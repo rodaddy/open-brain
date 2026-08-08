@@ -87,6 +87,32 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 5) — harvest of the merge-gate lane (PR #629) and the Terra ruling
+
+- **A repo guard cannot protect a run that checks out an older commit of the
+  repo.** verify-lane executes the done-means check FROM the PR-head worktree,
+  so a recursion fix committed after that head does not exist where the check
+  runs. The #629 lane burned two fix attempts on guards before seeing the real
+  defect was SELECTION (the live clause picked "whatever PR is open" — the PR
+  containing itself). When a tool tests repo state at a pinned SHA, ask which
+  VERSION of every involved script actually executes.
+- **Fixture-driven staleness proof:** a receipt is only valid for the exact
+  head SHA it ran against; verify-lane re-reads the head AFTER the check and
+  refuses to post if the PR moved mid-run. Gates must name BOTH SHAs when
+  refusing as stale.
+- **Wall-clock assertions (`toBeLessThan(1000)` ms) are CI flake generators**
+  — three runs, three different unrelated timing failures, all proven
+  main-owned via the #609 differential and filed (#632, #634) instead of
+  absorbed.
+- **Gate defect:** design-lookup HARD NO fires on `prune` inside
+  `git worktree prune` in a commit message — a git registration cleanup, not
+  a cap. Reword; report. (Second `prune` false-positive this week.)
+- **Effort tiers are policy, not fact** (operator ruling): `terra medium` was
+  blocked by a stale launcher gate contradicting canonical
+  `_DOCS/MODEL_ROUTING.md`; gate removed, route proven live. When a
+  constraint appears only in a secondary copy, check the canonical source
+  before repeating it.
+
 ### 2026-08-08 (round 4) — harvest of a CONTROLLER defect (Langfuse false-absence claim)
 
 - **Prove absence by the variable the CODE reads, never the product name.**
