@@ -59,6 +59,53 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 7) — harvest of the #636 continuation lane (inherited a dead lane's worktree)
+
+- **Inherited work is PROPOSED, and auditing it is the first task, not a
+  formality.** A continuation lane picked up a partially-applied scrub and
+  found EIGHT defects in it: six edits that renamed something real (a hook
+  instruction to a nonexistent path, an operator handshake token out of sync
+  with its runbook, six citations of a real script filename, a doc link, npm
+  script names, a private-range network fixture) plus two bugs in the
+  inherited gate itself. Every one looked correct in the diff.
+- **A find-and-replace sweep must ask what READS each literal.** A placeholder
+  only neutralises a value that nothing compares to reality. Where the reader
+  is the filesystem, an equality check, a skip condition, a recorded fixture,
+  an external runtime, or a human pasting a command, replacing the text
+  silently disables the thing the value was for. Full taxonomy with all seven
+  instances: `docs/sme/entries/2026-08-08-a-placeholder-only-neutralises-a-value-nothing-compares-to-reality.md`.
+- **Check the SKIP count, not just the pass count.** A scrubbed path turned the
+  Python suite's only cross-language proof into a permanent silent skip that
+  still reported green; restoring it moved the package from 581 passed / 26
+  skipped to 606 passed / 1 skipped. Twenty-five tests had stopped running and
+  the suite said nothing. A green run after a sweep is not evidence.
+- **`... | while read` cannot count.** The inherited done-means check
+  incremented its violation counter inside a pipeline subshell, so the value
+  was discarded: it printed VIOLATION lines and exited 0. A gate that reports
+  failure and passes anyway is worse than no gate, and only a NEGATIVE CONTROL
+  catches it — inject a real violation and confirm the check fails. Every
+  done-means check with an exception mechanism needs one.
+- **Prefer a `path:substring` exception to a file-wide allowlist entry.**
+  Exempting a whole file to permit one legitimate line blinds the check to
+  every future real leak in that file. Each exception carries its reason
+  inline, so the next reader can tell a justified retention from a silenced
+  inconvenience.
+- **Picking the wrong neutral value is its own failure mode.** A fixture moved
+  to `192.0.2.0/24` (TEST-NET-1, RFC5737) when the property under test was
+  RFC1918 private-range membership; the code correctly rejected it and all 18
+  tests in the file failed. The replacement must preserve the property the test
+  is about.
+- **A "neutral" fallback can be more dangerous than a hardcoded value.** The
+  inherited scrub gave the deploy runner-label variable a fallback that dropped
+  only the host-identifying label — so an unset variable still SCHEDULES, onto
+  whichever machine matches the remainder. Fail-closed beat neutral: the
+  variable is now required with no fallback.
+- **Gate refusal (design-lookup) fired correctly** on an edit to
+  `server-identity.test.ts` after an unrelated lookup earlier in the session.
+  Complied, ran the lookup, and the design doc it surfaced
+  (`docs/CONFIG_REFERENCE.md`, "Host identity in /health") is what confirmed
+  the RFC1918 root cause. The gate paid for itself.
+
 ### 2026-08-08 (latest) — harvest of the #612 lane (PR #624)
 
 - **`rm` of ANY spelling is banned — including single-file `rm -f`.** The
