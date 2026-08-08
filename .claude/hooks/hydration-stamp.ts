@@ -21,10 +21,15 @@
  * (#618, the guard that fired on heredoc text and taxed every lane until it was
  * fixed).
  *
- * Contrast with `.claude/hooks/capture-gate.ts`, which IS a hard gate: capture
- * is an action the agent takes or omits, so a missing capture receipt can mean
- * a skip. Hydration has no skip state. Same issue, different enforcement
- * strength, and the difference is not an inconsistency — it is the ruling.
+ * The capture tier used to be the contrast case: a hard gate at merge, on the
+ * argument that capture is an action the agent takes or omits, so a missing
+ * receipt can mean a skip. Ledger item 25 (2026-08-08) RETIRED that tier —
+ * raw capture turned out to be automatic and distillation is DREAM's job, so
+ * the gate was blocking merges to force a hand-made duplicate of an automated
+ * step, and its first live firing wedged the pipeline. The retired source is
+ * kept at `.claude/hooks/_retired/capture-gate.ts` as prior art for the #647
+ * liveness check. This file — verify and stamp, never block — is the tier that
+ * survived, and the paragraph above is why it never had that failure mode.
  *
  * ---------------------------------------------------------------------------
  * ALWAYS EXIT 0
