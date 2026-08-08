@@ -43,6 +43,11 @@ interface StartEnvelope {
 }
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  return JSON.parse(await callToolText(name, args));
+}
+
+/** The tool's raw text. Error results are sentences, not JSON envelopes. */
+async function callToolText(name: string, args: Record<string, unknown>): Promise<string> {
   if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "session-lifecycle-test", version: "1.0.0" });
   registerSessionLifecycleTools(server, {
@@ -62,7 +67,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
   const result = await client.callTool({ name, arguments: args });
   const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
   await client.close();
-  return JSON.parse(text);
+  return text;
 }
 
 dbDescribe("session lifecycle event bounds (#515)", () => {
@@ -92,7 +97,10 @@ dbDescribe("session lifecycle event bounds (#515)", () => {
     if (!pool) return;
     await pool.query(`DELETE FROM ob_session_events WHERE lane_id = $1`, [laneId]);
     await pool.query(`DELETE FROM ob_session_lanes WHERE id = $1`, [laneId]);
-    await pool.end();
+    // `pool` is module-level and shared by every suite's callTool(); closing it
+    // here made the #646 suite fail with "Cannot use a pool after calling end",
+    // which reads exactly like a real red. It is closed once, at the bottom of
+    // the file, after the last suite.
   });
 
   test("session_context honors event_limit", async () => {
@@ -133,5 +141,104 @@ dbDescribe("session lifecycle event bounds (#515)", () => {
     expect(started.is_new).toBe(false);
     expect(started.events_returned).toBe(50);
     expect(started.events[0]?.content).toBe(`event ${EVENT_COUNT - 1}`);
+  });
+});
+
+/**
+ * #646 — exact scope must be establishable on a lane that predates it.
+ *
+ * This handler used to return an existing lane verbatim, so a lane opened
+ * without the full exact-scope predicate could never afterwards prove it. The
+ * client's scope proof then failed permanently and EVERY capture into that
+ * lane was lost with "session_start result did not prove exact Open Brain
+ * scope". 2009 such lanes existed on the dogfood database when measured.
+ *
+ * The old behavior fails the first two tests here: it returned NULL scope
+ * columns unchanged, and it never refused a conflicting lane.
+ */
+dbDescribe("session_start exact-scope establishment (#646)", () => {
+  const SCOPE = {
+    agent: "agent-646",
+    platform: "cli-646",
+    server_id: "server-646",
+    channel_id: "channel-646",
+  };
+  const partialKey = `${NAMESPACE}-646-partial`;
+  const conflictKey = `${NAMESPACE}-646-conflict`;
+  const scopePool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+
+  const seed = async (sessionKey: string, agent: string | null): Promise<void> => {
+    await scopePool?.query(
+      `INSERT INTO ob_session_lanes
+         (session_key, namespace, status, agent, metadata, created_by)
+       VALUES ($1, $2, 'active', $3, '{}'::jsonb, $2)`,
+      [sessionKey, NAMESPACE, agent],
+    );
+  };
+
+  beforeAll(async () => {
+    if (!scopePool) return;
+    // The shape a head session leaves behind: an agent, and nothing else.
+    await seed(partialKey, "openbrain-capture");
+    // A lane that genuinely belongs to a different scope.
+    await seed(conflictKey, "someone-else");
+  });
+
+  afterAll(async () => {
+    if (!scopePool) return;
+    await scopePool.query(`DELETE FROM ob_session_lanes WHERE namespace = $1 AND session_key = ANY($2)`, [
+      NAMESPACE,
+      [partialKey, conflictKey],
+    ]);
+    await scopePool.end();
+  });
+
+  test("backfills the exact-scope coordinates of a lane that lacks them", async () => {
+    const started = (await callTool("session_start", {
+      session_key: partialKey,
+      ...SCOPE,
+      agent: "openbrain-capture", // matches the lane; the NULLs are what fill in
+    })) as StartEnvelope & {
+      lane: { agent: string; source: string; channel_id: string; metadata: Record<string, unknown> };
+    };
+
+    expect(started.is_new).toBe(false);
+    expect(started.lane.source).toBe(SCOPE.platform);
+    expect(started.lane.channel_id).toBe(SCOPE.channel_id);
+    expect(started.lane.metadata.server_id).toBe(SCOPE.server_id);
+
+    // Durably written, not just reflected in the response.
+    const row = await scopePool!.query(
+      `SELECT source, channel_id, metadata->>'server_id' AS server_id
+         FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
+      [NAMESPACE, partialKey],
+    );
+    expect(row.rows[0].source).toBe(SCOPE.platform);
+    expect(row.rows[0].channel_id).toBe(SCOPE.channel_id);
+    expect(row.rows[0].server_id).toBe(SCOPE.server_id);
+  });
+
+  test("refuses a lane whose established scope conflicts, instead of returning it unproven", async () => {
+    // errorResult returns a plain sentence, not a JSON envelope, so this reads
+    // the raw tool text rather than going through callTool()'s JSON.parse.
+    const text = await callToolText("session_start", {
+      session_key: conflictKey,
+      ...SCOPE,
+    });
+
+    expect(text).toContain("does not match");
+
+    // And the conflicting lane is left exactly as it was — never re-pointed.
+    const row = await scopePool!.query(
+      `SELECT agent, source FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
+      [NAMESPACE, conflictKey],
+    );
+    expect(row.rows[0].agent).toBe("someone-else");
+    expect(row.rows[0].source).toBeNull();
+  });
+
+  afterAll(async () => {
+    // Last suite in the file owns closing the shared module-level pool.
+    if (pool) await pool.end();
   });
 });

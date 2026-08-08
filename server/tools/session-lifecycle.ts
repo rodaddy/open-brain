@@ -17,6 +17,88 @@ const contextLaneFields = `id, session_key, namespace, status, agent, project, t
 const eventFields = `id, event_type, content, source, artifact_path, transcript_ref,
   transcript, occurred_at, importance, metadata, created_at, created_by`;
 
+type ExactStartScope = {
+  agent?: string;
+  platform?: string;
+  server_id?: string;
+  channel_id?: string;
+  thread_id?: string;
+};
+
+function hasCompleteExactScope(
+  args: ExactStartScope,
+): args is Required<Omit<ExactStartScope, "thread_id">> & { thread_id?: string } {
+  return (
+    args.agent !== undefined &&
+    args.platform !== undefined &&
+    args.server_id !== undefined &&
+    args.channel_id !== undefined
+  );
+}
+
+/**
+ * Fill in the exact-scope coordinates of an EXISTING lane, once, from a
+ * session_start that supplies all of them.
+ *
+ * Why this exists (#646): this handler used to return an existing lane
+ * verbatim, so a lane created without full scope — which is every lane a head
+ * session opens, `agent` set and source/server_id/channel_id NULL — could never
+ * afterwards prove the exact-scope predicate
+ * (docs/agent-context-pack-contract.md:99-105). The client's own scope proof
+ * then failed permanently, so EVERY capture into that lane was lost. 2009 such
+ * lanes existed on the dogfood database when this was measured.
+ *
+ * The write is a one-way fill, never a rewrite: each COALESCE only populates a
+ * NULL, and the WHERE clause refuses the update when any already-set field
+ * disagrees with the request. A lane that belongs to a different scope is
+ * therefore left untouched and reported, not silently re-pointed — the scope
+ * predicate is an isolation boundary, so widening it here would be a security
+ * defect, not a convenience.
+ *
+ * Ported from the equivalent logic in src/tools/session-start.ts:34-90 so the
+ * two entrypoints agree; this file is the one the running service serves.
+ */
+async function establishExactStartScope(
+  dependencies: MemoryToolDependencies,
+  namespace: string,
+  sessionKey: string,
+  args: ExactStartScope,
+): Promise<Record<string, unknown> | null> {
+  if (!hasCompleteExactScope(args)) return null;
+  const { rows } = await dependencies.pool.query(
+    `UPDATE ob_session_lanes
+        SET agent = COALESCE(agent, $3),
+            source = COALESCE(source, $4),
+            metadata = CASE
+              WHEN metadata->>'server_id' IS NOT NULL THEN metadata
+              ELSE jsonb_set(COALESCE(metadata, '{}'::jsonb), '{server_id}', to_jsonb($5::text), true)
+            END,
+            channel_id = COALESCE(channel_id, $6),
+            thread_id = CASE
+              WHEN $7::text IS NOT NULL AND thread_id IS NULL THEN $7
+              ELSE thread_id
+            END
+      WHERE namespace = $1
+        AND session_key = $2
+        AND (agent IS NULL OR agent = $3)
+        AND (source IS NULL OR source = $4)
+        AND (metadata->>'server_id' IS NULL OR metadata->>'server_id' = $5)
+        AND (channel_id IS NULL OR channel_id = $6)
+        AND ($7::text IS NULL OR thread_id IS NULL OR thread_id = $7)
+    RETURNING ${startLaneFields}`,
+    [
+      namespace,
+      sessionKey,
+      args.agent,
+      args.platform,
+      args.server_id,
+      args.channel_id,
+      args.thread_id ?? null,
+    ],
+  );
+  return (rows[0] as Record<string, unknown> | undefined) ?? null;
+}
+
 export function registerSessionLifecycleTools(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -64,13 +146,33 @@ function registerSessionStart(server: McpServer, dependencies: MemoryToolDepende
         [auth.namespace, args.session_key],
       );
       if (existing.rows[0]) {
+        let lane = existing.rows[0];
+        // Establish exact scope on a lane that predates it (#646). Only runs
+        // when the request carries the complete predicate; a conflicting lane
+        // is refused by name rather than returned unproven, because returning
+        // it makes every later capture fail with a scope error the caller
+        // cannot act on.
+        if (hasCompleteExactScope(args)) {
+          const scopedLane = await establishExactStartScope(
+            dependencies,
+            auth.namespace,
+            args.session_key,
+            args,
+          );
+          if (!scopedLane) {
+            return errorResult(
+              "Existing lane exact scope does not match session_start request",
+            );
+          }
+          lane = scopedLane;
+        }
         const events = await dependencies.pool.query(
           `SELECT ${eventFields} FROM ob_session_events
             WHERE lane_id = $1 ORDER BY created_at DESC LIMIT 50`,
-          [existing.rows[0].id],
+          [lane.id],
         );
         return textResult({
-          lane: existing.rows[0],
+          lane,
           events: events.rows,
           events_returned: events.rows.length,
           is_new: false,
