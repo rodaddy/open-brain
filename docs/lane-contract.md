@@ -59,6 +59,22 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 4) — harvest of a CONTROLLER defect (Langfuse false-absence claim)
+
+- **Prove absence by the variable the CODE reads, never the product name.**
+  The controller asserted "Langfuse unconfigured" after grepping env files for
+  `LANGFUSE_*`; the sink reads `OPENBRAIN_TRACING_*`
+  (`server/observability/langfuse-tracing.ts:601-604`), which was set and
+  ENABLED the whole time — 806 traces landed in the claimed-dark window. To
+  claim a config is absent: find the `process.env.X` read in source first,
+  then search for X. Same defect class as #618 (matching vocabulary instead
+  of the operation), committed by the head.
+- **A verification conclusion is only as fresh as its last execution.** The
+  wrong claim was made once from a bad grep and REPEATED hours later by
+  quoting the earlier conclusion instead of re-running the check. Re-quote
+  nothing; re-run it. Controller reports are subject to this exactly as lane
+  reports are.
+
 ### 2026-08-08 (round 3) — harvest of the enforcement-build lanes (PRs #628, #630, #631)
 
 - **`lane-bootstrap` prints the worktree path but does not change your
