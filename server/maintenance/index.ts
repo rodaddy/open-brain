@@ -62,7 +62,10 @@ import {
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
 } from "../../src/maintenance-queue.ts";
-import { startRecurringMaintenanceSweep } from "../../src/maintenance-sweep.ts";
+import {
+  startRecurringMaintenanceSweep,
+  type MaintenanceSweepLiveness,
+} from "../../src/maintenance-sweep.ts";
 
 export const MAINTENANCE_BOUNDARY: ServerModuleBoundary = {
   name: "maintenance",
@@ -110,6 +113,12 @@ export interface MaintenanceRuntimeInput {
 export interface MaintenanceRuntime extends BackgroundRuntime {
   readonly queue: MaintenanceQueue;
   readonly runner: MaintenanceQueueRunner;
+  /**
+   * The producer's liveness, or `undefined` when this composition started no
+   * producer (`autoStart: false`). Read by `/health` (#625) so a wedged sweep
+   * cannot hide behind a green database probe.
+   */
+  producerLiveness(): MaintenanceSweepLiveness | undefined;
 }
 
 /**
@@ -223,6 +232,10 @@ export function createMaintenanceRuntime(
     name: MAINTENANCE_RUNTIME_NAME,
     queue,
     runner,
+    // Reads through to the live sweep on every call rather than caching: a
+    // cached liveness value would itself go stale, which is the failure mode
+    // this exists to detect.
+    producerLiveness: () => sweep?.liveness(),
     // `runner.stop()` is a DRAIN (invariant 1 above): it awaits the in-flight
     // tick so any rows that tick's claim leased are tracked, then waits for
     // every tracked handler to finish. The application calls this BEFORE

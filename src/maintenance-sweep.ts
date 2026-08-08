@@ -265,9 +265,42 @@ export async function runMaintenanceSweep(
   return summary;
 }
 
+/**
+ * What the producer can say about its own liveness, for a health reader.
+ *
+ * `quietMs` is the age of the last COMPLETED tick, not the age of the last
+ * attempt: a producer whose ticks all hang is quiet no matter how often the
+ * timer fires, and that distinction is the whole point of #625.
+ */
+export interface MaintenanceSweepLiveness {
+  /** Milliseconds since the last tick that finished (success or handled failure). */
+  readonly quietMs: number;
+  /** True once `quietMs` exceeds the configured threshold. */
+  readonly stale: boolean;
+  /** The threshold `stale` was computed against, so a reader can report it. */
+  readonly quietThresholdMs: number;
+  /** Ticks that returned early because a previous tick was still running. */
+  readonly overlappedTicks: number;
+  /** Ticks that ran to completion, successfully or with a handled failure. */
+  readonly completedTicks: number;
+}
+
 export interface RecurringMaintenanceSweep {
   stop(): Promise<void>;
+  /**
+   * Current producer liveness. Read by `/health` so a wedged producer cannot
+   * stay invisible behind a green database probe.
+   */
+  liveness(): MaintenanceSweepLiveness;
 }
+
+/**
+ * Default quiet threshold: a producer is stale once it has gone this long with
+ * no completed tick. Twelve times the 5s default cadence — long enough that an
+ * ordinarily slow sweep does not flap the health status, short enough that the
+ * ~18 minutes of silence observed in #625 is reported within the first minute.
+ */
+const DEFAULT_QUIET_THRESHOLD_MS = 60_000;
 
 /**
  * Start the recurring producer: one bounded sweep now, then one per interval.
@@ -297,15 +330,67 @@ export interface RecurringMaintenanceSweep {
  * work after the runner has begun draining.
  */
 export function startRecurringMaintenanceSweep(
-  input: MaintenanceSweepOptions & { intervalMs: number },
+  input: MaintenanceSweepOptions & {
+    intervalMs: number;
+    /**
+     * Clock source, injected so liveness can be tested without sleeping.
+     * Defaults to `Date.now`. A wall-clock assertion is a flake generator
+     * (docs/lane-contract.md, Tightenings round 5), so the only way to test
+     * staleness honestly is to make time a parameter.
+     */
+    now?: () => number;
+    /** Quiet duration after which the producer reports itself stale. */
+    quietThresholdMs?: number;
+  },
 ): RecurringMaintenanceSweep {
   let interval: ReturnType<typeof setInterval> | null = null;
   let active: Promise<void> | null = null;
   let stopping = false;
 
+  const now = input.now ?? Date.now;
+  const quietThresholdMs = Math.max(
+    input.quietThresholdMs ?? DEFAULT_QUIET_THRESHOLD_MS,
+    1,
+  );
+
+  // Seeded at start, not at 0: a producer that has just booted is not stale,
+  // and treating "never completed" as infinitely quiet would report every
+  // process as degraded for its first tick.
+  let lastCompletedAt = now();
+  let overlappedTicks = 0;
+  let completedTicks = 0;
+  // Warn once per stall, not once per skipped tick: at a 5s cadence an
+  // 18-minute stall is ~216 skips, and 216 identical warnings is how a real
+  // signal gets filtered out as noise. The counter carried on the first line is
+  // what makes the extent recoverable without emitting each one.
+  let warnedForCurrentStall = false;
+
   const runOnce = (): Promise<void> => {
     if (stopping) return Promise.resolve();
-    if (active) return active;
+    if (active) {
+      // THE #625 DEFECT. Declining to start a second overlapping tick is
+      // correct; returning from here SILENTLY is not. When a tick hangs — a
+      // slow selection query, a pool connection that never returns, a lock —
+      // every subsequent interval landed here and emitted nothing, so a wedged
+      // producer and a keeping-up producer looked identical from the outside:
+      // both are quiet between sweeps. Observed as ~18 minutes of silence on
+      // the local clone while /health stayed green (#625, found by the #612
+      // lane). `_DOCS/STANDARDS-observability.md` names the guard-trigger path
+      // as one of the five required log points and states the governing rule:
+      // absence of a log line must never be used as proof of success.
+      overlappedTicks += 1;
+      if (!warnedForCurrentStall) {
+        warnedForCurrentStall = true;
+        input.logger.warn("maintenance_sweep_tick_overlapped", {
+          quiet_ms: now() - lastCompletedAt,
+          quiet_threshold_ms: quietThresholdMs,
+          overlapped_ticks: overlappedTicks,
+          completed_ticks: completedTicks,
+          interval_ms: input.intervalMs,
+        });
+      }
+      return active;
+    }
 
     const run = runMaintenanceSweep(input)
       .then(() => undefined)
@@ -315,7 +400,26 @@ export function startRecurringMaintenanceSweep(
         });
       })
       .finally(() => {
+        // A handled failure still counts as a completed tick: the producer is
+        // alive and reporting, which is a different condition from silence, and
+        // conflating them would make an erroring sweep also look wedged.
+        const wasStalled = warnedForCurrentStall;
+        const quietMs = now() - lastCompletedAt;
+        lastCompletedAt = now();
+        completedTicks += 1;
         active = null;
+        warnedForCurrentStall = false;
+        if (wasStalled) {
+          // Recovery is an outcome and gets its own signal, so an operator
+          // reading the log can close the incident without inferring it from
+          // the absence of further warnings.
+          input.logger.warn("maintenance_sweep_tick_recovered", {
+            quiet_ms: quietMs,
+            quiet_threshold_ms: quietThresholdMs,
+            overlapped_ticks: overlappedTicks,
+            completed_ticks: completedTicks,
+          });
+        }
       });
     active = run;
     return run;
@@ -325,6 +429,16 @@ export function startRecurringMaintenanceSweep(
   interval = setInterval(() => void runOnce(), input.intervalMs);
 
   return {
+    liveness(): MaintenanceSweepLiveness {
+      const quietMs = now() - lastCompletedAt;
+      return {
+        quietMs,
+        stale: quietMs > quietThresholdMs,
+        quietThresholdMs,
+        overlappedTicks,
+        completedTicks,
+      };
+    },
     async stop(): Promise<void> {
       stopping = true;
       if (interval) clearInterval(interval);
