@@ -59,6 +59,25 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 3) — harvest of the enforcement-build lanes (PRs #628, #630, #631)
+
+- **`lane-bootstrap` prints the worktree path but does not change your
+  directory.** Relative commands after it still target the primary checkout.
+  Enter the printed absolute path explicitly. Also: `bunx --cwd` is not a
+  thing — run `bunx` from inside the worktree. (Sol lane, PR #630 — first
+  Codex-routed lane; returned the required report format exactly.)
+- **Verify `.gitignore` outcomes by `git ls-files`, not by reading patterns**
+  — a later rule can override the one you read. (#628 lane.)
+- **Citations to artifacts that do not exist yet are fabrications.** A PR
+  number guessed before `gh pr create` is a guess in the grammar of a fact;
+  write the reference after the artifact exists. (#628 lane, self-caught.)
+- **The done-means field is now enforced** (PR #630): every PR body carries
+  `- Done-means: <path>` (validator-confirmed to exist) or the not-applicable
+  form with a real reason. Forward-compliance is over; it is simply required.
+- **Process canon now lives on `main`** (PR #631): lanes read
+  `docs/lane-contract.md` and `docs/controller-contract.md` from their own
+  worktree; the absolute-path bridge is retired.
+
 ### 2026-08-08 (latest) — harvest of the #612 lane (PR #624)
 
 - **`rm` of ANY spelling is banned — including single-file `rm -f`.** The
