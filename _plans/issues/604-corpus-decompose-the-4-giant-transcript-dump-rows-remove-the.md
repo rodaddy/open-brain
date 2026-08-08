@@ -3,11 +3,12 @@
 
 # #604 — Corpus: decompose the 4 giant transcript-dump rows; remove the 300-char evidence cap; find out why ingest bypasses the chunker
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-06T17:57:33Z
-Updated: 2026-08-06T18:25:20Z
+Updated: 2026-08-07T21:40:01Z
+Closed: 2026-08-07T21:40:01Z
 
 ---
 
