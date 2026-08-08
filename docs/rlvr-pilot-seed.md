@@ -125,6 +125,32 @@ CURRENT head SHA and (b) harvest proof.
   (operator ruling, ledger item 26). Requested-model provenance is never
   attestation — lanes self-report, controllers treat it as weak evidence.
 
+## Adopted amendments (2026-08-08 — from the first pilot's own friction report)
+
+The first factory pilot ran one session inside this process and sent back
+four honest frictions (the AUDITED honor system, flat-priced ceremony,
+head-absorption gravity, ratchet scroll) plus fixes. Operator-ratified the
+same day (open-brain ledger item 27); a pilot should build these in from
+day one rather than rediscovering them:
+
+- **Validate the report as a schema, not prose** — a small script refuses
+  a report with missing fields, a RED lacking real nonzero-exit output, or
+  claims outside claim-states. The first obligation to enforce.
+- **Bind the harvest mechanically** — if the accepted report's lessons ≠
+  none, merge refuses unless the diff actually touches the lane contract.
+- **Own landing as a machine verb** — validate→push→PR→verify→merge→
+  teardown as one command; the head approves, the machine lands. Dissolves
+  head-absorption instead of policing it.
+- **Tier ceremony by blast radius, not size** (T0 none / T1 five-field +
+  one receipt run / T2 full graph), with the tier declaration itself
+  auditable.
+- **Give the ratchet a graduation valve** — a bounded live-entry set;
+  overflow graduates the most stable entry into a check or ledger row.
+  The check is the memory; prose is the nursery.
+- **Random audit** — ~1-in-5 merge passes, an auditor lane checks an
+  already-accepted report's "deviations: none" against its transcript.
+  Backstop behind the schema validator, never the primary control.
+
 ## What success looks like for a pilot
 
 The shape holds without open-brain's tooling, and the pilot's first
