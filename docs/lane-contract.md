@@ -14,6 +14,31 @@ here is a defect in the merge pass that accepted the report.** SME entries
 (`docs/sme/entries/`) capture review knowledge for reviewers; this file
 captures operating knowledge for lanes. Same lesson may land in both.
 
+## Lane tiers (operator ruling, 2026-08-08 — ledger item 22)
+
+The full treatment is not free, and spending 25–45 minutes of deep research
+on a change we are already confident about buys little. Two tiers:
+
+**FAST LANE** — eligible when the change matches a KNOWN class (an SME scope
+key with a covering `scripts/done-means/` check — the verifier agent's tier-1
+test) and the diff is bounded. Route: Sol low/medium. Skips: the deep research
+phase, the full-suite three-way differential, exploratory root-causing.
+Keeps (the floor is not negotiable): the covering check run RED-first against
+the claim, PR-body validation (hook enforces it anyway), the required report
+format, truth labels, teardown, and one controller (or verifier-agent) run of
+the check before merge. Target: minutes, not quarter-hours.
+
+**STANDARD** — everything else: novel classes, security boundaries, deep
+root-causes, anything touching serving trees or contracts. The full standing
+contract below, unabridged.
+
+**Escalation is one-way and loud:** any surprise inside a fast lane — the
+check fails unexpectedly, the diff grows, territory turns out unfamiliar —
+promotes the lane to STANDARD immediately and says so in the report. A fast
+lane that absorbs a surprise silently is the ledger-item-21 unrecoverable
+variation. Misclassifying novel as known is the design's one failure mode;
+when the match is arguable, it is not a match.
+
 ## Standing contract
 
 Every lane, no exceptions:
