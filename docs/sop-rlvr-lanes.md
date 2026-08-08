@@ -28,6 +28,7 @@ item at a time.
 |---|---|---|
 | Frontier + ledger | `docs/issue-graph.md`, `scripts/issue-graph.ts` | what is workable now; decisions + rejected options |
 | Lane briefing contract | `docs/lane-contract.md` | standing rules + dated Tightenings changelog (the ratchet) |
+| Controller contract | `docs/controller-contract.md` | binds the HEAD: dispatch rules, required lane report format, verification/harvest obligations, enforcement migration |
 | Done-means checks | `scripts/done-means/` | executable acceptance, red-first, checker declares done |
 | Lane environment | `scripts/lane-bootstrap.ts` | one-command known-good worktree/env/DB; stated reason required |
 | PR-body enforcement | `.claude/hooks/pr-body-gate.ts` + `scripts/validate-pr-body.ts` + `.github/pull_request_template.md` | invalid bodies impossible at the boundary; CI backstop |

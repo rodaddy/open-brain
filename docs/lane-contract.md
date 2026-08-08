@@ -43,10 +43,10 @@ Every lane, no exceptions:
    `dropdb` by exact name. Scratch worth keeping moves to
    `{temp_workspace}/open-brain/_archive/<lane>/` — never deleted. Report
    anything you could not remove. No `rm -rf`, ever, anywhere.
-8. **Report shape.** Caveman-compressed. First line: `self-reported model:`
-   (weak evidence, kept for the A/B record). Then: branch, PR, RED/GREEN
-   evidence, root cause with file:line, refusals/workarounds/violations —
-   self-reported violations are harvested, never punished; burying one is the
+8. **Report shape.** The REQUIRED field format is defined in
+   `docs/controller-contract.md` ("Required lane report format") — return
+   exactly those fields, in order; prose goes after them, never instead.
+   Self-reported violations are harvested, never punished; burying one is the
    offense.
 9. **Refusals are rules working.** A hook denial means adjust, not retry a
    spelling variant. If the denial looks like a false positive, work around it
