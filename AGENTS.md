@@ -266,6 +266,12 @@ the controller re-runs the check before merge; every lane report is harvested
 into the lane contract's Tightenings (mandatory merge-pass step); decisions are
 reviewed WITH the operator and recorded in the ledger. INLINE work remains
 correct for conversation, exact lookups, and tiny deterministic changes.
+**No variations** (operator, 2026-08-08): the process is used all the time as
+the default standard; a deviation is flagged for a ruling, never taken
+silently, and a broken process step fails HARD and gets fixed through the
+decisions loop — never worked around. Where compliance needs forcing, the
+step gets a hook (last-ditch tier, per the controller contract's enforcement
+migration).
 
 ## Coding Standards
 
