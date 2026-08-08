@@ -22,15 +22,24 @@ function ipv4(
 }
 
 /**
- * The interface table of the Mac that exposed this defect, verified live on
+ * The interface SHAPE of the Mac that exposed this defect, verified live on
  * 2026-08-04: a loopback, the true LAN address on `en0`, a second physical
- * address on `en1`, and a VM bridge on `en10`.
+ * address on `en1`, and a VM bridge on `en10`. The addresses are neutral
+ * stand-ins for that machine's real ones (#636).
+ *
+ * They must stay inside an RFC1918 range, because that membership is the
+ * property under test: resolution step 3 is "detected PRIVATE LAN interfaces"
+ * (docs/CONFIG_REFERENCE.md, "Host identity in /health"), and `isPrivateIpv4`
+ * accepts 10/8, 172.16/12, 192.168/16, 169.254/16 and 100.64/10 only. The usual
+ * documentation range 192.0.2.0/24 (TEST-NET-1, RFC5737) is NOT private, so
+ * using it here makes the resolver correctly skip `en0` and collapses every
+ * expectation onto the `en10` bridge.
  */
 function macMiniInterfaces(): Interfaces {
   return {
     lo0: [ipv4("127.0.0.1", true)],
-    en0: [ipv4("10.71.1.20")],
-    en1: [ipv4("10.71.1.131")],
+    en0: [ipv4("172.16.0.20")],
+    en1: [ipv4("172.16.0.131")],
     en10: [ipv4("192.168.127.11")],
   };
 }
@@ -49,9 +58,9 @@ describe("server identity resolution", () => {
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
     expect(identity.serverIp).not.toBe("unknown");
-    expect(identity.serverIps).toContain("10.71.1.20");
+    expect(identity.serverIps).toContain("172.16.0.20");
   });
 
   it("reports the real LAN address when nothing at all is configured", () => {
@@ -60,32 +69,32 @@ describe("server identity resolution", () => {
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
     expect(identity.serverIps).not.toEqual(["unknown"]);
   });
 
   // -- Precedence ------------------------------------------------------------
   it("prefers the explicitly advertised address over detection", () => {
     const identity = resolveServerIdentity({
-      configuredServerIp: "10.71.1.21",
+      configuredServerIp: "172.16.0.21",
       bindHost: "0.0.0.0",
       interfaces: macMiniInterfaces,
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.21");
-    expect(identity.serverIps).toEqual(["10.71.1.21"]);
+    expect(identity.serverIp).toBe("172.16.0.21");
+    expect(identity.serverIps).toEqual(["172.16.0.21"]);
   });
 
   it("uses a concrete bind host in preference to detection", () => {
     const identity = resolveServerIdentity({
-      bindHost: "10.71.1.131",
+      bindHost: "172.16.0.131",
       interfaces: macMiniInterfaces,
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.131");
-    expect(identity.serverIps).toEqual(["10.71.1.131"]);
+    expect(identity.serverIp).toBe("172.16.0.131");
+    expect(identity.serverIps).toEqual(["172.16.0.131"]);
   });
 
   it.each([
@@ -104,7 +113,7 @@ describe("server identity resolution", () => {
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
   });
 
   it("ignores an explicit server IP that is itself loopback or wildcard", () => {
@@ -114,7 +123,7 @@ describe("server identity resolution", () => {
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
   });
 
   it("treats a blank or whitespace-only configuration value as unset", () => {
@@ -125,7 +134,7 @@ describe("server identity resolution", () => {
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
   });
 
   // -- Ordering and disclosure bounds ----------------------------------------
@@ -133,13 +142,13 @@ describe("server identity resolution", () => {
     const identity = resolveServerIdentity({
       interfaces: () => ({
         bridge100: [ipv4("192.168.64.1")],
-        en0: [ipv4("10.71.1.20")],
+        en0: [ipv4("172.16.0.20")],
       }),
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
-    expect(identity.serverIps).toEqual(["10.71.1.20", "192.168.64.1"]);
+    expect(identity.serverIp).toBe("172.16.0.20");
+    expect(identity.serverIps).toEqual(["172.16.0.20", "192.168.64.1"]);
   });
 
   it("orders interfaces deterministically regardless of enumeration order", () => {
@@ -148,8 +157,8 @@ describe("server identity resolution", () => {
     const shuffled = resolveServerIdentity({
       interfaces: () => ({
         en10: [ipv4("192.168.127.11")],
-        en1: [ipv4("10.71.1.131")],
-        en0: [ipv4("10.71.1.20")],
+        en1: [ipv4("172.16.0.131")],
+        en0: [ipv4("172.16.0.20")],
       }),
       hostname,
     });
@@ -164,12 +173,12 @@ describe("server identity resolution", () => {
     const identity = resolveServerIdentity({
       interfaces: () => ({
         en10: [ipv4("192.168.127.11")],
-        en2: [ipv4("10.71.1.55")],
+        en2: [ipv4("172.16.0.55")],
       }),
       hostname,
     });
 
-    expect(identity.serverIps).toEqual(["10.71.1.55", "192.168.127.11"]);
+    expect(identity.serverIps).toEqual(["172.16.0.55", "192.168.127.11"]);
   });
 
   it("keeps every detected private address visible, not just the winner", () => {
@@ -181,8 +190,8 @@ describe("server identity resolution", () => {
     // en0, en1, en10 — numerically sorted, so the VM bridge on en10 stays
     // visible but never displaces a real adapter.
     expect(identity.serverIps).toEqual([
-      "10.71.1.20",
-      "10.71.1.131",
+      "172.16.0.20",
+      "172.16.0.131",
       "192.168.127.11",
     ]);
   });
@@ -221,24 +230,24 @@ describe("server identity resolution", () => {
     const identity = resolveServerIdentity({
       interfaces: () =>
         ({
-          en0: [{ ...ipv4("10.71.1.20"), family: 4 as unknown as "IPv4" }],
+          en0: [{ ...ipv4("172.16.0.20"), family: 4 as unknown as "IPv4" }],
         }) as Interfaces,
       hostname,
     });
 
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
   });
 
   it("deduplicates an address that appears on more than one interface", () => {
     const identity = resolveServerIdentity({
       interfaces: () => ({
-        en0: [ipv4("10.71.1.20")],
-        en5: [ipv4("10.71.1.20")],
+        en0: [ipv4("172.16.0.20")],
+        en5: [ipv4("172.16.0.20")],
       }),
       hostname,
     });
 
-    expect(identity.serverIps).toEqual(["10.71.1.20"]);
+    expect(identity.serverIps).toEqual(["172.16.0.20"]);
   });
 
   // -- Hostname --------------------------------------------------------------
@@ -260,7 +269,7 @@ describe("server identity resolution", () => {
     });
 
     expect(identity.hostname).toBe("unknown");
-    expect(identity.serverIp).toBe("10.71.1.20");
+    expect(identity.serverIp).toBe("172.16.0.20");
   });
 
   it("degrades identity rather than failing when interfaces cannot be read", () => {
@@ -282,7 +291,7 @@ describe("deployed revision stamp", () => {
     "short_sha=f705fc9",
     "ref=HEAD",
     "deployed_at=2026-08-04T14:34:50Z",
-    "repo=/Volumes/ThunderBolt/Development/open-brain",
+    "repo=/workspace/open-brain",
     "subject=feat(capture): say it out loud when a turn cannot be written",
   ].join("\n");
 

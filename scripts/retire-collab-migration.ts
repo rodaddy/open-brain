@@ -52,6 +52,11 @@ const SHARED_NAMESPACE = "shared-kb";
 const REPO_FACT_ENTITY_TYPE = "repo_fact";
 export const COLLAB_RETIRE_APPROVAL_ENV =
   "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
+// NOT a hostname reference to scrub: this is a fixed handshake token the
+// operator types verbatim, and `docs/collab-retirement-preflight.md` (an
+// internal runbook, allowlisted) instructs them to export exactly this string.
+// Renaming it here without the runbook silently breaks the safety gate, so the
+// literal stays and the neutrality allowlist covers this one line.
 export const COLLAB_RETIRE_APPROVAL_VALUE = "core01-live-db-after-backup";
 const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 

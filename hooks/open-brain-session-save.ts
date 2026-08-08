@@ -86,6 +86,15 @@ try {
       tags.push(branchType);
   }
 
+  // The policy-refresh gate lives outside this repo, so its location is
+  // deployment-specific and MUST come from the environment. The fallback is a
+  // repo-relative path rather than any one machine's absolute layout: a wrong
+  // relative hint is obviously wrong, where a wrong absolute path reads as
+  // authoritative and sends the next agent to a file that does not exist.
+  const policyGatePath =
+    process.env.OPENBRAIN_POLICY_REFRESH_GATE ??
+    "_ob/scripts/policy-refresh-gate.ts";
+
   // Save via mcp2cli
   const params = JSON.stringify({
     summary,
@@ -95,7 +104,7 @@ try {
       "Reread active AGENTS/CLAUDE router and triggered SOPs before risky action.",
       "Restate Pony style, critical mode, source-of-truth order, and next concrete action.",
       "Inspect cwd, branch, and dirty state before editing; do not mix unrelated dirty files into the next phase.",
-      "Run /Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts --event refresh --agent claude after refresh.",
+      `Run ${policyGatePath} --event refresh --agent claude after refresh.`,
     ],
     key_decisions: [
       "Compaction requires forced relearn before risky action.",
