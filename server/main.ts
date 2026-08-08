@@ -49,6 +49,7 @@ import {
   startNatsBridgeRuntime,
 } from "./application/nats.ts";
 import { createAuthMiddleware } from "./auth/middleware.ts";
+import { createCaptureHealthRuntime } from "./capture/liveness-observer.ts";
 import {
   loadServerConfig,
   natsHealthFromConfig,
@@ -267,6 +268,19 @@ export async function startServer(
       ...(tracing.background ? { tracing: tracing.background } : {}),
     });
 
+    // The capture-health observer this process runs, from REQUIRED config
+    // (operator ruling 2026-08-08, ledger item 28 in `docs/issue-graph.md`).
+    // `OPENBRAIN_CAPTURE_HEALTH_NAMESPACE` has no fallback: unset means NO
+    // observer, no capture block on `/health`, and a WARN naming the variable.
+    // A guessed namespace would be this process reporting on another tenant's
+    // rows and calling the answer its own health — the namespace is the
+    // auth-derived security boundary, not a convenience label.
+    const captureHealth = createCaptureHealthRuntime({
+      env: process.env,
+      pool: database.pool,
+      logger: logger.child({ component: "capture-health" }),
+    });
+
     const authenticate = createAuthMiddleware(config.authTokens);
     const restSurface = createRestSurface({
       pool: database.pool,
@@ -300,7 +314,30 @@ export async function startServer(
         logger: logger.child({ component: "http" }),
       }),
       routers: [{ path: "/api/v1", handler: restSurface }],
-      ...(bridge.runtime ? { backgroundRuntimes: [bridge.runtime] } : {}),
+      // Absent when no namespace is configured, and absence is the composition
+      // publishing NOTHING rather than a neutral value: a deployment that runs
+      // no capture lane must not report itself broken for a job it was never
+      // given (`docs/lane-contract.md` Tightenings rounds 8 and 13).
+      ...(captureHealth.captureObserver
+        ? { captureObserver: captureHealth.captureObserver }
+        : {}),
+      // The observer owns a refresh interval, which makes it a background
+      // runtime and not a value: `server/application/index.ts` already owns
+      // ordered shutdown through this port, so the timer stops on the same
+      // path as the NATS bridge and the maintenance runner rather than through
+      // a second hand-rolled teardown. A runtime that is running but absent
+      // from `backgroundRuntimes` is the abandoned-lease bug (index.ts:127-131).
+      backgroundRuntimes: [
+        ...(bridge.runtime ? [bridge.runtime] : []),
+        ...(captureHealth.captureObserver
+          ? [
+              {
+                name: "capture-health-observer",
+                stop: async () => captureHealth.stop(),
+              },
+            ]
+          : []),
+      ],
       // The maintenance handler map is what makes the runner exist at all; the
       // application composes it from `config.maintenance` and puts it last in
       // the shutdown order, so "maintenance runs" and "maintenance drains"
