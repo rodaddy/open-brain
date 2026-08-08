@@ -3,11 +3,12 @@
 
 # #598 — Provider CLI: --event capture exits 0 with no receipt, and 'kind' is silently relegated to ignored_optional_request_keys
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-06T00:52:08Z
-Updated: 2026-08-06T00:52:08Z
+Updated: 2026-08-07T22:05:57Z
+Closed: 2026-08-07T22:05:57Z
 
 ---
 

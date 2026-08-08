@@ -10,6 +10,25 @@ Scope: this repo, now. The expansion path to Development-wide `_DOCS/` and an
 `_ob` skill is at the bottom — deliberately staged, per the standing rule that
 things are sussed out repo-local before they live forever.
 
+## No variations (operator ruling, 2026-08-08)
+
+This process is the default standard, used all the time. There are no ad-hoc
+variations: a session does not improvise a lighter version, skip verification
+because a change "looks safe," or route around a gate because it is
+inconvenient. Exactly two sanctioned paths exist when the process and reality
+disagree, and both are IN the process:
+
+1. **A deviation is flagged, not taken silently** — implement the better
+   behavior if the case is strong, name the recorded decision it touches, and
+   request a ruling (the ledger item 20 model). The ruling updates the
+   process.
+2. **A broken process fails HARD** — if a required step cannot be executed
+   (gate down, tooling broken, contract contradiction), the work STOPS at
+   that step and the failure is reported. Fix the process through the
+   decisions loop, then resume. Working around a broken step and shipping
+   anyway is the one unrecoverable variation, because it converts the
+   process's guarantees into decoration.
+
 ## The shape in one paragraph
 
 Work is dispatched to worker lanes from a computed frontier, each lane

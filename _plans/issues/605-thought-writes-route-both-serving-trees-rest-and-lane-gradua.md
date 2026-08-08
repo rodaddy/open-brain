@@ -3,11 +3,12 @@
 
 # #605 — Thought writes: route both serving trees, REST, and lane graduation through chunk-write
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-06T18:16:39Z
-Updated: 2026-08-06T18:16:39Z
+Updated: 2026-08-07T23:02:30Z
+Closed: 2026-08-07T23:02:30Z
 
 ---
 
