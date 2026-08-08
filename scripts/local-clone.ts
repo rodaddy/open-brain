@@ -53,6 +53,15 @@ const CHILD_ENV_KEYS = [
   "NODE_ENV",
   "OPENBRAIN_LOCAL_CLONE",
   "OPENBRAIN_LOCAL_CLONE_ROOT",
+  // #659 capture-health observer (PR #656, ledger item 28): these three must
+  // reach the server child or `createCaptureHealthRuntime` builds no observer
+  // and /health publishes no capture block -- the same deploy coupling the
+  // #530 tracing comment below documents, third instance. Listed by NAME
+  // rather than by an `OPENBRAIN_CAPTURE_HEALTH_` prefix sweep so that adding
+  // a fourth key stays a deliberate act with a reviewer attached.
+  "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE",
+  "OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS",
+  "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES",
   "OPENBRAIN_RECOVERY_WAL_PATH",
   "OPEN_BRAIN_BIND_HOST",
   "OPEN_BRAIN_MAINTENANCE_ENABLED",
@@ -99,6 +108,12 @@ export interface LocalCloneLauncherDependencies {
   child: ChildBoundary;
   writeReceipt(receipt: unknown): void;
   onSignal(signal: NodeJS.Signals, handler: () => void): () => void;
+  /**
+   * The launcher's normal operational output -- diagnostics an operator reads,
+   * kept separate from `writeReceipt` because the verify receipt is a
+   * content-free machine-parsed JSON document and must stay one line.
+   */
+  announce(line: string): void;
 }
 
 interface DatabaseProbeRow {
@@ -137,6 +152,71 @@ export function parseLocalCloneArgs(argv: string[]): LauncherMode {
   if (argv.length === 1 && argv[0] === "--verify") return "verify";
   if (argv.length === 1 && argv[0] === "--start") return "start";
   throw new Error("Usage: bun run scripts/local-clone.ts --verify | --start");
+}
+
+/**
+ * Prefixes that mark a variable as OPEN BRAIN SERVER CONFIGURATION.
+ *
+ * The launcher's environment is the clone env file UNIONED with launchd's
+ * ambient environment (`scripts/local-clone-autostart.sh:56-59` does
+ * `set -a; source local-clone.env`), so "everything not allowlisted" includes
+ * `PATH`, `HOME`, `SSH_AUTH_SOCK` and dozens more. Announcing all of them on
+ * every boot is noise that teaches an operator to skip the line -- silence with
+ * extra steps. Announcing none of them is #659. So the drop report is scoped to
+ * the namespaces this project actually configures itself with.
+ */
+const SERVER_CONFIG_PREFIXES = [
+  "ALLOWED_",
+  "AUTH_TOKEN_",
+  "DB_",
+  "EMBEDDING_",
+  "LOG_",
+  "OPENBRAIN_",
+  "OPEN_BRAIN_",
+  "SERVICE_",
+] as const;
+
+/** One configured key the child environment does not carry. */
+export interface DroppedChildEnvEntry {
+  readonly key: string;
+}
+
+/**
+ * The keys that LOOK like Open Brain server configuration and are nevertheless
+ * dropped from the child environment.
+ *
+ * This exists because an allowlist that discards a configured key without
+ * saying so is accept-and-ignore, not tolerance -- the class already recorded
+ * in `docs/sme/gotcha-agent.md` from #464, whose first review question is
+ * "does the drop path name what it dropped?". #659 is that question answered
+ * the wrong way for a third time: `OPENBRAIN_CAPTURE_HEALTH_NAMESPACE` was set
+ * in the deployed env file, the redeploy's revision proof PASSED, and live
+ * /health still published no capture block, because the launcher dropped the
+ * key in silence.
+ *
+ * Returned as NAMES ONLY, never values. The dropped set can contain secrets in
+ * the general case -- an unlisted `AUTH_TOKEN_*` spelling lands here -- and
+ * this report is written to a log file the deploy runbook tells an operator to
+ * read.
+ *
+ * Reporting is not honoring: the allowlist stays an allowlist. A key named here
+ * is one a human must either add to `CHILD_ENV_KEYS` or delete from the env
+ * file.
+ */
+export function describeDroppedChildEnvironment(
+  env: Record<string, string | undefined>,
+): readonly DroppedChildEnvEntry[] {
+  const delivered = buildChildEnvironment(env);
+  const dropped: DroppedChildEnvEntry[] = [];
+  for (const [key, configured] of Object.entries(env)) {
+    if (configured === undefined) continue;
+    if (delivered[key] !== undefined) continue;
+    if (!SERVER_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      continue;
+    }
+    dropped.push({ key });
+  }
+  return dropped.sort((left, right) => left.key.localeCompare(right.key));
 }
 
 export function buildChildEnvironment(
@@ -279,6 +359,22 @@ export async function runLocalCloneLauncher(
       },
     });
     return 0;
+  }
+
+  // Announce BEFORE spawning. A server that starts without the config key it
+  // was given is the #659 failure, and the operator's chance to notice is the
+  // boot log -- which is only useful if the line precedes the child's own
+  // output rather than being buried under it.
+  const dropped = describeDroppedChildEnvironment(env);
+  if (dropped.length > 0) {
+    deps.announce(
+      `local-clone launcher ADJUSTED the server child's environment: ` +
+        `${dropped.length} configured key(s) are NOT in the child allowlist and ` +
+        `were dropped -- ${dropped.map((entry) => entry.key).join(", ")}. ` +
+        `The server child will not see them. Add each to CHILD_ENV_KEYS in ` +
+        `scripts/local-clone.ts if it is meant to reach the server, or remove ` +
+        `it from the clone env file if it is not.`,
+    );
   }
 
   let child: ChildProcess;
@@ -429,6 +525,13 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
   onSignal(signal, handler): () => void {
     process.on(signal, handler);
     return () => process.off(signal, handler);
+  },
+  announce(line): void {
+    // stderr, not stdout: `writeReceipt` puts a machine-parsed JSON document on
+    // stdout, and an operator diagnostic sharing that stream would corrupt it.
+    // The autostart wrapper captures both into the same log file, so the
+    // operator still reads this line where they look for boot problems.
+    process.stderr.write(`${line}\n`);
   },
 };
 

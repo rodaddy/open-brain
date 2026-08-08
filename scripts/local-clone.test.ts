@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   buildChildEnvironment,
+  describeDroppedChildEnvironment,
   LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA,
   productionDependencies,
   runLocalCloneLauncher,
@@ -68,6 +69,7 @@ function fakeDependencies(
     child: { spawn: () => childProcess() },
     writeReceipt: () => undefined,
     onSignal: () => () => undefined,
+    announce: () => undefined,
     ...overrides,
   };
 }
@@ -251,6 +253,91 @@ describe("local clone launcher", () => {
     expect(spawnedEnv).not.toHaveProperty("SSH_AUTH_SOCK");
     expect(spawnedEnv).not.toHaveProperty("CORE01_HOST");
     expect(handlers.size).toBe(0);
+  });
+
+  // #659: the capture-health observer merged in #656 builds nothing unless
+  // these reach the server child. The clone was redeployed with a PASSING
+  // revision proof and live /health still published no capture block, because
+  // the launcher dropped the configured namespace in silence.
+  it("passes the capture-health observer configuration to the server child", () => {
+    const child = buildChildEnvironment({
+      ...cloneEnv(),
+      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "rico",
+      OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "360",
+      OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "60000",
+    });
+    expect(child.OPENBRAIN_CAPTURE_HEALTH_NAMESPACE).toBe("rico");
+    expect(child.OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES).toBe("360");
+    expect(child.OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS).toBe("60000");
+  });
+
+  it("names a configured server-config key it drops, without echoing its value", () => {
+    const dropped = describeDroppedChildEnvironment({
+      ...cloneEnv(),
+      OPENBRAIN_SOME_FUTURE_SERVER_KEY: "super-secret-value",
+    });
+    expect(dropped.map((entry) => entry.key)).toContain(
+      "OPENBRAIN_SOME_FUTURE_SERVER_KEY",
+    );
+    expect(JSON.stringify(dropped)).not.toContain("super-secret-value");
+  });
+
+  it("does not report ambient host variables as dropped configuration", () => {
+    // The autostart wrapper sources the env file with `set -a`, so the
+    // launcher's environment is the env file UNIONED with launchd's. A report
+    // naming PATH and HOME on every boot is noise an operator learns to skip,
+    // which is silence with extra steps.
+    const dropped = describeDroppedChildEnvironment({
+      ...cloneEnv(),
+      PATH: "/usr/bin:/bin",
+      HOME: "/Users/placeholder",
+      SSH_AUTH_SOCK: "/placeholder/agent.sock",
+    }).map((entry) => entry.key);
+    expect(dropped).not.toContain("PATH");
+    expect(dropped).not.toContain("HOME");
+    expect(dropped).not.toContain("SSH_AUTH_SOCK");
+  });
+
+  it("reporting a dropped key does not deliver it — the allowlist stays an allowlist", () => {
+    const env = {
+      ...cloneEnv(),
+      OPENBRAIN_SOME_FUTURE_SERVER_KEY: "configured-but-unlisted",
+    };
+    expect(
+      describeDroppedChildEnvironment(env).map((entry) => entry.key),
+    ).toContain("OPENBRAIN_SOME_FUTURE_SERVER_KEY");
+    expect(buildChildEnvironment(env)).not.toHaveProperty(
+      "OPENBRAIN_SOME_FUTURE_SERVER_KEY",
+    );
+  });
+
+  it("announces the dropped keys on the start path before spawning", async () => {
+    const child = childProcess();
+    const announced: string[] = [];
+    const deps = fakeDependencies({
+      child: {
+        spawn: () => {
+          queueMicrotask(() => child.emit("exit", 0, null));
+          return child;
+        },
+      },
+      announce: (line) => announced.push(line),
+    });
+
+    const code = await runLocalCloneLauncher(
+      "start",
+      { ...cloneEnv(), OPENBRAIN_SOME_FUTURE_SERVER_KEY: "unlisted" },
+      deps,
+    );
+
+    expect(code).toBe(0);
+    expect(announced.join("\n")).toContain("OPENBRAIN_SOME_FUTURE_SERVER_KEY");
+  });
+
+  it("stays quiet when every configured server-config key is delivered", () => {
+    // The healthy path must not emit the notice, or the line is decoration an
+    // operator cannot use to tell a broken deploy from a normal one.
+    expect(describeDroppedChildEnvironment(cloneEnv())).toEqual([]);
   });
 
   it("rejects an environment that is not explicitly local-clone mode", async () => {
