@@ -4,11 +4,27 @@
  */
 import { describe, expect, it } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import type { DestinationStream } from "pino";
 import { withCorrelation } from "./context.ts";
 import { createLogger, withOperation, workerLogPath } from "./logger.ts";
 import { sanitizeValue } from "./sanitize.ts";
+
+// A repo-relative scratch dir, never `/tmp` or `$TMPDIR`: those are
+// sandbox-local, so a runner, a sandbox, and the host each see a different one
+// and anything written there is invisible to the others (Development
+// AGENTS.md, hard rule).
+//
+// Repo-relative rather than the shared `{temp_workspace}` path, because this
+// runs in CI too. An absolute `/Volumes/...` default is unwritable on the Linux
+// runner and fails with `EACCES: permission denied, mkdir '/Volumes'` — which
+// is exactly how the first push of this test failed. `_scratch/` is already
+// gitignored and already used by `src/operator-doctor.test.ts`.
+const SCRATCH_ROOT =
+  process.env.OPENBRAIN_TEST_SCRATCH_DIR ?? join(import.meta.dir, "../../_scratch/logging");
+await mkdir(SCRATCH_ROOT, { recursive: true });
 
 const CONFIG = {
   level: "debug" as const,
@@ -81,5 +97,51 @@ describe("structured logging boundary", () => {
 
   it("derives a separate file path for every worker", () => {
     expect(workerLogPath("logs/open-brain.log", "worker/2")).toBe("logs/open-brain.worker_2.log");
+  });
+
+  // Regression for #612. Every other test in this file injects an in-memory
+  // stream, which is the SINGLE-destination pino path — and that is precisely
+  // why they all passed while the running server logged nothing at all. This
+  // one takes the production default (`createLogger(config)` with no injected
+  // destination) and reads the file back off disk, because the defect lived
+  // entirely in the composition the tests were substituting away.
+  //
+  // Asserts a CHILD-logger line specifically: `component` arrives as a child
+  // binding, which is the shape #612 was reported against.
+  it("delivers module and child lines to the real rotating file destination", async () => {
+    const dir = await mkdtemp(join(SCRATCH_ROOT, "logging-612-"));
+    const configured = join(dir, "open-brain.log");
+    const logger = createLogger({ ...CONFIG, file: configured });
+
+    logger.info({ probe: "module" }, "routing_probe_module");
+    logger.child({ component: "maintenance" }).info({ probe: "child" }, "routing_probe_child");
+
+    // pino-roll appends an index to the configured name and writes through a
+    // worker thread, so poll for the content rather than assuming it is
+    // flushed synchronously.
+    const expectedFile = workerLogPath(configured, CONFIG.workerName)
+      .replace(/\.log$/, ".1.log");
+    let contents = "";
+    for (let attempt = 0; attempt < 100 && !contents.includes("routing_probe_child"); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      contents = await readFile(expectedFile, "utf8").catch(() => "");
+    }
+
+    const lines = contents.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const moduleLine = lines.find((line) => line.message === "routing_probe_module");
+    const childLine = lines.find((line) => line.message === "routing_probe_child");
+
+    // The module line proves the destination receives anything at all; without
+    // it a missing child line is ambiguous between "child bindings are lost"
+    // and "nothing is written", and the real defect was the latter.
+    expect(moduleLine).toBeDefined();
+    expect(childLine).toBeDefined();
+    expect(childLine?.component).toBe("maintenance");
+    // The envelope must survive the routing fix unchanged — a string level is
+    // what the shared envelope requires, and is also what broke multi-target
+    // routing in the first place.
+    expect(childLine?.level).toBe("info");
+    expect(childLine?.service).toBe(CONFIG.service);
+    expect(typeof childLine?.timestamp).toBe("string");
   });
 });
