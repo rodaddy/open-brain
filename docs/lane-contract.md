@@ -87,6 +87,38 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 15) — harvest of the #654 namespace-scope lane (PR #657) and its verify run
+
+- **A live-service check reads the SERVING process's credentials, never the
+  checkout's.** The repo `.env` has an empty `AUTH_TOKEN_ADMIN` since the
+  #645 scrub, so a check built on it 401s by design and reads as a service
+  fault. Round 12's which-tree-runs rule extended to identity: name where
+  the credential comes from in the check header, and refuse loudly when it
+  is absent instead of falling through to a misleading auth failure.
+- **A security control is unproven until something REQUESTS the dangerous
+  thing.** The server role-gates `X-Namespace`, but the Python client had
+  `delegate_namespace=False` hardcoded since #294 — the header was never
+  sent, so the 403 path had never executed in any run. A refusal branch
+  that has never refused is decoration; the done-means now sends the
+  forbidden request and asserts the refusal (clause c) AND that the
+  refusal names the actionable cause (clause d).
+- **Silent-default identity is tenant mis-scope, not cosmetics.** With
+  delegation hardcoded off, every delegated-intent session landed in
+  namespace `admin` — a real cross-tenant landing, stronger than the issue
+  as filed. Any config key that selects identity is REQUIRED config, loud
+  on absence, never silently defaulted (ledger item 28).
+- **Errors must name what the caller can change — the dead-end-error
+  class.** #646 (scope errors naming response vocabulary the validator
+  rejects) and #654 (a silent wrong-namespace landing with no signal at
+  all) are the same defect at different volumes. A refusal that does not
+  name the acting cause, or a mis-scope that says nothing, both strand the
+  caller; checks assert the error TEXT, not just the status.
+- **A red anchor that inverts at the fix is only meaningful bound to the
+  PR head.** Clause (a)'s PASS proves the fix only because verify-lane
+  pinned the worktree to the head SHA and re-read it after the run
+  (`recheck-head`). Any check whose RED lives on main and GREEN on the
+  branch inherits this binding requirement.
+
 ### 2026-08-08 (round 14) — harvest of the #652 capture-health composition lane
 
 - **A "compose it" lane must ask what the composer can actually SEE.** The
