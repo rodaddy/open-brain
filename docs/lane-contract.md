@@ -87,6 +87,37 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 12) — harvest of the #646 provider-scope lane (PR #650)
+
+- **Verify which tree the process actually runs before reading source as
+  truth.** The lane reasoned about correct-looking code in `src/` while the
+  service ran `server/main.ts` (`lsof -nP -iTCP:<port>` + `ps -o command`
+  answers it in one call; `package.json` `start` still points at the
+  non-serving tree). A source file that contradicts observed behavior is
+  evidence you are reading the wrong file, not evidence of a mystery.
+- **A done-means fixture encodes a world-assumption that can be wrong in
+  either direction — query the real distribution before inventing a fixture
+  shape.** The lane's first fixture seeded a conflicting `agent` and read
+  the server's contract-correct refusal as a failure; it nearly "fixed"
+  correct code. All 2011 real lanes carried the matching agent.
+- **A shared test resource closed by an earlier suite's `afterAll` fakes a
+  red.** Distinguish by assertion count: 23 assertions executing means the
+  subject failed; a harness error executes near zero.
+- **`git stash push` on already-committed work stashes NOTHING, and the
+  follow-up pop grabs someone else's stash.** Read the stash output before
+  popping. (Second foreign-stash incident; first was #624.)
+- **A live-service-bound receipt is not portable:** a check that proves
+  behavior against 127.0.0.1:3100 at revision X proves nothing about any
+  other host or revision, and goes stale on redeploy. Name the binding in
+  the receipt.
+- **Near-miss discipline, both directions:** a phantom finding (nonexistent
+  import) was re-checked and retracted before reporting; a wrong fixture
+  was corrected and RED re-proven against the pre-fix revision. Both are
+  the report's job, not its shame.
+- **Lazy-heal is a decision, not a default:** 2011 scope-broken lanes heal
+  on their next capture; no bulk repair was run, and the report says so —
+  bulk-heal remains an operator option.
+
 ### 2026-08-08 (round 11) — harvest of the #645 conflict lane, the ledger-25 retirement lane (PR #649), and the worker-48 pin failure
 
 - **A recorded ruling is not an implemented one, and the gap is invisible to
