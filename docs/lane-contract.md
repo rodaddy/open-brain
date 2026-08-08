@@ -87,6 +87,34 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 14) — harvest of the #652 capture-health composition lane
+
+- **A "compose it" lane must ask what the composer can actually SEE.** The
+  reader wanted watermark bytes and spool depth — client-side per-hook
+  files a server cannot enumerate. Passing an honest-looking 0 for an
+  unobservable count is not neutral: zero-while-sessions-ran IS the wedged
+  fault, so it would degrade every healthy deployment. Substitute a value
+  preserving the PROPERTY (turns arriving ≈ watermark advancing) and
+  publish which faults the vantage point can raise. (Round 10's TEST-NET
+  lesson, counts domain.)
+- **A per-role check must seed the expected roles before folding rows.**
+  `GROUP BY role` returns no group for the dead speaker — the exact entity
+  the check exists to find. A fold over returned rows reports a busy lane
+  and rebuilds #447.
+- **Late-binding needs its own clause:** two requests against one composed
+  app with the observation changed between them was the ONLY clause that
+  caught a boot-captured reading. Any health input composed as a closure
+  carries this clause.
+- **A WRITTEN-not-RUNNING declaration that names its own missing piece
+  makes the next lane cheap** — #648's residual-risk field pointed straight
+  at the composition root; this lane declares its own remaining gap
+  (server/main.ts wiring awaits an operator config ruling: namespace,
+  window, refresh cadence) the same way. Hardcoding defaults to satisfy a
+  dispatch expectation would have been the adjusted-silently failure.
+- **A type added for a future composer is exported at the boundary in the
+  same PR** — tsc found #648's `TransportCaptureHealth` declared but never
+  barrel-exported; invisible until the first composer tried to import it.
+
 ### 2026-08-08 (round 13) — harvest of the #647 capture-liveness lane (PR #648)
 
 - **The design may already exist and simply never have been executed.** #647
