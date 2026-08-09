@@ -139,7 +139,27 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # moved 68 -> 70 (69 is #701's), keeping it after the #678 entry it was
 # written alongside. The warning is why the build is run on every merge
 # rather than trusting a conflict-free result.
-EXPECTED_ENTRY_COUNT=236
+#
+# 2026-08-09, the #675 lane (PR #688) integrating main after #687: 236 -> 237.
+# ONE entry added by this branch
+# (docs/sme/entries/2026-08-09-a-deploy-that-cannot-fail-proves-nothing-when-it-passes.md).
+#
+# RE-MEASURED on the merged tree, not summed:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 237.
+#
+# ANNOUNCED, and this is the THIRD consecutive integration to hit the same
+# pair of collisions (#701 -> #687 -> #688), which makes it a property of
+# concurrent lanes rather than an unlucky merge. The ORDER field collided
+# again too: this branch and main both claimed gotcha-agent 69, so this
+# lane's entry moved 69 -> 70 (69 stays with #691's argv-shift entry, already
+# on the default branch). Git reported NO conflict on that collision — the
+# two entries are different files — and only build-sme-indexes.ts saw it.
+#
+# The pattern is now recorded in docs/lane-contract.md round 28: re-measure
+# the pin AFTER integrating, and re-run the build even when the merge was
+# conflict-free, because the defect a merge introduces here is invisible to
+# a textual merge by construction.
+EXPECTED_ENTRY_COUNT=237
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

@@ -71,6 +71,36 @@ Newest first. Every entry: what changed, and the observation that forced it.
 > scope adjustment the contract forbids. The round 27 entry below is written
 > into main's lineage so this lane's own harvest is not lost to the same gap.
 
+### 2026-08-09 (round 29) — harvest of the #675 integration (PR #688): the collision is the norm, not the incident
+
+- **Third consecutive integration, same two collisions** (#701 -> #687 ->
+  #688): the SME entry-count pin conflicted, and the `order:` field
+  duplicated in a way git reported as no conflict at all. Round 28 recorded
+  it as a merge-order hazard; three for three makes it a PROPERTY of running
+  lanes in parallel, not an unlucky merge. Every integration of a branch
+  carrying an SME entry should now EXPECT both, and the cost of assuming
+  otherwise is a silently duplicated `order` that only the build can see.
+- **A warning is the right severity for discovery and the wrong one for a
+  gate.** `build-sme-indexes.ts` warns on a duplicate `order` and exits 0, so
+  a merge that never runs the build ships the duplicate. It was caught all
+  three times only because the integration ran the build by hand. The
+  standing rule stays "re-run the branch's tooling after integrating," but
+  the enforcement-migration candidate is obvious: the per-entry done-means
+  check should fail on a duplicate `order`, the way it already fails on a
+  duplicate heading. Flagged for the decisions pass rather than built here —
+  it is main-owned tooling and belongs in its own change.
+- **`FETCH_HEAD` is per-worktree, re-proven.** `git merge FETCH_HEAD` in a
+  freshly-added worktree died with `could not open .git/worktrees/<name>/FETCH_HEAD`
+  because the fetch had run in a different worktree. Fetch inside the
+  worktree you merge in (round 11), and note the error names a missing FILE
+  rather than a missing ref, which reads as a broken repo at a glance.
+- **The design-lookup gate fired twice mid-lane on unrelated writes** (round
+  22's window decay). Both were complied with rather than routed around, and
+  the second lookup was load-bearing: it confirmed `order:` is an explicit
+  sort field independent of entry date, which is what made "move the
+  duplicate to the next free number" the correct resolution instead of
+  renumbering by date.
+
 ### 2026-08-09 (round 28) — harvest of the #681 integration (PR #687), a merge-order collision
 
 - **Two branches can each derive a pinned count HONESTLY and still be wrong
