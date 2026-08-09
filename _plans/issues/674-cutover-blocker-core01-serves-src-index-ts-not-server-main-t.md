@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T04:31:07Z
-Updated: 2026-08-09T04:31:07Z
+Updated: 2026-08-09T16:04:02Z
 
 ---
 
@@ -28,3 +28,11 @@ docs/sme/correctness.md:1822 — "TWO serving trees... a cross-cutting install d
 
 ## Wanted (operator decision required — do NOT pick silently)
 Either (a) cut core01 over to server/main.ts as its entrypoint, or (b) port the capture-health runtime composition into src/index.ts. This is an architecture decision about which tree is canonical, not a lane's to choose. Whichever: a done-means check must assert the capture block is live on the core01 serving tree (feature-signal, not revision), and the two-serving-trees SME entry gets a regression note. Truth grammar: WRITTEN in server/, NOT in the core01 serving path.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-09T16:04:01Z
+
+OPERATOR RULING (Rico, 2026-08-09, via controller widget): core01 cuts over to `server/main.ts` — the same entrypoint dogfood has served since 2026-08-02. Rationale: the standing 'dogfood as close to what we push to core01 as humanly possible' directive; the capture-health chain exists only in the rewrite entrypoint; src/ stays intact as rollback on core01 exactly as it does locally. Rejected alternative: backporting capture-health into src/index.ts (more work, preserves an entrypoint we are retiring, only defensible if the rewrite were distrusted under two-worker load — it is not; the E2E gate and a week of dogfood say otherwise). The B5 (#675) deploy-hardening lane carries this ruling: the hardened core01 deploy ships the server/main.ts entrypoint. State: PROPOSED until that deploy runs at cutover.

@@ -3,11 +3,12 @@
 
 # #680 — [cutover-blocker] Spool quarantine is a permanent SILENT drop — 15 turns + ~44 lifecycle events abandoned, count=0 in DB, spool_pending reads 0
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T04:35:27Z
-Updated: 2026-08-09T04:35:27Z
+Updated: 2026-08-09T16:57:32Z
+Closed: 2026-08-09T16:57:32Z
 
 ---
 

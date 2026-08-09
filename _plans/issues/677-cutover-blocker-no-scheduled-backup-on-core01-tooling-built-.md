@@ -3,11 +3,12 @@
 
 # #677 — [cutover-blocker] No scheduled backup on core01 — tooling built & CI-drilled but never run; only backup is 16 days old, 15 migrations behind
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T04:32:11Z
-Updated: 2026-08-09T04:32:11Z
+Updated: 2026-08-09T16:57:35Z
+Closed: 2026-08-09T16:57:35Z
 
 ---
 

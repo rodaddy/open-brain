@@ -3,11 +3,12 @@
 
 # #679 — [safety-hole] Development-wide ob-gate safety gates (fast-tools, destructive-delete, irreversible-command, worktree-hygiene) fail OPEN in open-brain — _ob/bin/ob-gate does not exist here
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T04:34:18Z
-Updated: 2026-08-09T04:34:18Z
+Updated: 2026-08-09T16:57:39Z
+Closed: 2026-08-09T16:57:39Z
 
 ---
 

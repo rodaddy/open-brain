@@ -3,11 +3,12 @@
 
 # #681 — [cutover-blocker] Liveness observer blind to the 'tool' role — dead 8 days (14,006 rows frozen), /health reads green
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T04:35:48Z
-Updated: 2026-08-09T04:35:48Z
+Updated: 2026-08-09T17:48:28Z
+Closed: 2026-08-09T17:48:28Z
 
 ---
 
