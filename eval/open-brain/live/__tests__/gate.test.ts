@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { runLiveGate, type GateClients } from "../gate.ts";
+import {
+  labelTeardownError,
+  runLiveGate,
+  teardownRecords,
+  type GateClients,
+} from "../gate.ts";
 import type { LiveEvalConfig } from "../config.ts";
 import {
   LiveTransportError,
@@ -311,6 +316,9 @@ describe("runLiveGate happy path", () => {
       archived: 3,
       already_absent: 0,
       failed: 0,
+      // #671: empty on a clean run, and asserted EXACTLY so a label leaking in
+      // where nothing failed would fail this test rather than pass unnoticed.
+      failure_labels: [],
     });
     expect(state.archived.sort()).toEqual(
       ["srv-neg-secret", "srv-prim-a", "srv-prim-b"].sort(),
@@ -666,5 +674,58 @@ describe("runLiveGate through the REAL transport parseHits boundary", () => {
     // not the transport boundary -- classified it as foreign-namespace.
     expect(err.label).toBe("search_brain:foreign-namespace");
     expect(err.label).not.toContain("srv-no-ns");
+  });
+});
+
+// Issue #671: the bare `catch {}` in `teardownRecords` discarded the cleanup
+// error, so when the third credentialed #653 verify reported failed=2 the
+// throw's label was unrecoverable from the receipt, the log, or anywhere else.
+describe("teardownRecords failure labels (#671)", () => {
+  it("captures a LiveTransportError's redacted label, one per failure, in order", async () => {
+    const tally = await teardownRecords(
+      ["ok", "bad-a", "bad-b"],
+      async (record) => {
+        if (record === "ok") return "archived";
+        throw new LiveTransportError(`archive_entry:${record}`, false);
+      },
+    );
+    expect(tally.attempted).toBe(3);
+    expect(tally.archived).toBe(1);
+    expect(tally.failed).toBe(2);
+    expect(tally.failure_labels).toEqual([
+      "archive_entry:bad-a",
+      "archive_entry:bad-b",
+    ]);
+  });
+
+  it("keeps going after a failure — one bad record never strands the rest", async () => {
+    const cleaned: string[] = [];
+    const tally = await teardownRecords(["a", "b", "c"], async (record) => {
+      if (record === "a") throw new Error("boom");
+      cleaned.push(record);
+      return "archived";
+    });
+    expect(cleaned).toEqual(["b", "c"]);
+    expect(tally.archived).toBe(2);
+    expect(tally.failed).toBe(1);
+  });
+
+  it("never lets an arbitrary error's MESSAGE into the label — class name only", async () => {
+    // A receipt gets pasted into issues and PRs, and an arbitrary Error.message
+    // can carry row content, a namespace value, or a token fragment.
+    const secret = "namespace=rico row=super-secret-content";
+    const tally = await teardownRecords(["x"], async () => {
+      throw new Error(secret);
+    });
+    expect(tally.failure_labels).toEqual(["Error"]);
+    expect(tally.failure_labels.join(" ")).not.toContain("rico");
+    expect(tally.failure_labels.join(" ")).not.toContain("super-secret-content");
+  });
+
+  it("labels a non-Error throw without inventing detail", () => {
+    expect(labelTeardownError("just a string")).toBe("unknown");
+    expect(labelTeardownError(new LiveTransportError("tool:label", true))).toBe(
+      "tool:label",
+    );
   });
 });

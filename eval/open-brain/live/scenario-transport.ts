@@ -2,13 +2,14 @@ import { resolve } from "node:path";
 import { Pool } from "pg";
 import { summarizeChildStderr } from "../../../src/child-stderr.ts";
 import type { LiveEvalConfig } from "./config.ts";
-import { teardownRecords } from "./gate.ts";
-import { purgeNamespace } from "./namespace-purge.ts";
+import { labelTeardownError, teardownRecords } from "./gate.ts";
+import { countNamespaceResidue, purgeNamespace } from "./namespace-purge.ts";
 import type {
   ProviderExecution,
   ProviderReceipt,
   ScenarioRecord,
   ScenarioTransport,
+  TeardownResidue,
   TeardownTally,
 } from "./scenario-types.ts";
 import {
@@ -204,15 +205,24 @@ export class LiveScenarioTransport implements ScenarioTransport {
    * eval prefix. That narrow shape is what `docs/issue-graph.md` ledger item 20
    * permits, and nothing wider.
    *
-   * A purge failure is reported as a teardown failure rather than thrown: the
-   * receipt is the artifact an operator reads after a bad run, and a throw here
-   * would discard the record tally that explains what did get cleaned. Silently
+   * A purge failure is reported in the tally rather than thrown: the receipt is
+   * the artifact an operator reads after a bad run, and a throw here would
+   * discard the record tally that explains what did get cleaned. Silently
    * swallowing it would rebuild the exact defect #655 is about.
+   *
+   * THEN THE RESIDUE READING (issue #671). The tally above counts CALLS, and a
+   * call that threw is not the same fact as a row that remains. On the third
+   * credentialed #653 verify the two `archive_entry` throws pushed `failed=2`
+   * while the purge that followed removed every row; the gate read the tally and
+   * exited 1 on a clean database. So after everything has run, this asks the
+   * database what is actually left, and THAT is what the gate's verdict reads.
+   * The tally stays -- demoted to diagnostics, with the throw labels now
+   * captured (`teardownRecords`) instead of discarded into a bare catch.
    */
   async cleanup(
     records: ScenarioRecord[],
     namespace: string,
-  ): Promise<TeardownTally> {
+  ): Promise<{ tally: TeardownTally; residue: TeardownResidue }> {
     const unique = Array.from(
       new Map(records.map((record) => [`${record.kind}:${record.id}`, record])).values(),
     );
@@ -231,14 +241,48 @@ export class LiveScenarioTransport implements ScenarioTransport {
       const failedTables = Object.keys(purge.failed_tables);
       if (failedTables.length > 0) {
         tally.failed += failedTables.length;
+        // The purge's per-table failures are content-free class names already;
+        // labelling them by table keeps the diagnostic actionable rather than a
+        // bare increment (#671).
+        for (const [table, reason] of Object.entries(purge.failed_tables)) {
+          tally.failure_labels.push(`purge:${table}:${reason}`);
+        }
       }
-    } catch {
-      // A refusal or a connection failure. Counted, never hidden: a nonzero
-      // `failed` is what the #578 gate's clause (e) reads.
+    } catch (error: unknown) {
+      // A refusal or a connection failure. Counted AND labelled, never hidden.
       tally.failed += 1;
+      tally.failure_labels.push(`purge:${labelTeardownError(error)}`);
     }
 
-    return tally;
+    let residue: TeardownResidue;
+    try {
+      const observed = await countNamespaceResidue(this.pool, namespace);
+      const unreadable = Object.keys(observed.unreadable_tables);
+      residue =
+        unreadable.length > 0
+          ? {
+              // A partial reading cannot support a clean verdict: the rows we
+              // failed to count are exactly where residue would hide.
+              checked: false,
+              rows: observed.rows,
+              by_table: observed.rows_by_table,
+              unchecked_reason: `unreadable_tables=${unreadable.sort().join(",")}`,
+            }
+          : {
+              checked: true,
+              rows: observed.rows,
+              by_table: observed.rows_by_table,
+            };
+    } catch (error: unknown) {
+      residue = {
+        checked: false,
+        rows: 0,
+        by_table: {},
+        unchecked_reason: `residue_query_failed:${labelTeardownError(error)}`,
+      };
+    }
+
+    return { tally, residue };
   }
 
   /**
