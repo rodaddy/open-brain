@@ -1,4 +1,4 @@
-import type { TeardownTally } from "./gate.ts";
+import type { TeardownResidue, TeardownTally } from "./gate.ts";
 import type { ContextPackScope } from "./transport.ts";
 
 export type ScenarioKind =
@@ -130,11 +130,22 @@ export interface ScenarioTransport {
     sessionKey: string;
     namespace: string;
   }): Promise<Record<string, unknown>>;
-  cleanup(records: ScenarioRecord[], namespace: string): Promise<TeardownTally>;
+  /**
+   * Remove this run's records and namespace, and REPORT WHAT IS LEFT (#671).
+   *
+   * The residue half is the load-bearing return value: the tally counts cleanup
+   * CALLS, and a call that threw is not the same fact as a row that remains.
+   * A transport that cannot observe rows returns `checked: false` -- which the
+   * gate treats as unproven, never as clean.
+   */
+  cleanup(
+    records: ScenarioRecord[],
+    namespace: string,
+  ): Promise<{ tally: TeardownTally; residue: TeardownResidue }>;
   close(): Promise<void>;
 }
 
-export type { TeardownTally };
+export type { TeardownResidue, TeardownTally };
 
 export interface ScenarioVerdict {
   scenario_id: string;
@@ -160,5 +171,23 @@ export interface ScenarioGateReceipt {
   scenarios: ScenarioVerdict[];
   passed: boolean;
   failures: string[];
+  /**
+   * Content-free NON-VERDICT observations (#671). Anything an operator needs in
+   * order to explain a run but which must never by itself decide pass/fail --
+   * today, the labels of cleanup calls that threw. Kept out of `failures` on
+   * purpose: `failures` is the verdict channel, and mixing a diagnostic into it
+   * is the exact defect #671 removes.
+   */
+  diagnostics: string[];
+  /**
+   * DIAGNOSTICS ONLY since #671. Counts of cleanup calls plus one content-free
+   * label per failure. The gate verdict does NOT read `failed` -- see
+   * `teardown_residue`, which reads rows.
+   */
   teardown: TeardownTally;
+  /**
+   * The load-bearing teardown signal (#671): rows still carrying this run's
+   * namespace, queried from the database after cleanup ran.
+   */
+  teardown_residue: TeardownResidue;
 }

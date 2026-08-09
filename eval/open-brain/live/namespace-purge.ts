@@ -167,3 +167,70 @@ export async function purgeNamespace(
 
   return { namespace, deleted_by_table: deletedByTable, deleted, failed_tables: failedTables };
 }
+
+/**
+ * Count rows still carrying `namespace`, per table -- the DB-queryable truth a
+ * teardown verdict is allowed to rest on (issue #671).
+ *
+ * WHY THIS LIVES HERE AND NOT IN THE TRANSPORT
+ * --------------------------------------------
+ * It reads the SAME `PURGE_TABLES` tuple the purge writes. A separately
+ * maintained residue table list would drift the moment either side gained a
+ * table, and the drift's failure mode is silent and green: a table the purge
+ * stopped clearing would also stop being counted, so the residue verdict would
+ * report clean over exactly the rows it exists to find. One list, two readers.
+ *
+ * NOT prefix-guarded, deliberately: this only ever runs `SELECT count(*)`, so
+ * there is nothing for a guard to protect. Guarding it would also make it
+ * useless for the one job it has -- proving, from outside, that a name was
+ * cleaned.
+ *
+ * A table that cannot be read is recorded in `unreadable_tables` and is NOT
+ * silently treated as zero: a residue reading is only load-bearing if it can
+ * say which tables it actually managed to read.
+ */
+export interface NamespaceResidueResult {
+  namespace: string;
+  /** Rows remaining, per table, only for tables that had any. */
+  rows_by_table: Record<string, number>;
+  /** Total rows remaining across every table that could be read. */
+  rows: number;
+  /** Tables whose count could not be read, by name, with a content-free reason. */
+  unreadable_tables: Record<string, string>;
+}
+
+export async function countNamespaceResidue(
+  pool: Pool,
+  namespace: string,
+): Promise<NamespaceResidueResult> {
+  const rowsByTable: Record<string, number> = {};
+  const unreadableTables: Record<string, string> = {};
+  let rows = 0;
+
+  for (const table of PURGE_TABLES) {
+    try {
+      // Same interpolation argument as `purgeNamespace`: the table name comes
+      // from the module-local const tuple, never from a caller. The namespace
+      // is parameterized.
+      const result = await pool.query(
+        `SELECT count(*)::int AS n FROM ${table} WHERE namespace = $1`,
+        [namespace],
+      );
+      const count = Number(result.rows[0]?.n ?? 0);
+      if (count > 0) {
+        rowsByTable[table] = count;
+        rows += count;
+      }
+    } catch (error: unknown) {
+      unreadableTables[table] =
+        error instanceof Error ? error.constructor.name : "unknown";
+    }
+  }
+
+  return {
+    namespace,
+    rows_by_table: rowsByTable,
+    rows,
+    unreadable_tables: unreadableTables,
+  };
+}
