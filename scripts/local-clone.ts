@@ -50,7 +50,21 @@ const CHILD_ENV_KEYS = [
   "EMBEDDING_MODEL",
   "EMBEDDING_TIMEOUT_MS",
   "LOG_FILE",
+  // #661 operator ruling 29.2a: these five were configured with real values in
+  // the operator-owned env file and dropped in silence for their whole life --
+  // surfaced the moment #659's announce-on-drop made the drops visible. Fourth
+  // instance of the deploy-coupling class documented at the #530 comment below.
+  //
+  // The sixth key that boot line named, EMBEDDING_WATCHDOG_RESTART_SCRIPT, is
+  // deliberately NOT here: `src/local-clone-mode.ts` prohibits it in clone mode
+  // and the launcher throws on any non-empty value. It is set EMPTY in the env
+  // file, which is the documented suppression form -- see the empty-value rule
+  // in `describeDroppedChildEnvironment` below.
+  "LOG_LEVEL",
+  "LOG_MAX_BYTES",
+  "LOG_MAX_FILES",
   "NODE_ENV",
+  "OPENBRAIN_MCP_AUDIT_ENABLED",
   "OPENBRAIN_LOCAL_CLONE",
   "OPENBRAIN_LOCAL_CLONE_ROOT",
   // #659 capture-health observer (PR #656, ledger item 28): these three must
@@ -69,6 +83,7 @@ const CHILD_ENV_KEYS = [
   "OPENBRAIN_TRANSPORT",
   "PORT",
   "QMD_PATH",
+  "SERVICE_NAME",
   "TZ",
 ] as const;
 
@@ -202,6 +217,27 @@ export interface DroppedChildEnvEntry {
  * Reporting is not honoring: the allowlist stays an allowlist. A key named here
  * is one a human must either add to `CHILD_ENV_KEYS` or delete from the env
  * file.
+ *
+ * A CONFIGURED value has three states here, not two (#661, operator ruling
+ * 29.2a). Reading only `undefined` as "not configured" made this function
+ * report deliberate SUPPRESSIONS as mistakes:
+ *
+ *   unset        -- absent from the env file. Not configured, not reported.
+ *   set-empty    -- `KEY=` in the env file. A deliberate OFF SWITCH, not a
+ *                   dropped configuration, so it is not reported either.
+ *   set-valued   -- `KEY=something`. Configured; reported if the child will not
+ *                   receive it.
+ *
+ * Clone mode already reads an explicit empty this way: `QMD_PATH` MUST be empty
+ * to suppress the production `/opt/qmd` default
+ * (`src/local-clone-mode.ts`), and `EMBEDDING_WATCHDOG_RESTART_SCRIPT=` is the
+ * documented way to disable the embedding watchdog in a clone
+ * (`docs/local-clone-dogfood.md`) -- a key clone mode PROHIBITS from carrying a
+ * value at all. Announcing those as dropped configuration is the mirror of the
+ * #659 defect: a false positive that teaches an operator the boot line is
+ * noise, which costs exactly what silence costs. It also has a live receipt --
+ * the first boot after #659 named the empty watchdog key, and #661 was filed
+ * asking that a prohibited key be honored.
  */
 export function describeDroppedChildEnvironment(
   env: Record<string, string | undefined>,
@@ -210,6 +246,11 @@ export function describeDroppedChildEnvironment(
   const dropped: DroppedChildEnvEntry[] = [];
   for (const [key, configured] of Object.entries(env)) {
     if (configured === undefined) continue;
+    // An explicitly-empty value is a suppression, not a dropped setting. Note
+    // this tests the RAW value for `""` rather than falsiness: a key whose
+    // configured value is the string "0" or "false" IS configured, and dropping
+    // it silently is the bug this whole function exists to prevent.
+    if (configured === "") continue;
     if (delivered[key] !== undefined) continue;
     if (!SERVER_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))) {
       continue;
