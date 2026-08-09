@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# env bash, not /opt/homebrew/bin/bash: this repo is checked out on the Linux
+# cc-* boxes too, where Homebrew's path does not exist. Stays bash-3.2
+# compatible so it also works if env resolves to Apple's bash in a stripped
+# hook shell.
+#
+# ob-gate (open-brain) — reach the Development-wide enforcement gates from a
+# repo that does not contain them.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE EXISTS — issue #679, cutover pre-flight blocker B7
+# ---------------------------------------------------------------------------
+# /Volumes/ThunderBolt/Development/.claude/settings.json registers four safety
+# gates as:
+#
+#   "${CLAUDE_PROJECT_DIR}"/_ob/bin/ob-gate <gate>
+#
+# That is correct for a session opened on the Development root. When open-brain
+# is CLAUDE_PROJECT_DIR it expands to open-brain/_ob/bin/ob-gate — which does
+# not exist, and cannot: open-brain is a SEPARATE git repo, gitignored by
+# Development (`.gitignore:3:*  open-brain`), so Development's `_ob/` tree is
+# not part of this checkout and never will be.
+#
+# The shell then exits 127, and PreToolUse treats ANY non-2 exit as ALLOW. The
+# gates FAIL OPEN. Measured 2026-08-09: the pre-cutover enforcement audit's own
+# subagent ran `rm -rf`, `grep`, and `find` unblocked inside this repo, while
+# AGENTS.md and CLAUDE.md both claimed those were enforced controls.
+#
+# The upstream ob-gate's header says it "FAILS CLOSED, DELIBERATELY / converts
+# every breakage into exit 2". It cannot, because the file that would do that is
+# the missing one. This is the exact failure mode ob-gate exists to prevent,
+# reproduced one level up — and the reason THIS file's whole job is to fail
+# closed rather than to be clever.
+#
+# ---------------------------------------------------------------------------
+# WHAT IT DOES
+# ---------------------------------------------------------------------------
+# Resolve the Development root, then exec the REAL dispatcher at
+# <root>/_ob/bin/ob-gate. This file deliberately contains no gate logic of its
+# own. The gates are Development-owned and shared across every repo; a second
+# copy here would fork the moment either side changed, and the fork would be
+# invisible because both halves would keep exiting 0 on benign input. One
+# implementation, reached from two places.
+#
+# ---------------------------------------------------------------------------
+# ROOT RESOLUTION — ordered, and every order is deliberate
+# ---------------------------------------------------------------------------
+# Resolution order matches scripts/setup-client.sh:74-95, which solved this same
+# problem for the provider install (#555/#636). An instruction beats a guess:
+#
+#   1. OPENBRAIN_DEVELOPMENT_ROOT — this repo's own name for it, written per-box
+#      by setup-client.sh at install time.
+#   2. DEV_ROOT — what the fleet scripts and ~/.env.machine already call it.
+#      That file is THE one place a machine names its roots, and it keys on
+#      hostname rather than on an attached volume, so a travelling drive cannot
+#      swing the root mid-session.
+#   3. Walk up from THIS FILE's own location. open-brain normally sits at
+#      <root>/open-brain, so the root is two directories up from .claude/hooks.
+#      This keeps the checkout self-describing when the environment is bare —
+#      which is the ordinary case in a hook's stripped shell, and is why the
+#      env vars alone are not sufficient.
+#   4. Probe $HOME/Development (the Air/cc-* layout).
+#
+# Each candidate must actually CONTAIN the dispatcher before it is accepted. A
+# root that exists but holds no _ob/bin/ob-gate is not a root — accepting it
+# would turn a wrong-path problem into a silent no-gate problem, which is #679.
+#
+# Strategy 3 is why this is not a solved problem by env vars alone, and also why
+# it is not solved by strategy 3 alone: a LANE WORKTREE lives under the temp
+# workspace (/Volumes/ThunderBolt/_tmp/open-brain/_worktrees/<lane>), NOT under
+# the Development root, so walking up from a worktree finds nothing. Lanes are
+# where this repo does most of its work, so a resolver that only walked up would
+# be dark in exactly the environment that most needs it. Verified 2026-08-09
+# from a live lane worktree.
+#
+# ---------------------------------------------------------------------------
+# FAILS CLOSED, DELIBERATELY
+# ---------------------------------------------------------------------------
+# If the root will not resolve, or the dispatcher is missing, or bun is absent,
+# this exits 2 with the reason on stderr. Exit 2 BLOCKS the tool call and puts
+# the reason in front of the agent. Exiting anything else — including the 127 a
+# missing file naturally produces — is read as ALLOW and silently disables every
+# gate, which is the whole defect being fixed. Re-creating that failure mode in
+# the fix would be absurd.
+#
+# The cost of failing closed is real and is accepted: on a box with no
+# Development tree, every Bash call in this repo is refused with an explanation
+# naming OPENBRAIN_DEVELOPMENT_ROOT. That is loud, recoverable, and correct.
+# Failing open is quiet, unrecoverable, and is how ~50 GB of user data was
+# deleted on 2026-07-30.
+#
+# ---------------------------------------------------------------------------
+# Usage (from .claude/settings.json):
+#   "${CLAUDE_PROJECT_DIR}"/.claude/hooks/ob-gate fast-tools
+#   "${CLAUDE_PROJECT_DIR}"/.claude/hooks/ob-gate destructive-delete
+#   "${CLAUDE_PROJECT_DIR}"/.claude/hooks/ob-gate irreversible-command
+#   "${CLAUDE_PROJECT_DIR}"/.claude/hooks/ob-gate worktree-hygiene
+set -euo pipefail
+
+readonly SELF="ob-gate (open-brain)"
+
+die() {
+  printf '%s: %s\n' "$SELF" "$1" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || die "usage: ob-gate <gate-name> [args...]
+
+known gates: fast-tools, destructive-delete, irreversible-command, worktree-hygiene"
+
+# Resolve symlinks first, so an invocation through a link still locates the
+# real file (BASH_SOURCE reports the LINK, whose directory strips to nothing
+# useful). Same handling as the upstream dispatcher.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  target="$(readlink -- "$src")"
+  case "$target" in
+    /*) src="$target" ;;
+    *)  src="$(dirname -- "$src")/$target" ;;
+  esac
+done
+here="$(cd -- "$(dirname -- "$src")" && pwd -P)"
+
+# <root>/open-brain/.claude/hooks -> <root>
+repo_root="${here%/.claude/hooks}"
+walk_up_root="$(dirname -- "$repo_root")"
+
+# A candidate is only a root if it actually carries the dispatcher.
+upstream_for() { printf '%s/_ob/bin/ob-gate' "$1"; }
+
+root=""
+root_source=""
+try_root() {
+  local candidate="$1" source="$2"
+  [ -n "$candidate" ] || return 1
+  [ -x "$(upstream_for "$candidate")" ] || return 1
+  root="$candidate"
+  root_source="$source"
+  return 0
+}
+
+try_root "${OPENBRAIN_DEVELOPMENT_ROOT:-}" "OPENBRAIN_DEVELOPMENT_ROOT" \
+  || try_root "${DEV_ROOT:-}" "DEV_ROOT" \
+  || try_root "$walk_up_root" "walked up from this checkout" \
+  || try_root "$HOME/Development" "probed \$HOME/Development" \
+  || true
+
+if [ -z "$root" ]; then
+  die "cannot reach the Development enforcement gates.
+
+    Looked for _ob/bin/ob-gate under, in order:
+      OPENBRAIN_DEVELOPMENT_ROOT  ${OPENBRAIN_DEVELOPMENT_ROOT:-(unset)}
+      DEV_ROOT                    ${DEV_ROOT:-(unset)}
+      walked up from this repo    $walk_up_root
+      \$HOME/Development           $HOME/Development
+
+    BLOCKING rather than allowing, on purpose. These are the fast-tools,
+    destructive-delete, irreversible-command and worktree-hygiene gates; a
+    session that cannot reach them is a session where \`rm -rf\` is unguarded,
+    and letting the command through quietly is issue #679 itself.
+
+    Fix: export OPENBRAIN_DEVELOPMENT_ROOT (or DEV_ROOT) to this machine's
+    Development tree, or mount the volume that holds it."
+fi
+
+gate="$1"
+shift
+
+exec "$(upstream_for "$root")" "$gate" "$@"

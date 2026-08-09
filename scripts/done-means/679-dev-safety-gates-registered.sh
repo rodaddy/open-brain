@@ -85,13 +85,32 @@
 #      closed and wedged the repo — would satisfy clauses 1-3 and look like
 #      success. This is the clause that distinguishes "enforced" from "broken".
 #
-#   5  FAIL-CLOSED. Point the dispatcher at a root where no gate can be found
-#      and it must exit 2, never 0. This is the property whose ABSENCE is the
+#   5  FAIL-CLOSED. With NO Development tree reachable by ANY of the resolver's
+#      strategies, the dispatcher must exit 2 with a stated reason — never 0,
+#      and never a non-verdict 127. This is the property whose ABSENCE is the
 #      entire issue: the pre-fix world exits 127 and the harness reads that as
 #      ALLOW. A fix that merely made the happy path work, while still exiting
 #      non-2 when the Development tree is absent (a laptop without the volume
 #      mounted, a fresh clone), would reintroduce #679 on the next machine.
-#      Asserted by invoking the real dispatcher with a bogus resolved root.
+#
+#      HOW THIS CLAUSE IS DRIVEN, AND WHY IT IS NOT THE OBVIOUS WAY. The first
+#      version set DEV_ROOT/OPENBRAIN_DEVELOPMENT_ROOT to a bogus path and
+#      asserted exit 2. It PASSED — for the wrong reason, and the refusal text
+#      gave it away: it was the UPSTREAM dispatcher's "Development root does not
+#      exist" message, not this repo's. The resolver had correctly rejected the
+#      bogus env roots and fallen through to $HOME/Development, which on this
+#      machine is a symlink to the real tree. So the env vars alone can never
+#      starve the resolver here, and the fail-closed branch was never reached:
+#      a green clause proving nothing (round 9 — a clause whose PASS comes from
+#      a negative match must be mutation-checked).
+#
+#      Driven instead by COPYING the dispatcher to a scratch location whose
+#      walk-up parent holds no _ob/bin/ob-gate, with HOME and both env vars
+#      pointed at that same barren directory. That starves all four strategies
+#      at once, which is the only state in which the fail-closed branch runs.
+#      The clause additionally asserts the refusal is THIS file's — it must name
+#      OPENBRAIN_DEVELOPMENT_ROOT — so it can never again be satisfied by the
+#      upstream dispatcher answering on the real tree's behalf.
 #
 #   6  permissions.deny CARRIES THE HARD FLOOR. Hooks are the actionable layer;
 #      `permissions.deny` is the layer that holds when bun is missing or a file
@@ -347,10 +366,21 @@ fi
 # directory that exists but holds no gates. Exit 2 (block + explain) is the only
 # acceptable answer. Exit 0 is #679 itself; 127 is the pre-fix world.
 # ---------------------------------------------------------------------------
-if [ -z "$DD_CMD" ]; then
-  record 5 FAIL "no dispatcher registered to test the fail-closed property against (see clause 1)"
+DISPATCHER="$REPO_ROOT/.claude/hooks/ob-gate"
+if [ ! -x "$DISPATCHER" ]; then
+  record 5 FAIL "no repo-local dispatcher at .claude/hooks/ob-gate to test the fail-closed property against"
 else
-  BOGUS_ROOT="$REPO_ROOT/.679-nonexistent-development-root"
+  # Starve EVERY resolution strategy at once. A barren directory serves as the
+  # walk-up parent, as $HOME, and as both env roots; none of them contains
+  # _ob/bin/ob-gate, so the resolver has nowhere left to fall through to. This
+  # is the only state in which the fail-closed branch executes.
+  FC_SCRATCH="$REPO_ROOT/.679-fail-closed-probe.$$"
+  FC_BARREN="$FC_SCRATCH/barren"
+  mkdir -p "$FC_BARREN/open-brain/.claude/hooks" || fail_hard "cannot create fail-closed probe dir"
+  cp "$DISPATCHER" "$FC_BARREN/open-brain/.claude/hooks/ob-gate" \
+    || fail_hard "cannot stage dispatcher for the fail-closed probe"
+  chmod +x "$FC_BARREN/open-brain/.claude/hooks/ob-gate" 2>/dev/null
+
   payload="$(
     bun -e '
       process.stdout.write(JSON.stringify({
@@ -363,10 +393,10 @@ else
   )" || fail_hard "could not build fail-closed payload"
 
   FC_STDERR="$(printf '%s' "$payload" | \
-    CLAUDE_PROJECT_DIR="$REPO_ROOT" \
-    DEV_ROOT="$BOGUS_ROOT" \
-    OPENBRAIN_DEVELOPMENT_ROOT="$BOGUS_ROOT" \
-    /usr/bin/env bash -c "$DD_CMD" 2>&1 >/dev/null)"
+    HOME="$FC_BARREN" \
+    DEV_ROOT="$FC_BARREN/nonexistent" \
+    OPENBRAIN_DEVELOPMENT_ROOT="$FC_BARREN/nonexistent" \
+    "$FC_BARREN/open-brain/.claude/hooks/ob-gate" destructive-delete 2>&1 >/dev/null)"
   FC_EXIT=$?
 
   if [ "$FC_EXIT" -eq 0 ]; then
@@ -375,8 +405,18 @@ else
     record 5 FAIL "an unresolvable gate root exited $FC_EXIT; PreToolUse reads any non-2 as ALLOW, so this fails open"
   elif [ -z "$FC_STDERR" ]; then
     record 5 FAIL "blocked at exit=2 but said nothing — a silent block wedges the lane with no reason"
+  elif ! printf '%s' "$FC_STDERR" | rg -qF 'OPENBRAIN_DEVELOPMENT_ROOT'; then
+    # Guards against the false green this clause was rewritten to kill: an exit
+    # 2 produced by the UPSTREAM dispatcher on a real tree, rather than by this
+    # repo's resolver running out of strategies.
+    record 5 FAIL "exit=2 but the refusal is not this repo's fail-closed message (never names OPENBRAIN_DEVELOPMENT_ROOT) — the probe did not starve the resolver: $(printf '%s' "$FC_STDERR" | tr '\n' ' ' | cut -c1-200)"
   else
-    record 5 PASS "unresolvable gate root exits 2 with a stated reason — fails CLOSED"
+    record 5 PASS "with no Development tree reachable by any strategy, exits 2 naming the remedy — fails CLOSED"
+  fi
+
+  ARCHIVE_DIR="/Volumes/ThunderBolt/_tmp/open-brain/_archive"
+  if mkdir -p "$ARCHIVE_DIR" 2>/dev/null; then
+    mv "$FC_SCRATCH" "$ARCHIVE_DIR/679-fail-closed-probe.$(date +%s).$$" 2>/dev/null
   fi
 fi
 
