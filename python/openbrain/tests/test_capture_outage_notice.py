@@ -45,11 +45,16 @@ from conftest import (
 )
 from openbrain.apps.capture.outage import (
     DEGRADED_NOTICE,
+    QUARANTINE_ENVELOPE_SCHEMA,
+    QUARANTINE_ONLY_NOTICE,
+    QUARANTINE_SUFFIX,
     RECOVERED_NOTICE,
     OutageLatch,
     default_spool_path,
+    quarantine_path,
     spool_notice,
     spool_pending,
+    spool_quarantined,
 )
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks import stop, subagent_stop
@@ -1117,6 +1122,157 @@ class TestTheSpoolDepthOnTheNotice:
 
         assert resolved.is_absolute()
         assert resolved.name == "claude-spool.jsonl"
+
+
+class TestQuarantineIsNeverSilent:
+    """#680 — abandoned records are visible and named at the capture lane.
+
+    The defect these pin: after ``quarantine_threshold`` consecutive replay
+    failures the provider moves a unit to a sidecar and stops retrying it, and
+    every count in this module read the LIVE spool, so the move made the number
+    go DOWN. Fifteen real turns were lost that way on 2026-07-30 while the
+    operator line reported a healthy spool.
+    """
+
+    def test_the_mirrored_constants_match_the_writer(self, tmp_path: Path) -> None:
+        """The reader re-derives the writer's schema and suffix; pin them.
+
+        ``openbrain`` deliberately does not depend on the provider package
+        (``spool_pending`` re-derives its path resolution for the same reason),
+        so these constants are COPIES. A copy that drifts silently makes the
+        reader count zero envelopes forever while the sidecar fills — a green
+        surface over a live loss, which is precisely the defect class. This
+        test is the only thing standing between the copy and that drift.
+        """
+        from openbrain_memory.spool import (  # noqa: PLC0415
+            QUARANTINE_ENVELOPE_SCHEMA as WRITER_SCHEMA,
+        )
+        from openbrain_memory.spool import JsonlSpool  # noqa: PLC0415
+
+        assert QUARANTINE_ENVELOPE_SCHEMA == WRITER_SCHEMA
+
+        spool = JsonlSpool(tmp_path / "example-spool.jsonl")
+        assert spool.quarantine_path == quarantine_path(spool.path)
+        assert QUARANTINE_SUFFIX in str(spool.quarantine_path)
+
+    def test_an_absent_sidecar_is_a_real_zero(self, tmp_path: Path) -> None:
+        assert spool_quarantined(tmp_path / "never-existed.jsonl") == 0
+
+    def test_no_configured_spool_is_zero(self) -> None:
+        assert spool_quarantined(None) == 0
+
+    def test_an_unreadable_sidecar_is_none_never_a_guessed_zero(
+        self, tmp_path: Path
+    ) -> None:
+        """Unreadable and empty are different facts; only one is actionable."""
+        spool = tmp_path / "spool.jsonl"
+        spool.write_text("", encoding="utf-8")
+        quarantine_path(spool).mkdir()
+
+        assert spool_quarantined(spool) is None
+
+    def test_envelopes_are_counted_not_lines(self, tmp_path: Path) -> None:
+        """A unit's record lines belong to a unit already counted once.
+
+        Counting lines would make the number move with payload size instead of
+        with abandoned units, so a single fat turn would read as a crisis and a
+        dozen small ones as nothing.
+        """
+        spool = tmp_path / "spool.jsonl"
+        spool.write_text("", encoding="utf-8")
+        quarantine_path(spool).write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {"schema": QUARANTINE_ENVELOPE_SCHEMA, "spool_key": "a"}
+                    ),
+                    json.dumps({"operation": "ingest_raw_turn", "payload": {}}),
+                    json.dumps({"operation": "ingest_raw_turn", "payload": {}}),
+                    json.dumps(
+                        {"schema": QUARANTINE_ENVELOPE_SCHEMA, "spool_key": "b"}
+                    ),
+                    json.dumps({"operation": "session_wrap", "payload": {}}),
+                    "",
+                    "{truncated",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        assert spool_quarantined(spool) == 2
+
+    def test_the_notice_names_abandonment_separately_from_backlog(self) -> None:
+        """One number cannot mean both "drains itself" and "never will"."""
+        line = spool_notice(DEGRADED_NOTICE, 3, 2)
+
+        assert "(spool: 3)" in line
+        assert "quarantined: 2" in line
+        # The words must ask for a human; backlog wording invites waiting,
+        # which is the wrong response to a permanent loss.
+        assert "ABANDONED" in line
+
+    def test_zero_quarantined_says_nothing_about_quarantine(self) -> None:
+        """A line that shouts on every Stop is a line the operator skips."""
+        assert spool_notice(DEGRADED_NOTICE, 3, 0) == f"{DEGRADED_NOTICE} (spool: 3)"
+        assert spool_notice(RECOVERED_NOTICE, 0, 0) == RECOVERED_NOTICE
+
+    def test_an_unreadable_count_prints_no_count_rather_than_a_guess(self) -> None:
+        assert spool_notice(DEGRADED_NOTICE, 0, None) == DEGRADED_NOTICE
+
+    def test_existing_two_argument_callers_are_unchanged(self) -> None:
+        """The new parameter defaults to 0, so no caller changes behaviour."""
+        assert spool_notice(DEGRADED_NOTICE, 7) == f"{DEGRADED_NOTICE} (spool: 7)"
+        assert spool_notice(DEGRADED_NOTICE, 0) == DEGRADED_NOTICE
+
+    def test_abandoned_records_are_announced_when_the_latch_reports_no_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """THE LOAD-BEARING ONE: recovery is when the loss used to get buried.
+
+        The latch speaks only on a state CHANGE, which is right for
+        reachability and wrong for abandoned records. On 2026-07-30 the lane
+        recovered and delivered 1,819 further turns for the same session while
+        the fifteen abandoned ones were never mentioned again by anything. So
+        a healthy, unchanged Stop must still say it.
+        """
+        spool = tmp_path / "spool.jsonl"
+        spool.write_text("", encoding="utf-8")
+        quarantine_path(spool).write_text(
+            json.dumps({"schema": QUARANTINE_ENVELOPE_SCHEMA, "spool_key": "a"}),
+            encoding="utf-8",
+        )
+        settings = CaptureSettings(
+            watermark_path=tmp_path / "marks.sqlite",
+            spool_path=spool,
+        )
+        notices = io.StringIO()
+
+        # An already-healthy session delivering again: the latch returns None.
+        stop.announce_outage_state(
+            "session-a", settings, delivered=True, notices=notices
+        )
+
+        line = notices.getvalue()
+        assert "quarantined: 1" in line
+        assert QUARANTINE_ONLY_NOTICE in line
+        # It must NOT claim an outage that the latch did not observe.
+        assert DEGRADED_NOTICE not in line
+
+    def test_a_clean_healthy_stop_still_says_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """CONTROL. Without this, "announce on every Stop" passes the test above."""
+        settings = CaptureSettings(
+            watermark_path=tmp_path / "marks.sqlite",
+            spool_path=tmp_path / "spool.jsonl",
+        )
+        notices = io.StringIO()
+
+        stop.announce_outage_state(
+            "session-b", settings, delivered=True, notices=notices
+        )
+
+        assert notices.getvalue() == ""
 
 
 def asyncio_offset(watermark: Path, session_key: str) -> int:

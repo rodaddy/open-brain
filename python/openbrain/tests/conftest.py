@@ -39,7 +39,10 @@ _LEAKING_NAMES = frozenset({"PORT", "SERVICE_NAME", "ALLOWED_ORIGINS"})
 
 
 @pytest.fixture(autouse=True)
-def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clean_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     """Remove every variable the settings models read, for every test.
 
     WHY THIS IS SUITE-WIDE AND NOT PER-FILE (#544). ``test_settings`` has
@@ -78,6 +81,27 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     Prefix-based rather than a fixed list, because the failure mode is a
     variable nobody thought to enumerate -- the one that hung the suite was
     added to the environment file after the tests were written.
+
+    THE STATE DIRECTORY IS THE SAME LEAK, ONE LAYER DOWN (#680). Clearing the
+    prefixes above removes ``OPENBRAIN_SPOOL_PATH``, which sends
+    ``apps.capture.outage.default_spool_path`` to its LAST fallback:
+    ``$XDG_STATE_HOME`` or, failing that, ``~/.local/state``. That is the
+    developer's REAL spool directory. It went unnoticed while the only reader
+    ran after the latch had already decided to speak, but the #680 quarantine
+    read is unconditional by design -- abandoned records are a standing
+    condition, not an event -- so an unconfigured test began reading the
+    operator's actual sidecar.
+
+    MEASURED, ON THIS BRANCH: seven "says nothing" tests failed because
+    ``~/.local/state/openbrain-memory/claude-spool.jsonl.quarantine.jsonl``
+    exists on this machine and holds the fifteen turns #680 was filed about.
+    The assertions were reading live user data, and on a machine with a clean
+    home they would have passed -- the same "passes on their machine only"
+    shape this fixture's docstring already describes for settings.
+
+    Redirected, not deleted: a test that legitimately resolves a state path
+    still gets a real, writable, EMPTY directory, so the fallback is exercised
+    rather than skipped.
     """
     for name in list(os.environ):
         upper = name.upper()
@@ -85,6 +109,14 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
             continue
         if upper.startswith(_LEAKING_PREFIXES) or upper in _LEAKING_NAMES:
             monkeypatch.delenv(name, raising=False)
+
+    state_home = tmp_path_factory.mktemp("xdg-state")
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    # HOME too: `default_spool_path` falls back to `Path.home()/.local/state`
+    # when XDG_STATE_HOME is empty, and `Path.home()` reads HOME directly, so
+    # setting only the former leaves the empty-string path pointed at the real
+    # home directory.
+    monkeypatch.setenv("HOME", str(state_home))
 
 
 #: The timestamp every helper line carries. Real transcripts always set one, and
