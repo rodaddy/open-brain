@@ -146,14 +146,92 @@ Fail-closed, no partial success:
    `err.message`. A failed `pg_dump` also removes its partial dump file so a
    retry is not blocked behind `--force`.
 
-### Stale-backup alerting — DOCUMENTED-ONLY (mechanism TESTED, scheduling deferred)
+### Stale-backup alerting — mechanism TESTED, now WIRED into the scheduled job
 
 `backup-verify --dir <backups-root> --max-age-hours N` exits 3 with a `stale`
 status when the newest VALID backup is older than N hours (a corrupt set does
-not count as a valid backup — TESTED in `scripts/backup-lib.test.ts`). Wire
-it into cron/launchd on core01 and alert on nonzero exit; the actual launchd
-plist/notification wiring is deliberately left to the operator runbook and is
-NOT shipped in this repo (scripts stay operator-run, no service wiring).
+not count as a valid backup — TESTED in `scripts/backup-lib.test.ts`).
+
+This is no longer left to the operator to wire. `scripts/backup-scheduled-run.sh`
+runs it as the last step of every scheduled backup, at `--max-age-hours 26`
+(one daily interval plus two hours of slack), across the whole backups root.
+That is deliberately a DIFFERENT question from "did tonight's run succeed":
+a job that has been failing silently for a week passes the per-set check on
+the night it finally works and still fails this one.
+
+### Scheduled backup on core01 (#677) — WRITTEN, not yet RUNNING
+
+**Status: the wiring SHIPS in this repo and is proven locally; it has NOT been
+installed on core01.** Everything below is the cutover-runbook step, to be run
+BY THE OPERATOR ON CORE01. Nothing in this section has been executed against
+core01 by any agent.
+
+Issue #677 (cutover blocker B4) measured the gap this closes: the backup
+substrate was real, tested, and CI-drilled, and had **never been invoked** —
+the only set on disk was 16 days and 15 migrations stale, against a stated
+24h RPO.
+
+What ships:
+
+| File | Role |
+|---|---|
+| `docs/deploy/com.rico.open-brain-backup.plist.template` | launchd job, 03:00 daily, `LowPriorityIO` |
+| `scripts/install-backup-launchagent.sh` | renders + lints + bootstraps it (same staged-write/validation pattern as `install-qmd-sync-launchagent.sh`) |
+| `scripts/backup-scheduled-run.sh` | what launchd runs: dated set, env load, backup, verify, staleness alert |
+| `scripts/deploy-lock.ts` | the deploy-overlap guard shared by backup and deploy |
+
+**The core01 install step (operator, on core01):**
+
+```bash
+cd /Volumes/ThunderBolt/open-brain/app
+bash scripts/install-backup-launchagent.sh
+# Prove the wiring immediately — do not wait for 03:00:
+launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-backup
+# Then confirm a set landed and verifies:
+bun run scripts/backup-verify.ts --dir /Volumes/ThunderBolt/open-brain/backups --max-age-hours 26
+```
+
+Note that `/Volumes/ThunderBolt/open-brain/backups/` does not exist on core01
+today (#677 confirmed its absence); the runner creates it on first run.
+
+**`DB_NAME` is required, not defaulted.** The runner refuses to start without
+it. `DB_NAME` selects *which brain* gets backed up, and #676 records that it
+otherwise silently defaults to `open_brain` — a scheduled job quietly backing
+up the wrong database would look healthy indefinitely.
+
+**Retention stays operator-run**, exactly as the retention row above specifies.
+The scheduled job creates and verifies sets; it never removes one.
+
+#### The deploy-overlap guard
+
+A dump taken mid-migration can capture a half-applied schema that
+`backup-verify` **cannot detect from the outside** (see the upgrade matrix
+below). That is worse than a missing backup, because it passes verification.
+Scheduling backups without a guard would have made blocker B4 subtler rather
+than smaller.
+
+The guard is a session-scoped Postgres advisory lock on the database both
+operations touch — the same primitive `server/db/migrations.ts` already uses to
+serialize migrations, with a distinct key (`:openbrain-deploy`). It is
+deliberately asymmetric:
+
+- **`scripts/core01-deploy-local.sh` takes and HOLDS the lock** for the whole
+  deploy, acquired after the env file is sourced and before staging, migrate,
+  and the runtime swap. It waits (bounded) rather than refusing: a deploy is
+  attended, and queueing behind a running backup is correct.
+- **`scripts/backup.ts` REFUSES immediately** if the lock is held, exits `4`,
+  and writes nothing. It is an unattended job; skipping to the next clean run
+  beats holding a connection open against a database being migrated. The
+  refusal names the deploy as the cause.
+
+Because the lock is session-scoped, a deploy that is killed at any point
+releases it automatically. There is no stale-lock file and no cleanup path to
+get wrong.
+
+Executable proof: `scripts/done-means/677-scheduled-backup.sh`, which runs a
+full backup→restore round trip at the current schema and compares row counts
+and an `information_schema`-derived schema hash between source and restored
+databases from outside both scripts.
 
 ## Server Data vs Client Adapter State
 
