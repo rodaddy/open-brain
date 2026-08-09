@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.rico.open-brain — the core01 HTTP service launch shape.
+
+  WRITTEN 2026-08-09 for cutover-blocker B2 (issue #675). Until then this
+  service's launch shape existed ONLY on core01: scripts/core01-deploy-local.sh
+  kickstarts this label but never installs it, so the entrypoint, the env
+  delivery, the ThrottleInterval, and the migration gating were all unversioned.
+  Two consequences, both real:
+
+    * questions about the launch shape could not be answered on paper — the
+      pre-cutover audit had to mark them unanswerable rather than checked; and
+    * the deploy's revision-proof poll window has to OUTLAST ThrottleInterval,
+      and nothing in git said what that value was. B2 and B3 are one fix
+      surface for exactly this reason.
+
+  ENTRYPOINT — server/main.ts, per the B1 operator ruling (Rico, 2026-08-09,
+  issue #674 comment): core01 cuts over to the same entrypoint dogfood has
+  served since 2026-08-02, because the capture-health chain exists only in the
+  rewrite entrypoint and the standing directive is to keep dogfood as close to
+  what we push to core01 as humanly possible. src/ stays intact in the tree as
+  rollback on core01 exactly as it does locally — this file selects the
+  entrypoint, it does not remove the other one.
+
+  STATE: WRITTEN, not RUNNING. This template has never been installed on
+  core01. Its application step is in docs/core01-cutover-preflight.md; nothing
+  in this repo installs it, and this lane never contacted 10.71.1.21.
+
+  INSTALL (run ON core01 at cutover, by the operator — not from here):
+
+    cp docs/deploy/com.rico.open-brain.plist.template \
+       ~/Library/LaunchAgents/com.rico.open-brain.plist
+    launchctl bootout  gui/$(id -u)/com.rico.open-brain 2>/dev/null || true
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.rico.open-brain.plist
+    launchctl kickstart -k gui/$(id -u)/com.rico.open-brain
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rico.open-brain</string>
+
+  <!--
+    The two-worker launcher, not a single server: core01 fronts
+    open-brain-worker-1 (3101) and open-brain-worker-2 (3102) behind :3100
+    (confirmed 2026-07-30 from the `workers` array in /health). Session caps
+    are per worker, so the front is capacity as well as routing.
+
+    Env is delivered by SOURCING the operator env file, exactly as the NATS
+    worker template does — that file holds every AUTH_TOKEN_* and must not be
+    duplicated into this plist, which lives in git.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>-lc</string>
+    <string>set -euo pipefail; ENV_FILE=/Users/rico/.config/open-brain/env; test -r "$ENV_FILE"; set -a; source "$ENV_FILE"; set +a; cd /Volumes/ThunderBolt/open-brain/app; exec "${BUN_BIN:-bun}" run scripts/run-two-worker.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Volumes/ThunderBolt/open-brain/app</string>
+
+  <!--
+    The deploy's revision proof reads the LISTENER's cwd and compares it to the
+    runtime directory (scripts/core01-deploy-local.sh check_new_process_serving).
+    That assertion is only meaningful because WorkingDirectory pins it here —
+    a service started from anywhere else would serve the swapped tree while
+    reporting another cwd.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!--
+      B1 ruling (issue #674, 2026-08-09): the workers run server/main.ts.
+      scripts/run-two-worker.ts reads this to choose the entrypoint it spawns
+      for each worker; src/index.ts remains in the tree as the rollback path.
+    -->
+    <key>OPEN_BRAIN_WORKER_ENTRYPOINT</key>
+    <string>server/main.ts</string>
+
+    <key>OPEN_BRAIN_PUBLIC_PORT</key>
+    <string>3100</string>
+    <key>OPEN_BRAIN_WORKER_PORTS</key>
+    <string>3101,3102</string>
+    <key>OPEN_BRAIN_WORKERS</key>
+    <string>2</string>
+
+    <key>QMD_PATH</key>
+    <string>/Volumes/ThunderBolt/qmd/open-brain-qmd.ts</string>
+  </dict>
+
+  <!--
+    MIGRATION GATING is NOT set here on purpose. scripts/run-two-worker.ts
+    gives the migrate flag to worker 0 only (runMigrations: index === 0), so
+    exactly one process migrates. Setting OPEN_BRAIN_RUN_MIGRATIONS in this
+    dict would override that for BOTH workers and put two concurrent migration
+    runs against one database. The residual — that this is convention rather
+    than a lock — is issue #675 SHOULD-FIX 6 (advisory lock in migrate.ts) and
+    is deliberately NOT closed by this template.
+  -->
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!--
+    THE NUMBER THE DEPLOY READS. launchd holds a failed service down for this
+    long before retrying, so a process that throws on config and dies is simply
+    ABSENT for 30 seconds. The old deploy polled /health for 20 seconds and
+    called that success — the outgoing process answered the whole time. The
+    hardened deploy's revision-proof window (OPENBRAIN_DEPLOY_REVISION_PROOF_TICKS,
+    30 ticks x 2s = 60s) is set to outlast THIS value with margin.
+
+    Changing this number without widening that window re-opens B3.
+  -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/open-brain.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/ThunderBolt/open-brain/logs/open-brain.err.log</string>
+
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+</dict>
+</plist>
