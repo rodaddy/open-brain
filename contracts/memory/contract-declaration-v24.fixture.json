@@ -1,0 +1,16 @@
+{
+  "id": "contract-declaration-v24",
+  "description": "The matched clients declare the reviewed v24 contract id and deterministic schema hash.",
+  "capability": "contract-declaration",
+  "runtime": "both",
+  "consumers": ["python", "ts"],
+  "request": {
+    "contract_id": "2026-08-09.memory-tools.v24",
+    "schema_version": 1,
+    "schema_hash": "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
+  },
+  "expectation": {
+    "compatible_contract_ids": ["2026-08-09.memory-tools.v24"],
+    "client_header": "2026-08-09.memory-tools.v24;schema_hash=b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
+  }
+}

@@ -62,10 +62,10 @@ RECEIPT_STATE_SCHEMA: Final[str] = "development.openbrain-memory-receipts.v1"
 #: receipt-state.ts:92-95. A receipt whose contract triple does not match
 #: exactly is ignored (receipt-state.ts:337-339): an old receipt written under a
 #: superseded contract is not evidence about the current one.
-MEMORY_CONTRACT: Final[str] = "2026-07-23.memory-tools.v23"
+MEMORY_CONTRACT: Final[str] = "2026-08-09.memory-tools.v24"
 MEMORY_CONTRACT_SCHEMA_VERSION: Final[int] = 1
 MEMORY_CONTRACT_SCHEMA_HASH: Final[str] = (
-    "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
+    "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
 )
 
 #: receipt-state.ts:98 — a compact cycle older than this is not the current one.

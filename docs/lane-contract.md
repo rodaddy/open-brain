@@ -59,6 +59,126 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+> **Note on this file's history, recorded 2026-08-09 by the #271 tripwire
+> lane.** Rounds 8 through 26 are committed on the unmerged `wip/2026-08-07`
+> branch and are NOT on the upstream default branch: main's copy is 211 lines
+> and jumps from round 7 to the founding round, while the wip copy is 945
+> lines. Lanes read this file from their own worktree (round 3, PR #631), so a
+> lane bootstrapped from main has been briefed from a contract missing
+> nineteen rounds of ratchet. The ratchet only ratchets where it is merged.
+> Flagged for the decisions pass rather than fixed here — landing nineteen
+> rounds of someone else's harvest inside a test-heal PR would be the silent
+> scope adjustment the contract forbids. The round 27 entry below is written
+> into main's lineage so this lane's own harvest is not lost to the same gap.
+
+### 2026-08-09 (round 29) — harvest of the #675 integration (PR #688): the collision is the norm, not the incident
+
+- **Third consecutive integration, same two collisions** (#701 -> #687 ->
+  #688): the SME entry-count pin conflicted, and the `order:` field
+  duplicated in a way git reported as no conflict at all. Round 28 recorded
+  it as a merge-order hazard; three for three makes it a PROPERTY of running
+  lanes in parallel, not an unlucky merge. Every integration of a branch
+  carrying an SME entry should now EXPECT both, and the cost of assuming
+  otherwise is a silently duplicated `order` that only the build can see.
+- **A warning is the right severity for discovery and the wrong one for a
+  gate.** `build-sme-indexes.ts` warns on a duplicate `order` and exits 0, so
+  a merge that never runs the build ships the duplicate. It was caught all
+  three times only because the integration ran the build by hand. The
+  standing rule stays "re-run the branch's tooling after integrating," but
+  the enforcement-migration candidate is obvious: the per-entry done-means
+  check should fail on a duplicate `order`, the way it already fails on a
+  duplicate heading. Flagged for the decisions pass rather than built here —
+  it is main-owned tooling and belongs in its own change.
+- **`FETCH_HEAD` is per-worktree, re-proven.** `git merge FETCH_HEAD` in a
+  freshly-added worktree died with `could not open .git/worktrees/<name>/FETCH_HEAD`
+  because the fetch had run in a different worktree. Fetch inside the
+  worktree you merge in (round 11), and note the error names a missing FILE
+  rather than a missing ref, which reads as a broken repo at a glance.
+- **The design-lookup gate fired twice mid-lane on unrelated writes** (round
+  22's window decay). Both were complied with rather than routed around, and
+  the second lookup was load-bearing: it confirmed `order:` is an explicit
+  sort field independent of entry date, which is what made "move the
+  duplicate to the next free number" the correct resolution instead of
+  renumbering by date.
+
+### 2026-08-09 (round 28) — harvest of the #681 integration (PR #687), a merge-order collision
+
+- **Two branches can each derive a pinned count HONESTLY and still be wrong
+  after the merge.** PR #687 measured EXPECTED_ENTRY_COUNT as 235 on its own
+  tree and was correct there; PR #701 then landed its own entry and main
+  became 235 too. The merged truth is 236. So a pin computed BEFORE
+  integration is stale the moment anything else merges, and the freshness of
+  a measurement is not a property of how carefully it was taken — it is a
+  property of when. **Re-measure the pin after integrating the upstream
+  default branch, never carry the branch's own derivation across a merge.**
+  This is the concurrency half of the never-sum rule, and it is invisible to
+  a lane working alone.
+- **Git reported the ORDER collision as no conflict at all.** Both branches
+  independently chose correctness `order: 68`, in two different entry FILES,
+  so there was nothing for a textual merge to conflict on — the tree merged
+  clean and the duplicate only surfaced when `build-sme-indexes.ts` was run
+  and warned. Round 11's "a conflict-free merge is not a clean merge" with a
+  sharper edge: the branch's own tooling must be RE-RUN after integrating,
+  because the class of defect a merge introduces is precisely the class no
+  textual merge can see. A generated-file conflict is regenerated; a
+  generated-file NON-conflict still needs the build.
+- **A shared sequential ID chosen by hand collides under parallelism by
+  construction.** `order:` is allocated by reading the current maximum, which
+  every concurrent lane reads identically. The build warns rather than fails,
+  which is the right severity for a merge-time discovery, but the allocation
+  scheme is the root cause and it will keep colliding as long as lanes run in
+  parallel. Flagged for the decisions pass, not worked around here.
+
+### 2026-08-09 (round 27) — harvest of the #271 tripwire heal (PR #701), a CONTROLLER merge defect
+
+- **A failing assertion turns off every clause after it in the same test, and
+  for a TRIPWIRE that is a hole rather than an inconvenience.** The #271
+  block's later clauses — the exact top-level key-set assertion and the
+  push/injection negative filter — are the ones that enforce the boundary,
+  and the stale version literal aborted the body before either ran (37
+  expect() calls red vs 44 healed). For the window main stayed red, a
+  push-shaped hot-memory key could have landed and the tripwire would have
+  failed for the OLD reason, looking like the same known redness. **A red
+  tripwire and a disabled tripwire are indistinguishable in test output**,
+  and known redness is a strong anaesthetic. Never leave a guard red on the
+  upstream default branch; heal it or revert what broke it.
+- **Prove a guard test by its executed-assertion COUNT, not by its exit
+  code.** A floor on expect() calls is the only clause that can express "the
+  body ran to the end"; green/red structurally cannot. Pin a floor, not an
+  equality, so adding assertions does not fail the gate.
+- **A PR that moves a pinned value must re-run the OTHER assertions of that
+  value, including in files its diff never touches.** #691 bumped the tool
+  contract 2 -> 3 with all its own gates green; the pin-holder was a test in
+  an untouched file, so the branch was green and the merge was red. This is
+  the controller's defect, not the lane's — the cross-file pin check belongs
+  in the merge pass.
+- **A mutation clause written against an ALREADY-RED subject banks the
+  pre-existing failure as a kill.** Clause c passed on the pre-fix tree in its
+  first form — a survived mutant reported as a discriminating check. Gate
+  mutation clauses on a proven-green baseline and report INCONCLUSIVE
+  otherwise. Found by reading WHY each RED clause failed rather than accepting
+  a satisfying 4/4 red.
+- **Exit 127 can masquerade as a gate verdict.** Five CI failures asserted
+  `toBe(1)` for a refusal and received 127 — the shell's command-not-found,
+  meaning the script under test never ran. "Did not execute" and "refused
+  correctly" were distinguishable only by the number's luck. Any clause
+  asserting a specific nonzero exit should reject 127 explicitly. Filed as
+  #702 rather than absorbed.
+- **The two-runs-same-SHA comparison settled a red CI check again:** identical
+  f0e135c passed on `push` and failed on `pull_request`. Corroborated by
+  running both failing clusters locally on clean origin/main AND on the branch
+  in separate worktrees — 29 pass / 0 fail on both — before concluding
+  environment-owned. A same-SHA disagreement is the signal; the local
+  differential is the proof.
+- **PIPESTATUS printed empty when read outside the pipeline's shell**, reading
+  as exit 0 at a glance. Every verdict in this lane re-read the exit code
+  directly from the command instead.
+- **Pin collisions between concurrent branches are a merge-order hazard the
+  pin cannot see.** PR #701 and PR #687 each legitimately re-measured
+  EXPECTED_ENTRY_COUNT as 235 on their own trees; whichever merges second is
+  silently stale. Re-measure the pin AFTER integrating main, never carry a
+  branch's own derivation across a merge — and never sum.
+
 ### 2026-08-08 (round 7) — harvest of the #636 continuation lane (inherited a dead lane's worktree)
 
 - **Inherited work is PROPOSED, and auditing it is the first task, not a

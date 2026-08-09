@@ -19,6 +19,7 @@ import {
   readCaptureLiveness,
   MIN_SESSIONS_FOR_SILENCE,
 } from "./liveness-observer.ts";
+import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
 
 function poolReturning(rows: ReadonlyArray<Record<string, unknown>>): Pool {
   return { query: async () => ({ rows }) } as unknown as Pool;
@@ -43,17 +44,23 @@ function observer(pool: Pool) {
 
 describe("capture liveness observer", () => {
   it("reads a delivering lane as healthy", async () => {
+    // All three ACCEPTED roles deliver. This fixture carried only user and
+    // assistant until #681, which was not a statement that a healthy lane has
+    // two speakers — it was the two-role seed showing through: `tool` could not
+    // be judged, so its absence read as health. With the seed derived from the
+    // accepted set, a healthy lane is one where every accepted role arrives.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "120", sessions: "9", seconds_since_last: "4" },
         { role: "assistant", turns: "118", sessions: "9", seconds_since_last: "2" },
+        { role: "tool", turns: "94", sessions: "9", seconds_since_last: "6" },
       ]),
     );
     await subject.refresh();
     const reading = subject.reading();
 
     expect(reading?.stale).toBe(false);
-    expect(reading?.turns_delivered).toBe(238);
+    expect(reading?.turns_delivered).toBe(332);
     expect(reading?.sessions_observed).toBe(9);
     expect(reading?.silent_roles).toEqual([]);
   });
@@ -63,6 +70,11 @@ describe("capture liveness observer", () => {
     // speaker produces no group, so a fold over returned rows alone would
     // report a busy lane. 365 user rows beside an absent assistant is exactly
     // the six-day blind spot (`capture-never-drops-a-turn.md:291`).
+    //
+    // `tool` is named alongside it because it is equally absent here and the
+    // seed now covers every accepted role (#681). Before that fix this
+    // assertion read `["assistant"]` — not because `tool` was delivering, but
+    // because a role missing from the seed could not be judged at all.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "365", sessions: "9", seconds_since_last: "3" },
@@ -72,9 +84,65 @@ describe("capture liveness observer", () => {
     const reading = subject.reading();
 
     expect(reading?.stale).toBe(true);
-    expect(reading?.silent_roles).toEqual(["assistant"]);
+    expect(reading?.silent_roles).toEqual(["assistant", "tool"]);
     expect(reading?.turns_delivered).toBe(365);
     expect(reading?.reason).toContain("assistant");
+  });
+
+  it("names a dead `tool` role beside a live user and assistant (#681)", async () => {
+    // The cutover-blocker shape, byte for byte: `tool` frozen since 2026-08-01
+    // at 14,006 rows while `/health` read `stale: false, silent_roles: []` for
+    // eight days. The role was never exercised in this file before #681 —
+    // which is how a health check reported green over a dead speaker on the
+    // very evidence the core01 cutover was to rely on.
+    const subject = observer(
+      poolReturning([
+        { role: "user", turns: "3780", sessions: "9", seconds_since_last: "12" },
+        { role: "assistant", turns: "58140", sessions: "9", seconds_since_last: "3" },
+      ]),
+    );
+    await subject.refresh();
+    const reading = subject.reading();
+
+    expect(reading?.stale).toBe(true);
+    expect(reading?.silent_roles).toEqual(["tool"]);
+    expect(reading?.reason).toContain("tool");
+  });
+
+  it("stays green when all three accepted roles deliver", async () => {
+    // The control for the clause above: widening the seed must not make `tool`
+    // permanently silent. An always-degrade implementation passes the test
+    // above and fails this one.
+    const subject = observer(
+      poolReturning([
+        { role: "user", turns: "300", sessions: "9", seconds_since_last: "12" },
+        { role: "assistant", turns: "1200", sessions: "9", seconds_since_last: "3" },
+        { role: "tool", turns: "900", sessions: "9", seconds_since_last: "5" },
+      ]),
+    );
+    await subject.refresh();
+    const reading = subject.reading();
+
+    expect(reading?.stale).toBe(false);
+    expect(reading?.silent_roles).toEqual([]);
+    expect(reading?.turns_delivered).toBe(2400);
+  });
+
+  it("seeds every role the server accepts, so a new role cannot escape", async () => {
+    // The mechanism, not the instance (#681). The seed derives from
+    // `RAW_TURN_ROLES`, so this asserts the observation's keys ARE that set —
+    // a hardcoded triple would satisfy the behavioural tests above and rebuild
+    // the identical trap for role number four.
+    const subject = observer(
+      poolReturning([
+        { role: "user", turns: "10", sessions: "9", seconds_since_last: "1" },
+      ]),
+    );
+    await subject.refresh();
+
+    expect(Object.keys(subject.observation()?.turnsByRole ?? {}).sort()).toEqual(
+      [...RAW_TURN_ROLES].sort(),
+    );
   });
 
   it("publishes nothing when the window holds no arrivals at all", async () => {

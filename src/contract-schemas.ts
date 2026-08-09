@@ -118,7 +118,12 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       "RAM-only working-set append receipt with accepted/reason/item/counters/not_durable_memory",
   },
   agent_context_pack: {
-    version: 2,
+    // v3 (#678): the mirror now advertises `repo`, `prior_context`, and
+    // `continue_from`, which the live Zod schema has accepted since the
+    // #543/#563 work. The version bump is the client-visible half of the drift
+    // receipt — the schema_hash moves on its own because TOOL_CONTRACTS is in
+    // the hashed payload, but a hash tells a client only THAT something moved.
+    version: 3,
     input_schema: {
       namespace: {
         type: "string",
@@ -155,6 +160,80 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
         maxLength: 500,
       },
       query: { type: "string", required: false, maxLength: 4000 },
+      repo: {
+        type: "string",
+        required: false,
+        minLength: 1,
+        maxLength: 300,
+        description:
+          "Active repository slug (e.g. owner/name) that repo_facts binds to " +
+          "exactly. When absent, repo_facts returns its defined no-active-repo " +
+          "empty state; repo_facts never falls back to any other repository.",
+      },
+      prior_context: {
+        type: "array",
+        required: false,
+        maxItems: 200,
+        description:
+          "Explicit identifiers/source refs already supplied to the model this " +
+          "turn. durable_memory recall removes records already represented by " +
+          "these references and returns only net-new results. Raw prior-context " +
+          "text is never accepted; each reference carries resolvable identity " +
+          "only (citation_id or source_ref).",
+        items: {
+          type: "object",
+          fields: {
+            citation_id: {
+              type: "string",
+              required: "citation_id_or_source_ref",
+              minLength: 1,
+              maxLength: 500,
+            },
+            source_ref: {
+              type: "union",
+              required: "citation_id_or_source_ref",
+              description:
+                "The recalled item's own resolvable source ref: either the " +
+                "string form (<=1000) or the structural {source,type,id," +
+                "namespace?} form. At least one of citation_id/source_ref is " +
+                "required per reference.",
+              variants: [
+                { type: "string", minLength: 1, maxLength: 1000 },
+                {
+                  type: "object",
+                  additionalProperties: true,
+                  fields: {
+                    source: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    type: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                    id: {
+                      type: "string",
+                      required: true,
+                      minLength: 1,
+                      maxLength: 500,
+                    },
+                    namespace: {
+                      type: "string",
+                      required: false,
+                      minLength: 1,
+                      maxLength: 200,
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
       requested_sections: {
         type: "array",
         required: false,
@@ -185,6 +264,20 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
           "Explicit opt-in to include exact-scope quarantined recovery " +
           "summary. Recovery records are not durable memory or searchable recall.",
       },
+      continue_from: {
+        type: "object",
+        required: false,
+        description:
+          "Resume a durable_memory walk: pass back the `next` object from the " +
+          "previous reply to receive the following burst of the same ranked " +
+          "recall. Absent, delivery starts at the top of the ranking. It is a " +
+          "delivery position, never a filter — nothing about it narrows what " +
+          "the query matches, and a walk run to completion has received every " +
+          "record the query found.",
+        fields: {
+          offset: { type: "integer", required: true, min: 0 },
+        },
+      },
       budget: {
         type: "object",
         required: false,
@@ -205,7 +298,7 @@ export const TOOL_CONTRACTS: Record<string, ToolContract> = {
       },
     },
     output_shape:
-      "agent_context_pack envelope with exact-scope working_set, explicitly opted-in recovery, and explicitly requested bounded durable_lane_context sections; warnings include generic exact-scope denials/degraded sources/truncation, budget declares per-source bounds, and citations identify returned durable lane/events",
+      "agent_context_pack envelope with exact-scope working_set, explicitly opted-in recovery, and explicitly requested bounded durable_lane_context sections; durable_memory is delivered in bounded bursts and carries a `next` continuation handle whenever undelivered records remain (#563); warnings include generic exact-scope denials/degraded sources/truncation, budget declares per-source bounds and recalled_net_new, and citations identify returned durable lane/events",
   },
   agent_reflex_pointers: {
     version: 1,

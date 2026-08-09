@@ -29,7 +29,8 @@ export const FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Readonly<
 > = {
   session_start: 2,
   session_wrap: 2,
-  agent_context_pack: 2,
+  // v3 as of #678 (mirror reconciled with the live Zod schema).
+  agent_context_pack: 3,
   append_session_event: 8,
 };
 export const FIRST_CLASS_RUNTIME_TOOLS: readonly string[] = Object.keys(

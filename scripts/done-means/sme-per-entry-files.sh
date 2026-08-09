@@ -82,32 +82,84 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
+# RECONCILED 2026-08-09 (#680 lane): origin/main carried 231 dated headings
+# against a pin of 227 — four entries landed across earlier merges without the
+# same-commit bump the rule requires, so this clause had been RED on main
+# before this lane touched it. 231 (inherited) + 1 (this lane's entry) = 232.
+# Reported rather than absorbed: the drift is other lanes' missed bumps, and
+# the number is reconciled here because leaving it stale keeps the clause red
+# for everyone downstream.
 #
-# RECONCILED 2026-08-09 (#680 lane, now merged as df00a46): origin/main carried
-# 231 dated headings against a pin of 227 — four entries landed across earlier
-# merges without the same-commit bump the rule requires, so this clause had been
-# RED on main before that lane touched it. 231 (inherited) + 1 (#680's entry)
-# = 232. Reported rather than absorbed: the drift was other lanes' missed bumps,
-# and the number was reconciled there because leaving it stale keeps the clause
-# red for everyone downstream.
-#
-# 232 -> 233 (#675, 2026-08-09), on rebase onto that reconciled main. ANNOUNCED,
-# because the arithmetic changed during the rebase. This lane originally raised
-# 227 -> 232, having independently measured the SAME four-entry drift from its
-# own detached probe on clean main — the ledger-31 / #609 rule that
-# "pre-existing" is proven by running it on main, never asserted. Both lanes
-# proved the same gap and both resolved it to 232, so those two 227 -> 232 bumps
-# are one correction counted twice, not two; summing them would double-count it.
-#
+# 232 -> 234 (#678, 2026-08-09), on rebase onto that reconciled main. ANNOUNCED,
+# and it is a +2, not the usual +1: this lane adds two entry files — the
+# hash-over-a-mirror correctness finding and the `bun -e` argv-shift gotcha.
 # Re-measured on the rebased tree rather than inferred: origin/main is 232 dated
-# headings against a pin of 232 (green — #680 already absorbed the four), and
-# this lane adds exactly one entry file (the #675 unfalsifiable-deploy gotcha),
-# for a true count of 233. The pin moves UP by exactly one, which is the rule
-# this header states.
+# headings against a pin of 232 (green), plus these two = 234.
+#
+# Worth stating plainly, because the branch did NOT carry this bump before the
+# rebase: it added both entries while leaving the pin at 227, so clause 4 was
+# RED on the branch on its own terms and the rebase is what surfaced it. The
+# number is raised here, in the lane that owns the entries, which is exactly the
+# same-commit rule this header states — the drift it exists to catch is a pin
+# quietly failing to follow the entries it counts.
 #
 # The count-DOWN half of the clause is untouched and still fires if entry text is
 # ever lost.
-EXPECTED_ENTRY_COUNT=233
+#
+# 2026-08-09, the #271 tripwire lane: 234 -> 235. ONE entry added
+# (docs/sme/entries/2026-08-09-a-failing-assertion-turns-off-every-clause-after-it-in-the-same-test.md,
+# lane correctness, order 69 — the enforcing clauses below a failed assertion
+# stop executing, so a red tripwire and a disabled one look identical).
+#
+# The number was RE-MEASURED on this tree, not arithmetic on the previous pin:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 235. Main measured
+# 234 against a pin of 234 before this branch, so measured and expected agree
+# on both sides of the change. Announced here rather than adjusted quietly,
+# per the nothing-is-adjusted-silently rule — and the derivation is stated
+# because a summed pin cannot tell a legitimate addition from a lost entry
+# plus two new ones.
+#
+# 2026-08-09, the #681 lane (PR #687) integrating main after #701: 235 -> 236.
+# ONE entry added by this branch
+# (docs/sme/entries/2026-08-09-a-mirrored-closed-set-goes-stale-the-moment-the-original-grows.md).
+#
+# RE-MEASURED on the merged tree, not summed:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 236.
+#
+# ANNOUNCED, because this is the exact hazard a summed pin cannot see. This
+# branch measured 235 on its own tree and was CORRECT there; #701 then landed
+# its own entry and main became 235 too. Two branches, each honestly deriving
+# 235, and the merge is 236 — so the pin a branch computes before integration
+# is stale the moment anything else merges. The rule this is a receipt for:
+# re-measure AFTER integrating main, never carry the branch's own derivation
+# across a merge.
+#
+# The same collision hit the ORDER field: both branches independently chose
+# correctness order 68, and build-sme-indexes.ts warned. This lane's entry
+# moved 68 -> 70 (69 is #701's), keeping it after the #678 entry it was
+# written alongside. The warning is why the build is run on every merge
+# rather than trusting a conflict-free result.
+#
+# 2026-08-09, the #675 lane (PR #688) integrating main after #687: 236 -> 237.
+# ONE entry added by this branch
+# (docs/sme/entries/2026-08-09-a-deploy-that-cannot-fail-proves-nothing-when-it-passes.md).
+#
+# RE-MEASURED on the merged tree, not summed:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 237.
+#
+# ANNOUNCED, and this is the THIRD consecutive integration to hit the same
+# pair of collisions (#701 -> #687 -> #688), which makes it a property of
+# concurrent lanes rather than an unlucky merge. The ORDER field collided
+# again too: this branch and main both claimed gotcha-agent 69, so this
+# lane's entry moved 69 -> 70 (69 stays with #691's argv-shift entry, already
+# on the default branch). Git reported NO conflict on that collision — the
+# two entries are different files — and only build-sme-indexes.ts saw it.
+#
+# The pattern is now recorded in docs/lane-contract.md round 28: re-measure
+# the pin AFTER integrating, and re-run the build even when the merge was
+# conflict-free, because the defect a merge introduces here is invisible to
+# a textual merge by construction.
+EXPECTED_ENTRY_COUNT=237
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

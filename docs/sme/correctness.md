@@ -1994,3 +1994,84 @@ namespace, or a token fragment into an artifact that gets pasted into issues.
   maintain a parallel one? A parallel list drifts silently and GREEN — the table
   the remover stopped clearing also stops being counted.
 - Does every swallowed error contribute a label somewhere an operator can read?
+
+## [2026-08-09] A hash computed over a hand-maintained mirror is a receipt that cannot move
+
+**Severity:** HIGH
+**Source:** #678 (cutover blocker B6); mirror `src/contract-schemas.ts` vs live Zod `src/tools/agent-context-pack.ts` / `server/tools/context-pack-args.ts`
+**Scope key:** contract manifests, schema hashes, capability declarations, and any value documented as a drift/version receipt
+**Status:** active
+
+### Pattern
+
+`schema_hash` is documented (docs/downstream-rollout.md:112) as "the authoritative drift receipt." It is computed over a payload containing `TOOL_CONTRACTS` — a HAND-MAINTAINED mirror of the Zod schemas that actually validate requests. So the receipt moves when the MIRROR moves, not when the CONTRACT moves.
+
+Between #543 and #563 the live `agent_context_pack` schema gained `repo`, `prior_context`, and `continue_from`. Nobody edited the mirror. Result: the contract version AND the hash read identically on both sides of a real, client-facing shape change, and every downstream compatibility check returned the same verdict either way.
+
+The failure is not a wrong value — it is a value that CANNOT change, which is strictly worse than a wrong one. A wrong receipt eventually mismatches something. A blind receipt reports agreement forever, and each passing check adds confidence that nothing has drifted.
+
+Note the near-miss that makes this hard to catch: `src/contract.test.ts` pinned the exact hash as a literal. That test looks like precisely the guard against this defect, and it is not — it pins the hash of the MIRROR, so it stays green exactly when the mirror is stale. A test can pin the derived value and still be blind to the source.
+
+### Review checks
+
+- When a value is described as a receipt, a fingerprint, a drift detector, or a version, trace what it is actually computed OVER. If any input is hand-maintained, the receipt's sensitivity is bounded by someone remembering to update that input by hand — say so out loud in review.
+- Ask the discriminating question: **what change to the real subject would leave this value unchanged?** If an answer exists, the receipt has a blind spot and the blind spot is the finding.
+- A literal-pinning test over a derived value proves determinism, NOT freshness. Freshness needs an assertion tying the hand-maintained side to the authoritative source (here: mirror key set == Zod key set).
+- Mirrors need a parity assertion in BOTH directions. A key in the source but not the mirror under-advertises; a key in the mirror but not the source advertises a parameter the strict schema will REJECT, which is the worse client experience because the manifest itself is lying.
+- When more than one tree can serve (this repo has `src/index.ts` and `server/main.ts`), a mirror reconciled against one tree while the other drifted is accurate and still wrong on whichever surface is running. Pin every reachable tree.
+- Bumping a hash and re-pinning its consumers are ONE change, never two. A bumped server with stale client pins converts a blind receipt into a hard downstream refusal — check the pin sites in the same diff.
+
+## [2026-08-09] A failing assertion turns off every clause after it in the same test
+
+**Severity:** HIGH
+**Source:** #691 merge defect; `src/tools/__tests__/get-contract.test.ts` (the #271 boundary tripwire), healed by the #271 tripwire lane
+**Scope key:** tripwires, boundary guards, and any single test whose later assertions enforce a security or contract decision; PRs that move a pinned version, hash, or count
+**Status:** active
+
+### Pattern
+
+`expect()` throws on first failure, so every assertion after the first failing one in the same `it()` block never executes. For an ordinary test that is fine — it is red either way. For a TRIPWIRE it is a hole, because the test's job is not to be green; it is to REFUSE a specific class of change.
+
+Concretely: the #271 tripwire pins two independently-versioned surfaces and then, further down the same block, asserts the exact top-level key set of the served contract and applies a negative filter rejecting any new key matching `/(hot|inject|push|bundle|_meta)/i`. Those last two clauses are the ones that actually enforce the boundary. #691 bumped `tool_contracts.agent_context_pack.version` 2 -> 3 and left the tripwire's stale literal in place, so the block aborted at the version line and the two enforcing clauses stopped running — measurable as 37 `expect()` calls on the red tree versus 44 on the healed one.
+
+For the window the default branch stayed red, a PR could have advertised a push-shaped hot-memory key and the tripwire would not have refused it. It would have failed for the old reason and looked like the same known redness.
+
+That is the trap worth naming: **a red tripwire and a disabled tripwire are indistinguishable in the test output.** Both show one failing test with a familiar message. Known redness is a strong anaesthetic — the second failure hides behind the first, and the longer the branch stays red the more normal the message looks.
+
+The enabling defect is separate and mundane: a PR moved a pinned number and did not re-run the OTHER assertions of that number, because they lived in a file the diff did not touch. The PR's own gates were green.
+
+### Review checks
+
+- **When a PR moves a pinned value — a version, a hash, a count, a schema literal — grep for every other assertion of that value before merging, including in files the diff does not touch.** The pin-holders are by definition somewhere else; a green branch proves the branch's own tests, not the pins.
+- On any test whose later assertions enforce a boundary, ask **what happens to the clauses BELOW an early failure.** If the answer is "they do not run," the enforcement is conditional on the rest of the file being green, and that is a property nobody is tracking.
+- Prefer proving execution by **assertion count** over greenness for guard tests. A floor on `expect()` calls catches a silently truncated body; an exit code cannot express it. Pin a floor, not an equality, so adding assertions does not fail the gate.
+- Splitting a multi-clause tripwire into separate `it()` blocks is the structural fix and is usually right; where a single block is deliberate (the clauses share expensive setup), the count assertion is the compensating control.
+- **Never let a tripwire sit red on the default branch.** Its failure message stops carrying information the moment it becomes expected, and the whole value of a tripwire is that its redness is surprising. Heal it or revert what broke it; "known failure" is not a state a guard can survive in.
+- When healing a red tripwire, the review question is never "what value makes it green." It is "does the thing that moved stay on the correct side of the decision this tripwire encodes" — answered from source, with the reasoning written next to the number so the next reader inherits it. A bumped literal with no rationale is indistinguishable from a silenced guard.
+- A mutation clause written for a subject that is ALREADY red will pass off the pre-existing failure and report a survived mutant as a kill. Gate mutation clauses on a proven-green baseline.
+
+## [2026-08-09] A mirrored closed set goes stale the moment the original grows — and the mirror that judges ABSENCE fails silently
+
+**Severity:** HIGH
+**Source:** #681 (cutover blocker B3) — `server/capture/liveness-observer.ts` seeded `EXPECTED_ROLES = ["user","assistant"]` beside an ingest enum accepting three; `tool` frozen at 14,006 rows from 2026-08-01 while `/health` read `stale: false, silent_roles: []` for eight days
+**Scope key:** a closed set (enum, role list, status list, kind list, allowlist) written out a second time in another module
+**Status:** active
+
+### Pattern
+
+A retyped copy of a closed set is not wrong when it is written — it is wrong *later*, and nothing announces the transition. The original grows a member, the copy does not, and every test written against either one still passes. #681's literal was correct for the enum it sat beside and became a blind spot the day a third role was added.
+
+What makes this severity HIGH rather than cosmetic is **which direction the copy is read in**. A stale copy used to *accept* input fails loudly: the new member arrives, validation rejects it, someone sees an error. A stale copy used to judge **absence** fails silently and in the reassuring direction — the member that is missing from the copy is exactly the member that can never be reported missing.
+
+The #681 mechanism, worth recognising by shape: counts came from `SELECT ... GROUP BY role`, and a role with zero arrivals returns **no row at all**. The judge folded over returned rows, so a role neither seeded nor present was never a key, and the silent-role fault was structurally unable to name it. Dead role → no rows → no group → no key → not silent → healthy. The health check reported green over a dead speaker on the very evidence a production cutover was to rely on.
+
+This is the second instance of the same defect in the same module: #447 was the identical shape with `assistant` as the missing role, and the seed added to fix it was itself written as a literal — so the fix preserved the mechanism and the next role walked into it.
+
+### Review checks
+
+- **Grep the codebase for the set's members, not the set's name.** A second copy rarely shares the identifier; it is a bare array of the same strings somewhere else. Three copies of the role set existed here (`server/tools/`, `src/tools/`, the SQL `CHECK`) and only one was derived.
+- **For every mirrored set, ask which direction it is read in.** If any consumer uses it to decide what is MISSING, absent-member drift is silent and needs a derived source or a drift test — reasoning that "we'd notice" is exactly what failed for eight days.
+- **A fix that adds the missing member to the literal is not a fix.** It resolves the instance and preserves the mechanism. Require either derivation from one exported source or an executable drift assertion; "add the missing one" is the finding, not the remedy.
+- **Where a copy genuinely cannot be folded in — a separate deployment tree, an applied migration's `CHECK` (immutable history), another language — the drift test IS the enforcement.** Copies that agree because something asserts they agree are a different world from copies that agree because nobody has touched one yet.
+- **Check the fold for `GROUP BY`-shaped blindness generally.** Any aggregate that reports per-category health from returned rows alone cannot see a category with no rows. The expected categories must be seeded before the fold, and the seed must come from the authority that defines them.
+- **When widening such a seed, read the existing test fixtures as evidence of the old world.** Two tests here encoded the two-role assumption and failed on the corrected behaviour — the failures were the fix working, not a regression, but a lane that "fixed" the fixtures without reading them would have narrowed the seed back.

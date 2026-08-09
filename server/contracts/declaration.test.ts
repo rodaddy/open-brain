@@ -33,9 +33,9 @@ describe("serverContractDeclaration", () => {
     // Pinned independently of `src/contract.test.ts`: deriving the value must
     // not quietly change what the rewrite tells downstream clients.
     expect(serverContractDeclaration(GENERATED_AT)).toEqual({
-      contractVersion: "2026-07-23.memory-tools.v23",
+      contractVersion: "2026-08-09.memory-tools.v24",
       schemaHash:
-        "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8",
+        "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377",
     });
   });
 });

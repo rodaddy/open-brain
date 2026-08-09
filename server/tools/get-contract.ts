@@ -15,7 +15,7 @@
  * builder: deriving both sides would make the condition `x !== x`, a branch that
  * can never fire while still reading like a guard. The frozen identity is
  * anchored where an anchor actually holds -- the pinned expectation in
- * `src/contract.test.ts` and `contracts/memory/contract-declaration-v23.fixture.json`
+ * `src/contract.test.ts` and `contracts/memory/contract-declaration-v24.fixture.json`
  * -- so a hash move still has to be deliberate.
  *
  * What IS worth checking at call time is the question the old string comparison
