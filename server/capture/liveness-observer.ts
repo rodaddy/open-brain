@@ -73,6 +73,7 @@
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { TransportCaptureHealth } from "../transport/index.ts";
+import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
 
 /**
  * Sessions that must be observed before total silence counts as a fault.
@@ -87,8 +88,27 @@ import type { TransportCaptureHealth } from "../transport/index.ts";
  */
 export const MIN_SESSIONS_FOR_SILENCE = 2;
 
-/** The roles a healthy capture lane is expected to deliver. */
-const EXPECTED_ROLES = ["user", "assistant"] as const;
+/**
+ * The roles a healthy capture lane is expected to deliver — DERIVED from the
+ * set the server accepts, never retyped beside it (#681).
+ *
+ * This was a literal `["user", "assistant"]`, and it was correct for the enum
+ * it was written next to until that enum grew a third member. The failure is
+ * silent by construction: a role with no arrivals produces no `GROUP BY` group,
+ * so a role that is neither seeded here nor present in the rows is never a key
+ * in `turnsByRole` and `readCaptureLiveness` cannot name it. `tool` sat frozen
+ * at 14,006 rows from 2026-08-01 while this module reported
+ * `stale: false, silent_roles: []` — eight days of green over a dead speaker,
+ * which is the #447 failure this module's own docstring cites as its reason to
+ * exist, one role wider.
+ *
+ * Deriving rather than extending is deliberate: adding `"tool"` to the literal
+ * would fix the instance and keep the mechanism, leaving role four to escape
+ * liveness exactly as role three did. `RAW_TURN_ROLES` is the ingest
+ * boundary's own set, so a role the server learns to accept becomes a role this
+ * observer expects, with no second edit to forget.
+ */
+const EXPECTED_ROLES = RAW_TURN_ROLES;
 
 /**
  * Faults this vantage point can actually raise, named in the reading.
