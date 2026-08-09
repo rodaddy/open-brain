@@ -71,6 +71,21 @@ export interface TransportCaptureHealth {
   readonly sessions_observed: number;
   readonly turns_delivered: number;
   readonly spool_pending: number;
+  /**
+   * Units the capture lane ABANDONED after exhausting its replay attempts.
+   *
+   * ABSENT, never 0, when no vantage point reported the count (#680). The two
+   * states are genuinely different — "nothing was abandoned" and "nobody
+   * looked" — and collapsing them into a confident zero is the exact defect
+   * this field exists to end: on 2026-07-30 a hardcoded 0 stood in for an
+   * unmeasured quantity while fifteen turns were gone for good, and `/health`
+   * read `spool_pending:0, reason:"capture lane delivering"` over the top of
+   * it.
+   *
+   * A monitor alerts on this crossing 0 -> 1, so a reporting vantage point
+   * publishes a real 0 rather than omitting the field.
+   */
+  readonly quarantined_count?: number;
   /** Reported for an operator; no verdict is derived from it. */
   readonly silence_seconds: number;
   /** Content-free sentence naming which fault fired. */
