@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
 import { authorize, contentHash } from "./memory-helpers.ts";
+import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
 
 const harnessNoise = [
   /^\[Request interrupted by user[^\]]*\]$/,
@@ -21,7 +22,10 @@ const rawTurnSchema = z.object({
   repo: z.string().min(1).max(200).nullish(),
   git_branch: z.string().min(1).max(300).nullish(),
   turn_index: z.number().int().min(0),
-  role: z.enum(["user", "assistant", "tool"]),
+  // The accepted set is declared once (#681). The liveness observer seeds its
+  // expected roles from this same export, so a role added here cannot be a role
+  // the health check stays blind to.
+  role: z.enum(RAW_TURN_ROLES),
   is_human_prompt: z.boolean().optional(),
   content: z.string(),
   runtime: z.string().min(1).max(100).nullish(),
