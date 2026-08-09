@@ -65,13 +65,78 @@ export interface TeardownTally {
   archived: number;
   already_absent: number;
   failed: number;
+  /**
+   * One content-free label per cleanup failure, in failure order (issue #671).
+   *
+   * Before this existed, `teardownRecords` caught the cleanup error into a bare
+   * `catch {}` and only the integer `failed` survived. When the third
+   * credentialed #653 verify hit `failed=2`, the label of the throw was
+   * unrecoverable from the receipt, the log, or anywhere else -- the
+   * dead-end-error class (docs/lane-contract.md Tightenings rounds 15/19)
+   * inside our own eval tooling. The catch STAYS, because a teardown that
+   * aborts on the first bad record strands every later one; what changes is
+   * that the error stops being discarded.
+   *
+   * Content-free by construction: `labelTeardownError` emits a
+   * `LiveTransportError`'s already-redacted `label`, or otherwise the error's
+   * CLASS NAME only -- never `error.message` from an arbitrary throw, which can
+   * echo row content or a namespace value into a receipt.
+   */
+  failure_labels: string[];
+}
+
+/**
+ * Residue -- the DB-queryable truth about what a teardown actually left behind.
+ *
+ * This exists because the tally cannot answer the question the tally was being
+ * asked (issue #671). A tally counts CALLS: `failed` means "a cleanup call
+ * threw", which is not the same claim as "rows remain". The third credentialed
+ * #653 verify reported `attempted=6 archived=4 already_absent=0 failed=2` on a
+ * database that a 12-table residue query proved was clean -- two archive calls
+ * threw, the composed purge then removed everything, and nothing corrected the
+ * count. The gate exited 1 on a clean database.
+ *
+ * Round 16's Tightening says "a teardown that reports success is not evidence
+ * of removal"; this is its mirror -- a teardown that reports FAILURE is not
+ * evidence of residue. So the verdict channel now reads rows, and the tally is
+ * demoted to diagnostics.
+ *
+ * `checked: false` means no residue observation was possible (no database
+ * handle). That is NOT a pass: a verdict may not be derived from an
+ * unperformed check, so callers treat unchecked as unproven and say so.
+ */
+export interface TeardownResidue {
+  /** Whether a residue observation actually ran. False is unproven, not clean. */
+  checked: boolean;
+  /** Total rows still carrying this run's namespace, across every table checked. */
+  rows: number;
+  /** Per-table counts, only for tables that had any rows left. */
+  by_table: Record<string, number>;
+  /** Content-free reason the observation could not run, when `checked` is false. */
+  unchecked_reason?: string;
+}
+
+/**
+ * Reduce an arbitrary thrown value to a content-free label safe for a receipt.
+ *
+ * A `LiveTransportError` already carries a redacted label by contract, so that
+ * label passes through -- it is the one that names WHICH tool call failed and
+ * why, which is the whole point of capturing it. Anything else contributes its
+ * constructor name only: an arbitrary `Error.message` may contain row content,
+ * a namespace, or a token fragment, and a receipt is an artifact that gets
+ * pasted into issues and PRs.
+ */
+export function labelTeardownError(error: unknown): string {
+  if (error instanceof LiveTransportError) return error.label;
+  if (error instanceof Error) return `${error.constructor.name}`;
+  return "unknown";
 }
 
 /**
  * Shared EVAL-3 teardown accounting. Callers provide the exact records this run
  * created and one record-specific cleanup operation; every record is attempted,
- * individual failures never prevent later cleanup, and the receipt carries only
- * counts.
+ * individual failures never prevent later cleanup, and the receipt carries
+ * counts plus one content-free label per failure (#671).
  */
 export async function teardownRecords<T>(
   records: readonly T[],
@@ -82,6 +147,7 @@ export async function teardownRecords<T>(
     archived: 0,
     already_absent: 0,
     failed: 0,
+    failure_labels: [],
   };
   for (const record of records) {
     tally.attempted += 1;
@@ -89,8 +155,11 @@ export async function teardownRecords<T>(
       const outcome = await cleanup(record);
       if (outcome === "archived") tally.archived += 1;
       else tally.already_absent += 1;
-    } catch {
+    } catch (error: unknown) {
+      // The catch is deliberate and stays: one bad record must not strand the
+      // rest. What #671 changes is that the error is no longer DISCARDED.
       tally.failed += 1;
+      tally.failure_labels.push(labelTeardownError(error));
     }
   }
   return tally;
