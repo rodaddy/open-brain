@@ -87,6 +87,41 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 24) — harvest of the #671 verdict-channel lane (PR #673)
+
+- **A driver that implements a changing interface can silently repair the
+  defect it exists to expose.** Returning only the post-fix shape handed
+  the pre-fix gate an object with no `failed`, and `undefined > 0` is
+  false — the broken gate reported PASS and the RED was false. New
+  spelling of the false-RED family (round 18's broken import, round 22's
+  env mutant): a CONTRACT-SHAPE mismatch that looks like legitimate
+  green. When the fix changes a driver-implemented signature, return both
+  shapes and assert the RED went red for the defect's own reason.
+- **When a fix changes WHICH SIGNAL produces a failure, the control
+  clause must assert the signal, not the outcome** — "gate failed" was
+  satisfied pre-fix by the old tally verdict, certifying a mechanism that
+  did not exist yet. Round 9/17 negative-match family extended.
+- **A residue/leak reader shares the remover's resource list — never a
+  parallel one.** Two lists drift, and the drift fails GREEN: the table
+  the purge stops clearing also stops being counted. Enforce with a unit
+  test asserting the reader names exactly the remover's tables.
+- **"Not observed" must fail closed** — a verdict moved onto a query
+  inherits the query's failure modes; unchecked and partially-read
+  readings both fail, or the false-red fix becomes a false-green one.
+- **A git-guard refusal aborts the ENTIRE compound command** — heredocs
+  and file writes earlier in the chain never executed, so the next step
+  fails on a missing file and reads as an unrelated bug. Write message
+  files in a separate tool call before the guarded command.
+- **Empty shell variables in numeric tests abort under `set -u`** and
+  truncate the remaining clauses — a transcript that reads as a crash,
+  not a verdict. Sentinel JSON reads, guard the arithmetic (round 21's
+  PIPESTATUS sibling).
+- **A lane constrained away from the live path reports instrumentation
+  shipped, not findings observed** — the #671 lane could only see its own
+  stub label and said so, filing #672 for the real one instead of
+  fabricating. "NOT OBSERVED — structurally cannot observe" is a
+  complete, correct answer.
+
 ### 2026-08-08 (round 23) — harvest of the #667 bootstrap-continuation lane
 
 - **A negative-match clause on a crashing subject can go green off the
