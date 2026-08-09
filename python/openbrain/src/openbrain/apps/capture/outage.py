@@ -240,19 +240,57 @@ _MIGRATIONS = (
 )
 
 
-def spool_notice(notice: str, pending: int | None) -> str:
-    """Render one notice, with the spool depth when it is known.
+#: The line printed when reachability is UNCHANGED but records are abandoned.
+#:
+#: Its own notice rather than a reuse of :data:`DEGRADED_NOTICE`, because the
+#: brain is not unreachable in this case -- it is very likely delivering
+#: perfectly, which is what makes the situation dangerous. Saying "unreachable"
+#: would send an operator to check a service that is fine and would go stale
+#: the moment they confirmed it, teaching them the line is noise. The subject
+#: here is the records, not the connection.
+QUARANTINE_ONLY_NOTICE = "open-brain capture - records abandoned by replay"
+
+#: Appended to a notice when records have been ABANDONED, not merely held.
+#:
+#: Deliberately different wording from the spool depth, because the two need
+#: different operator actions and a line that cannot tell them apart is a line
+#: the operator learns to skip. A spool depth drains itself the moment the
+#: server comes back; a quarantined unit never will -- it has already used up
+#: its ``quarantine_threshold`` replay attempts and is retried by NOTHING. The
+#: memory-capacity reference states it plainly under "Quarantine threshold":
+#: never retried automatically, triage is operator-managed. "Held for replay"
+#: is reassuring and, for these records, false.
+QUARANTINE_NOTICE = "ABANDONED - replay gave up, operator action required"
+
+
+def spool_notice(
+    notice: str,
+    pending: int | None,
+    quarantined: int | None = 0,
+) -> str:
+    """Render one notice, with the spool depth and any ABANDONED records.
 
     Args:
         notice: :data:`DEGRADED_NOTICE` or :data:`RECOVERED_NOTICE`.
-        pending: How many records are waiting in the spool, or ``None`` when
+        pending: The count of records waiting in the spool, or ``None`` when
             the count could not be read.
+        quarantined: The count of units abandoned into the quarantine sidecar,
+            or ``None`` when that count could not be read. Defaults to ``0`` so
+            existing two-argument callers keep their exact behaviour.
 
     Returns:
-        The line to print. The depth is appended only when it is genuinely
-        known -- an unreadable spool prints no count rather than a ``?`` or a
-        guessed ``0``, because a count is the one thing on this line an
-        operator would act on.
+        The line to print. Each count is appended only when it is genuinely
+        known and non-zero -- an unreadable spool prints no count rather than a
+        ``?`` or a guessed ``0``, because a count is the one thing on this line
+        an operator would act on.
+
+    WHY QUARANTINE IS NOT FOLDED INTO THE SPOOL DEPTH (#680). It would have
+    been one character cheaper to add the two numbers together, and it would
+    have rebuilt the defect: a single depth reads as backlog, backlog reads as
+    self-healing, and the operator's correct response to backlog is to wait.
+    Waiting is exactly wrong here. On 2026-07-30 fifteen turns were abandoned
+    while this line reported a healthy spool, so the abandoned records get
+    their own clause, in words that ask for a human.
 
     Example:
         >>> spool_notice(DEGRADED_NOTICE, 3)
@@ -261,10 +299,15 @@ def spool_notice(notice: str, pending: int | None) -> str:
         'open-brain unreachable - turn held for replay'
         >>> spool_notice(DEGRADED_NOTICE, 0)
         'open-brain unreachable - turn held for replay'
+        >>> spool_notice(DEGRADED_NOTICE, 0, 2)
+        'open-brain unreachable - turn held for replay (quarantined: 2 - ABANDONED - replay gave up, operator action required)'
     """
-    if not pending:
-        return notice
-    return f"{notice} (spool: {pending})"
+    line = notice
+    if pending:
+        line = f"{line} (spool: {pending})"
+    if quarantined:
+        line = f"{line} (quarantined: {quarantined} - {QUARANTINE_NOTICE})"
+    return line
 
 
 def spool_pending(path: Path | None) -> int | None:
@@ -296,6 +339,101 @@ def spool_pending(path: Path | None) -> int | None:
     except OSError:
         return None
     return sum(1 for line in text.split("\n") if _is_json_object_line(line))
+
+
+#: Schema marker on a quarantine sidecar's envelope lines.
+#:
+#: Mirrors ``openbrain_memory.spool.QUARANTINE_ENVELOPE_SCHEMA`` rather than
+#: importing it, exactly as ``spool_pending`` re-derives its own path
+#: resolution and line counting: ``openbrain`` does not depend on the provider
+#: package, and this module runs inside a 5-second ``Stop`` deadline where it
+#: must not import a client to print one number. The value is pinned against
+#: the writer's constant by a test, so the two cannot drift silently.
+QUARANTINE_ENVELOPE_SCHEMA = "openbrain.spool_quarantine.v1"
+
+#: Suffix the provider appends to a spool path to name its quarantine sidecar.
+#: Mirrors ``JsonlSpool.quarantine_path`` (``path.with_suffix(suffix +
+#: ".quarantine.jsonl")``), pinned by the same test.
+QUARANTINE_SUFFIX = ".quarantine.jsonl"
+
+
+def quarantine_path(spool_path: Path) -> Path:
+    """Where the provider parks units it has given up on.
+
+    Args:
+        spool_path: The live spool file.
+
+    Returns:
+        The sidecar path, derived exactly as ``JsonlSpool`` derives it.
+    """
+    return spool_path.with_suffix(spool_path.suffix + QUARANTINE_SUFFIX)
+
+
+def spool_quarantined(path: Path | None) -> int | None:
+    """Count the units the provider ABANDONED into the quarantine sidecar.
+
+    Args:
+        path: The LIVE spool file (not the sidecar), or ``None`` when no spool
+            is configured. The sidecar is derived from it, so callers pass the
+            same path they already pass to :func:`spool_pending`.
+
+    Returns:
+        The count of quarantine envelopes, ``0`` for an absent or empty
+        sidecar, or ``None`` when the sidecar exists but could not be read.
+
+    THE DEFECT THIS EXISTS TO END (#680, cutover blocker B2). After
+    ``quarantine_threshold`` consecutive replay failures the provider moves a
+    unit out of the live spool and into a sidecar, and stops retrying it. Every
+    operator-facing count in this module reads the LIVE spool, so the move made
+    the number go DOWN: on 2026-07-30 fifteen real turns and roughly forty-four
+    lifecycle events were abandoned while ``/health`` reported
+    ``spool_pending:0, reason:"capture lane delivering"``. The records were
+    confirmed absent from ``ob_raw_turns`` and present on disk in the sidecar.
+    ``SpoolStatus.quarantined_count`` had existed the whole time with no
+    consumer anywhere outside the provider package.
+
+    ENVELOPES, NOT LINES. The sidecar interleaves one content-free envelope per
+    abandoned unit with that unit's original record lines, so counting lines
+    would report a number that moves with payload size rather than with the
+    thing an operator cares about. Counting envelopes counts abandoned units,
+    which is what ``quarantined_count`` means on the writing side.
+
+    UNREADABLE IS ``None``, NEVER ``0``. Inherited deliberately from
+    :func:`spool_pending`: a guessed zero for a sidecar that could not be read
+    is this very defect rebuilt one directory over, and the operator acts on
+    this count.
+    """
+    if path is None:
+        return 0
+    sidecar = quarantine_path(path)
+    try:
+        if not sidecar.exists():
+            return 0
+        if sidecar.stat().st_size == 0:
+            return 0
+        text = sidecar.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return sum(1 for line in text.split("\n") if _is_quarantine_envelope(line))
+
+
+def _is_quarantine_envelope(line: str) -> bool:
+    """Whether one sidecar line is a quarantine envelope (not a record line).
+
+    A truncated or non-object line is a crash artifact, and a record line
+    belongs to a unit already counted by its own envelope -- neither is an
+    abandoned unit.
+    """
+    if not line.strip():
+        return False
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(parsed, dict)
+        and parsed.get("schema") == QUARANTINE_ENVELOPE_SCHEMA
+    )
 
 
 def _is_json_object_line(line: str) -> bool:

@@ -111,21 +111,38 @@ def main() -> int:
         )
 
         # ------------------------------------------------------------------
-        # (a) THE DEFECT ITSELF. The capture lane's operator-facing count must
-        # not read 0 while records sit abandoned in the sidecar. This is the
-        # exact live symptom: /health said spool_pending:0 with 15 turns gone.
+        # (a) THE DEFECT ITSELF, as the pre-flight doc states the requirement:
+        # "forced 5 failures -> the turn is STILL PENDING **or** a LOUD fault
+        # is raised — never a silent sidecar". A DISJUNCTION, deliberately.
         #
-        # Asserts the COUNT, not the presence of a function: a reader that
-        # returns 0 here is the shipped defect regardless of what it is named.
+        # The lane's first draft of this clause asserted only the left branch
+        # (`spool_pending > 0`) and it FAILED against the implemented fix, for
+        # a good reason: folding abandoned units into the pending depth would
+        # make one number mean both "will drain itself when the server returns"
+        # and "will never drain, ever". Backlog reads as self-healing and the
+        # operator's correct response to backlog is to WAIT, which is exactly
+        # the wrong response here. Conflating them is the defect's own shape in
+        # a new place, so the implementation took the right branch instead: the
+        # abandoned records get their own count and their own words.
+        #
+        # The clause is corrected to assert the requirement as WRITTEN rather
+        # than the lane's first reading of it (docs/lane-contract.md round 19 —
+        # reject a briefed hypothesis on evidence, in writing, never silently).
+        # What it must never accept is the third state: neither pending nor
+        # loud, which is the 2026-07-30 live symptom.
         # ------------------------------------------------------------------
         from openbrain.apps.capture import outage  # noqa: PLC0415
 
         pending = outage.spool_pending(spool_path)
+        loud = call(resolve(outage, "spool_quarantined"), spool_path)
+        still_pending = pending is not None and pending > 0
+        raised_loud = loud is not _MISSING and loud is not None and loud > 0
         check(
-            "a-pending-not-blind",
-            pending is not None and pending > 0,
-            f"after the drop, the capture lane's pending count reads {pending!r} "
-            "(0 or None means the records are invisible to every operator surface)",
+            "a-pending-or-loud",
+            still_pending or raised_loud,
+            f"after the drop: pending={pending!r} quarantined={loud!r} — the records "
+            "are still pending, or an abandoned count is raised; a silent sidecar "
+            "(pending=0 with no quarantine reader) is the shipped defect",
         )
 
         # ------------------------------------------------------------------

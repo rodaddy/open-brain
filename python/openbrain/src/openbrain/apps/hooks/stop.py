@@ -80,11 +80,13 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from openbrain.apps.capture.outage import (
+    QUARANTINE_ONLY_NOTICE,
     OutageLatch,
     default_spool_path,
     latch_path,
     spool_notice,
     spool_pending,
+    spool_quarantined,
 )
 from openbrain.apps.hooks.session import StopHook, run_stop
 from openbrain.config import load_capture_settings, load_observation_settings
@@ -233,7 +235,8 @@ def announce_outage_state(
     delivered: bool,
     notices: TextIO | None,
 ) -> None:
-    """Latch this Stop's outcome and print a line only when the state CHANGED.
+    """Latch this Stop's outcome, and speak when the state CHANGED or records
+    have been ABANDONED.
 
     Args:
         session_key: The session whose health this is, or ``None`` when the
@@ -246,6 +249,25 @@ def announce_outage_state(
     that did not parse is a defect in the harness's message, not evidence about
     Open Brain's reachability, and announcing an outage from one would be a
     false alarm on every malformed Stop.
+
+    WHY A QUARANTINE COUNT IS NOT GATED ON THE LATCH (#680, cutover blocker
+    B2). The latch exists to say a CHANGE once and then stay quiet, which is
+    exactly right for reachability: an outage that is still going is not news.
+    Abandoned records are the opposite kind of fact. They are a standing
+    condition that nothing resolves on its own -- the provider has already
+    exhausted its replay attempts and will never retry them -- so the latch's
+    "already said that" is the wrong instinct: it said it about the OUTAGE, and
+    the outage recovering is precisely when a healthy-looking Stop would bury
+    the loss. That is the observed 2026-07-30 shape: the lane recovered, kept
+    delivering 1,819 further turns for the same session, and the fifteen
+    abandoned ones were never mentioned again by anything.
+
+    So the line is emitted whenever the count is non-zero, on every Stop, until
+    an operator triages the sidecar. That is deliberate repetition, and it is
+    the cheaper error: an operator who sees it daily can act on it, whereas the
+    status quo is that nobody ever learns. It is the same reasoning
+    ``log_capture_failure`` uses in reverse -- there, repetition of a KNOWN
+    outage is demoted because waiting resolves it; here, waiting does not.
 
     Wrapped in its own swallow. This function exists to REPORT a failure; it
     must not be able to cause one, so a notice that cannot be latched or written
@@ -260,13 +282,24 @@ def announce_outage_state(
             if delivered
             else latch.note_spooled(session_key)
         )
-        if notice is None:
+        spool_path = default_spool_path(settings.spool_path)
+        # Read the sidecar even on an unchanged latch: abandoned records are a
+        # standing condition, not an event, and gating them on a state CHANGE
+        # is what made the 2026-07-30 loss permanent and silent. The read is
+        # one stat on a file that does not exist for a healthy machine, which
+        # is the same cost the pending read already pays when it does speak.
+        quarantined = spool_quarantined(spool_path)
+        if notice is None and not quarantined:
             return
-        # Only read the spool once there is genuinely a line to print, so the
-        # ordinary healthy Stop never pays the stat/read at all.
-        line = spool_notice(
-            notice, spool_pending(default_spool_path(settings.spool_path))
-        )
+
+        if notice is None:
+            # Nothing changed about reachability, but records are abandoned.
+            # Say only that -- prefixing a recovery or degradation notice that
+            # did not happen would be reporting a state transition that the
+            # latch explicitly did not observe.
+            line = spool_notice(QUARANTINE_ONLY_NOTICE, 0, quarantined)
+        else:
+            line = spool_notice(notice, spool_pending(spool_path), quarantined)
         target = sys.stderr if notices is None else notices
         target.write(f"{line}\n")
         target.flush()
