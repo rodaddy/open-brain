@@ -235,8 +235,7 @@ def announce_outage_state(
     delivered: bool,
     notices: TextIO | None,
 ) -> None:
-    """Latch this Stop's outcome, and speak when the state CHANGED or records
-    have been ABANDONED.
+    """Latch this Stop's outcome; speak on a CHANGE or on ABANDONED records.
 
     Args:
         session_key: The session whose health this is, or ``None`` when the
