@@ -59,6 +59,68 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+> **Note on this file's history, recorded 2026-08-09 by the #271 tripwire
+> lane.** Rounds 8 through 26 are committed on the unmerged `wip/2026-08-07`
+> branch and are NOT on the upstream default branch: main's copy is 211 lines
+> and jumps from round 7 to the founding round, while the wip copy is 945
+> lines. Lanes read this file from their own worktree (round 3, PR #631), so a
+> lane bootstrapped from main has been briefed from a contract missing
+> nineteen rounds of ratchet. The ratchet only ratchets where it is merged.
+> Flagged for the decisions pass rather than fixed here — landing nineteen
+> rounds of someone else's harvest inside a test-heal PR would be the silent
+> scope adjustment the contract forbids. The round 27 entry below is written
+> into main's lineage so this lane's own harvest is not lost to the same gap.
+
+### 2026-08-09 (round 27) — harvest of the #271 tripwire heal (PR #701), a CONTROLLER merge defect
+
+- **A failing assertion turns off every clause after it in the same test, and
+  for a TRIPWIRE that is a hole rather than an inconvenience.** The #271
+  block's later clauses — the exact top-level key-set assertion and the
+  push/injection negative filter — are the ones that enforce the boundary,
+  and the stale version literal aborted the body before either ran (37
+  expect() calls red vs 44 healed). For the window main stayed red, a
+  push-shaped hot-memory key could have landed and the tripwire would have
+  failed for the OLD reason, looking like the same known redness. **A red
+  tripwire and a disabled tripwire are indistinguishable in test output**,
+  and known redness is a strong anaesthetic. Never leave a guard red on the
+  upstream default branch; heal it or revert what broke it.
+- **Prove a guard test by its executed-assertion COUNT, not by its exit
+  code.** A floor on expect() calls is the only clause that can express "the
+  body ran to the end"; green/red structurally cannot. Pin a floor, not an
+  equality, so adding assertions does not fail the gate.
+- **A PR that moves a pinned value must re-run the OTHER assertions of that
+  value, including in files its diff never touches.** #691 bumped the tool
+  contract 2 -> 3 with all its own gates green; the pin-holder was a test in
+  an untouched file, so the branch was green and the merge was red. This is
+  the controller's defect, not the lane's — the cross-file pin check belongs
+  in the merge pass.
+- **A mutation clause written against an ALREADY-RED subject banks the
+  pre-existing failure as a kill.** Clause c passed on the pre-fix tree in its
+  first form — a survived mutant reported as a discriminating check. Gate
+  mutation clauses on a proven-green baseline and report INCONCLUSIVE
+  otherwise. Found by reading WHY each RED clause failed rather than accepting
+  a satisfying 4/4 red.
+- **Exit 127 can masquerade as a gate verdict.** Five CI failures asserted
+  `toBe(1)` for a refusal and received 127 — the shell's command-not-found,
+  meaning the script under test never ran. "Did not execute" and "refused
+  correctly" were distinguishable only by the number's luck. Any clause
+  asserting a specific nonzero exit should reject 127 explicitly. Filed as
+  #702 rather than absorbed.
+- **The two-runs-same-SHA comparison settled a red CI check again:** identical
+  f0e135c passed on `push` and failed on `pull_request`. Corroborated by
+  running both failing clusters locally on clean origin/main AND on the branch
+  in separate worktrees — 29 pass / 0 fail on both — before concluding
+  environment-owned. A same-SHA disagreement is the signal; the local
+  differential is the proof.
+- **PIPESTATUS printed empty when read outside the pipeline's shell**, reading
+  as exit 0 at a glance. Every verdict in this lane re-read the exit code
+  directly from the command instead.
+- **Pin collisions between concurrent branches are a merge-order hazard the
+  pin cannot see.** PR #701 and PR #687 each legitimately re-measured
+  EXPECTED_ENTRY_COUNT as 235 on their own trees; whichever merges second is
+  silently stale. Re-measure the pin AFTER integrating main, never carry a
+  branch's own derivation across a merge — and never sum.
+
 ### 2026-08-08 (round 7) — harvest of the #636 continuation lane (inherited a dead lane's worktree)
 
 - **Inherited work is PROPOSED, and auditing it is the first task, not a
