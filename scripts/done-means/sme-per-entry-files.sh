@@ -82,7 +82,7 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
-EXPECTED_ENTRY_COUNT=227
+EXPECTED_ENTRY_COUNT=228
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
