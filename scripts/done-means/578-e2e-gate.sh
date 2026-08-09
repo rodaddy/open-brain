@@ -94,9 +94,15 @@
 #       was accepted), the entire suite is non-discriminating and the check
 #       reports FAIL no matter what (a)-(c) said.
 #
-#   (e) CONTROL — TEARDOWN. The scenario leg reports its own teardown tally and
-#       nothing it created is left behind (`failed=0`). A gate that accretes
-#       throwaway namespaces on every run is a gate nobody runs twice.
+#   (e) CONTROL — TEARDOWN RESIDUE. Nothing the run created is left behind,
+#       asserted against OBSERVED ROWS (`teardown_residue`, PR #673) rather
+#       than the cleanup-call tally. `checked=true` with `rows=0` passes;
+#       `checked=false` FAILS closed, because an unperformed check cannot
+#       support a clean verdict; `rows>0` fails naming the table. The old
+#       `teardown.failed` tally is reported as INFO diagnostics and decides
+#       nothing. A gate that accretes throwaway namespaces on every run is a
+#       gate nobody runs twice — but a gate that reds out over a cleanup call
+#       that threw on an already-empty database is one nobody trusts (#671).
 #
 # ---------------------------------------------------------------------------
 # ENVIRONMENT — WHY THIS IS OPT-IN AND WHERE THE VALUES COME FROM
@@ -253,19 +259,81 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (e) CONTROL — teardown. Read from the same receipt.
+# (e) CONTROL — teardown RESIDUE. Read from the same receipt.
+#
+# This clause reads OBSERVED ROWS, not the cleanup-call tally. `teardown.failed`
+# counts calls that threw; residue counts what is still in the database. PR #673
+# (issue #671) proved they are different facts: on the third credentialed #653
+# verify, two `archive_entry` calls threw over a database a 12-table residue
+# query had just shown to be empty, and this clause failed a clean run.
+#
+# Three outcomes, and the middle one is the point:
+#   checked=true, rows=0   PASS — a reading ran and found nothing
+#   checked=false          FAIL — nothing was looked at; unproven is not clean
+#   rows>0                 FAIL — naming the table(s) holding the rows
+#
+# The tally is still reported, as INFO, in the diagnostics line below it. It
+# explains a result; it is not the result.
 # ---------------------------------------------------------------------------
-printf '\n--- (e) control: teardown ---\n'
+printf '\n--- (e) control: teardown residue ---\n'
+set +e
+RESIDUE_CHECKED="$(bun "${RECEIPT_READER}" "${SCENARIO_RECEIPT}" teardown_residue_checked 2>&1)"
+RESIDUE_CHECKED_EXIT=$?
+set -e
+set +e
+RESIDUE_ROWS="$(bun "${RECEIPT_READER}" "${SCENARIO_RECEIPT}" teardown_residue_rows 2>&1)"
+RESIDUE_ROWS_EXIT=$?
+set -e
+set +e
+RESIDUE_TABLES="$(bun "${RECEIPT_READER}" "${SCENARIO_RECEIPT}" teardown_residue_tables 2>&1)"
+RESIDUE_TABLES_EXIT=$?
+set -e
+
+# The reader prints the `checked=false` reason on stderr, which 2>&1 folds into
+# the value. Keep only the last line, so the comparison sees the value and the
+# transcript still carries the reason.
+RESIDUE_CHECKED_VALUE="$(printf '%s\n' "${RESIDUE_CHECKED}" | tail -1)"
+RESIDUE_ROWS_VALUE="$(printf '%s\n' "${RESIDUE_ROWS}" | tail -1)"
+# Round 24 (empty variable in a numeric test aborts the script under `set -u`
+# and truncates every clause after it): a failed read becomes a sentinel, never
+# an empty string, and the arithmetic is guarded on the sentinel.
+if [[ ${RESIDUE_ROWS_EXIT} -ne 0 || -z "${RESIDUE_ROWS_VALUE}" ]]; then
+  RESIDUE_ROWS_VALUE="MISSING"
+fi
+
+if [[ ${RESIDUE_CHECKED_EXIT} -ne 0 ]]; then
+  fail "(e) teardown residue reading unreadable: ${RESIDUE_CHECKED}"
+elif [[ "${RESIDUE_CHECKED_VALUE}" != "true" ]]; then
+  # Fail CLOSED. `rows` is 0 both when nothing remains and when nothing was
+  # examined; treating the second as the first is how the #671 false red would
+  # become a false green.
+  # The reason lives on the reader's stderr lines, i.e. everything the value
+  # line is not. Folded onto one line so the verdict stays one line — a FAIL
+  # whose message wraps into a bare `false` on the next line reads like a
+  # second, unexplained output.
+  RESIDUE_UNCHECKED_REASON="$(printf '%s\n' "${RESIDUE_CHECKED}" | sed '$d' | tr '\n' ' ')"
+  fail "(e) teardown residue was NOT observed (checked=${RESIDUE_CHECKED_VALUE}) — an unperformed check cannot support a clean verdict: ${RESIDUE_UNCHECKED_REASON:-no reason reported}"
+elif [[ "${RESIDUE_ROWS_VALUE}" == "MISSING" ]]; then
+  fail "(e) teardown residue row count unreadable: ${RESIDUE_ROWS}"
+elif [[ "${RESIDUE_ROWS_VALUE}" -eq 0 ]]; then
+  pass "(e) teardown residue OBSERVED and empty (checked=true rows=0) — the run left nothing behind"
+else
+  if [[ ${RESIDUE_TABLES_EXIT} -ne 0 || -z "${RESIDUE_TABLES}" ]]; then
+    RESIDUE_TABLES="<table breakdown unavailable: ${RESIDUE_TABLES}>"
+  fi
+  fail "(e) teardown left ${RESIDUE_ROWS_VALUE} row(s) behind in: ${RESIDUE_TABLES}"
+fi
+
+# DIAGNOSTIC, not a verdict. Reported because it explains a residue result and
+# carries the content-free failure labels #673 added; it decides nothing.
 set +e
 TEARDOWN_FAILED="$(bun "${RECEIPT_READER}" "${SCENARIO_RECEIPT}" teardown_failed 2>&1)"
 TEARDOWN_EXIT=$?
 set -e
 if [[ ${TEARDOWN_EXIT} -ne 0 ]]; then
-  fail "(e) teardown tally unreadable: ${TEARDOWN_FAILED}"
-elif [[ "${TEARDOWN_FAILED}" == "0" ]]; then
-  pass "(e) scenario teardown left nothing behind (failed=0)"
+  info "(e) diagnostics: teardown call tally unreadable (${TEARDOWN_FAILED}) — not a verdict either way"
 else
-  fail "(e) scenario teardown failed=${TEARDOWN_FAILED} — the run left records behind"
+  info "(e) diagnostics: ${TEARDOWN_FAILED} teardown call(s) threw (a tally of CALLS, not of rows — see clause (e) above for the verdict)"
 fi
 
 # ---------------------------------------------------------------------------
