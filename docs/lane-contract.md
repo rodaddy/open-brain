@@ -87,6 +87,30 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 21) — harvest of the #653 branch-sync lane
+
+- **`lane-bootstrap` refuses a continuation lane on an EXISTING BRANCH,
+  not only on a leftover worktree** (hard-coded `worktree add -b` at
+  scripts/lane-bootstrap.ts:302-309; round 11 recorded only the worktree
+  half). Until the script gains a continuation mode (ruling requested,
+  pending decisions pass), a continuation lane hand-replicates fetch /
+  `worktree add` WITHOUT `-b` / `.env` copy / `bun install --frozen-lockfile`
+  — and announces the hand-build, because hand-building is what ledger
+  item 15 exists to stop.
+- **Record the NEGATIVE results of the merge-recheck rule too.** Round
+  11's "conflict-free is not clean" re-run cost ~1 minute and came back
+  clean; only reporting the catches would make the rule look more
+  expensive than it is.
+- **`PIPESTATUS` evaluated outside the pipeline's shell prints EMPTY** —
+  indistinguishable at a glance from exit 0, and it bit twice in one lane
+  (a refusal path whose whole claim is nonzero exit, and tsc). Round 19's
+  tee-masking lesson, second spelling: redirect to a file and read `$?`.
+- **"Prove the refusal, never the credentialed path" is a viable standing
+  split for uncredentialed continuation lanes** — the gate's refusal
+  enumerates all 8 missing coordinates by name, so a lane with no
+  credentials fully exercises the refusal branch with zero harvest risk;
+  the credentialed leg stays with the controller-dispatched verifier.
+
 ### 2026-08-08 (round 20) — harvest of the #661 five-keys lane (PR #663) and the hold-at-RED escalation
 
 - **An issue generated from a tool's own output inherits that tool's
