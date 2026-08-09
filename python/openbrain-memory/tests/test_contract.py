@@ -22,7 +22,7 @@ PREVIOUS_CONTRACT_VERSION = "2026-07-13.memory-tools.v21"
 CURRENT_REQUIRED_TOOL_VERSIONS = {
     "session_start": 2,
     "session_wrap": 2,
-    "agent_context_pack": 2,
+    "agent_context_pack": 3,
     "agent_reflex_pointers": 1,
     "append_session_event": 8,
 }
@@ -88,10 +88,10 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
 
 
 def test_package_pins_reviewed_v23_schema_snapshot() -> None:
-    assert CURRENT_CONTRACT_VERSION == "2026-07-23.memory-tools.v23"
+    assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v24"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
+        "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
     )
 
 
@@ -189,9 +189,9 @@ def test_current_package_rejects_realistic_v21_first_class_contract():
     assert result.ok is False
     assert COMPATIBLE_CONTRACT_VERSIONS == (CURRENT_CONTRACT_VERSION,)
     assert any("contract_version" in reason for reason in result.reasons)
-    assert "capability 'agent_context_pack'.version must be >= 2" in result.reasons
+    assert "capability 'agent_context_pack'.version must be >= 3" in result.reasons
     assert "capability 'append_session_event'.version must be >= 8" in result.reasons
-    assert "tool_contracts['agent_context_pack'].version must be >= 2" in result.reasons
+    assert "tool_contracts['agent_context_pack'].version must be >= 3" in result.reasons
     assert (
         "tool_contracts['append_session_event'].version must be >= 8" in result.reasons
     )

@@ -183,31 +183,36 @@ else
   UNMUTATED_STATUS=$?
   echo "unmutated parity test exit status: $UNMUTATED_STATUS"
 
-  # Mutate: delete the `continue_from` key line from the mirror's
+  # Mutate: delete the `continue_from` block from the mirror's
   # agent_context_pack entry. Marker-anchored (round 25: extract/mutate by
-  # markers against the REAL file, never a retyped copy), and the mutation is
-  # verified to have actually changed the file before the run is trusted.
+  # markers against the REAL file, never a retyped copy).
+  #
+  # The mutation runs from a FILE, not `bun -e`. Under `bun -e` the first user
+  # argument is `process.argv[1]`, not `[2]` — an inline script reading `[2]`
+  # got `undefined`, `readFileSync(undefined)` threw, and the throw's stderr was
+  # captured nowhere the verdict looked. The result was a mutation step that
+  # silently mutated NOTHING while the run continued: the "mutated" parity test
+  # then passed because the file was untouched, and clause (f) was the only
+  # thing that noticed. That is the round-8 measures-its-own-harness family, and
+  # it is why the applied-marker assertion below is not optional.
   cp "$MIRROR" "$BACKUP"
-  bun -e '
-    const fs = require("node:fs");
-    const path = process.argv[2];
-    const src = fs.readFileSync(path, "utf8");
-    // Remove the continue_from block from the agent_context_pack entry only.
-    const start = src.indexOf("  agent_context_pack: {");
-    if (start < 0) { console.error("MUTATION-FAILED: agent_context_pack entry not found"); process.exit(1); }
-    const end = src.indexOf("  agent_reflex_pointers: {", start);
-    if (end < 0) { console.error("MUTATION-FAILED: entry end marker not found"); process.exit(1); }
-    const entry = src.slice(start, end);
-    const mutatedEntry = entry.replace(/\n      continue_from: \{[\s\S]*?\n      \},/, "");
-    if (mutatedEntry === entry) { console.error("MUTATION-FAILED: continue_from block not matched"); process.exit(1); }
-    fs.writeFileSync(path, src.slice(0, start) + mutatedEntry + src.slice(end));
-    console.log("MUTATION-APPLIED: continue_from removed from the agent_context_pack mirror entry");
-  ' "$MIRROR"
+  bun "$SCRIPT_DIR/678-schema-mirror-parity.mutate.ts" "$MIRROR" > "$SCRATCH/mutation.txt" 2>&1
   MUTATION_STATUS=$?
+  cat "$SCRATCH/mutation.txt"
 
-  if [[ $MUTATION_STATUS -ne 0 ]]; then
-    echo "clause f: FAIL — the mutation could not be applied, so nothing was proven"
+  # Two independent gates on the mutation, because an exit code alone has
+  # already proven insufficient here: the script must SAY it applied the
+  # mutation, and the file on disk must actually differ from the backup.
+  MUTATION_ANNOUNCED=0
+  rg -q "^MUTATION-APPLIED" "$SCRATCH/mutation.txt" && MUTATION_ANNOUNCED=1
+  MUTATION_CHANGED_FILE=0
+  if ! cmp -s "$MIRROR" "$BACKUP"; then MUTATION_CHANGED_FILE=1; fi
+
+  if [[ $MUTATION_STATUS -ne 0 || $MUTATION_ANNOUNCED -ne 1 || $MUTATION_CHANGED_FILE -ne 1 ]]; then
+    echo "clause f: FAIL — the mutation was not applied, so nothing was proven"
+    echo "  exit=$MUTATION_STATUS announced=$MUTATION_ANNOUNCED file_changed=$MUTATION_CHANGED_FILE"
     FAILURES=$((FAILURES + 1))
+    restore_mirror
   else
     MUTATED_OUT="$SCRATCH/parity-mutated.txt"
     bun test "$PARITY_TEST" > "$MUTATED_OUT" 2>&1

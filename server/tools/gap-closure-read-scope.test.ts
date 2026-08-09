@@ -224,7 +224,7 @@ describe("service-metadata surfaces gate on role alone", () => {
     expect(result.isError).toBeFalsy();
     const contract = JSON.parse((result.content as Array<{ text: string }>)[0]?.text ?? "{}");
     expect(contract.service).toBe("open-brain");
-    expect(contract.contract_version).toBe("2026-07-23.memory-tools.v23");
+    expect(contract.contract_version).toBe("2026-08-09.memory-tools.v24");
     expect(queries).toHaveLength(0);
   });
 
