@@ -142,6 +142,28 @@ CURRENT head SHA and (b) harvest proof.
   internal key the caller has no way to send is a dead-end; fixing one
   case of it (mismatch) does not fix its sibling (absent) — enumerate the
   cases at the boundary.
+- When a fix changes WHICH SIGNAL produces a failure, the control clause
+  must assert the signal, not the outcome — the old mechanism can satisfy
+  "it failed" and certify a mechanism that does not exist yet. Likewise a
+  done-means driver that implements a changing interface can silently
+  repair the defect it exists to expose (return both shapes; assert the
+  RED went red for the defect's own reason).
+- Prove the prover: "all cases behaved as expected" is a claim about the
+  author's expectations until one deliberate driver mutation makes the
+  harness report MISMATCH.
+- A zero has three worlds: "clean," "never looked," and "field missing."
+  A residue count needs a companion checked-flag read separately, and a
+  missing field is an ERROR, never a default — else a stale artifact
+  satisfies the clause added to read it.
+- A guard written as "key present AND value wrong" leaves the absent
+  branch unguarded — enumerate present-correct / present-wrong / absent
+  and say which branch handles each.
+- A leak/residue reader shares the remover's resource list, never a
+  parallel one — parallel lists drift, and the drift fails GREEN.
+- Test residue in a DATABASE that a lane can prove is its own (guarded
+  prefix, counted before/after) is the lane's to delete, announced with
+  counts; the unconditional no-`rm` rule governs the filesystem
+  (operator ruling). Uncertain provenance stays report-only.
 
 ## Adopted amendments (2026-08-08 — from the first pilot's own friction report)
 
