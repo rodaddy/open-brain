@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
-export const CONTRACT_VERSION = "2026-07-23.memory-tools.v23";
+// v24 (#678). The v23 string outlived three client-facing shape changes: the
+// live Zod schema for `agent_context_pack` gained `repo`, `prior_context`, and
+// `continue_from` while `src/contract-schemas.ts` — the hand-maintained mirror
+// the schema_hash is computed over — was never touched. So the version AND the
+// hash both read identically on either side of a real contract change, and
+// docs/downstream-rollout.md's "authoritative drift receipt" recorded nothing.
+// Bumping is the client-visible half; the hash moves on its own once the mirror
+// is honest, because TOOL_CONTRACTS is inside the hashed payload.
+export const CONTRACT_VERSION = "2026-08-09.memory-tools.v24";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 export interface ContractCapability {

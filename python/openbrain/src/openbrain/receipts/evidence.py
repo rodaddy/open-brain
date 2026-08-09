@@ -55,7 +55,7 @@ RECEIPT_STATE_SCHEMA: Final = "development.openbrain-memory-receipts.v1"
 #: BE the model field's default. Inferred as a plain ``str`` it could not, and the
 #: constant and the field would drift into two independent copies of the same
 #: value -- exactly the split this triple exists to detect.
-MEMORY_CONTRACT: Final = "2026-07-23.memory-tools.v23"
+MEMORY_CONTRACT: Final = "2026-08-09.memory-tools.v24"
 
 #: The contract's schema version, filtered on alongside :data:`MEMORY_CONTRACT`.
 MEMORY_CONTRACT_SCHEMA_VERSION: Final = 1
@@ -65,7 +65,7 @@ MEMORY_CONTRACT_SCHEMA_VERSION: Final = 1
 #: definition, and deriving it locally would let the two sides drift apart while
 #: both looked self-consistent.
 MEMORY_CONTRACT_SCHEMA_HASH: Final = (
-    "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
+    "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
 )
 
 #: What the receipt is evidence OF. ``recall`` is a read; the other three are
@@ -160,10 +160,10 @@ class ProviderReceiptEvidence(_CamelModel):
     # declared as single-value Literals so a caller CANNOT vary them: passing a
     # different value is a validation error, not a receipt that lies.
     fallback_attempted: Literal[False] = False
-    contract: Literal["2026-07-23.memory-tools.v23"] = MEMORY_CONTRACT
+    contract: Literal["2026-08-09.memory-tools.v24"] = MEMORY_CONTRACT
     contract_schema_version: Literal[1] = MEMORY_CONTRACT_SCHEMA_VERSION
     contract_schema_hash: Literal[
-        "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
+        "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
     ] = MEMORY_CONTRACT_SCHEMA_HASH
 
     def trigger_key(self) -> str:

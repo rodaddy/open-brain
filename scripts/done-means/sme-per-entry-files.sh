@@ -82,34 +82,38 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
+# RECONCILED 2026-08-09 (#680 lane): origin/main carried 231 dated headings
+# against a pin of 227 — four entries landed across earlier merges without the
+# same-commit bump the rule requires, so this clause had been RED on main
+# before this lane touched it. 231 (inherited) + 1 (this lane's entry) = 232.
+# Reported rather than absorbed: the drift is other lanes' missed bumps, and
+# the number is reconciled here because leaving it stale keeps the clause red
+# for everyone downstream.
 #
-# RECONCILED 2026-08-09 (#680 lane, now merged as df00a46): origin/main carried
-# 231 dated headings against a pin of 227 — four entries landed across earlier
-# merges without the same-commit bump the rule requires, so this clause had been
-# RED on main before that lane touched it. 231 (inherited) + 1 (#680's entry)
-# = 232. Reported rather than absorbed: the drift was other lanes' missed bumps,
-# and the number was reconciled there because leaving it stale keeps the clause
-# red for everyone downstream.
-#
-# 232 -> 233 (#681, 2026-08-09), on rebase onto that reconciled main. ANNOUNCED,
-# because the arithmetic changed during the rebase and the reader must be able to
-# map it. This lane originally raised 227 -> 232 and carried its OWN copy of the
-# four-entry drift reconciliation above, measured independently on a detached
-# worktree at 78b740b. Both lanes diagnosed the same pre-existing drift and both
-# resolved it to 232, so the two 227 -> 232 bumps were the SAME correction
-# counted twice, not two separate ones — taking the rebased sum at face value
-# would have double-counted it.
-#
+# 232 -> 234 (#678, 2026-08-09), on rebase onto that reconciled main. ANNOUNCED,
+# and it is a +2, not the usual +1: this lane adds two entry files — the
+# hash-over-a-mirror correctness finding and the `bun -e` argv-shift gotcha.
 # Re-measured on the rebased tree rather than inferred: origin/main is 232 dated
-# headings against a pin of 232 (green, drift already absorbed by #680), and this
-# lane adds exactly one entry file — the #681 mirrored-closed-set finding — for a
-# true count of 233. The pin therefore moves UP by exactly one here, which is the
-# rule this header states: the constant moves by the number of new entry files in
-# the same commit that adds them.
+# headings against a pin of 232 (green), plus these two = 234.
+#
+# Worth stating plainly, because the branch did NOT carry this bump before the
+# rebase: it added both entries while leaving the pin at 227, so clause 4 was
+# RED on the branch on its own terms and the rebase is what surfaced it. The
+# number is raised here, in the lane that owns the entries, which is exactly the
+# same-commit rule this header states — the drift it exists to catch is a pin
+# quietly failing to follow the entries it counts.
 #
 # The count-DOWN half of the clause is untouched and still fires if entry text is
-# ever lost. #681 itself is what a stale mirrored constant costs.
-EXPECTED_ENTRY_COUNT=233
+# ever lost.
+#
+# 234 -> 235 (#681, 2026-08-09, controller integration): main absorbed #678's +2
+# after this branch's rebase, so the branch's 233 and main's 234 collided at
+# merge. Re-derived, not summed: main = 234 dated headings, this lane adds
+# exactly one entry file (the #681 mirrored-closed-set finding) = 235. Three
+# concurrent lanes colliding on this constant in one day is recorded as a
+# pattern needing a ruling (the same-commit rule does not survive parallel
+# branches); until ruled, each integration re-measures and announces.
+EXPECTED_ENTRY_COUNT=235
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

@@ -329,7 +329,7 @@ describe("GET /api/v1/operator/doctor", () => {
       const serialized = JSON.stringify(body);
       expect(body.status).toBe("healthy");
       expect(body.contract_version).toBe("2026-08-05.operator-doctor.v4");
-      expect(body.runtime.contract_version).toBe("2026-07-23.memory-tools.v23");
+      expect(body.runtime.contract_version).toBe("2026-08-09.memory-tools.v24");
       expect(body.embedding_provider.available).toBe(true);
       expect(serialized).not.toContain(secret);
       expect(serialized).not.toContain(embeddingHost);
