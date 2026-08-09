@@ -3,6 +3,7 @@ import {
   EVAL_NAMESPACE_PREFIX,
   NamespacePurgeRefused,
   assertPurgeableNamespace,
+  countNamespaceResidue,
   purgeNamespace,
 } from "../namespace-purge.ts";
 import { makeRunId, runNamespaces } from "../config.ts";
@@ -155,5 +156,85 @@ describe("purgeNamespace", () => {
     expect(result.deleted_by_table).toEqual({});
     expect(result.failed_tables).toEqual({});
     expect(result.namespace).toBe(namespace);
+  });
+});
+
+/**
+ * Issue #671: the teardown VERDICT now rests on this counter rather than on a
+ * tally of cleanup calls, so what it reads and what it does when it cannot read
+ * are both load-bearing.
+ */
+describe("countNamespaceResidue", () => {
+  test("counts every table the purge deletes from — one list, two readers", async () => {
+    // Drift between a purge list and a residue list fails silently and GREEN: a
+    // table the purge stopped clearing would also stop being counted.
+    const purgeTables: string[] = [];
+    const recordingPurge = {
+      query: (sql: string) => {
+        purgeTables.push(sql.replace(/^DELETE FROM (\w+).*$/s, "$1"));
+        return Promise.resolve({ rowCount: 0 });
+      },
+    } as never;
+    const residueTables: string[] = [];
+    const recordingResidue = {
+      query: (sql: string) => {
+        residueTables.push(sql.replace(/^SELECT count\(\*\)::int AS n FROM (\w+).*$/s, "$1"));
+        return Promise.resolve({ rows: [{ n: 0 }] });
+      },
+    } as never;
+
+    const namespace = runNamespaces(
+      makeRunId({ prefix: "scenario-unit", randomHex: "0123456789ab", env: {} }),
+    ).primary;
+    await purgeNamespace(recordingPurge, namespace);
+    await countNamespaceResidue(recordingResidue, namespace);
+
+    expect(residueTables).toEqual(purgeTables);
+    expect(residueTables.length).toBeGreaterThan(0);
+  });
+
+  test("binds the namespace and never mutates", async () => {
+    const seen: Array<{ sql: string; params: unknown[] }> = [];
+    const recording = {
+      query: (sql: string, params: unknown[]) => {
+        seen.push({ sql, params });
+        return Promise.resolve({ rows: [{ n: 3 }] });
+      },
+    } as never;
+
+    const namespace = runNamespaces(
+      makeRunId({ prefix: "scenario-unit", randomHex: "0123456789ab", env: {} }),
+    ).primary;
+    const result = await countNamespaceResidue(recording, namespace);
+
+    for (const call of seen) {
+      expect(call.sql).toContain("SELECT count(*)");
+      expect(call.sql).not.toContain("DELETE");
+      expect(call.sql).toContain("WHERE namespace = $1");
+      expect(call.params).toEqual([namespace]);
+    }
+    expect(result.rows).toBe(3 * seen.length);
+  });
+
+  test("records an unreadable table by class instead of reporting it as zero", async () => {
+    // Counting an unreadable table as zero is how a residue reading would go
+    // clean over exactly the rows it exists to find.
+    let calls = 0;
+    const flaky = {
+      query: () => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new TypeError("boom"));
+        return Promise.resolve({ rows: [{ n: 0 }] });
+      },
+    } as never;
+
+    const namespace = runNamespaces(
+      makeRunId({ prefix: "scenario-unit", randomHex: "0123456789ab", env: {} }),
+    ).primary;
+    const result = await countNamespaceResidue(flaky, namespace);
+
+    expect(Object.keys(result.unreadable_tables)).toHaveLength(1);
+    expect(Object.values(result.unreadable_tables)).toEqual(["TypeError"]);
+    expect(result.rows).toBe(0);
   });
 });

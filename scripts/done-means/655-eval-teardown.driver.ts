@@ -41,12 +41,14 @@ import { runScenarioGate } from "../../eval/open-brain/live/scenario-gate.ts";
 import { teardownRecords } from "../../eval/open-brain/live/gate.ts";
 import {
   assertPurgeableNamespace,
+  countNamespaceResidue,
   purgeNamespace,
 } from "../../eval/open-brain/live/namespace-purge.ts";
 import type {
   ProviderExecution,
   ScenarioRecord,
   ScenarioTransport,
+  TeardownResidue,
   TeardownTally,
 } from "../../eval/open-brain/live/scenario-types.ts";
 import { runNamespaces, makeRunId } from "../../eval/open-brain/live/config.ts";
@@ -280,11 +282,27 @@ class DriverTransport implements ScenarioTransport {
   async cleanup(
     records: ScenarioRecord[],
     namespace: string,
-  ): Promise<TeardownTally> {
+  ): Promise<{ tally: TeardownTally; residue: TeardownResidue }> {
     this.cleanupEntered = true;
     const tally = await teardownRecords(records, (record) =>
       this.cleanupRecord(record, namespace),
     );
+    // #671 added the residue half of the transport contract. This driver reads
+    // it with the SHIPPED counter for the same reason it purges with the
+    // shipped purge: a hand-rolled copy can agree with itself while the product
+    // is wrong.
+    const observe = async (): Promise<TeardownResidue> => {
+      const seen = await countNamespaceResidue(pool, namespace);
+      const unreadable = Object.keys(seen.unreadable_tables);
+      return unreadable.length > 0
+        ? {
+            checked: false,
+            rows: seen.rows,
+            by_table: seen.rows_by_table,
+            unchecked_reason: `unreadable_tables=${unreadable.sort().join(",")}`,
+          }
+        : { checked: true, rows: seen.rows, by_table: seen.rows_by_table };
+    };
     // DONE_MEANS_655_SKIP_PURGE reproduces the pre-fix world exactly: record
     // teardown runs, the namespace purge does not. It exists so the RED
     // transcript can be regenerated at any time WITHOUT deleting the fix, and
@@ -296,11 +314,11 @@ class DriverTransport implements ScenarioTransport {
       console.log(
         "INFO  DONE_MEANS_655_SKIP_PURGE=1 — namespace purge deliberately SKIPPED (pre-fix reproduction)",
       );
-      return tally;
+      return { tally, residue: await observe() };
     }
     const purge = await purgeNamespace(pool, namespace);
     this.purgedRows = purge.deleted;
-    return tally;
+    return { tally, residue: await observe() };
   }
 
   private async cleanupRecord(

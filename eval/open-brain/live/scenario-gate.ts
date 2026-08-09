@@ -8,6 +8,7 @@ import type {
   ScenarioScope,
   ScenarioTransport,
   ScenarioVerdict,
+  TeardownResidue,
   TeardownTally,
 } from "./scenario-types.ts";
 import { LiveTransportError, type ContextPackScope } from "./transport.ts";
@@ -31,6 +32,22 @@ const EMPTY_TEARDOWN: TeardownTally = {
   archived: 0,
   already_absent: 0,
   failed: 0,
+  failure_labels: [],
+};
+
+/**
+ * The residue reading used when the transport reported none (issue #671).
+ *
+ * NOT a pass. `checked: false` says the run could not observe rows, and the
+ * verdict below treats that as unproven rather than clean -- a verdict derived
+ * from an unperformed check is exactly the defect this issue exists to remove,
+ * in the other direction.
+ */
+const UNCHECKED_RESIDUE: TeardownResidue = {
+  checked: false,
+  rows: 0,
+  by_table: {},
+  unchecked_reason: "transport reported no residue observation",
 };
 
 function materialize<T>(value: T, runId: string, namespace: string): T {
@@ -359,6 +376,7 @@ export async function runScenarioGate(
   const records: ScenarioRecord[] = [];
   const verdicts: ScenarioVerdict[] = [];
   let teardown = EMPTY_TEARDOWN;
+  let residue: TeardownResidue = UNCHECKED_RESIDUE;
 
   try {
     for (const scenario of fixture.scenarios) {
@@ -395,15 +413,59 @@ export async function runScenarioGate(
     const uniqueRecords = Array.from(
       new Map(records.map((record) => [`${record.kind}:${record.id}`, record])).values(),
     );
-    teardown = await opts.transport.cleanup(uniqueRecords, opts.namespace);
+    const cleanup = await opts.transport.cleanup(uniqueRecords, opts.namespace);
+    teardown = cleanup.tally;
+    residue = cleanup.residue;
   }
 
   const failures = verdicts.flatMap((verdict) =>
     verdict.failures.map((failure) => `${verdict.scenario_id}:${failure}`),
   );
-  if (teardown.failed > 0) {
-    failures.push(`teardown_failed:${teardown.failed}`);
+
+  // THE TEARDOWN VERDICT CHANNEL (issue #671).
+  //
+  // What fails the run is RESIDUE -- rows this run's namespace still owns,
+  // read back out of the database. What does NOT fail the run is `teardown.failed`,
+  // which counts cleanup CALLS THAT THREW. Those are different facts, and
+  // conflating them is what made the third credentialed #653 verify exit 1 on a
+  // database a 12-table residue query had just proven clean: two `archive_entry`
+  // calls threw, the composed namespace purge then removed every row, and no
+  // one corrected the count.
+  //
+  // The thrown calls are not swept under the rug -- they are REPORTED, by label,
+  // as a diagnostic below. An operator reading the receipt still learns exactly
+  // which call failed and why; they just no longer learn a wrong verdict from it.
+  if (!residue.checked) {
+    // Unchecked is unproven, not clean. Refusing to pass here is the same
+    // discipline in the opposite direction: a verdict may not rest on an
+    // observation that never ran.
+    failures.push(
+      `teardown_residue_unchecked:${residue.unchecked_reason ?? "no reason given"}`,
+    );
+  } else if (residue.rows > 0) {
+    const tables = Object.entries(residue.by_table)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([table, count]) => `${table}=${count}`)
+      .join(",");
+    // Names the table and the count, because "residue exists" without saying
+    // WHERE is the dead-end-error class this issue's sibling defect is about.
+    failures.push(
+      `teardown_residue:rows=${residue.rows}${tables ? `;${tables}` : ""}`,
+    );
   }
+  // DIAGNOSTIC, never a verdict input: the labels of any cleanup calls that
+  // threw. Emitted whenever there were any, INCLUDING on an otherwise-passing
+  // run -- a silent throw is how the #671 label went unrecoverable in the first
+  // place.
+  const teardownDiagnostics =
+    teardown.failed > 0
+      ? [
+          `teardown_call_failures:${teardown.failed}` +
+            (teardown.failure_labels.length > 0
+              ? `;labels=${teardown.failure_labels.join("|")}`
+              : ""),
+        ]
+      : [];
   const passed = failures.length === 0;
   return {
     passed,
@@ -416,7 +478,9 @@ export async function runScenarioGate(
       scenarios: verdicts,
       passed,
       failures,
+      diagnostics: teardownDiagnostics,
       teardown,
+      teardown_residue: residue,
     },
   };
 }

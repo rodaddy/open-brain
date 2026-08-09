@@ -13,6 +13,7 @@ import type {
   ScenarioFixture,
   ScenarioRecord,
   ScenarioTransport,
+  TeardownResidue,
   TeardownTally,
 } from "../scenario-types.ts";
 
@@ -41,6 +42,14 @@ interface FakeOptions {
   packItemCount?: number;
   packThrows?: boolean;
   cleanupFails?: number;
+  /**
+   * Rows the fake transport reports as REMAINING after cleanup (#671). Distinct
+   * from `cleanupFails`, which is calls that threw -- keeping them separate is
+   * the whole point of the issue: a thrown call is not a stranded row.
+   */
+  residueRows?: number;
+  /** Report the residue observation as never having run (#671). */
+  residueUnchecked?: boolean;
 }
 
 interface LaneState {
@@ -148,13 +157,34 @@ function fakeTransport(opts: FakeOptions = {}): ScenarioTransport {
         ? { lane, events: lane.events, event_count: lane.events.length }
         : { lane: null, events: [], event_count: 0 };
     },
-    async cleanup(records: ScenarioRecord[]): Promise<TeardownTally> {
+    async cleanup(
+      records: ScenarioRecord[],
+    ): Promise<{ tally: TeardownTally; residue: TeardownResidue }> {
       const failed = Math.min(opts.cleanupFails ?? 0, records.length);
+      const rows = opts.residueRows ?? 0;
       return {
-        attempted: records.length,
-        archived: records.length - failed,
-        already_absent: 0,
-        failed,
+        tally: {
+          attempted: records.length,
+          archived: records.length - failed,
+          already_absent: 0,
+          failed,
+          failure_labels: Array.from(
+            { length: failed },
+            (_unused, index) => `fake_cleanup:threw-${index}`,
+          ),
+        },
+        residue: opts.residueUnchecked
+          ? {
+              checked: false,
+              rows: 0,
+              by_table: {},
+              unchecked_reason: "fake transport reported no observation",
+            }
+          : {
+              checked: true,
+              rows,
+              by_table: rows > 0 ? { thoughts: rows } : {},
+            },
       };
     },
     async close() {},
@@ -224,7 +254,13 @@ describe("runScenarioGate", () => {
       archived: 6,
       already_absent: 0,
       failed: 0,
+      failure_labels: [],
     });
+    // #671: a clean run observes residue and finds none — distinct from never
+    // having looked, which the gate refuses to pass on.
+    expect(outcome.receipt.teardown_residue.checked).toBe(true);
+    expect(outcome.receipt.teardown_residue.rows).toBe(0);
+    expect(outcome.receipt.diagnostics).toEqual([]);
     expectContentFree(outcome.receipt);
   });
 
@@ -359,10 +395,34 @@ describe("runScenarioGate", () => {
     expect(outcome.receipt.teardown.failed).toBe(0);
   });
 
-  it("fails an otherwise-green batch when teardown strands a record", async () => {
-    const outcome = await run(fakeTransport({ cleanupFails: 1 }));
+  it("fails an otherwise-green batch when teardown leaves RESIDUE, naming the table and count", async () => {
+    const outcome = await run(fakeTransport({ residueRows: 2 }));
     expect(outcome.passed).toBe(false);
-    expect(outcome.receipt.teardown.failed).toBe(1);
-    expect(outcome.receipt.failures).toContain("teardown_failed:1");
+    expect(outcome.receipt.teardown_residue.rows).toBe(2);
+    expect(outcome.receipt.failures).toContain("teardown_residue:rows=2;thoughts=2");
+  });
+
+  it("PASSES when cleanup calls threw but no rows remain, reporting the labels as diagnostics (#671)", async () => {
+    // The third credentialed #653 verify in miniature: calls threw, the database
+    // came back clean, and the old gate exited 1 anyway.
+    const outcome = await run(fakeTransport({ cleanupFails: 2 }));
+    expect(outcome.passed).toBe(true);
+    expect(outcome.receipt.teardown.failed).toBe(2);
+    // The tally is REPORTED, so the operator still learns the calls failed...
+    expect(outcome.receipt.diagnostics.join(" ")).toContain("teardown_call_failures:2");
+    // ...by label, which the bare `catch {}` used to discard...
+    expect(outcome.receipt.teardown.failure_labels).toEqual([
+      "fake_cleanup:threw-0",
+      "fake_cleanup:threw-1",
+    ]);
+    expect(outcome.receipt.diagnostics.join(" ")).toContain("fake_cleanup:threw-0");
+    // ...and it is NOT in the verdict channel.
+    expect(outcome.receipt.failures.join(" ")).not.toContain("teardown");
+  });
+
+  it("refuses to pass when residue was never observed — unchecked is unproven, not clean (#671)", async () => {
+    const outcome = await run(fakeTransport({ residueUnchecked: true }));
+    expect(outcome.passed).toBe(false);
+    expect(outcome.receipt.failures.join(" ")).toContain("teardown_residue_unchecked");
   });
 });
