@@ -187,7 +187,25 @@ class CodexTaskCompletePayload(BaseModel):
     started_at: int
     completed_at: int
     duration_ms: int
-    time_to_first_token_ms: int
+    # OPTIONAL BECAUSE CODEX OMITS IT, and it is telemetry either way.
+    #
+    # Measured 2026-08-09 against Codex CLI 0.147.0 (#512): a turn that produced
+    # no tokens writes `task_complete` with NO `time_to_first_token_ms` at all.
+    # Across every rollout written that day, 144 records carried the field and 1
+    # did not -- and the one that did not came from `codex exec`, which is
+    # exactly the non-interactive path automation and Workflow lanes use.
+    #
+    # Required, this cost the WHOLE file: `codex_raw_turn_from_line` raised
+    # MalformedCodexRecordError, and `ingest.py` re-raises with a file:line
+    # rather than skipping, so a single tokenless turn aborted the entire
+    # ingest. Rare input, total failure.
+    #
+    # Optional is the minimal correct change, not a loosening: no turn content
+    # depends on this field. `turn_id`, `last_agent_message`, and the timestamps
+    # stay REQUIRED, because turn identity and the assistant's actual words do
+    # depend on them -- a record missing those is still quarantined loudly, and
+    # `scripts/done-means/512-codex-adapter.sh` clause (c) holds that line.
+    time_to_first_token_ms: int | None = None
 
 
 CodexEventAdapter = Callable[[CodexEnvelope, str], RawTurn | None]
