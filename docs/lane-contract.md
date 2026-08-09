@@ -71,6 +71,34 @@ Newest first. Every entry: what changed, and the observation that forced it.
 > scope adjustment the contract forbids. The round 27 entry below is written
 > into main's lineage so this lane's own harvest is not lost to the same gap.
 
+### 2026-08-09 (round 28) — harvest of the #681 integration (PR #687), a merge-order collision
+
+- **Two branches can each derive a pinned count HONESTLY and still be wrong
+  after the merge.** PR #687 measured EXPECTED_ENTRY_COUNT as 235 on its own
+  tree and was correct there; PR #701 then landed its own entry and main
+  became 235 too. The merged truth is 236. So a pin computed BEFORE
+  integration is stale the moment anything else merges, and the freshness of
+  a measurement is not a property of how carefully it was taken — it is a
+  property of when. **Re-measure the pin after integrating the upstream
+  default branch, never carry the branch's own derivation across a merge.**
+  This is the concurrency half of the never-sum rule, and it is invisible to
+  a lane working alone.
+- **Git reported the ORDER collision as no conflict at all.** Both branches
+  independently chose correctness `order: 68`, in two different entry FILES,
+  so there was nothing for a textual merge to conflict on — the tree merged
+  clean and the duplicate only surfaced when `build-sme-indexes.ts` was run
+  and warned. Round 11's "a conflict-free merge is not a clean merge" with a
+  sharper edge: the branch's own tooling must be RE-RUN after integrating,
+  because the class of defect a merge introduces is precisely the class no
+  textual merge can see. A generated-file conflict is regenerated; a
+  generated-file NON-conflict still needs the build.
+- **A shared sequential ID chosen by hand collides under parallelism by
+  construction.** `order:` is allocated by reading the current maximum, which
+  every concurrent lane reads identically. The build warns rather than fails,
+  which is the right severity for a merge-time discovery, but the allocation
+  scheme is the root cause and it will keep colliding as long as lanes run in
+  parallel. Flagged for the decisions pass, not worked around here.
+
 ### 2026-08-09 (round 27) — harvest of the #271 tripwire heal (PR #701), a CONTROLLER merge defect
 
 - **A failing assertion turns off every clause after it in the same test, and
