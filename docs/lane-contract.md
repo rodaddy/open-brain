@@ -87,6 +87,39 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 25) — harvest of the #653 final-sync lane (clause-e residue edit)
+
+- **When a gate has no clause-level seam, EXTRACT the clause from the
+  real file by markers — never retype it.** A retyped copy proves the
+  copy. The extractor fails hard on empty/unrecognisable extraction, or
+  "0 lines extracted, all cases as expected" is a vacuous green.
+- **Prove the prover:** "all cases behaved as expected" is a claim about
+  the author's expectations until one deliberate driver mutation
+  (`elif false`) makes it report MISMATCH.
+- **Marker extraction: gate the END pattern on the state variable**
+  (`on &&`) — an END regex that also matches EARLIER than START turns
+  the block off before it turns on and silently yields nothing.
+- **`rows=0` means both "clean" and "never looked" — a companion
+  `checked` field read separately is mandatory, and a receipt MISSING
+  the field entirely is a third world that must ERROR, never default:
+  otherwise a stale pre-fix receipt satisfies the clause added to read
+  it.**
+- **Round 24's git-guard practice held:** message files written in
+  separate tool calls before the guarded command — no compound-chain
+  aborts. Standing practice.
+- **Bootstrap continuation mode's first real run was correct** — banner
+  names the SHA and says the ref was untouched, making continuation
+  distinguishable from a fresh cut in a transcript. The hand-build tax
+  this lane paid twice is gone.
+- **The design-lookup hook caught a real gap** (an edit against a design
+  merged hours earlier and unread), and the fallback that mattered was
+  reading the SME entry directly — the index had not caught up with
+  tonight's merges. An index-only lookup would have been satisfiable
+  without informing anyone.
+- **Refusal-path coordinate count is now 10** (the two capture fallbacks
+  joined the enumeration) — the briefed "8" is stale; brief the observed
+  number or brief "the enumerated set," not a count.
+
 ### 2026-08-08 (round 24) — harvest of the #671 verdict-channel lane (PR #673)
 
 - **A driver that implements a changing interface can silently repair the
