@@ -87,6 +87,35 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 20) — harvest of the #661 five-keys lane (PR #663) and the hold-at-RED escalation
+
+- **An issue generated from a tool's own output inherits that tool's
+  classification errors** — #659's reporter could not tell set-empty from
+  set-valued, its boot line named a prohibited key, and the ruling said
+  "honor all six." The lane validated each enumerated key against source,
+  found the prohibition (`PROHIBITED_PATH_KEYS`, test-pinned), HELD AT
+  PROVEN RED, and escalated with options instead of obeying or silently
+  deviating. Operator amended the ruling (29.2a). This is the
+  no-variations rule's designed behavior — brief it as the expectation.
+- **Empty-means-suppressed is repo precedent** (`QMD_PATH=`): a drop
+  reporter distinguishes unset / set-empty / set-valued, and skips
+  explicit suppressions rather than announcing them — a per-suppression
+  boot line is the noise the #659 scope rule exists to prevent.
+- **Report equivalent mutants as equivalent, not as kills.** A survived
+  mutant (`=== ""` vs `!configured` behind an undefined-guard) is
+  provably unreachable, not a check gap; the first instinct to "fix" the
+  check would have shipped a false rationale. A survived mutant deserves
+  the same why-analysis as a failed clause.
+- **The two-runs-same-SHA CI comparison settled a red check in one
+  call** (push failed, pull_request passed on identical 93d021d): a
+  fixed-literal fixture on the shared CI database collides across
+  concurrent jobs — filed as #665, not absorbed, not retried into green.
+- **Prove new tests execute** — assert the test COUNT went up (14→19)
+  rather than trusting a green suite that may not have loaded the file.
+- **`aqmd search` >120s hang, third datapoint** (rounds 11/17): treat
+  `qmd search` direct (~1s) as the standing fallback; empty output after
+  a timeout is did-not-run.
+
 ### 2026-08-08 (round 19) — harvest of the #662 validator lane (PR #664) and the #653 credentialed verify
 
 - **A guard written as "key present AND value wrong" leaves the absent
