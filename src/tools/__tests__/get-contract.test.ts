@@ -199,7 +199,12 @@ describe("get_contract", () => {
           (item: { name: string }) => item.name === "append_session_event",
         ).version,
       ).toBe(8);
-      expect(parsed.tool_contracts.agent_context_pack.version).toBe(2);
+      // 2 -> 3 acknowledged 2026-08-09 (#691): the tool-contract bump adds
+      // continue_from, a bounded-recall CONTINUATION of the client-pulled
+      // pack -- it stays on the #271 pull side of the boundary; no
+      // push/injection surface was added. The capability entry above stays
+      // at 2 deliberately: #691 moved the tool contract, not the capability.
+      expect(parsed.tool_contracts.agent_context_pack.version).toBe(3);
       expect(parsed.tool_contracts.append_session_event.version).toBe(8);
 
       // Positive shape: the top-level contract surface is exactly this key

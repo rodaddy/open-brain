@@ -106,14 +106,40 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # The count-DOWN half of the clause is untouched and still fires if entry text is
 # ever lost.
 #
-# 234 -> 235 (#681, 2026-08-09, controller integration): main absorbed #678's +2
-# after this branch's rebase, so the branch's 233 and main's 234 collided at
-# merge. Re-derived, not summed: main = 234 dated headings, this lane adds
-# exactly one entry file (the #681 mirrored-closed-set finding) = 235. Three
-# concurrent lanes colliding on this constant in one day is recorded as a
-# pattern needing a ruling (the same-commit rule does not survive parallel
-# branches); until ruled, each integration re-measures and announces.
-EXPECTED_ENTRY_COUNT=235
+# 2026-08-09, the #271 tripwire lane: 234 -> 235. ONE entry added
+# (docs/sme/entries/2026-08-09-a-failing-assertion-turns-off-every-clause-after-it-in-the-same-test.md,
+# lane correctness, order 69 — the enforcing clauses below a failed assertion
+# stop executing, so a red tripwire and a disabled one look identical).
+#
+# The number was RE-MEASURED on this tree, not arithmetic on the previous pin:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 235. Main measured
+# 234 against a pin of 234 before this branch, so measured and expected agree
+# on both sides of the change. Announced here rather than adjusted quietly,
+# per the nothing-is-adjusted-silently rule — and the derivation is stated
+# because a summed pin cannot tell a legitimate addition from a lost entry
+# plus two new ones.
+#
+# 2026-08-09, the #681 lane (PR #687) integrating main after #701: 235 -> 236.
+# ONE entry added by this branch
+# (docs/sme/entries/2026-08-09-a-mirrored-closed-set-goes-stale-the-moment-the-original-grows.md).
+#
+# RE-MEASURED on the merged tree, not summed:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 236.
+#
+# ANNOUNCED, because this is the exact hazard a summed pin cannot see. This
+# branch measured 235 on its own tree and was CORRECT there; #701 then landed
+# its own entry and main became 235 too. Two branches, each honestly deriving
+# 235, and the merge is 236 — so the pin a branch computes before integration
+# is stale the moment anything else merges. The rule this is a receipt for:
+# re-measure AFTER integrating main, never carry the branch's own derivation
+# across a merge.
+#
+# The same collision hit the ORDER field: both branches independently chose
+# correctness order 68, and build-sme-indexes.ts warned. This lane's entry
+# moved 68 -> 70 (69 is #701's), keeping it after the #678 entry it was
+# written alongside. The warning is why the build is run on every merge
+# rather than trusting a conflict-free result.
+EXPECTED_ENTRY_COUNT=236
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

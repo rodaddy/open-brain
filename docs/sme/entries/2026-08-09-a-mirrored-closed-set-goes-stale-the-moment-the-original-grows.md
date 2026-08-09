@@ -1,6 +1,6 @@
 ---
 lane: correctness
-order: 68
+order: 70
 ---
 ## [2026-08-09] A mirrored closed set goes stale the moment the original grows — and the mirror that judges ABSENCE fails silently
 
