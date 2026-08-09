@@ -3,11 +3,12 @@
 
 # #578 — E2E quality gate: scripted input/output scenarios + Langfuse egress verification
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T16:04:17Z
-Updated: 2026-08-05T19:15:48Z
+Updated: 2026-08-09T01:35:06Z
+Closed: 2026-08-09T01:35:06Z
 
 ---
 
@@ -68,7 +69,7 @@ evals (subjective; this gate is deterministic), CI-required gating on day one
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-08-05T17:26:12Z
 
@@ -140,3 +141,9 @@ Both gate lanes are **RUNNING and failing** on `origin/main`. Per the run contra
 ### rodaddy — 2026-08-05T19:15:48Z
 
 Live gate rerun on trunk a5a1274 after #586: drive PASS (emit proven, watermark offset 1446) + verify PASS (1 trace, 4 obs, 3 generations, generation_metadata 3/3, total_cost 3/3 non-NULL, secret_scan clean over real content, settled in 1 poll). This run is the closing receipt on #560. The gate found #581/#582/#583 this morning; all three are now closed, all same-day.
+
+---
+
+### rodaddy — 2026-08-09T01:35:05Z
+
+Done via PR #653 (merged 78b740b) after a four-verify arc, each independently receipted. The composed E2E gate (scripts/done-means/578-e2e-gate.sh) refuses without its enumerated live-eval coordinates ('nothing was examined'), and on its fourth credentialed run at b344e4c went fully green against the live dogfood service: 3 scenarios executed (capture round-trip, durable-memory pack shape, checkpoint wrap), Langfuse egress driven and verified (traces 1/1, observations 4/4, non-vacuous secret scan), discrimination control rejected a deliberately-wrong expectation, and teardown residue checked=true rows=0 — confirmed by an outside query across all 14 purge tables. The gate earned its keep before going green: four credentialed runs surfaced five real defects (#654 namespace scope, #655 teardown leak, #662 absent-namespace dead end, #666 missing delegation, #671 tally-vs-residue verdict), all fixed and held tonight. Remaining follow-ons filed, not absorbed: #672 (deterministic archive_entry:error/:invalid throw labels, now observed via #671's instrumentation), plus the pre-existing eval residue covered by the #655 operator cleanup SQL. Lessons: lane-contract rounds 19–25.
