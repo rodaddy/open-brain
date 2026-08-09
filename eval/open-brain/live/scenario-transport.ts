@@ -114,6 +114,18 @@ export class LiveScenarioTransport implements ScenarioTransport {
         OPENBRAIN_TOKEN: this.config.primaryToken,
         OPENBRAIN_NAMESPACE: this.config.primaryNamespace,
         OPENBRAIN_PROJECT: this.config.project,
+        // This transport ALWAYS derives a per-run `eval-live-recall-*`
+        // namespace (config.ts runNamespaces) that no token grants by default,
+        // so it always needs the X-Namespace header. Since #657 the provider's
+        // delegation is opt-in and default OFF, and without this flag
+        // session_start binds the token's own namespace and refuses the
+        // configured one (#666, #662's error text). A component that derives
+        // foreign namespaces owns the delegation request — ledger item 30.1
+        // puts the intent here, in code with its reason, rather than in
+        // live-eval.env where every future credential assembly must remember
+        // it. The token must still be admin/ob-admin; the server role-gates
+        // the header regardless of this flag.
+        OPENBRAIN_DELEGATE_NAMESPACE: "1",
       },
       stdin: "pipe",
       stdout: "pipe",
