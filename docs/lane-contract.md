@@ -87,6 +87,43 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 19) — harvest of the #662 validator lane (PR #664) and the #653 credentialed verify
+
+- **A guard written as "key present AND value wrong" leaves the absent
+  branch unguarded** — and the absent branch inherits the exact dead end
+  the guard was added to remove. #654 and #662 are one defect on two
+  sides of one `if`. When a fix special-cases a key, enumerate the key's
+  states — present-correct, present-wrong, absent — and say which branch
+  handles each.
+- **"The server always sends it" is not a reason to leave a validator's
+  hostile-input branch dead-ended.** The lane object is the untrusted
+  thing being validated. The dispatch's server-side hypothesis was
+  reasonable and wrong; one live `tools/call` plus reading the column
+  lists settled it in minutes — a lane rejects a briefed hypothesis on
+  evidence and writes the reasoning into the check header, never decides
+  silently.
+- **Absence and mismatch need different messages because only one has a
+  remedy.** Reusing the delegation advice for the absent case would pass
+  a naive "mentions namespace" assertion while being a dead end with more
+  words. Clauses assert what the message SAYS, not that it exists.
+- **`rg -r` is ripgrep's REPLACE flag, not recursive** — it silently
+  emits mangled replacement text that reads as a single real hit. Joins
+  the `rg -E` family: the failure mode is a plausible-looking wrong
+  answer, not an error.
+- **A verify run that pipes the driver through `tee` masks the exit
+  code.** Read the code directly (re-run clean or use pipefail); the
+  #653 verify caught its own masked first run and re-ran.
+- **The controller's external row count corroborated the gate's own
+  teardown clause** (round 16 rule applied in anger): baseline before,
+  count after, from outside the run. Also observed: a per-run tally can
+  under-report entity creation (attempted=1 while two namespaces
+  appeared) — count the entities, not the attempts.
+- **A gate that keeps failing on REAL defects is doing its job** — the
+  #578 gate's first credentialed run found the third live defect in the
+  very path it composes (#654's absent-case sibling). Resist reading a
+  red gate as a broken gate; the verifier proved the fixed defects fixed
+  (re-ran their checks live) before attributing the new failure.
+
 ### 2026-08-08 (round 18) — harvest of the #659 launcher-env lane (PR #660) and the controller-side discovery
 
 - **A revision proof is not a feature-live proof.** The clone redeploy
