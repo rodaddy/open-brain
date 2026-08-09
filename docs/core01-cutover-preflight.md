@@ -33,6 +33,15 @@ quarantine drop (#680) and the `tool`-role liveness blind spot (#681).
 - **Namespace/delegation security** (tonight's #654/#657/#662/#666) —
   server role-gates the header, refusal is live-proven, defaults OFF are
   safe both client/server directions.
+- **The full auth/isolation boundary** — all 11 claimed controls ENFORCED
+  and verified against constructed live violations (role-gated delegation,
+  delegated-admin confinement, IDOR on a real foreign row, wildcard
+  erasure, session-identity switching, SQL-identifier injection, scoped
+  enumeration, constant-time tokens, REST role gate), the delegation gate
+  mutation-proven load-bearing. This is the surface that most matters for a
+  multi-tenant cutover and it is solid. Residual: #684 (serving gate has no
+  test — legacy tree only; `X-Agent-Id` not role-gated; a false "fixed"
+  SME label needing a ruling) — none an isolation bypass.
 - **The test suite via `bun run test:isolated`** — 3761/35/0, load-bearing
   paths mutation-proven (auth predicate, #563 burst bound, delegation,
   spool). Trustworthy evidence — via that path only.
@@ -65,6 +74,12 @@ quarantine drop (#680) and the `tool`-role liveness blind spot (#681).
 - #683 — test/CI: #563 bound's only catchers are Postgres-gated; anti-skip
   guard covers 16 of 51 live suites (2 unguarded are namespace-isolation);
   #665 mechanism corrected (runner concurrency, not shared DB).
+- #684 — auth boundary HELD on all 11 controls; residual: serving
+  delegation gate untested (legacy-tree coverage only), `X-Agent-Id` not
+  role-gated (attribution forgery), false "fixed" SME label on the
+  promote/demote asymmetry (operator ruling needed). NATS defaults open but
+  dark here — set `OPENBRAIN_NATS_REQUIRE_AUTH=true` before enabling on
+  core01.
 
 ## Ordered pre-flight (the batten-the-hatches list)
 
