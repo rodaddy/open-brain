@@ -271,6 +271,74 @@ describe("local clone launcher", () => {
     expect(child.OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS).toBe("60000");
   });
 
+  // #661 (operator ruling 29.2a): five keys the operator set with real values
+  // in the clone env file were dropped in silence for their whole life, and
+  // only became visible when #659 taught the launcher to announce its drops.
+  it("passes the operator-ruled logging, audit and service keys to the server child", () => {
+    const child = buildChildEnvironment({
+      ...cloneEnv(),
+      LOG_LEVEL: "debug",
+      LOG_MAX_BYTES: "67108864",
+      LOG_MAX_FILES: "12",
+      OPENBRAIN_MCP_AUDIT_ENABLED: "1",
+      SERVICE_NAME: "open-brain",
+    });
+    expect(child.LOG_LEVEL).toBe("debug");
+    expect(child.LOG_MAX_BYTES).toBe("67108864");
+    expect(child.LOG_MAX_FILES).toBe("12");
+    expect(child.OPENBRAIN_MCP_AUDIT_ENABLED).toBe("1");
+    expect(child.SERVICE_NAME).toBe("open-brain");
+  });
+
+  // The sixth key from the original ruling. Clone mode PROHIBITS it with a
+  // value (`src/local-clone-mode.ts`), so honoring it would hand the clone a
+  // capability its own guard refuses.
+  it("does not pass the clone-mode-prohibited embedding watchdog script to the child", () => {
+    const child = buildChildEnvironment({
+      ...cloneEnv(),
+      EMBEDDING_WATCHDOG_RESTART_SCRIPT: "",
+    });
+    expect(child).not.toHaveProperty("EMBEDDING_WATCHDOG_RESTART_SCRIPT");
+  });
+
+  // The three-state rule. An explicitly-empty value is a deliberate off switch
+  // — the same reading clone mode already gives `QMD_PATH=` — so reporting it
+  // as dropped configuration is a false positive. That false positive is what
+  // put a prohibited key into #661's original "honor all six" text.
+  it("does not report an explicitly-empty key as dropped configuration", () => {
+    const dropped = describeDroppedChildEnvironment({
+      ...cloneEnv(),
+      EMBEDDING_WATCHDOG_RESTART_SCRIPT: "",
+      OPENBRAIN_SOME_SUPPRESSED_KEY: "",
+    }).map((entry) => entry.key);
+    expect(dropped).not.toContain("EMBEDDING_WATCHDOG_RESTART_SCRIPT");
+    expect(dropped).not.toContain("OPENBRAIN_SOME_SUPPRESSED_KEY");
+  });
+
+  // The mutation half: same key, value flipped from empty to real, expected
+  // answer inverts. Without this, "empty is not announced" also passes on a
+  // reporter that announces nothing at all.
+  it("still reports the same key when it carries a real value", () => {
+    const dropped = describeDroppedChildEnvironment({
+      ...cloneEnv(),
+      OPENBRAIN_SOME_SUPPRESSED_KEY: "a-real-configured-value",
+    }).map((entry) => entry.key);
+    expect(dropped).toContain("OPENBRAIN_SOME_SUPPRESSED_KEY");
+  });
+
+  // Falsy is not empty. "0" and "false" are configured values an operator
+  // chose, and dropping them in silence is the exact bug this reporter exists
+  // to prevent — a `!configured` test instead of `=== ""` would swallow both.
+  it("reports a key whose configured value is falsy-looking but real", () => {
+    const dropped = describeDroppedChildEnvironment({
+      ...cloneEnv(),
+      OPENBRAIN_SOME_ZERO_KEY: "0",
+      OPENBRAIN_SOME_FALSE_KEY: "false",
+    }).map((entry) => entry.key);
+    expect(dropped).toContain("OPENBRAIN_SOME_ZERO_KEY");
+    expect(dropped).toContain("OPENBRAIN_SOME_FALSE_KEY");
+  });
+
   it("names a configured server-config key it drops, without echoing its value", () => {
     const dropped = describeDroppedChildEnvironment({
       ...cloneEnv(),
