@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-08T05:29:09Z
-Updated: 2026-08-08T05:29:09Z
+Updated: 2026-08-08T18:56:13Z
 
 ---
 
@@ -40,3 +40,47 @@ Suggested fix direction: guard the timeout callback (`proc?.kill()`), and clear 
 ## Why this matters beyond the noise
 
 A suite that exits non-zero with `0 fail` teaches readers to discount red CI, which is how a real failure gets waved through later. It also makes every lane pay a re-run tax on an unrelated diff.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-08T18:43:08Z
+
+Recurrence on PR #648 (lane for #647), with the two-runs-disagree evidence the round-8 rule asks for:
+
+- Both runs are the SAME head SHA `be0f6b2ed543c9815dd0b919f8fe3421f446bc14`.
+- run 31272342608 → `check` **SUCCESS** (49s)
+- run 31272430693 → `check` **FAILURE** (1m11s)
+
+Failing run reports `3674 pass / 35 skip / 0 fail / 1 error` — the signature in this issue's title. The error verbatim:
+
+```
+# Unhandled error between tests
+TypeError: proc.kill is not a function. (In 'proc.kill()', 'proc.kill' is undefined)
+      at src/tools/search-all.ts:110:18
+```
+
+Surfaced while entering `eval/open-brain/live/__tests__/transport.test.ts`, i.e. between files rather than inside a test, so it fails the job with zero failing assertions.
+
+PR #648 touches none of it — its diff is `server/transport/health.ts`, one new Python module, two done-means drivers, and an SME entry. Filing the recurrence rather than absorbing it or re-running until green.
+
+---
+
+### rodaddy — 2026-08-08T18:56:13Z
+
+Second recurrence on PR #648, now in a DIFFERENT job — worth noting because it shows the flake is not job-specific.
+
+Merged head `8f11099`:
+- `check` → **pass** (49s), twice
+- `db-integration` → **fail** (1m8s), `0 fail / 1 error`
+
+Identical signature at the same line:
+
+```
+# Unhandled error between tests
+TypeError: proc.kill is not a function. (In 'proc.kill()', 'proc.kill' is undefined)
+      at src/tools/search-all.ts:110:18
+```
+
+Across the two heads on this PR the failure has now landed once in `check` (`be0f6b2`, while a same-SHA sibling run passed) and once in `db-integration` (`8f11099`, while both `check` runs passed). It follows whichever job happens to lose the race, not a particular suite — consistent with the subprocess-timeout race this issue describes rather than anything suite-specific.

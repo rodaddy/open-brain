@@ -3,11 +3,12 @@
 
 # #451 — Make the memory calls unskippable — hooks and requirements, not good intentions
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:26Z
-Updated: 2026-08-08T17:00:10Z
+Updated: 2026-08-08T18:51:01Z
+Closed: 2026-08-08T18:51:01Z
 
 ---
 
@@ -50,7 +51,7 @@ Type: grilling (HITL). Where the hard edges go is Rico's call.
 
 ---
 
-## Discussion (5)
+## Discussion (6)
 
 ### rodaddy — 2026-08-03T01:03:51Z
 
@@ -182,3 +183,9 @@ Decisions 1–4 from the lane's delta: 1=capture (with hydration verify-stamp an
 PR #642 MERGED — tiered coverage per ledger item 24 is implemented and controller-verified (verify-lane receipt at 7b13131; red-first 7-clause check, all green + mutation-proven): capture-gate.ts (merge refusal without server receipt, drain-first), hydration-stamp.ts, recall counter reusing usage_kind=canon (schema pinned by Zod enum + DB CHECK; new kind was a forbidden schema change).
 
 REMAINS OPEN for the named PROPOSED gaps before this is called done against LIVE Open Brain: (1) drain-DELIVERS direction unproven — needs a seeded-spool clause flipping a refusal to a pass; (2) hung-TCP outage shape untested (only closed-port refusal proven); (3) session_id/session_key equivalence assumed, enforced nowhere. MERGED, unverified-live.
+
+---
+
+### rodaddy — 2026-08-08T18:19:36Z
+
+**Ruling amended (ledger item 25, 2026-08-08):** the capture merge-gate tier is RETIRED after its first live firing wedged the pipeline. Reasoning recorded in docs/issue-graph.md item 25 — short form: raw capture is automatic (Stop hooks → watermark → spool), distillation is the DREAM pipeline's designed job (docs/dream-design.md), so the gate hard-blocked merges to force hand-distillation of a designed automatic step. Replacement: an automatic-capture LIVENESS check (the #625 pattern). Hydration stamp and recall telemetry from item 24 remain. #646 (provider scope contradiction) stays open as a real defect regardless.
