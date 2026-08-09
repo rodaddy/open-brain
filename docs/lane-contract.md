@@ -87,6 +87,30 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 23) — harvest of the #667 bootstrap-continuation lane
+
+- **A negative-match clause on a crashing subject can go green off the
+  SUBJECT'S OWN error text.** git's `fatal: a branch named 'x' already
+  exists` satisfied an `already exists` announce-assertion on the exact
+  run where the script announced nothing and died. Anchor
+  announce-assertions on a marker the script OWNS (its `[ok]` step
+  prefix), never on prose the failure mode also emits. Round-9/17
+  family, new spelling; caught by round 18's read-WHY rule.
+- **A summary line hardcoding one path's provenance silently misreports
+  the other the moment a second path exists** (`(from origin/main)`
+  became a lie in the same commit that added continuation). When adding
+  a branch to a function, grep the REPORTING strings, not just the logic.
+- **When the subject IS a script, the check resolves the script from its
+  own tree** (`BASH_SOURCE`-derived root) so it structurally cannot reach
+  across trees — make this the default shape for tooling done-means
+  (round 12 sharpened).
+- **Plant-and-survive on worktree refusals needs the REGISTRY check, not
+  just the directory check** — a created-then-cleaned worktree leaves a
+  `.git/worktrees` registration a `-d` test alone would miss.
+- **Local-only branch (no origin counterpart) is continued and
+  announced, not refused** — lane judgment call, flagged in PR #669's
+  assumptions field; stands unless the operator overrules.
+
 ### 2026-08-08 (round 22) — harvest of the #666 transport-delegation lane
 
 - **When the defect is "what does X pass to the boundary," stub the
