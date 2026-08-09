@@ -105,7 +105,20 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 #
 # The count-DOWN half of the clause is untouched and still fires if entry text is
 # ever lost.
-EXPECTED_ENTRY_COUNT=234
+#
+# 2026-08-09, the #271 tripwire lane: 234 -> 235. ONE entry added
+# (docs/sme/entries/2026-08-09-a-failing-assertion-turns-off-every-clause-after-it-in-the-same-test.md,
+# lane correctness, order 69 — the enforcing clauses below a failed assertion
+# stop executing, so a red tripwire and a disabled one look identical).
+#
+# The number was RE-MEASURED on this tree, not arithmetic on the previous pin:
+# `rg -c '^## \[20' docs/sme/entries/*.md | wc -l` returns 235. Main measured
+# 234 against a pin of 234 before this branch, so measured and expected agree
+# on both sides of the change. Announced here rather than adjusted quietly,
+# per the nothing-is-adjusted-silently rule — and the derivation is stated
+# because a summed pin cannot tell a legitimate addition from a lost entry
+# plus two new ones.
+EXPECTED_ENTRY_COUNT=235
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
