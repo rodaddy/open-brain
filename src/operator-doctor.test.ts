@@ -222,7 +222,7 @@ describe("operator doctor status", () => {
     const serialized = JSON.stringify(status);
 
     expect(status.contract_version).toBe("2026-08-05.operator-doctor.v4");
-    expect(status.runtime.contract_version).toBe("2026-07-23.memory-tools.v23");
+    expect(status.runtime.contract_version).toBe("2026-08-09.memory-tools.v24");
     expect(status.database.connected).toBe(true);
     expect(status.embedding_provider).toMatchObject({
       configured: true,

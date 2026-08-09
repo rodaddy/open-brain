@@ -29,7 +29,17 @@ def test_runtime_tool_versions_match_server_contract_source() -> None:
     source = (repo_root / "src" / "contract-schemas.ts").read_text(encoding="utf-8")
     actual: dict[str, int] = {}
     for tool_name in FIRST_CLASS_RUNTIME_TOOL_VERSIONS:
-        match = re.search(rf"\n  {tool_name}: \{{\n    version: (\d+),", source)
+        # Comment lines are allowed between the tool key and its `version:`.
+        # The original pattern required them to be adjacent, so adding a comment
+        # explaining WHY a version moved made this assertion fail with "could
+        # not find <tool>" — a message that reads as a missing tool rather than
+        # an unparsed one. Observed while bumping agent_context_pack to v3
+        # (#678). Only comment/blank lines are skipped, so an unrelated field
+        # appearing before `version:` still fails loudly.
+        match = re.search(
+            rf"\n  {tool_name}: \{{\n(?:\s*(?://.*)?\n)*    version: (\d+),",
+            source,
+        )
         assert match, f"could not find {tool_name} version in src/contract-schemas.ts"
         actual[tool_name] = int(match.group(1))
 

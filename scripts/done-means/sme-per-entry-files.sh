@@ -89,7 +89,23 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # Reported rather than absorbed: the drift is other lanes' missed bumps, and
 # the number is reconciled here because leaving it stale keeps the clause red
 # for everyone downstream.
-EXPECTED_ENTRY_COUNT=232
+#
+# 232 -> 234 (#678, 2026-08-09), on rebase onto that reconciled main. ANNOUNCED,
+# and it is a +2, not the usual +1: this lane adds two entry files — the
+# hash-over-a-mirror correctness finding and the `bun -e` argv-shift gotcha.
+# Re-measured on the rebased tree rather than inferred: origin/main is 232 dated
+# headings against a pin of 232 (green), plus these two = 234.
+#
+# Worth stating plainly, because the branch did NOT carry this bump before the
+# rebase: it added both entries while leaving the pin at 227, so clause 4 was
+# RED on the branch on its own terms and the rebase is what surfaced it. The
+# number is raised here, in the lane that owns the entries, which is exactly the
+# same-commit rule this header states — the drift it exists to catch is a pin
+# quietly failing to follow the entries it counts.
+#
+# The count-DOWN half of the clause is untouched and still fires if entry text is
+# ever lost.
+EXPECTED_ENTRY_COUNT=234
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

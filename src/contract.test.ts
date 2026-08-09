@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8",
+      "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.15");
@@ -360,7 +360,7 @@ describe("Open Brain contract manifest", () => {
     expect(recoveryWalMark).toBeDefined();
     expect(agentContextPack).toBeDefined();
     expect(workingSetAppend?.output_shape).toContain("RAM-only");
-    expect(agentContextPack?.version).toBe(2);
+    expect(agentContextPack?.version).toBe(3);
     expect(agentContextPack?.output_shape).toContain("durable_lane_context");
     expect(agentContextPack?.output_shape).toContain("exact-scope denials");
     expect(recoveryWalAppend?.output_shape).toContain("not_searchable_recall");
@@ -599,7 +599,7 @@ describe("Open Brain contract manifest", () => {
     // contract so a future TS/Python divergence fails here, in lockstep with
     // python/openbrain-memory CURRENT_CONTRACT_VERSION.
     const contract = buildContract("2026-06-18T00:00:00.000Z");
-    expect(contract.contract_version).toBe("2026-07-23.memory-tools.v23");
+    expect(contract.contract_version).toBe("2026-08-09.memory-tools.v24");
 
     const appendEvent = contract.tool_contracts.append_session_event;
     expect(appendEvent).toBeDefined();
