@@ -42,6 +42,18 @@
  *     fault stays unobservable from here, and reporting it as absent is honest
  *     where reporting it as present would be a fabrication.
  *
+ * WHY QUARANTINE IS DIFFERENT FROM SPOOL DEPTH (#680, cutover blocker B2). The
+ * paragraph above is right about `spool_pending` and does NOT extend to
+ * abandoned units, which is the distinction that let a real data loss stay
+ * invisible. `spoolQuarantined` is an OPTIONAL REPORTED input, not something
+ * this gatherer discovers: a client already computes the count
+ * (`SpoolStatus.quarantined_count`) and can hand it over, so no enumeration
+ * has to be invented. This gatherer does not report it — the arrivals query
+ * genuinely cannot see it — so it leaves the field UNDEFINED and the judge
+ * publishes no count, rather than the hardcoded 0 that used to stand in for an
+ * unmeasured quantity. That hardcoded 0 is exactly what `/health` was showing
+ * on 2026-07-30 while fifteen turns sat abandoned in a sidecar, permanently.
+ *
  * This is announced rather than silent (AGENTS.md, "Nothing is adjusted
  * silently"): `observableFaults` names which of the reader's three faults this
  * vantage point can actually raise, and it travels into the health block.
@@ -114,6 +126,19 @@ export interface CaptureObservation {
   readonly outageAnnouncements: number;
   readonly turnsByRole: Readonly<Record<string, number>>;
   readonly silenceSeconds: number;
+  /**
+   * Units a capture lane ABANDONED after exhausting its replay attempts (#680).
+   *
+   * OPTIONAL, and its absence is not zero. This is a REPORTED input, not
+   * something a server discovers: the module docstring's argument that a
+   * server cannot enumerate client-side spool files is correct for
+   * `spoolPending` and does NOT extend to this, because a quarantine count is
+   * something a client already computes (`SpoolStatus.quarantined_count`) and
+   * can hand over. A vantage point with no reporter leaves it undefined, and
+   * the judge then publishes no count rather than a fabricated 0 — which is
+   * the whole lesson of the field that sits above it.
+   */
+  readonly spoolQuarantined?: number;
 }
 
 interface RoleCountRow {
@@ -153,6 +178,17 @@ export function readCaptureLiveness(
         .sort()
     : [];
 
+  // ABANDONED RECORDS ARE A FAULT WHENEVER THEY EXIST (#680), with no
+  // `active` guard. The other faults ask "is the lane working right now?", so
+  // they are meaningless below quorum — a quiet night is not a dead lane.
+  // This one is not a liveness question at all: it is a report that data is
+  // already gone and stays gone until a human acts. A quarantine count is
+  // equally true on a busy Tuesday and an idle Sunday, so gating it on
+  // sessions observed would hide exactly the deployment that stopped
+  // capturing BECAUSE its records were being abandoned.
+  const quarantined = observation.spoolQuarantined;
+  const quarantineFault = quarantined !== undefined && quarantined > 0;
+
   const faults: string[] = [];
   if (watermarkWedged) {
     faults.push(
@@ -162,6 +198,11 @@ export function readCaptureLiveness(
   if (spoolUnannounced) {
     faults.push(
       `spool holds ${observation.spoolPending} record(s) with no outage announced`,
+    );
+  }
+  if (quarantineFault) {
+    faults.push(
+      `${String(quarantined)} unit(s) quarantined — replay gave up, records are lost until an operator replays the sidecar`,
     );
   }
   if (silentRoles.length > 0) {
@@ -176,6 +217,11 @@ export function readCaptureLiveness(
     sessions_observed: observation.sessionsObserved,
     turns_delivered: turnsDelivered,
     spool_pending: observation.spoolPending,
+    // Present only when something actually reported it. Spreading a
+    // conditional rather than writing `?? 0` is the entire point: an absent
+    // count and a zero count are different facts, and the fabricated zero is
+    // the defect (#680).
+    ...(quarantined === undefined ? {} : { quarantined_count: quarantined }),
     silence_seconds: Math.max(0, observation.silenceSeconds),
     reason: faults.length > 0 ? faults.join("; ") : "capture lane delivering",
   };

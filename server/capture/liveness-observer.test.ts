@@ -147,4 +147,90 @@ describe("capture liveness observer", () => {
   it("returns undefined for an absent observation rather than a healthy reading", () => {
     expect(readCaptureLiveness(undefined)).toBeUndefined();
   });
+
+  describe("quarantined units are never a silent drop (#680)", () => {
+    const delivering = {
+      sessionsObserved: 4,
+      watermarkBytesAdvanced: 240,
+      spoolPending: 0,
+      outageAnnouncements: 0,
+      turnsByRole: { user: 120, assistant: 120 },
+      silenceSeconds: 3,
+    } as const;
+
+    it("raises a named fault and publishes the count", () => {
+      const reading = readCaptureLiveness({ ...delivering, spoolQuarantined: 3 });
+
+      expect(reading?.stale).toBe(true);
+      expect(reading?.quarantined_count).toBe(3);
+      expect(reading?.reason).toContain("quarantined");
+      // The words must state the consequence, because "3 quarantined" alone
+      // reads like a queue depth an operator can wait out. These records are
+      // gone until someone replays the sidecar by hand.
+      expect(reading?.reason).toContain("operator");
+    });
+
+    it("reports a real zero when a vantage point looked and found none", () => {
+      const reading = readCaptureLiveness({ ...delivering, spoolQuarantined: 0 });
+
+      expect(reading?.stale).toBe(false);
+      expect(reading?.quarantined_count).toBe(0);
+      expect(reading?.reason).not.toContain("quarantined");
+    });
+
+    it("omits the count entirely when nothing reported one", () => {
+      // The load-bearing distinction. A hardcoded 0 standing in for an
+      // unmeasured quantity is the exact defect: on 2026-07-30 `/health` read
+      // `spool_pending:0, reason:"capture lane delivering"` while fifteen turns
+      // were already gone. "Nobody looked" must not render as "nothing wrong".
+      const reading = readCaptureLiveness(delivering);
+
+      expect(reading?.stale).toBe(false);
+      expect(reading).not.toHaveProperty("quarantined_count");
+    });
+
+    it("fires below the silence quorum, unlike the liveness faults", () => {
+      // Deliberately NOT gated on `active`. The other faults ask "is the lane
+      // working right now?" and are meaningless on a quiet night; this one
+      // reports that data is already lost, which is equally true at 3am. A
+      // deployment that stopped capturing BECAUSE its records were being
+      // abandoned is precisely the case a quorum gate would hide.
+      const reading = readCaptureLiveness({
+        ...delivering,
+        sessionsObserved: MIN_SESSIONS_FOR_SILENCE - 1,
+        spoolQuarantined: 2,
+      });
+
+      expect(reading?.stale).toBe(true);
+      expect(reading?.quarantined_count).toBe(2);
+    });
+
+    it("reports every fault that fired, not just the first", () => {
+      const reading = readCaptureLiveness({
+        ...delivering,
+        turnsByRole: { user: 120, assistant: 0 },
+        spoolQuarantined: 1,
+      });
+
+      expect(reading?.stale).toBe(true);
+      expect(reading?.silent_roles).toEqual(["assistant"]);
+      expect(reading?.reason).toContain("quarantined");
+      expect(reading?.reason).toContain("assistant");
+    });
+
+    it("leaves the gatherer reporting no quarantine count of its own", async () => {
+      // The arrivals query genuinely cannot see a client-side sidecar, so the
+      // gatherer must leave the field undefined rather than pass a confident 0
+      // — the same honesty the module already applies to spool_pending.
+      const observed = observer(
+        poolReturning([
+          { role: "user", turns: "12", sessions: "3", seconds_since_last: "4" },
+        ]),
+      );
+      await observed.refresh();
+
+      expect(observed.observation()).not.toHaveProperty("spoolQuarantined");
+      expect(observed.reading()).not.toHaveProperty("quarantined_count");
+    });
+  });
 });
