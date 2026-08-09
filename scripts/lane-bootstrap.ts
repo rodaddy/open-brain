@@ -299,15 +299,99 @@ function main(): void {
   run("fetch", "git", ["fetch", "origin", "--quiet"]);
   step("fetch", "origin fetched");
 
-  run("worktree", "git", [
-    "worktree",
-    "add",
-    "-b",
-    args.branch,
-    worktreePath,
-    "origin/main",
-  ]);
-  step("worktree", `${worktreePath} on new branch ${args.branch} from origin/main`);
+  // --- 2a. fresh vs continuation ------------------------------------------
+  // `worktree add -b` means CREATE, so it fatals the moment the branch exists
+  // and every continuation lane had to hand-build its environment instead —
+  // the exact hand-building ledger item 15 exists to stop (issue #667, ledger
+  // item 30.2). Which path runs is decided here, once, and ANNOUNCED: a
+  // continuation that reads identically to a fresh cut in the lane transcript
+  // is the adjusted-silently defect.
+  //
+  // Scope, deliberately: this is bootstrap-side only. Ledger item 15's
+  // teardown rejection stands, and nothing below removes, resets, or moves a
+  // ref. A state this script inspects and declines to touch is NAMED instead.
+  const branchExists =
+    spawnSync(
+      "git",
+      ["show-ref", "--verify", "--quiet", `refs/heads/${args.branch}`],
+      { cwd: REPO_ROOT },
+    ).status === 0;
+
+  // Which path ran, carried into the LANE READY block. The summary is what a
+  // lane actually pastes into a report, so "from origin/main" printed over a
+  // continuation would misstate the lane's own starting point.
+  let branchOrigin = "";
+
+  if (!branchExists) {
+    branchOrigin = "new branch from origin/main";
+    run("worktree", "git", [
+      "worktree",
+      "add",
+      "-b",
+      args.branch,
+      worktreePath,
+      "origin/main",
+    ]);
+    step("worktree", `${worktreePath} on new branch ${args.branch} from origin/main`);
+  } else {
+    // Continuation. The branch is the lane's existing work, so the ONLY safe
+    // thing to do is check it out where it already points. Verify it agrees
+    // with origin FIRST: a local tip that has drifted from its remote is a
+    // reconciliation the operator must make, never one this script makes for
+    // them. Both SHAs are named on refusal because a refusal that does not say
+    // what to reconcile is a dead end.
+    const localSha = capture("continuation", "git", [
+      "rev-parse",
+      `refs/heads/${args.branch}`,
+    ]);
+
+    const originRef = `refs/remotes/origin/${args.branch}`;
+    const originProbe = spawnSync(
+      "git",
+      ["rev-parse", "--verify", "--quiet", originRef],
+      { cwd: REPO_ROOT, encoding: "utf-8" },
+    );
+    const originSha =
+      originProbe.status === 0 ? (originProbe.stdout || "").trim() : "";
+
+    if (!originSha) {
+      // Local-only branch. Not divergence — there is nothing to diverge from —
+      // so this continues, but it is a state worth naming: nothing has been
+      // pushed, and the lane is the only copy of this work.
+      step(
+        "continuation",
+        `branch ${args.branch} already exists at ${localSha} and has NO origin counterpart (${originRef} not found) — continuing on the local branch; nothing was created, reset, or pushed`,
+      );
+    } else if (originSha !== localSha) {
+      // REFUSED BEFORE ANY WORKTREE IS CREATED. The refusal is raised here, at
+      // the check, and not after `worktree add` — a refusal that first leaves a
+      // worktree behind is not a refusal.
+      throw new LaneBootstrapError(
+        "continuation",
+        `branch ${args.branch} exists locally but has DIVERGED from origin.\n` +
+          `      local  ${localSha} (refs/heads/${args.branch})\n` +
+          `      origin ${originSha} (${originRef})\n\n` +
+          `    Refusing before creating anything: no worktree was created and no ref was ` +
+          `touched, so both commits are intact. Reconciling them is yours to decide — this ` +
+          `script will never reset, force, or discard a lane's local work to make a ` +
+          `bootstrap succeed. Push, pull, rebase, or pick another --branch, then re-run.`,
+      );
+    } else {
+      step(
+        "continuation",
+        `branch ${args.branch} already exists and is in sync with origin at ${localSha} — continuing on it (NOT re-cut from origin/main, and the branch ref was not touched)`,
+      );
+    }
+
+    branchOrigin = `continuation of existing branch at ${localSha}`;
+
+    // No `-b`: check out the branch that already exists, where it points.
+    run("worktree", "git", ["worktree", "add", worktreePath, args.branch]);
+    step(
+      "worktree",
+      `${worktreePath} on EXISTING branch ${args.branch} at ${localSha} (continuation)`,
+    );
+  }
 
   // --- 3. .env -------------------------------------------------------------
   const srcEnv = join(REPO_ROOT, ".env");
@@ -428,7 +512,7 @@ function main(): void {
     "─".repeat(72),
     `  reason:    ${args.reason}`,
     `  worktree:  ${worktreePath}`,
-    `  branch:    ${args.branch} (from origin/main)`,
+    `  branch:    ${args.branch} (${branchOrigin})`,
     `  env:       .env copied — OK`,
     `  deps:      bun install --frozen-lockfile — OK`,
   ];
