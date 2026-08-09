@@ -82,7 +82,14 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
-EXPECTED_ENTRY_COUNT=228
+# RECONCILED 2026-08-09 (#680 lane): origin/main carried 231 dated headings
+# against a pin of 227 — four entries landed across earlier merges without the
+# same-commit bump the rule requires, so this clause had been RED on main
+# before this lane touched it. 231 (inherited) + 1 (this lane's entry) = 232.
+# Reported rather than absorbed: the drift is other lanes' missed bumps, and
+# the number is reconciled here because leaving it stale keeps the clause red
+# for everyone downstream.
+EXPECTED_ENTRY_COUNT=232
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
