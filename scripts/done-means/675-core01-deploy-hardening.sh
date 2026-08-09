@@ -215,6 +215,35 @@ printf '// fixture legacy entrypoint (rollback tree)\n' > "$FIXTURE_REPO/src/ind
 
 cp "$PACKAGE_SCRIPT" "$FIXTURE_REPO/scripts/core01-package-runtime.sh"
 chmod +x "$FIXTURE_REPO/scripts/core01-package-runtime.sh"
+# scripts/deploy-lock.ts arrived on main with #677/#690 (backup/deploy overlap
+# guard) after this check was written, and core01-deploy-local.sh now holds that
+# lock for the whole deploy, resolving it as "$REPO_DIR/scripts/deploy-lock.ts".
+# Without it in the fixture repo every clause failed identically at "could not
+# acquire the openbrain-deploy lock ... Module not found" — including the (e)
+# CONTROL clause whose entire job is to prove a good deploy still passes.
+#
+# Stubbed rather than copied, deliberately and announced: the real lock takes a
+# Postgres advisory lock (`createPool` from src/db/pool.ts), and this fixture is
+# hermetic by design — no database, no network, no core01. Copying the shipped
+# file only moved the failure from "Module not found" to "Cannot find module
+# '../src/db/pool.ts'". Whether the advisory lock genuinely serialises backup
+# against deploy is #677/#690's own done-means check to prove, not this one's;
+# what THIS check needs from the lock is only its observable contract with the
+# deploy script, which is the two lines below: print READY on --hold, then hold
+# until killed (scripts/deploy-lock.ts:185-188). The deploy waits for `^READY$`
+# and kills the child on EXIT, so a stub that honours those two facts exercises
+# the same code path in core01-deploy-local.sh that production takes.
+cat > "$FIXTURE_REPO/scripts/deploy-lock.ts" <<'LOCK'
+// FIXTURE STUB — not the shipped scripts/deploy-lock.ts.
+// Mirrors only the observable contract core01-deploy-local.sh depends on:
+// `--hold` prints READY and then holds until the parent kills it. The real
+// implementation takes a Postgres advisory lock; this fixture has no database
+// on purpose, and #677/#690 owns proving the lock itself works.
+if (import.meta.main) {
+  console.log("READY");
+  await new Promise<void>(() => {});
+}
+LOCK
 # The deploy runs `bun install --frozen-lockfile` in staging; a package.json
 # with no dependencies and a matching lockfile keeps that step honest and fast.
 cat > "$FIXTURE_REPO/package.json" <<'PKG'
