@@ -87,6 +87,16 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 26) — operator ruling on test-data cleanup (ledger item 31)
+
+- **A prefix-scoped SQL DELETE of rows a lane can PROVE are its own test
+  residue is the lane's to run** — count before, delete in one
+  transaction children-first, verify zero after, announce the counts.
+  "It's a database, not an RM-RF" (operator, 2026-08-08). The
+  unconditional no-`rm` rule governs the FILESYSTEM and is unchanged.
+  Rows of uncertain provenance, user data, and anything outside a
+  provably-test prefix stay report-only.
+
 ### 2026-08-08 (round 25) — harvest of the #653 final-sync lane (clause-e residue edit)
 
 - **When a gate has no clause-level seam, EXTRACT the clause from the
