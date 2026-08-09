@@ -281,12 +281,18 @@ else
     else
       pass "(a) rendered plist is valid, periodic (StartCalendarInterval), label=$label"
       note "runner: $prog0"
-      # No placeholder tokens may survive rendering — an unsubstituted
-      # __TOKEN__ is a plist that lints fine and does nothing.
-      if rg -q '__[A-Z_]+__' "$RENDERED_PLIST"; then
-        fail "(a) rendered plist still contains unsubstituted __TOKEN__ placeholders"
+      # No placeholder tokens may survive rendering in a VALUE — an
+      # unsubstituted placeholder is a plist that lints fine and does nothing.
+      # Scoped to <string> values, not the whole file: the template documents
+      # its own placeholder syntax in a comment, and a whole-file match reads
+      # that documentation as a defect. (Self-caught: the first green run
+      # failed here on the template's own explanatory comment, and the
+      # installer contained the identical over-broad guard — one mistake made
+      # twice, in the checker and in the subject.)
+      if rg -q '<string>[^<]*__[A-Z_]+__' "$RENDERED_PLIST"; then
+        fail "(a) rendered plist still contains unsubstituted placeholders in a value"
       else
-        pass "(a) no unsubstituted placeholders survive rendering"
+        pass "(a) no unsubstituted placeholders survive rendering into values"
       fi
     fi
   fi
@@ -505,17 +511,17 @@ if true; then
   # a race here would let the backup run unlocked and bank a false RED. The
   # lock is identified by its own key, not by "any advisory lock": another
   # session's unrelated advisory lock would otherwise satisfy the precondition.
+  # Scoped to THIS RUN'S database (pg_locks is cluster-wide — see the release
+  # note below). An advisory lock held against an unrelated database would
+  # otherwise satisfy this precondition, and clause (d1) would then be testing
+  # a backup that faced no lock at all: a false RED banked as a real one.
   lock_visible=0
-  lock_key="$(psqlq "$SRC_DB" "select hashtext('$SRC_DB' || ':openbrain-deploy')")"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.5
-    held="$(psqlq "$SRC_DB" "select count(*) from pg_locks where locktype='advisory' and granted and objid = ($lock_key)::bigint & 4294967295" 2>/dev/null)"
-    if [[ -z "$held" || "$held" == "0" ]]; then
-      # Fall back to the coarser reading rather than failing on a bitmask
-      # detail; announced, because a weaker precondition must not be silent.
-      held="$(psqlq "$SRC_DB" "select count(*) from pg_locks where locktype='advisory' and granted" 2>/dev/null)"
-      [[ "${held:-0}" -ge 1 ]] && note "ADJUSTED: keyed lock lookup returned nothing; using the coarser any-advisory-lock reading"
-    fi
+    held="$(psqlq "$SRC_DB" "select count(*) from pg_locks l
+                             join pg_stat_activity a on a.pid = l.pid
+                             where l.locktype='advisory' and l.granted
+                               and a.datname = '$SRC_DB'" 2>/dev/null)"
     if [[ "${held:-0}" -ge 1 ]]; then lock_visible=1; break; fi
   done
 
@@ -568,9 +574,45 @@ if true; then
 
   # Release: end the lock-holding session. Killing the psql child closes its
   # connection, which is what releases a session-scoped advisory lock.
+  #
+  # KILLING psql DOES NOT RELEASE THE LOCK. Measured here, twice: the client
+  # process dies immediately and `pg_locks` still reports the advisory lock
+  # held, because the BACKEND is inside `pg_sleep()` and does not notice the
+  # client is gone until that query returns. The lock belongs to the backend
+  # session, not to the psql process.
+  #
+  # This cost a full false failure of clause (e) — an unlocked backup refused
+  # with exit 4 and the check reported "a guard that blocks normal backups",
+  # which reads exactly like a real implementation defect. It was the check's
+  # own leftover lock. Release SERVER-SIDE with pg_terminate_backend, scoped by
+  # application_name to the lock-holder this run started, then WAIT for the
+  # lock to be observably gone and fail loudly rather than let (e) inherit it.
   kill "$LOCK_PID" 2>/dev/null || true
+  psqlq "$SRC_DB" "select pg_terminate_backend(pid) from pg_stat_activity
+                   where datname = '$SRC_DB' and pid <> pg_backend_pid()
+                     and query like '%openbrain-deploy%'" >/dev/null 2>&1 || true
   wait "$LOCK_PID" 2>/dev/null || true
-  note "deploy lock released (lock-holding session ended)"
+  # pg_locks is CLUSTER-WIDE. Scope the reading to THIS RUN'S database by
+  # joining pg_stat_activity on datname — an unrelated advisory lock held
+  # against some other database on the same server otherwise reads as "still
+  # held" forever and fails this clause for a reason that has nothing to do
+  # with the subject. (Self-caught: a leftover debug database on this machine
+  # did exactly that, and the failure was indistinguishable at a glance from a
+  # real unreleased lock.)
+  lock_gone=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    still="$(psqlq "$SRC_DB" "select count(*) from pg_locks l
+                              join pg_stat_activity a on a.pid = l.pid
+                              where l.locktype='advisory' and l.granted
+                                and a.datname = '$SRC_DB'" 2>/dev/null)"
+    if [[ "${still:-1}" == "0" ]]; then lock_gone=1; break; fi
+    sleep 0.5
+  done
+  if [[ "$lock_gone" -eq 1 ]]; then
+    note "deploy lock released (observed gone from pg_locks)"
+  else
+    fail "(d) the deploy lock was still held after the holder was killed — clause (e) below would inherit a false failure"
+  fi
 fi
 
 # ===========================================================================
@@ -601,9 +643,17 @@ else
   # first run of this clause printed NOTHING AT ALL rather than a verdict
   # (round 21/24 lesson, hit here in its own spelling). `|| true` keeps the
   # pipeline alive and every value is defaulted before any arithmetic.
-  lock_line="$(rg -n 'openbrain-deploy' "$DEPLOY_SCRIPT" 2>/dev/null | head -1 | cut -d: -f1 || true)"
-  migrate_line="$(rg -n 'run migrate' "$DEPLOY_SCRIPT" 2>/dev/null | head -1 | cut -d: -f1 || true)"
-  stage_line="$(rg -n 'core01-package-runtime.sh' "$DEPLOY_SCRIPT" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+  # ANCHOR ON THE COMMANDS, NOT ON PROSE. The first version of this clause
+  # matched `openbrain-deploy` and `run migrate` anywhere in the file, and both
+  # patterns hit the deploy script's own explanatory COMMENTS — which sit
+  # ABOVE the real commands, so the clause reported the lock as taken after
+  # migrate when it is taken before. Round 23's rule: anchor an assertion on a
+  # marker the subject OWNS, never on prose that also contains the words. Here
+  # the owned markers are the actual invocations, with comment lines excluded.
+  ncl() { rg -n -v '^\s*#' "$DEPLOY_SCRIPT" 2>/dev/null; }
+  lock_line="$(rg -n 'deploy-lock\.ts' "$DEPLOY_SCRIPT" 2>/dev/null | rg -v '^\s*[0-9]+:\s*#' | head -1 | cut -d: -f1 || true)"
+  migrate_line="$(rg -n '^\s*"\$BUN_BIN" run migrate' "$DEPLOY_SCRIPT" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+  stage_line="$(rg -n '^\s*"\$REPO_DIR/scripts/core01-package-runtime\.sh"' "$DEPLOY_SCRIPT" 2>/dev/null | head -1 | cut -d: -f1 || true)"
   lock_line="${lock_line:-0}"
   migrate_line="${migrate_line:-0}"
   stage_line="${stage_line:-0}"

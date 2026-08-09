@@ -113,6 +113,64 @@ set -a
 source "$ENV_FILE"
 set +a
 
+# Deploy/backup mutual exclusion (#677, cutover blocker B4). Taken HERE:
+# after the env file is sourced (the lock helper needs DB_* to connect) and
+# BEFORE the first mutation of staging, migrate, or the runtime swap. A lock
+# acquired after `bun run migrate` would protect nothing while reading
+# identically in a diff, which is why the done-means check asserts this
+# ordering by line number rather than by presence.
+#
+# The lock is HELD BY A CHILD PROCESS for the rest of this script. It is a
+# session-scoped Postgres advisory lock, so if this deploy dies at any point
+# the child dies with it and the lock is released — there is no stale-lock
+# file to clean up and no path where a crashed deploy wedges backups.
+DEPLOY_LOCK_PID=""
+release_deploy_lock() {
+  if [[ -n "$DEPLOY_LOCK_PID" ]]; then
+    kill "$DEPLOY_LOCK_PID" 2>/dev/null || true
+    wait "$DEPLOY_LOCK_PID" 2>/dev/null || true
+    DEPLOY_LOCK_PID=""
+  fi
+}
+trap release_deploy_lock EXIT
+
+# Ready-file lives beside the runtime, never in /tmp or $TMPDIR: those are
+# process- and sandbox-local, so a runner and the host see different ones
+# (AGENTS.md hard rule). This path is deterministic and inspectable after a
+# failed deploy, which is when its contents matter most.
+DEPLOY_LOCK_STATE_DIR="${DEPLOY_LOCK_STATE_DIR:-$(dirname "$RUNTIME_DIR")/deploy-state}"
+if ! mkdir -p "$DEPLOY_LOCK_STATE_DIR"; then
+  echo "FATAL: could not create the deploy-lock state dir: $DEPLOY_LOCK_STATE_DIR" >&2
+  exit 1
+fi
+DEPLOY_LOCK_READY_FILE="$DEPLOY_LOCK_STATE_DIR/deploy-lock.$$.log"
+: > "$DEPLOY_LOCK_READY_FILE"
+
+"$BUN_BIN" run "$REPO_DIR/scripts/deploy-lock.ts" --hold > "$DEPLOY_LOCK_READY_FILE" 2>&1 &
+DEPLOY_LOCK_PID=$!
+
+# Wait for the child to report READY. A deploy that proceeded without
+# confirming the lock is held would be a guard in name only.
+deploy_lock_ready=0
+for _ in $(seq 1 60); do
+  if grep -q '^READY$' "$DEPLOY_LOCK_READY_FILE" 2>/dev/null; then
+    deploy_lock_ready=1
+    break
+  fi
+  if ! kill -0 "$DEPLOY_LOCK_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$deploy_lock_ready" -ne 1 ]]; then
+  echo "FATAL: could not acquire the openbrain-deploy lock before deploying." >&2
+  echo "A backup may be in flight; retry once it completes. Detail:" >&2
+  cat "$DEPLOY_LOCK_READY_FILE" >&2 || true
+  exit 1
+fi
+echo "openbrain-deploy lock held for the duration of this deploy"
+
 rm -rf "$STAGING_DIR"
 cleanup_previous_dir pre-deploy
 mkdir -p "$STAGING_DIR"
