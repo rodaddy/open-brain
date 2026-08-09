@@ -87,6 +87,29 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-08 (round 22) — harvest of the #666 transport-delegation lane
+
+- **When the defect is "what does X pass to the boundary," stub the
+  BOUNDARY — do not extract a helper for observability.** Extracting
+  `buildProviderEnv()` would invent a seam the check proves instead of
+  the real call site — the same gap class that let #655's stubbed green
+  miss #666. Monkeypatching `Bun.spawn` (existing convention:
+  src/tools/__tests__/search-all.test.ts:85) lets the SHIPPED method run
+  unmodified while the check reads what the real spawn received.
+- **A single-key presence assertion most needs a mutant, and an ENV-level
+  mutant beats a source-level one** — stripping the key from the OBSERVED
+  env keeps RED regenerable forever with the fix in place (round 16's
+  SKIP-flag idea, env spelling). Report what it proves honestly: the
+  clause reads that key and fails on absence.
+- **The design-lookup gate's window EXPIRES mid-lane** (plain time decay,
+  distinct from round 20's sibling contention). Long lanes get gated
+  twice on unrelated writes; when a legitimate lookup returns nothing,
+  declare UNVERIFIED and source the convention elsewhere (git log) —
+  an empty result is neither permission nor a gate defect.
+- **Fast-and-explicit "No results found" is a genuine miss; empty output
+  after a 120s+ hang is did-not-run.** The two are distinguishable and
+  must be treated differently (rounds 11/17/20 refined).
+
 ### 2026-08-08 (round 21) — harvest of the #653 branch-sync lane
 
 - **`lane-bootstrap` refuses a continuation lane on an EXISTING BRANCH,
