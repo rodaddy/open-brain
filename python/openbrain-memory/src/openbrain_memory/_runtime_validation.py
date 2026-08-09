@@ -104,8 +104,37 @@ def validate_started_lane(
     # opaque refusal into an actionable one, and it must stay a REFUSAL: writing
     # into whatever namespace came back is the silent mis-scope this issue is
     # about (server/auth/middleware.ts:9-13).
+    #
+    # The ABSENT case needs its own branch (#662). #654's guard reads
+    # `"namespace" in lane`, so a lane carrying no `namespace` key at all walks
+    # past it into the generic comparison and produces the exact dead-end
+    # message the paragraph above says must never be produced for this key. It
+    # is the same defect #654 fixed, on the other side of its own `if`.
+    #
+    # Absent and mismatched are genuinely different faults and must not share a
+    # message. A mismatch means the server bound the lane somewhere and said
+    # so, and the remedy is delegation. An absence means the response never
+    # stated a namespace at all, so there is nothing the caller can set to
+    # change it: the actionable information is that the SERVER's response shape
+    # is wrong, and the operator's move is to check what is answering. Telling
+    # them to set OPENBRAIN_DELEGATE_NAMESPACE here would be a false remedy —
+    # a dead end with more words.
+    #
+    # It stays a REFUSAL. An unproven namespace is not a proven one, and
+    # writing into a lane whose scope was never established is the silent
+    # mis-scope #654 exists to prevent (server/auth/middleware.ts:9-13).
     served = lane.get("namespace")
-    if "namespace" in lane and served != namespace:
+    if "namespace" not in lane:
+        raise ValueError(
+            "session_start did not return a namespace for the lane, so it "
+            f"cannot prove the configured '{namespace}'. The namespace is "
+            "carried by OPENBRAIN_NAMESPACE and is never a request key, so "
+            "there is nothing to add to the request: the response shape is "
+            "wrong. Check that OPENBRAIN_BASE_URL points at an Open Brain "
+            "whose session_start returns the lane's namespace. Nothing was "
+            f"written to '{namespace}'."
+        )
+    if served != namespace:
         raise ValueError(
             "session_start bound the lane to namespace "
             f"'{served}', not the configured '{namespace}'. The namespace is "

@@ -327,3 +327,65 @@ def test_namespace_mismatch_names_the_cause_and_the_remedy() -> None:
     assert "token-namespace" in error
     assert "bilby" in error
     assert "OPENBRAIN_DELEGATE_NAMESPACE" in error
+
+
+# --- #662: an ABSENT namespace key is a different fault and needs its own name
+
+
+class AbsentNamespaceLaneClient(ScopeResponseClient):
+    """A server whose session_start lane omits `namespace` entirely."""
+
+    def session_start(self, **arguments: Any) -> dict[str, Any]:
+        result = super().session_start(**arguments)
+        result["lane"].pop("namespace", None)
+        return result
+
+
+def test_absent_namespace_names_the_response_shape_not_a_false_remedy() -> None:
+    """#662: #654's guard reads `"namespace" in lane`, so absence walked past it.
+
+    A lane with no `namespace` key fell through to the generic
+    "did not prove exact Open Brain scope: namespace" — the exact dead end
+    #654's own comment says must never be produced for this key, because
+    `namespace` is env-carried and has no request spelling to correct.
+
+    Absence is not mismatch. A mismatch has a remedy (delegate the namespace);
+    an absence does not, because the server never stated one — so the refusal
+    points at the response shape and at the endpoint, and must NOT repeat the
+    delegation remedy, which would be a dead end with more words.
+    """
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        client=AbsentNamespaceLaneClient(),
+    )
+
+    output = runtime.capture_distilled("Absent namespace must be named")
+
+    assert output.receipt.status is not ReceiptStatus.SAVED
+    assert output.receipt.durable is False
+    error = output.receipt.error or ""
+    assert "did not prove exact Open Brain scope: namespace" not in error
+    assert "did not return a namespace" in error
+    assert "bilby" in error
+    assert "OPENBRAIN_BASE_URL" in error
+    assert "OPENBRAIN_DELEGATE_NAMESPACE" not in error
+
+
+def test_absent_namespace_is_still_refused_never_accepted() -> None:
+    """An unproven namespace is not a proven one.
+
+    Separate from the message test on purpose: a fix that improved the wording
+    while letting the write proceed would satisfy the text assertions and
+    reintroduce the silent mis-scope #654 exists to prevent.
+    """
+    runtime = FirstClassMemoryRuntime(
+        runtime_config(),
+        runtime_scope(),
+        client=AbsentNamespaceLaneClient(),
+    )
+
+    output = runtime.capture_distilled("Absent namespace must not be written")
+
+    assert output.receipt.durable is False
+    assert output.receipt.error
