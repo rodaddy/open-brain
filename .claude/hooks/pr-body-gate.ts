@@ -309,6 +309,78 @@ function branchOf(dir: string): string | null {
   return branch ? branch : null;
 }
 
+/** Does `ref` name something `git` can resolve inside `dir`? */
+function refResolves(dir: string, ref: string): boolean {
+  const probe = spawnSync(
+    "git",
+    ["-C", dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+    { encoding: "utf8" },
+  );
+  return probe.status === 0;
+}
+
+/**
+ * The ref that actually CONTAINS the PR's commits, given a branch NAME.
+ *
+ * ISSUE #714. A branch name is not a ref until some repository can resolve it,
+ * and `gh pr create --head <branch>` names a branch on the REMOTE. Run from a
+ * root checkout that fetched but never created a local branch of that name —
+ * which is exactly where a lane opens a PR with `--head` and no `cd` — the bare
+ * name resolves to nothing:
+ *
+ *   $ git cat-file -e lane/x:scripts/done-means/check.sh
+ *   fatal: invalid object name 'lane/x'.
+ *   $ git cat-file -e origin/lane/x:scripts/done-means/check.sh   # exit 0
+ *
+ * #709 made the hook FEED the branch tier; this makes what it feeds RESOLVABLE.
+ * Without it the tier is fed a dead string and the refusal prints
+ * `; and in ref lane/x`, which reads as "your check is not on the branch" when
+ * the truth is "that name means nothing here" — a refusal that misdirects is
+ * worse than one that admits it looked nowhere, because the cheapest way past a
+ * misdirecting refusal is a false receipt (#706's lesson, one layer out).
+ *
+ * Candidates are tried in order and each is ASSERTED ON POSITIVELY — round 28:
+ * a lookup whose failure is indistinguishable from its legitimate empty case
+ * must be asserted on positively, never by observing that nothing broke. So a
+ * name that resolves nowhere returns null and the branch tier is skipped
+ * entirely rather than fed a string that will fail for the wrong reason.
+ *
+ *   1. the name as given — a local branch, a SHA, a tag, or a ref the caller
+ *      already spelled correctly (`--head origin/lane/x`). Trying this FIRST is
+ *      what stops a correct ref being mangled, and keeps a local-only checkout
+ *      working with no remote at all.
+ *   2. `<remote>/<name>` for each configured remote, origin first. This is the
+ *      #714 case. Remotes are ENUMERATED rather than assuming `origin` exists,
+ *      because a checkout with a differently-named remote is not an error.
+ *
+ * This only ever changes WHICH ref is consulted; `existsInRef`'s containment
+ * guard on the PATH is untouched, so it widens where a check may live and never
+ * what may be named.
+ */
+function resolvableRef(dir: string, name: string): string | null {
+  if (refResolves(dir, name)) return name;
+
+  const remotesProbe = spawnSync("git", ["-C", dir, "remote"], {
+    encoding: "utf8",
+  });
+  if (remotesProbe.status !== 0) return null;
+  const remotes = (remotesProbe.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort((a, b) => Number(b === "origin") - Number(a === "origin"));
+
+  for (const remote of remotes) {
+    // A name that already carries this remote's prefix was covered by the
+    // as-given attempt above; re-prefixing it would only build origin/origin/x.
+    if (name.startsWith(`${remote}/`)) continue;
+    const candidate = `${remote}/${name}`;
+    if (refResolves(dir, candidate)) return candidate;
+  }
+
+  return null;
+}
+
 function refuse(lines: string[]): never {
   console.error(lines.join("\n"));
   process.exit(2);
@@ -477,6 +549,20 @@ if (!existsSync(VALIDATOR)) {
  * checkout this process can see. Every step degrades to the pre-#709 behaviour
  * rather than guessing, and `scripts/done-means/709-hook-feeds-head-ref.sh`
  * drives THIS file with real payloads to hold it there.
+ *
+ * ---------------------------------------------------------------------------
+ * ISSUE #714 — a branch NAME is not a ref until something can resolve it.
+ * ---------------------------------------------------------------------------
+ *
+ * The precedence above produces a branch NAME. `gh pr create --head <branch>`
+ * names a branch on the REMOTE, and in a root checkout that fetched it but
+ * never created a local branch of that name, the bare name resolves to nothing
+ * — so the tier #709 made reachable was still handed a dead string. The name is
+ * therefore run through `resolvableRef()` (as-given, then `<remote>/<name>`),
+ * each candidate asserted on positively, and the SETTLED ref is what reaches
+ * `PR_HEAD_REF`. `scripts/done-means/714-head-ref-resolves-remote.sh` holds it
+ * with a genuine bare-remote fixture, because the defect is invisible in any
+ * fixture where the lane branch also exists locally.
  */
 const payloadCwd = input.cwd?.trim() || process.cwd();
 const cdTarget = cdTargetBefore(commands, targetIndex, payloadCwd);
@@ -486,18 +572,20 @@ const reviewRootSource = cdTarget
   : `the hook payload's cwd (${payloadCwd})`;
 const reviewRoot = cdTarget ?? payloadCwd;
 
-let headRef: string | null = null;
-let headRefSource = "";
-if (target.head?.trim()) {
-  headRef = target.head.trim();
-  headRefSource = `explicit --head on the gh command`;
-} else {
-  const derived = branchOf(reviewRoot);
-  if (derived) {
-    headRef = derived;
-    headRefSource = `branch checked out in ${reviewRoot}`;
-  }
-}
+// The branch NAME the PR is opened from, and where that name came from.
+const headName = target.head?.trim() || branchOf(reviewRoot);
+const headNameSource = target.head?.trim()
+  ? `explicit --head on the gh command`
+  : `branch checked out in ${reviewRoot}`;
+
+// ...and the ref that can actually be READ in the tree being asked (issue
+// #714). A name that resolves nowhere yields null, so the branch tier is
+// skipped rather than fed a string that fails for a reason nobody can act on.
+const headRef = headName ? resolvableRef(reviewRoot, headName) : null;
+const headRefSource =
+  headRef && headRef !== headName
+    ? `${headNameSource}; '${headName}' does not resolve in ${reviewRoot}, so the remote-tracking ref was used`
+    : headNameSource;
 
 const result = spawnSync("bun", [VALIDATOR], {
   encoding: "utf8",
@@ -529,11 +617,16 @@ if (result.error || result.status === null) {
 // so the refusal read as "your path does not exist" when the truth was "the
 // gate was looking in the wrong place". A refusal is exactly when someone has
 // to work out why, so the inputs are printed on the failing path too.
+// Issue #714 adds a third state to this line. A head NAME with no resolvable
+// ref is not the same as no name at all, and reporting it as "not on a named
+// branch" would send the reader looking for the wrong problem.
 const inputNotes = [
   `[${HOOK_NAME}] tree under review: ${reviewRootSource}`,
   headRef
     ? `[${HOOK_NAME}] head ref: ${headRef} (source: ${headRefSource})`
-    : `[${HOOK_NAME}] head ref: none — no --head on the command and ${reviewRoot} is not on a named branch; the branch tier cannot run`,
+    : headName
+      ? `[${HOOK_NAME}] head ref: none — '${headName}' (${headNameSource}) resolves to no ref in ${reviewRoot}, locally or on any remote; the branch tier cannot run. Fetch the branch, or pass a --head that this checkout can see.`
+      : `[${HOOK_NAME}] head ref: none — no --head on the command and ${reviewRoot} is not on a named branch; the branch tier cannot run`,
 ];
 
 if (result.status !== 0) {
