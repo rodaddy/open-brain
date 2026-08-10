@@ -260,6 +260,54 @@ Newest first. Every entry: what changed, and the observation that forced it.
   branches). Handled the sanctioned way — do the lookup, write the message
   file in a separate call — never a retried spelling. Round 24's practice held.
 
+### 2026-08-09 (round 27) — operator ruling: a completed node shows its outcome (ledger item 32), harvested from the artifact-resolution lane
+
+- **At merge, the controller posts a CLOSURE COMMENT on the ISSUE** —
+  direction taken, why that direction over the alternatives, and the
+  receipts (PR number, merge SHA, done-means check name). The generator
+  now renders a `## Resolution` from the closing PR, but the artifact is
+  only as good as what was written: a PR body that never states WHY
+  produces a Resolution section that faithfully preserves nothing.
+  Operator, 2026-08-09: the artifacts must "explain the direction we went
+  in and why we went in them." The comment lands the reasoning where the
+  mirror already captures it (comments have been mirrored since the
+  generator's first version) rather than depending on PR linkage.
+- **A closing PR body is a durable artifact, not a merge formality.** It
+  is reproduced BYTE-FOR-BYTE into the closed issue's artifact and is
+  what a future `aqmd` search returns as the answer. Write it for the
+  reader who arrives in six months with no session context.
+- **Measured trap — `closedByPullRequestsReferences` is EMPTY in this
+  repo.** Lanes squash-merge into a wip branch, not the default branch,
+  so GitHub's auto-close linkage never registers: the field returns
+  `[]` for #681 even though PR #687 demonstrably closed it. Resolution
+  comes from the TIMELINE instead (closer is a PullRequest in 20 of 25
+  recent closures, a Commit needing SHA-to-mergeCommit correlation in 2,
+  and null in 3). Any future tooling that reads closure MUST use the
+  timeline; the obvious field silently reports absence.
+- **Cross-referenced PRs are not a list of closing PRs.** #659 is
+  cross-referenced by four and closed by one. Use them ONLY to resolve a
+  closing commit SHA to its PR. Rendering candidates would put several
+  directions on an issue that took one — an ambiguous answer fails the
+  ruling as surely as a missing one.
+- **Importing a script to test it must not RUN it.** The lane's own first
+  RED run imported `scripts/sync-issues.ts` for its renderer and fired
+  the entire `gh issue list` sweep, rewriting every file in
+  `_plans/issues/`. A check that mutates the tree it measures cannot be
+  trusted about it. Scripts that a done-means check imports now guard
+  their side effects behind `import.meta.main`.
+- **Prove the EXPECTATION, not just the assertion.** The lane's driver
+  derived its expected body-phrase by filtering long words and joining
+  them, fabricating a string present nowhere in the source — so a
+  CORRECT renderer failed the clause and read exactly like a renderer
+  defect. Derived expectations now carry a self-check that they exist in
+  the source, asserted before anything rests on them. Sibling of round
+  25's "prove the prover."
+- **An embedded document's own headings are structure, and they collide.**
+  PR bodies here carry `## Summary` / `## Verification` headings; inlined
+  into an artifact they became top-level sections of the ISSUE, so the
+  PR's structure masqueraded as the issue's. Blockquoting the embedded
+  body keeps every line inside its section and byte-identical.
+
 ### 2026-08-08 (round 26) — operator ruling on test-data cleanup (ledger item 31)
 
 - **A prefix-scoped SQL DELETE of rows a lane can PROVE are its own test
