@@ -3,11 +3,12 @@
 
 # #712 — pre-push fails every push: bun test aborts with WriteFailed when its stdout is git's pipe (tests are green)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T02:00:37Z
-Updated: 2026-08-10T02:20:51Z
+Updated: 2026-08-10T13:44:40Z
+Closed: 2026-08-10T13:44:40Z
 
 ---
 
@@ -109,7 +110,18 @@ so worktrees run the primary's copy of this same hook).
 
 ---
 
-## Discussion (2)
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-10T13:44:40Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-10T13:44:40Z.
+
+---
+
+## Discussion (3)
 
 ### rodaddy — 2026-08-10T02:06:46Z
 
@@ -213,3 +225,9 @@ hook-under-repair route, and this one, which has no such route because the
 defect is not in the hook this lane touches).
 
 Environment: `bun 1.3.14`, macOS Darwin 27.0.0.
+
+---
+
+### rodaddy — 2026-08-10T13:44:40Z
+
+Fixed by PR #715 (squash 3069f27 on wip/2026-08-07). Direction taken and why: the measured root cause was bun's STDERR (not stdout) failing on git's pipe — the reflex fix (redirect stdout only) would have left the defect fully live. The hook now sends both fds to a log under {temp_workspace}/open-brain/_scratch/pre-push/, judges on the runner's EXIT CODE, replays the log to the caller, announces the redirect, and names the failure class (TESTS FAILED vs THE RUNNER COULD NOT WRITE ITS OUTPUT). Receipts: verify-lane receipt exit=0 bound to b3d1c3f (6/6 clauses incl. mutant + stderr-only controls, posted on #715); live proof RUNNING — the first real push through the fixed hook carried three previously-blocked commits (3069f27..36a2a7d) with 'pre-push: all checks passed'.
