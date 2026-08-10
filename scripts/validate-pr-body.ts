@@ -87,7 +87,13 @@ function requireSpecificLine(
   }
 }
 
-/** The tree this validator file itself ships in. */
+/**
+ * The tree this validator file itself ships in.
+ *
+ * ISSUE #720: this tree is NOT about the PR. Under the hook it is the primary
+ * checkout on the integration branch. It may answer a `Done-means` path ONLY
+ * when no head ref is available at all — see `requireDoneMeans`.
+ */
 const OWN_TREE = resolve(import.meta.dir, "..");
 
 /**
@@ -145,50 +151,89 @@ function requireDoneMeans(
 
   if (!value || value === "-" || value.toLowerCase() === "n/a") return;
 
-  // RESOLUTION ORDER (issue #706). The tree under review is asked FIRST,
-  // because that is the tree being merged and therefore the only one whose
-  // answer is about this PR. The validator's own tree is the fallback for the
-  // ordinary case where they are the same directory, or where the validator is
-  // invoked from somewhere else entirely.
+  // RESOLUTION ORDER (issues #706, #720). Two sources can speak ABOUT THIS PR:
+  // the tree under review, and the branch being merged. Both are asked before
+  // anything else, and between them they are AUTHORITATIVE — when a head ref
+  // is known, their combined "no" is the answer, full stop.
+  //
+  // ISSUE #720. The validator's own tree used to be consulted as a plain
+  // second tree, before the branch was ever asked. Because
+  // `.claude/hooks/pr-body-gate.ts` runs the PRIMARY checkout's copy of this
+  // file, `OWN_TREE` is that checkout — which sits on the integration branch
+  // and has accumulated every done-means check ever merged. So a check DELETED
+  // from, renamed on, or never committed to the branch under review passed on
+  // the strength of a same-named file in a tree that is not being merged, and
+  // the fallback fired most readily in exactly the case it should have caught.
+  // That is #706's own defect — a gate judging from the wrong tree — one layer
+  // deeper.
+  //
+  // The own tree may therefore answer only when NO head ref exists at all:
+  // somebody running this validator by hand, where there is no authoritative
+  // answer to overrule. That case keeps working (it is the ordinary
+  // same-directory use), and it ANNOUNCES its weaker basis rather than reading
+  // identically to a branch-backed pass (AGENTS.md, 2026-08-08: nothing is
+  // adjusted silently).
   const reviewRoot = resolve(options.reviewRoot ?? process.cwd());
-  const trees: Array<{ label: string; root: string }> = [
-    { label: "the tree under review", root: reviewRoot },
-  ];
-  if (reviewRoot !== OWN_TREE) {
-    trees.push({ label: "the validator's own tree", root: OWN_TREE });
-  }
+  const headRef = options.headRef?.trim();
+  const repoDir = resolve(options.repoDir ?? reviewRoot);
 
-  for (const tree of trees) {
-    if (existsInTree(tree.root, value)) {
-      notes.push(
-        `Done-means resolved in ${tree.label}: ${tree.root}${sep}${value}`,
-      );
-      return;
-    }
+  if (existsInTree(reviewRoot, value)) {
+    notes.push(
+      `Done-means resolved in the tree under review: ${reviewRoot}${sep}${value}`,
+    );
+    return;
   }
 
   // On disk in no tree we can see. The file may still be committed on the
   // branch being merged — the `gh pr create` case the hook hits, where the lane
   // has pushed but no local checkout carries the file.
-  const headRef = options.headRef?.trim();
   if (headRef) {
-    const repoDir = resolve(options.repoDir ?? reviewRoot);
     if (existsInRef(repoDir, headRef, value)) {
       notes.push(
         `Done-means resolved in branch ${headRef} (${repoDir}), not on disk in any available tree`,
       );
       return;
     }
+
+    // AUTHORITATIVE NO (#720). The branch under review was asked and does not
+    // carry this path. Whatever the validator's own tree happens to hold is
+    // about some other branch, so it is not consulted and the refusal says so.
+    //
+    // The refusal keeps the established `looked in:` / `and in ref` markers.
+    // `709-hook-feeds-head-ref.sh` clause 4 asserts on them precisely because a
+    // refusal that stops saying where it looked is a dead end (round 29: print
+    // the gate's inputs on the REFUSAL path). A new message is not a reason to
+    // move an existing assertion.
+    errors.push(
+      `Verification field 'Done-means' must name a path present in the change under review;` +
+        ` not found: ${value} (looked in: ${reviewRoot}; and in ref ${headRef} within ${repoDir}).` +
+        ` The validator's own tree was NOT consulted: a head ref is known, so the branch answer is authoritative.`,
+    );
+    return;
+  }
+
+  // No head ref at all — nothing authoritative exists to be overruled. This is
+  // the hand-run case (#706 clause d), so the tree this file ships in may
+  // answer, and the note says plainly that it did and why that is a weaker
+  // basis than a branch-backed resolution.
+  if (reviewRoot !== OWN_TREE && existsInTree(OWN_TREE, value)) {
+    notes.push(
+      `Done-means resolved in the validator's own tree: ${OWN_TREE}${sep}${value}` +
+        ` — no head ref was available, so no branch answer could be consulted;` +
+        ` this does NOT prove the path is present in the change under review.`,
+    );
+    return;
   }
 
   // Refused. The gate's purpose is unchanged: a path that exists in no tree and
   // on no named ref is still not a check that can declare anything done. The
   // message names WHERE it looked so the refusal is actionable rather than a
   // dead end.
-  const looked = trees.map((tree) => tree.root).join(", ");
+  const looked =
+    reviewRoot === OWN_TREE ? reviewRoot : `${reviewRoot}, ${OWN_TREE}`;
   errors.push(
     `Verification field 'Done-means' must name an existing repo-relative path; not found: ${value}` +
-      ` (looked in: ${looked}${headRef ? `; and in ref ${headRef}` : ""})`,
+      ` (looked in: ${looked}; no head ref was available, so the branch tier could not run)`,
   );
 }
 
