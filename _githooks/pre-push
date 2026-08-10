@@ -7,8 +7,42 @@ set -eu
 # Each is gated on its own paths with its own validation, so a push touching only
 # one still runs that one's mypy/ruff/pytest -- a push touching only
 # python/openbrain used to skip every Python check entirely.
+#
+# ---------------------------------------------------------------------------
+# BASE SELECTION (issue #705)
+# ---------------------------------------------------------------------------
+# Which base the push is diffed against decides which gates run, so getting it
+# wrong does not make the gate stricter -- it makes it STOP DISCRIMINATING.
+# This file used to hardcode `origin/main` in TWO places (the stdin-range path
+# and the manual path). Every lane in the current flow branches from a wip
+# branch that was 80 commits ahead of origin/main, and one of those commits
+# touches python/openbrain, so every lane -- including ones whose diff contained
+# no Python at all -- was told it had changed the Python package and ran that
+# package's pytest. That suite executes the out-of-repo context-budget-gate
+# crosslang proof, which fails for main-owned reasons (#704).
+#
+# The damage is not the wasted minutes. Once every lane is told it changed
+# Python, a push that GENUINELY breaks Python looks exactly like one that
+# touched only markdown, and "not mine" becomes the habitual response -- which
+# is how a gate turns into noise that gets routed around with `--no-verify`.
+#
+# So the base is the branch's actual INTEGRATION TARGET: its configured upstream
+# when it has one, falling back to origin/main, then main, then the empty tree.
+# It is resolved by exactly ONE function, called from both paths, because the
+# duplicated copy is what let the original fix land on one path and miss the
+# other. And the chosen base is ANNOUNCED, so a future lane can read which base
+# produced the verdict instead of inferring it from a failure.
 
-echo "pre-push: running Open Brain validation..."
+EXPLAIN_ONLY=no
+for arg in "$@"; do
+  if [ "$arg" = "--explain" ]; then
+    EXPLAIN_ONLY=yes
+  fi
+done
+
+if [ "$EXPLAIN_ONLY" = no ]; then
+  echo "pre-push: running Open Brain validation..."
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -23,56 +57,168 @@ CHANGED_PYTHON=no
 CHANGED_OPENBRAIN=no
 CHANGED_PARITY=no
 
-while read -r _local_ref local_sha _remote_ref remote_sha; do
-  SAW_RANGE=yes
-  if [ "$local_sha" = "$ZERO_SHA" ]; then
-    continue
-  fi
-  if [ "$remote_sha" = "$ZERO_SHA" ]; then
-    if git rev-parse --verify origin/main >/dev/null 2>&1; then
-      base_sha="$(git merge-base "$local_sha" origin/main)"
-    elif git rev-parse --verify main >/dev/null 2>&1; then
-      base_sha="$(git merge-base "$local_sha" main)"
-    else
-      base_sha="$(git hash-object -t tree /dev/null)"
-    fi
-  else
-    base_sha="$remote_sha"
+# The resolved base and how it was chosen. Set by resolve_base.
+#
+# WHY THESE ARE GLOBALS SET IN PLACE, AND NOT A PRINTED RESULT. The obvious
+# spelling -- `base_sha="$(resolve_base "$tip")"` -- runs the function in a
+# COMMAND-SUBSTITUTION SUBSHELL, so BASE_REF and BASE_SOURCE are assigned in a
+# child process and are empty in the parent the moment it returns. That failure
+# is silent and it fails GREEN in the direction that matters: the flags are
+# still computed correctly, so only the ANNOUNCEMENT goes blank, and an
+# announcement nobody is asserting on is exactly the thing that rots. Observed
+# here on the first GREEN run of scripts/done-means/705-pre-push-base-selection.sh
+# (clauses c and d caught it). So resolve_base writes all three outputs into
+# globals and returns nothing.
+BASE_REF=""
+BASE_SOURCE=""
+BASE_SHA=""
+
+# resolve_base <tip-rev> [branch-ref]
+#
+# Sets BASE_SHA to the base to compare <tip-rev> against, and records the ref it
+# came from in BASE_REF / BASE_SOURCE. The ONLY place a base is chosen; both the
+# stdin-range path and the manual path call it.
+#
+# Order, most specific first:
+#   1. the branch's configured upstream -- the branch it actually integrates
+#      into. This is what makes a lane off a wip branch diff against that wip
+#      branch instead of inheriting the wip-vs-main span.
+#   2. origin/main, then main -- the historical behaviour, kept as the fallback
+#      for a branch with no upstream configured. Dropping it would leave those
+#      pushes ungated, which is the opposite of the fix.
+#   3. the empty tree -- a repository with no main at all; everything counts as
+#      changed, which is the safe direction to fail.
+#
+# WHY THE BRANCH REF IS A SEPARATE ARGUMENT FROM THE TIP.
+# `@{upstream}` is a property of a BRANCH, and git can only answer it for
+# something that names one. On a real push git hands this hook the tip as a raw
+# SHA, and `<sha>@{upstream}` is meaningless -- git errors, the lookup returns
+# empty, and the resolution silently falls through to origin/main, which is
+# EXACTLY the bug being fixed. Observed live 2026-08-09: the first push of this
+# very lane announced "base: origin/main -- fallback (no configured upstream)"
+# and charged the lane a python/openbrain change it did not make, while
+# `--explain` (which passes the symbolic `HEAD`) resolved the upstream
+# correctly. So the caller passes the branch ref it already has, and the tip is
+# used only for the merge-base. A check that exercised only `--explain` could
+# not see this; scripts/done-means/705-pre-push-base-selection.sh now drives the
+# stdin-range path with a SHA tip for that reason.
+resolve_base() {
+  local tip="$1"
+  local branch_ref="${2:-}"
+  local upstream=""
+
+  # `@{upstream}` takes a SHORT BRANCH NAME. git sends the FULL ref on stdin
+  # (`refs/heads/lane/x`), and `refs/heads/lane/x@{upstream}` is a hard error --
+  # "fatal: no such branch" -- not a missing upstream, so it would fall through
+  # to origin/main just as silently as the SHA did. The prefix is therefore
+  # stripped here. `HEAD` is passed through unchanged because it already names a
+  # branch for this purpose.
+  local branch_name="${branch_ref#refs/heads/}"
+
+  # `2>/dev/null` because git errors loudly when no upstream is configured,
+  # which is an ordinary case here and not a failure.
+  if [ -n "$branch_name" ]; then
+    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name "${branch_name}@{upstream}" 2>/dev/null || true)"
   fi
 
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain-memory)" ]; then
+  if [ -n "$upstream" ] && git rev-parse --verify "$upstream" >/dev/null 2>&1; then
+    BASE_REF="$upstream"
+    BASE_SOURCE="configured upstream"
+    BASE_SHA="$(git merge-base "$tip" "$upstream")"
+    return 0
+  fi
+
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    BASE_REF="origin/main"
+    BASE_SOURCE="fallback (no configured upstream)"
+    BASE_SHA="$(git merge-base "$tip" origin/main)"
+    return 0
+  fi
+
+  if git rev-parse --verify main >/dev/null 2>&1; then
+    BASE_REF="main"
+    BASE_SOURCE="fallback (no configured upstream, no origin/main)"
+    BASE_SHA="$(git merge-base "$tip" main)"
+    return 0
+  fi
+
+  BASE_REF="(empty tree)"
+  BASE_SOURCE="fallback (no upstream and no main)"
+  BASE_SHA="$(git hash-object -t tree /dev/null)"
+}
+
+# classify <base-sha> <tip-rev> -- set the CHANGED_* flags from one diff range.
+# Extracted alongside resolve_base for the same reason: the pathspec list was
+# also written twice, so a package added to one copy would be missed by the
+# other.
+classify() {
+  local base="$1" tip="$2"
+  if [ -n "$(git diff --name-only "$base" "$tip" -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
   fi
   # `python/openbrain` is a distinct path from `python/openbrain-memory`: a git
   # pathspec matches whole path components, so this leading-dir filter never
   # catches the sibling package. Each package gets its own gate on its own paths.
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain)" ]; then
+  if [ -n "$(git diff --name-only "$base" "$tip" -- python/openbrain)" ]; then
     CHANGED_OPENBRAIN=yes
   fi
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- "${PARITY_PATHS[@]}")" ]; then
+  if [ -n "$(git diff --name-only "$base" "$tip" -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
   fi
-done
+}
+
+# `--explain` has no stdin range to read, and reading stdin would block.
+if [ "$EXPLAIN_ONLY" = no ]; then
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    SAW_RANGE=yes
+    if [ "$local_sha" = "$ZERO_SHA" ]; then
+      continue
+    fi
+    if [ "$remote_sha" = "$ZERO_SHA" ]; then
+      # A brand-new branch: the remote has nothing to compare against, so the
+      # base has to be chosen. This is EVERY first lane push, and it is the path
+      # #705 was measured on.
+      #
+      # `$_local_ref` is the LOCAL ref being pushed (e.g. refs/heads/lane/x).
+      # It is passed because git gives `$local_sha` as a raw SHA, which cannot
+      # answer `@{upstream}` -- see resolve_base's own note.
+      resolve_base "$local_sha" "$_local_ref"
+    else
+      # The remote already has this branch, so what the push actually adds is
+      # exactly remote..local. Nothing to choose.
+      BASE_SHA="$remote_sha"
+      BASE_REF="$_remote_ref"
+      BASE_SOURCE="remote tip of the branch being pushed"
+    fi
+
+    classify "$BASE_SHA" "$local_sha"
+  done
+fi
 
 # A direct/manual invocation has no pre-push stdin. Compare the current branch
-# to main so local hook testing retains useful behavior.
+# to its integration target so local hook testing retains useful behavior.
 if [ "$SAW_RANGE" = no ]; then
-  if git rev-parse --verify origin/main >/dev/null 2>&1; then
-    BASE="$(git merge-base HEAD origin/main)"
-  elif git rev-parse --verify main >/dev/null 2>&1; then
-    BASE="$(git merge-base HEAD main)"
-  else
-    BASE="HEAD^"
-  fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain-memory)" ]; then
-    CHANGED_PYTHON=yes
-  fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain)" ]; then
-    CHANGED_OPENBRAIN=yes
-  fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- "${PARITY_PATHS[@]}")" ]; then
-    CHANGED_PARITY=yes
-  fi
+  resolve_base HEAD HEAD
+  classify "$BASE_SHA" HEAD
+fi
+
+# ANNOUNCE THE BASE (issue #705, and AGENTS.md "nothing is adjusted silently").
+# The base is a self-made decision that changes which gates run, so it is stated
+# rather than left to be inferred from whichever validation happens to fail.
+echo "  base: ${BASE_REF} — ${BASE_SOURCE}"
+echo "  changed: python/openbrain-memory=${CHANGED_PYTHON} python/openbrain=${CHANGED_OPENBRAIN} parity=${CHANGED_PARITY}"
+
+# `--explain` stops here: it exists so the base-selection decision above can be
+# tested on its own, without the multi-minute typecheck/test phases that follow
+# and that have nothing to do with which base was picked. It is the SHIPPED
+# resolution running on a real repository -- not a second implementation.
+if [ "$EXPLAIN_ONLY" = yes ]; then
+  echo "  base_ref=${BASE_REF}"
+  echo "  base_source=${BASE_SOURCE}"
+  echo "  changed_openbrain_memory=${CHANGED_PYTHON}"
+  echo "  changed_openbrain=${CHANGED_OPENBRAIN}"
+  echo "  changed_parity=${CHANGED_PARITY}"
+  exit 0
 fi
 
 echo "  bun run typecheck ..."

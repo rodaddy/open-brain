@@ -325,13 +325,37 @@ if (!existsSync(VALIDATOR)) {
   ]);
 }
 
+/**
+ * WHICH TREE THE Done-means PATH IS RESOLVED AGAINST (issue #706).
+ *
+ * This hook is registered as `$CLAUDE_PROJECT_DIR/.claude/hooks/pr-body-gate.ts`,
+ * so VALIDATOR above always points into the PRIMARY CHECKOUT — which is sitting
+ * on the base branch. Lanes work in a worktree, and a lane's done-means check is
+ * a NEW file on the lane branch. The validator used to resolve `Done-means`
+ * against its own tree, so a PR that introduced its own check was structurally
+ * refused, and the cheapest ways past were all false receipts: name a different
+ * pre-existing check that never judged this lane, or claim `not applicable`.
+ *
+ * The payload's `cwd` is the tree the command was actually run from — the lane
+ * worktree — so it is handed to the validator as the tree under review. The
+ * VALIDATOR SCRIPT is still the primary checkout's copy: this passes the tree to
+ * inspect, not the rules to inspect it with, so a lane cannot weaken the gate by
+ * editing the validator on its own branch.
+ *
+ * `CLAUDE_PROJECT_DIR` is deliberately NOT used here. It is the primary
+ * checkout, which is the exact tree that produced the bug.
+ */
+const reviewRoot = input.cwd?.trim() || process.cwd();
+
 const result = spawnSync("bun", [VALIDATOR], {
   encoding: "utf8",
   env: {
     ...process.env,
     PR_BODY: body,
     PR_TITLE: target.title ?? "",
+    PR_REPO_DIR: reviewRoot,
   },
+  cwd: reviewRoot,
 });
 
 if (result.error || result.status === null) {
@@ -361,6 +385,16 @@ if (result.status !== 0) {
       .join("\n"),
     ...REMEDY,
   ]);
+}
+
+// ALLOWED. Echo the validator's resolution notes so the pass is not silent
+// about WHICH tree answered the Done-means path (issue #706, AGENTS.md nothing
+// silent). stderr, because stdout on a PreToolUse hook is parsed as a decision
+// document; this is commentary on an allow, not a decision.
+for (const line of (result.stdout ?? "").split("\n")) {
+  if (line.startsWith("Done-means resolved")) {
+    console.error(`[${HOOK_NAME}] ${line}`);
+  }
 }
 
 process.exit(0);
