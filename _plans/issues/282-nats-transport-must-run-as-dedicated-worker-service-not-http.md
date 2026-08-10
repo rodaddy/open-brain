@@ -47,6 +47,75 @@ Add dedicated NATS listener workers beside the HTTP workers.
 
 ---
 
+## Resolution
+
+Closed by **PR #284** — feat(nats): reconcile transport to fleet-bus + dedicated worker (closes #282, supersedes #283)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `3bf56df19a2cf1e24092c824c4ac3fc0d22b5399`
+- Merged at: 2026-07-08T16:01:47Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T16:01:48Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #284 body
+
+> ## Summary
+>
+> Reconciles Open Brain's NATS request/reply transport (TS/Bun) to the
+> `rodaddy/fleet-bus` conventions, and supersedes/closes the dedicated-worker
+> work from #283 (this branch is built on `feat/282-dedicated-nats-worker` and
+> contains all of it).
+>
+> Closes #282. Supersedes #283.
+>
+> - **Fleet `Envelope`** wire format: `{ id, ts, from, kind, payload, ... , correlation_id, version }`, compact UTF-8 JSON, key `from` (not `sender`). Requests `kind="context_pack_request"`, responses `kind="context_pack_response"` with `correlation_id` echo.
+> - **Env-prefixed subject** `{env}.ob.memory.context_pack` via a `_slug`-parity builder (`src/nats-subjects.ts`); legacy flat subject unpinned from plist/runbook.
+> - **Lane binding (v1, auth off):** explicit top-level `payload.namespace` → `override`; else declared identity → `declared`; else `rejected` (never a silent global). `OPENBRAIN_NATS_REQUIRE_AUTH=true` re-enables the bearer gate and force-disables override; token-derived is stamped `token`.
+> - **Dedicated worker** (from #283) keeps HTTP `/health` isolated from NATS broker/subscription failures; `safeWorkerError` redaction hardened (instanceof allowlist).
+> - **Shared cross-language wire fixture** (`src/__fixtures__/nats-context-pack-wire.json`) that TS and the Python client both byte-validate against, so the wire cannot drift.
+> - Advisory contract manifest updated to advertise the env-prefixed subject (excluded from `schema_hash`; no v20 contract bump).
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` → clean.
+> - `bun test` → **1317 pass, 54 skip, 0 fail**.
+> - Cross-language parity: TS serializer emits the fixture `request.wire` byte-for-byte; the Python client (PR for `lane/python-fleet-nats`) validates the byte-identical fixture (md5 `3aca6ba2…`).
+>
+> ## Gauntlet receipt
+>
+> Critical → review-swarm (security/adversarial + gotcha/correctness, SME lanes injected) → codex `gpt-5.5` cross-model review → all findings fixed/waived.
+>
+> - Findings: 2 BLOCKER, 2 HIGH, 3 MEDIUM, 3 low. Fixed: 8. Waived: 1 (shared-kb shadow — no privilege gain).
+> - `[codex/gpt-5.5]` caught both blockers (TS↔Python `kind` mismatch; override field-path mismatch) — end-to-end breakers no single-language review could see. Detail on #282.
+>
+> ## Downstream classification
+>
+> Runtime/transport-facing. Local + hosted (core01) verification apply and are complete/planned in this run. mcp2cli/rtech-hermes live rollout deferred: NATS is opt-in, not default; the fleet cutover (CT274) is documented in `docs/fleet-nats-integration.md` as a config-only v2 flip gated on `REQUIRE_AUTH=true`.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: namespace/lane binding on the auth-off local bus — a caller-declared identity or `payload.namespace` selects the lane. Mitigated: binds a non-privileged synthetic identity through the same server-side `canReadNamespace` check; `NAMESPACE_TOKEN_RE` bounds the token; reject-on-unroutable never falls to a global namespace; runbook states auth-off-on-untrusted-bus as a hard cross-tenant-read precondition.
+> - Assumptions that could be wrong: that the core01 NATS broker is a trusted loopback bus with no untrusted publishers. Documented as a deployment precondition; the fleet cutover requires `REQUIRE_AUTH=true`.
+> - Missing/weak tests: no live-broker integration test in CI (fake driver + the shared wire fixture cover the contract); live request/reply is a deploy-time smoke.
+> - Security/permission risk: bearer auth is off by default in v1 (intentional, local trust); namespace remains a server-enforced boundary; logs/errors redact token/PII/URL via instanceof allowlist.
+> - Migration/deploy risk: no DB migration. Deploy risk is worker startup + env separation on core01; legacy-subject pin removed so the worker subscribes to the fleet subject.
+> - Downstream client/runtime risk: breaking NATS wire change vs the prior `openbrain.nats.*.v1` shape, but that surface is advisory (excluded from `schema_hash`) and NATS is opt-in; Python client lands in lockstep; HTTP transport unchanged.
+> - Rollback/cleanup concern: unload only `com.rico.open-brain-nats-worker`; HTTP/Postgres untouched.
+> - Fixes made before PR: all 8 gauntlet findings (2 blocker, 2 high, 3 medium, 1 low) fixed; shared wire fixture added to prevent recurrence.
+> - Known residual risk: cross-language parity is fixture-locked but hand-maintained (no automated TS↔Python check beyond the shared fixture); upstream `fleet-nats` `ob_context_pack` builder not yet filed.
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: 2 blocker + 2 high + 3 medium fixed, posted to #282
+> - Live Open Brain checks: [x] linked below
+>
+> Live checks: core01 deploy + NATS request/reply smoke run post-merge in this goal run; receipt to follow on #282.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-08T06:11:40Z

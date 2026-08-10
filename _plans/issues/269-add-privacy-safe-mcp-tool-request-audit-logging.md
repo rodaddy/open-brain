@@ -48,3 +48,72 @@ Operators need enough audit signal to debug tool usage and failures without writ
 - No browser admin UI.
 - No full gbrain request log schema import.
 - No raw payload debug mode unless explicitly approved later.
+
+---
+
+## Resolution
+
+Closed by **PR #275** — feat: add privacy-safe MCP audit logging
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `1ba0875168bb21f7ee4817f6091eadb93f421b6a`
+- Merged at: 2026-07-08T02:54:37Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T02:54:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #275 body
+
+> ## Summary
+>
+> - add privacy-safe MCP/tool audit summaries for registered tool calls
+> - persist only operation metadata: status, duration, caller identity, namespace source, declared parameter keys, unknown parameter count, and coarse payload size bucket
+> - add a fail-open audit writer with retention cleanup and disable/retention environment controls
+> - add migration `022_mcp_tool_audit_log.sql` plus focused privacy and protocol tests
+>
+> Closes #269.
+>
+> ## Validation
+>
+> Re-run at head `4df18f0` (hardening: bounded audit write timeout, cleanup retry state, double-install guard, operator docs):
+>
+> - `bun test src/audit-log.test.ts src/tools/__tests__/mcp-audit-log.test.ts src/tools/__tests__/protocol.test.ts` - PASS, 26 pass / 0 fail (71 expect calls)
+> - `bunx tsc --noEmit` - PASS
+> - `bun test` - PASS, 1215 pass / 54 skip / 0 fail (1269 tests across 88 files)
+> - `git diff --check` - PASS
+> - `git diff --cached --check` - PASS before commit
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: audit logging could accidentally persist raw prompts, values, secrets, file paths, or attacker-controlled unknown key names.
+> - Assumptions that could be wrong: declared parameter key names are acceptable metadata because they come from registered tool schemas, not caller payloads.
+> - Missing/weak tests: no live database migration smoke was run; migration is covered by SQL review and local test fakes rather than a live Postgres apply.
+> - Security/permission risk: caller identity fields are operational metadata; request bodies and values are deliberately omitted. Unknown caller key names are counted, not stored.
+> - Migration\/deploy risk: adds table `mcp_tool_audit_log`. Note: migration 022 was amended in place during review (status CHECK gained 'validation_error'); envs that applied the earlier branch version need the constraint re-added or table dropped — main\/prod never ran 022; deploy/release must run migrations through the normal release tag path.
+> - Downstream client/runtime risk: no MCP tool contract, input schema, output shape, Python client, or transport behavior changes. Operators may see new audit rows only after release/deploy.
+> - Rollback/cleanup concern: rollback removes the table wiring and tests; a DB rollback would leave an unused audit table unless explicitly dropped in a later migration.
+> - Fixes made before PR: added fail-open write behavior, disable control, retention cleanup, payload bucketing, and tests proving raw values and unknown key names are not persisted.
+> - Known residual risk: hosted migration/live smoke is intentionally deferred until the approved release tag/deploy phase.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no MEDIUM+ review finding has been produced yet; PR remains draft until review swarm completes.
+>
+> ## Downstream rollout classification
+>
+> Checked `docs/downstream-rollout.md`.
+>
+> - Applies partially because this PR adds a database migration that affects runtime/operator behavior.
+> - Does not change public MCP tool names, tool schemas, output envelopes, streamable HTTP behavior, Python client behavior, generated skills, or Hermes call shapes.
+> - Local Open Brain verification is complete.
+> - Hosted Open Brain deploy, live DB migration, mcp2cli refresh, rtech-mcps handoff, rtech-hermes changes, Hermes rollout, and live canaries are not run in this PR. They remain release-phase work after merge, via the approved v* release tag path.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: no review swarm has run yet; PR remains draft until standard review completes.
+> - [ ] Initial review swarm complete
+> - [ ] Material findings fixed or explicitly deferred
+> - [ ] Fix verification complete
+> - [ ] CI passed for this PR head
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this is local-first sprint work; no core01 deploy or live DB mutation is approved for this PR.
+>
+> ## No deploy / release note
+>
+> No core01 deploy is performed by this PR. The sprint remains local branches, PRs, and CI first. After the sprint issues are merged and verified, the release step is a v* tag.

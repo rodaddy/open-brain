@@ -17,3 +17,101 @@ fleet-bus commit 2b20f97 (2026-07-28, 'own the ob lane' #221/#116/#117/#227) add
 Verified 2026-08-04: subject shapes are currently byte-identical, so no live drift — this is about closing the window, not fixing a break.
 
 Work: (1) refresh the mirror against fleet-bus 2b20f97 and update the probe date; (2) route the subject through fleet_nats.subjects when importable, deleting the local helper on that path per the module's own design; (3) decide whether the uv tool venvs (openbrain-memory / openbrain) should carry fleet_nats from the monorepo path so the REAL package runs on fleet machines instead of the mirror — that also affects scripts/client-bundle.sh (a fourth wheel) and is the part that needs a deliberate call; (4) a drift-canary test that compares the mirror to the fleet-bus clone's source when the clone is present, so the next upstream change fails a test instead of aging silently.
+
+---
+
+## Resolution
+
+Closed by **PR #551** — fix(nats): defer the ob subject to fleet_nats and canary the mirror against the clone (#550)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `fde646a4d76f1651ce214cbc33352f6d4d0e9fbf`
+- Merged at: 2026-08-04T22:02:17Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T22:02:19Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #551 body
+
+> Closes #550.
+>
+> ## Summary
+>
+> fleet-bus `2b20f97` (2026-07-28) added `fleet_nats.subjects.ob_context_pack(env)`, fulfilling the TODO `nats_wire.py` had been carrying. The mirror's probe note still read `2026-07-08`, so three upstream changes had aged in silently. The issue expected no live drift; two of the three turned out to be real divergences.
+>
+> **Subject — routed upstream, local helper deleted on that path.** When `fleet_nats` is importable, `build_context_pack_subject` calls `ob_context_pack` directly and constructs no subject text of its own. That is the single-owner design the module always stated, and upstream's docstring names OB's TS mirror as its parity target. The `_resolve_slug` indirection is gone with it. The local mirror survives only for environments without fleet-nats, which is every machine this client normally runs on — fleet-nats is not on PyPI and is not importable here, so the delegating path is `written, not exercised` (see What is NOT proven).
+>
+> **What had actually drifted:**
+>
+> - `_slug` was renamed to the public `slug` and gained a `>` rejection (fleet-bus #222). `>` is the NATS multi-token wildcard, so an unrejected env token yields `>.ob.memory.context_pack`, which subscribes across the entire tree rather than the `ob` domain. The local mirror now rejects it and still permits `*`, matching upstream's line exactly — `*` is how single-token authorization grants are built and cannot widen a subject beyond one token.
+> - `Envelope` moved to `fleet_core.spec` and its `to_bytes` now emits two additional wire keys, `act` and `state` (fleet's A2A/FIPA coordination fields).
+>
+> **Envelope — deliberately NOT delegated.** This is the one judgment call in the PR and it goes the other way from the subject. The old code called the real `Envelope.to_bytes` whenever fleet-nats was importable. Post-`2b20f97` that emits `act`/`state`, which the cross-language fixture `nats-context-pack-wire.json` does not contain — so the fleet path and the TS mirror (`src/nats-runtime.ts`) would produce **different bytes for the same message**, and which bytes you got would depend on whether fleet-nats happened to be installed. That is precisely the drift the fixture exists to catch. The envelope is now built locally on both paths so the wire is identical either way. `FLEET_NATS_AVAILABLE` is diagnostics only and no longer selects a builder. Adopting `act`/`state` is a joint change with the TS mirror and the shared fixture, not a side effect of a mirror refresh.
+>
+> **Drift canary.** `tests/test_nats_wire_drift.py` reads the fleet-bus clone READ-ONLY and never imports it as a package — upstream pulls pydantic and fleet-core, neither of which this lightweight client depends on or should start depending on to check a mirror. Instead `ob_context_pack` and `slug` are lifted out with `ast` and executed in an isolated namespace, and the envelope wire keys are read out of `to_bytes`'s literal dict. All five tests skip cleanly when the clone is absent; a skip is the designed outcome, since the canary's job is to fail on the machine that has the source of truth.
+>
+> The envelope assertion is an **ordered-prefix** check, not equality. Order is the byte contract (`envelope_to_wire_bytes` does not sort), so a reorder upstream is a wire break — but the mirror is allowed to lag upstream's trailing additions, which is exactly the `act`/`state` situation. It may not carry a key upstream lacks, or drop one from the middle.
+>
+> `src/nats-subjects.ts` gets its now-false TODO replaced with the upstream status plus a marker for the one gap left open there: the TS `slugSubjectToken` still does not reject `>`. Tightening it changes which env strings the runtime accepts, so it is a deliberate follow-up rather than a silent change inside a mirror refresh. Not currently reachable — `env` is supplied by config, which uses `dev`, `prod`, or `staging`.
+>
+> ## Open question for Rico (not decided in this PR)
+>
+> Issue item (3) — whether the `openbrain-memory` / `openbrain` uv tool venvs should carry `fleet_nats` from the monorepo path so the REAL package runs on fleet machines instead of the mirror, which also means a fourth wheel in `scripts/client-bundle.sh`. **Deliberately not done here.** It is a packaging decision with a live blast radius, and this PR's finding sharpens it: bundling fleet-nats today would activate the delegating subject path on client machines, and — before this change — would also have activated the envelope path and put those machines on `act`/`state` bytes that the TS side does not emit. The envelope is now pinned locally so that specific hazard is closed, but the call on the wheel is yours.
+>
+> ## Verification
+>
+> Run in `python/openbrain-memory` on the branch:
+>
+> - `uv run mypy src/openbrain_memory` — Success, 17 source files
+> - `uv run ruff check` (changed files) — All checks passed
+> - `uv run ruff format --check` (changed files) — clean
+> - `uv run pytest -q` — **561 passed, 9 skipped**
+> - `bun install --frozen-lockfile` — 169 packages
+> - `bunx tsc --noEmit` — clean
+> - `bun test src/nats-subjects.test.ts` — 5 pass, 0 fail
+>
+> Red proof, both behavioral changes:
+>
+> - `>` rejection: reverted `nats_wire.py` to the old source with the new tests in place → `test_wildcard_env_token_rejected` and `test_local_slug_matches_upstream_slug` both fail `Failed: DID NOT RAISE ValueError`. Green after.
+> - Envelope canary: reordered the mirror's first two wire keys (`ts` before `id`) → `test_mirror_envelope_is_an_ordered_prefix_of_the_upstream_wire` fails with `At index 0 diff: 'id' != 'ts'`. Green after restore.
+> - Skip path: ran the canary with `FLEET_BUS_CLONE` pointed at a nonexistent directory → `5 skipped`, no failures, no errors.
+>
+> Clone confirmed read-only: no `git status` change and no writes; `2b20f97` verified present via `git merge-base --is-ancestor`.
+>
+> ### What is NOT proven
+>
+> The `fleet_nats`-importable branch of `build_context_pack_subject` is **not executed by any test**, because `fleet_nats` is not installable in this client's environment (`ModuleNotFoundError`, confirmed). It is marked `pragma: no cover` and its correctness rests on the canary asserting that our mirror and upstream's builder produce identical subjects for the same envs — which is the property that makes the branch safe to take, but is not the same as running it. This is the concrete cost of the deferred wheel decision above.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: the envelope non-delegation. If I have read `to_bytes` wrong and `act`/`state` were somehow omitted when `None`, I would be preserving a local builder for no reason. I read the source: they are in the unconditional `body.update({...})` dict alongside `id`/`ts`, so they serialize as explicit `null`, exactly like `to`/`task_id` already do on our wire. The prefix canary would also catch me if upstream changes this.
+> - Assumptions that could be wrong: that the fleet-bus clone at `/Volumes/ThunderBolt/Development/fleet-bus` is a faithful upstream checkout rather than a stale or dirty one. The canary asserts against whatever is on disk, so a stale clone yields a false green — mitigated only in that a stale clone is a strictly better oracle than the hardcoded 2026-07-08 note it replaces. Also assumed the AST shapes (`slug` as a module-level function, the wire-key dict inside `to_bytes`) hold; each raises an explicit `AssertionError` naming the missing symbol rather than silently passing.
+> - Missing/weak tests: the delegating subject path is untested, stated plainly above. The `ast`-lifting helper is itself untested machinery — if it silently matched the wrong dict the canary could pass vacuously, so `_upstream_wire_keys` requires the dict to contain the `id` key and raises otherwise. No test asserts the skip reason string.
+> - Security/permission risk: the `>` rejection is a security improvement, not a regression — it closes subject-token injection into a wildcard subscription. The canary calls `exec` on source lifted from a local clone; that is executing code already on the developer's own disk, in a namespace with no builtins passed in beyond the default, and only for two functions selected by name. It runs only when the clone is present. No secrets, no network, no service surface.
+> - Migration/deploy risk: none. No schema, no migration, no service change. `_FLEET_ENVELOPE_VERSION` is unchanged at 1 and now has a test pinning it to upstream's.
+> - Downstream client/runtime risk: the wire bytes are unchanged — the fixture test passes untouched, which is the whole point. The one behavioral change reaching callers is that `build_context_pack_subject` now raises on a `>` env token where it previously produced a wildcard subject. `env` comes from config (`dev`/`prod`/`staging`), so no live caller is affected.
+> - Rollback/cleanup concern: reverting the commit restores the previous mirror wholesale; nothing persists outside git. The new test file is additive.
+> - Fixes made before PR: three. (1) mypy `no-redef` on the conditional import — split into an aliased import plus assignment. (2) two `E501` lines in the canary — extracted the duplicated `exec`/`compile` into `_exec_upstream_function`, which also removed the duplication. (3) Long-running confusion where tests failed against source that was already correct: a stale `__pycache__` was serving a mutated code object after a red-proof mutation. Archived it and re-ran; the failures were artifacts, not real. Worth recording because `inspect.getsource` showed the CORRECT source while the executing code object was stale, which is a convincing way to be misled.
+> - Known residual risk: a stale fleet-bus clone produces a false green (above). The TS `>` gap is left open by choice and marked in-source. The `act`/`state` adoption remains owed work whenever OB decides to carry coordination fields — the canary tolerates the gap deliberately, so it will not nag about it.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no new review-lane pattern arose. The mirror-drift class is already this issue's subject and is now enforced by a test rather than by reviewer attention, which is the better home for it.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` — none arose
+> - Live Open Brain checks: [x] not applicable because: no service, transport endpoint, MCP tool, or schema surface is touched; this is a client-side wire-shape mirror and its tests
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: the shared wire contract is unchanged — `nats-context-pack-wire.json` is untouched and its byte-equality test passes; the change tightens slug validation identically in the Python client and the TS mirror, with no fixture, schema, or wire representation change
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable
+>
+> Notes/evidence: no MCP tool, schema, or transport contract changes. The emitted NATS wire bytes are byte-identical before and after, proven by the unchanged shared fixture test. The only caller-visible behavior change is rejecting a `>` env token, which no live caller passes.
+>
+>

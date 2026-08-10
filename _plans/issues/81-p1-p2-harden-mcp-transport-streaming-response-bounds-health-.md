@@ -30,3 +30,37 @@ Hermes/rtech adapter users can see intermittent hangs, high memory usage on bad 
 - `health()` returns structured health bodies for expected degraded responses while preserving error behavior for non-health failures.
 - Add `OpenBrainClient.close()` and context manager support if server/API supports session termination; otherwise document lifecycle/TTL clearly.
 - Add tests for close/lifecycle behavior or documented unsupported behavior.
+
+---
+
+## Resolution
+
+Closed by **PR #87** — fix: harden MCP transport streaming
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d5451504ffe82d2d4f8a42f630f03f3d358eacd9`
+- Merged at: 2026-06-11T02:13:33Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T02:13:34Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #87 body
+
+> ## Summary
+>
+> - Bound JSON and SSE response reads in `UrllibTransport` with `max_response_bytes`.
+> - Keep MCP SSE reads open until the matching JSON-RPC response id arrives, skipping notifications/progress and mismatched id events.
+> - Return structured degraded health bodies only for expected `status: degraded` 503 responses.
+> - Add `OpenBrainClient.close()` and context manager cleanup for local MCP session state.
+> - Add a Python package CI job for `python/openbrain-memory` tests and build.
+>
+> Closes #81.
+> Completes the missing Python package CI gate follow-up from #79.
+>
+> ## Validation
+>
+> - `uv run pytest tests/test_client.py` in `python/openbrain-memory`: 26 passed
+> - `uv run pytest` in `python/openbrain-memory`: 66 passed, 1 skipped
+> - `uv build` in `python/openbrain-memory`: built sdist and wheel
+> - `bun test`: 579 passed, 16 skipped
+> - `git diff --check`: passed
+>

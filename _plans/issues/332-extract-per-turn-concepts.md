@@ -51,3 +51,91 @@ Extract a deterministic, bounded set of salient entity and concept keys from the
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Resolution
+
+Closed by **PR #354** — feat(332): drive recall with bounded turn concepts
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `90a7a0942ec2ea0dc1581198176a64b887ed5898`
+- Merged at: 2026-07-23T00:21:57Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T00:21:59Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #354 body
+
+> ## Summary
+>
+> Adds deterministic, bounded per-turn entity/concept extraction to the standalone Python client and uses the derived keys to drive recall.
+>
+> - preserves the original query while appending at most eight normalized keys not already represented
+> - sends the same derived query to `search_all` and optional `brain_answer`
+> - keeps `MemoryContext.query` as the original input and exposes structured concepts separately
+> - supports NFC-normalized accented Latin, Cyrillic, CJK, and the documented `-_./` identifier separators
+> - retains namespace/session/source payload behavior
+> - never persists extracted keys
+> - emits count/category telemetry only, without raw text or keys
+> - releases the public behavior and root exports as `openbrain-memory` 0.1.13
+>
+> Closes #332
+> Part of #331
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> Evidence:
+>
+> - focused turn-concept + contract tests: 62 passed
+> - full Python suite: 425 passed, 5 env-gated skips
+> - mypy: clean across 16 source files
+> - ruff: clean
+> - `uv sync --frozen` and `uv lock --check`: clean
+> - 0.1.13 wheel and sdist built with matching metadata
+> - lower-vs-casefold mutation is killed by the sharp-s regression
+> - initial Full-tier review, focused verification, Terra terminal audit, and targeted terminal-fix verification completed
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: derived keys could leak through logs, replace the original query, or make search/answer use different queries.
+> - Assumptions that could be wrong: separator-shaped tokens are useful entity signals; a uniform three-code-point minimum is appropriate across scripts.
+> - Missing/weak tests: live retrieval-quality deltas are not measured here; deterministic transport call shape and failure behavior are covered locally.
+> - Security/permission risk: current-turn private text remains inside the existing authenticated recall path; telemetry contains counts/categories only and extracted keys are not persisted.
+> - Migration/deploy risk: no database migration or server deployment; installable Python artifact moves from 0.1.12 to 0.1.13.
+> - Downstream client/runtime risk: standalone Python behavior only; standalone TypeScript parity is deferred. Server MCP schema, wire contract, auth, and namespace behavior are unchanged.
+> - Rollback/cleanup concern: revert the extractor exports/recall wiring and the 0.1.13 artifact commit before publishing.
+> - Fixes made before PR: corrected the first worker version that extracted keys without using them; added Unicode/NFC behavior, trimmed unused public helpers, added mutation-killing casefold coverage, documented the public API, and bumped the package version.
+> - Known residual risk: heuristic quality is unit-tested but not benchmarked against a live corpus; CJK terms shorter than three code points follow the same threshold as other scripts.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: existing active Python client versioning and cross-runtime parity entries already cover the review patterns; this PR introduced no new MEDIUM+ review pattern.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: client-only recall-query augmentation uses existing server tools and does not change hosted server code, schema, transport, auth, or namespace behavior.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: per-turn concept extraction and derived recall-query augmentation are standalone Python client conveniences; TypeScript parity is explicitly deferred to the later standalone TS client phase.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - rtech-mcps and mcp2cli are not applicable: no server tool/schema/registry/generated-skill behavior changed.
+> - Direct Hermes integration and live canaries are not applicable; this is a runtime-neutral standalone Python client release and Hermes is outside the approved scope.
+> - The server compatibility floor intentionally remains `openbrain-memory >=0.1.8 <1.0.0`; the new convenience is optional, not server-required.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

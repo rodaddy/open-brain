@@ -70,6 +70,152 @@ Session-wrap was also the wrong home:
 
 ---
 
+## Resolution
+
+Closed by **PR #597** — fix(qmd): install and load the nightly index sync job with a watchdog (#386)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `1ed6bbead07070418df1e20299bf318ee070ba9f`
+- Merged at: 2026-08-06T00:31:42Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T00:31:43Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #597 body
+
+> Fixes #386
+>
+> ## Summary
+>
+> - add an explicit watchdog around every qmd subprocess, with a 30-minute embed bound and a six-hour complete-run bound
+> - kill the timed-out command process group so TERM-ignoring children cannot survive as CPU-bound orphans
+> - add an idempotent installer that copies the sync script into a stable machine-owned runtime, renders the LaunchAgent plist, boots out an existing registration, and bootstraps the replacement
+> - install and load `com.rico.qmd-sync` on this Mac, force a real 55-index run, and document the exact install, verify, diagnosis, and uninstall flow
+> - move the durable primary log to the established local service path at `/Volumes/ThunderBolt/open-brain-local/log/qmd-sync.log`
+>
+> ## Existing Design and Delta
+>
+> The merged design already established sequential project-local index refresh plus `global_docs_instructions` in `scripts/qmd-sync.sh` and `docs/deploy/qmd-sync.md`. This PR preserves that traversal and metric parsing. The delta is operational: watchdog enforcement, a stable installed runtime, a rendered and bootstrapped LaunchAgent, and live receipts proving the scheduled job actually runs.
+>
+> ## Watchdog Failure Proof
+>
+> Deliberate mutation: replaced the final process-group KILL with a no-op.
+>
+> ```text
+> mutation_test_exit=1
+> ok - update metrics
+> ok - comma-formatted embed metrics vectors
+> ok - already-embedded terminal output vectors
+> ok - empty-documents terminal output vectors
+> ok - status metrics
+> not ok - watchdog: child process 32011 survived
+> ```
+>
+> Restored production logic:
+>
+> ```text
+> ok - update metrics
+> ok - comma-formatted embed metrics vectors
+> ok - already-embedded terminal output vectors
+> ok - empty-documents terminal output vectors
+> ok - status metrics
+> ok - watchdog kills a hung embed process group and logs failure (1s)
+> ```
+>
+> ## Validation
+>
+> ```text
+> bunx tsc --noEmit
+> # exit 0
+>
+> bun test src/operator-doctor.test.ts
+> 29 pass
+> 0 fail
+> Ran 29 tests across 1 file.
+>
+> /opt/homebrew/bin/bash scripts/qmd-sync.test.sh
+> # all 6 checks passed
+>
+> shellcheck scripts/qmd-sync.sh scripts/qmd-sync.test.sh scripts/install-qmd-sync-launchagent.sh
+> # exit 0
+>
+> plutil -lint docs/deploy/com.rico.qmd-sync.plist.template
+> # OK
+> ```
+>
+> The pre-push hook also ran the repository validation suite successfully before publishing commit `9772fdbd9369af883009d4dd296e1bb273ad2a54`.
+>
+> ## Live Install and Kickstart Receipt
+>
+> The first forced run was intentionally treated as a real deployment gate, not omitted from the record. It exited 1 and exposed two machine-specific defects: the script named a nonexistent `/usr/bin/unlink`, and the LaunchAgent PATH selected an older user-local Node symlink whose ABI did not match `better-sqlite3`. The implementation now uses Homebrew `gunlink` and places `/opt/homebrew/bin` before `~/.local/bin`. The corrected installer was rerun idempotently and the job was forced again.
+>
+> Installed artifacts:
+>
+> ```text
+> /Users/rico/Library/LaunchAgents/com.rico.qmd-sync.plist
+> /Volumes/ThunderBolt/open-brain-local/qmd-sync/qmd-sync.sh
+> /Volumes/ThunderBolt/open-brain-local/log/qmd-sync.log
+> rendered_plist_placeholders=none
+> source_sha256=8893c7d41265907e2e5ea2d16dec7b75fa79b7dc254087704bd943dee20a0c28
+> installed_sha256=8893c7d41265907e2e5ea2d16dec7b75fa79b7dc254087704bd943dee20a0c28
+> ```
+>
+> Kickstart and launchd result:
+>
+> ```text
+> kickstart_rc=0
+> state = not running
+> runs = 1
+> last exit code = 0
+> ```
+>
+> Primary log:
+>
+> ```text
+> [2026-08-05T20:11:06-0400] qmd-sync status=started dev_root=/Volumes/ThunderBolt/Development embed_watchdog_seconds=1800 run_watchdog_seconds=21600 kill_after_seconds=20
+> [2026-08-05T20:16:18-0400] index=open-brain status=completed last_run=2026-08-05T20:15:36-0400 files_indexed=1179 files_new=0 files_updated=0 vectors_embedded=341 vectors_total=9420
+> [2026-08-05T20:19:31-0400] qmd-sync status=completed last_run=2026-08-05T20:11:06-0400 indexes_attempted=55 failures=0
+> ```
+>
+> Index freshness advanced:
+>
+> ```text
+> before_epoch=1785974550 before_time=Aug  5 20:02:30 2026
+> retry_after_epoch=1785975512 retry_after_time=Aug  5 20:18:32 2026 size_bytes=69369856
+>
+> QMD Status
+> Index: /Volumes/ThunderBolt/Development/open-brain/.qmd/index.sqlite
+> Size: 66.2 MB
+> Total: 1119 files indexed
+> Vectors: 9420 embedded
+> Updated: 2m ago
+> ```
+>
+> No `qmd update` or `qmd embed` process remained after the completed run.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Process-group cleanup could kill the wrong target if the watchdog PID were not also the GNU timeout process-group ID; the functional macOS test proves the real launched shape and verifies the TERM-ignoring child is gone.
+> - Assumptions that could be wrong: Homebrew coreutils and the Homebrew Node runtime remain installed at their current stable paths and retain the process-group and native-module behavior verified by the live run.
+> - Missing/weak tests: The watchdog test uses a fake TERM-ignoring command rather than forcing the real upstream qmd busy-loop, because reproducing that upstream defect is nondeterministic and CPU-expensive.
+> - Security/permission risk: The job runs only in the logged-in user's gui domain, installs the plist mode 600 and script mode 700, logs no secret values, and receives only HOME, PATH, and LOG_DIR in its plist environment.
+> - Migration/deploy risk: Reinstallation boots out the existing label before bootstrapping the rendered plist, so a rendering or bootstrap failure is loud and can leave the job unloaded rather than silently running stale configuration.
+> - Downstream client/runtime risk: No MCP schema, transport, Python client, or agent-facing contract changes; downstream rollout is not applicable.
+> - Rollback/cleanup concern: Boot out `gui/$(id -u)/com.rico.qmd-sync`, then remove the installed plist and stable script through the approved file-removal workflow; the durable log is retained for diagnosis.
+> - Fixes made before PR: The first forced run exposed the nonexistent unlink path and wrong Node selection; both were fixed, all checks rerun, the installer reapplied, and a second forced run completed all 55 indexes with exit 0.
+> - Known residual risk: A legitimately slow embed that exceeds 1,800 seconds will be stopped and logged as a watchdog failure; operators can tune the documented positive-second settings for a controlled run.
+> - SME review-memory update: [x] not applicable because: this operational LaunchAgent change introduced no reusable Python-client or review-swarm defect pattern for `docs/sme/`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: the first live run found the invalid unlink path and wrong Node ABI selection; both were corrected before PR and the full live run then passed.
+> - Live Open Brain checks: [x] linked below
+>
+> Live evidence is in **Live Install and Kickstart Receipt** above: the registered user LaunchAgent completed 55 indexes with exit 0, the durable log contains the successful run, and the open-brain qmd index mtime and vector count advanced.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-04T23:29:28Z

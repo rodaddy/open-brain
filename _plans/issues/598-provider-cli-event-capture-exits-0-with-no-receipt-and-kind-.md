@@ -18,3 +18,42 @@ Split from #529 (its items 3-4) so the core scope-proof fix (PR #591) can close 
 2. `kind` in a capture request is silently moved to `ignored_optional_request_keys` instead of being honored or loudly rejected — the accept-and-ignore class (docs/sme/gotcha-agent.md).
 
 Acceptance: operator-invoked capture either produces a durable receipt or exits non-zero with the named reason; `kind` is either honored per contract or rejected by name.
+
+---
+
+## Resolution
+
+Closed by **PR #607** — feat: issue dependency graph, RLVR done-means discipline, #598 kind rejection, consolidation receipts
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c05360888f5d38ce3b8964e717f4f580b973c4fe`
+- Merged at: 2026-08-07T22:05:56Z
+- PR state: MERGED
+- Issue closed: 2026-08-07T22:05:58Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #607 body
+
+> ## What this lands
+>
+> - **`scripts/issue-graph.ts`** — parses declared dependencies from all open issue bodies, reports the workable frontier (hierarchy never blocks; epic tags as context), charts labelled declarations as native blocked_by edges; prose matches quarantine in LOOSE MATCH. Write path proven live (#436←#435).
+> - **`docs/issue-graph.md`** — the operating manual + full decision ledger (11 items), rejected-options record, agent candidates, RLVR plan.
+> - **RLVR trial 1 complete:** `scripts/done-means/598-capture-receipt.sh` written red-first, then `fix(cli)`: `kind` rejected by name with the legal event_type values from the one vocabulary (#598). Checker-verified on the live installed binary, controller re-run independently.
+> - **SME growth:** 4 process entries in `docs/sme/gotcha-agent.md` (measure-before-theorize, generated-_DOCS trap, 3-4 rule, repo-local-first), union-merged with main's 8 newer entries.
+> - **Consolidation receipts:** salvage INDEX preserved; fix-606 worktree's uncommitted 1135-line delta preserved as a patch before removal.
+>
+> ## Critical self-review
+> - Highest-risk behavior: `kind` rejection could break an unseen live sender — pre-flight grep across deployed hooks/env/providers found none; regression tests pin scope (capture only, other optional keys unchanged).
+> - Assumptions that could be wrong: issue-body declaration parsing (colon-is-the-signal) may miss future phrasings — LOOSE MATCH section surfaces rather than hides them.
+> - Missing/weak tests: `issue-graph.ts` has no unit tests (verified against live data only, read-only by default); done-means check's clause-2 grep is looser than the unit tests that pin the exact contract.
+> - Security/permission risk: none new — no auth paths touched; graph writes need existing gh auth.
+> - Migration/deploy risk: none — no schema, no server behavior change; the CLI fix shipped to the local uv tool only.
+> - Downstream client/runtime risk: `kind` was never a documented contract key; rejection is additive strictness. mcp2cli/Hermes untouched.
+> - Rollback/cleanup concern: revert of the CLI commit restores relegation behavior cleanly; graph edges are removable via the same API.
+> - Fixes made before PR: SME conflict union-merged (nothing dropped, 35 dated entries); post-merge full-suite pre-push green.
+> - Known residual risk: fix-606 patch (preserved, unapplied) awaits an apply-or-discard ruling.
+>
+> Issue #598 closes on merge (Fixes #598).
+>
+> Fixes #598
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

@@ -55,3 +55,34 @@ Docs should be updated continuously as #67-#70 land, but this issue closes last 
 - Final close happens after install path and package API are stable.
 
 Parent: #66
+
+---
+
+## Resolution
+
+Closed by **PR #76** — docs: clarify openbrain-memory runtime model
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7007e0c4da27a689f10041d7af0e1d2f6344df5a`
+- Merged at: 2026-06-11T00:42:12Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T00:42:13Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #76 body
+
+> ## Summary
+> - Document that openbrain-memory installs on agent hosts while the Open Brain service remains remote on the LXC.
+> - Clarify dependency direction: open-brain owns the reusable client/package, rtech-hermes owns the Hermes adapter.
+> - Add subdirectory install command, future package install, runtime env config, and package test command.
+> - Default docs to HTTPS and mark lab HTTP as an explicit trusted-network opt-in.
+>
+> ## Review swarm
+> - Docs correctness lane: no blocking issues; suggested making insecure HTTP opt-in explicit.
+> - Security/adversarial lane: fixed MEDIUM copy-paste HTTP token transport by defaulting to HTTPS and gating lab HTTP with OPENBRAIN_ALLOW_INSECURE_HTTP=1.
+> - Security/adversarial lane: fixed INFO shell-history concern by telling users to use host secret manager or uncommitted env files.
+>
+> ## Validation
+> - cd python/openbrain-memory && uv run pytest: 53 passed, 1 skipped
+> - git diff --check: passed
+>
+> Closes #71

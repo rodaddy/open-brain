@@ -48,3 +48,73 @@ This issue is paired with the graph retrieval implementation issue. The implemen
 
 - Do not implement the retrieval arm here unless needed for test harness shape; this issue may land as skipped/failing scaffolding only if paired PR sequencing requires it.
 - Do not add LLM-based relational parsing.
+
+---
+
+## Resolution
+
+Closed by **PR #273** — test: add relational retrieval eval gate
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7cb77129b18a0dbd5a4af17eb3131f3be177063b`
+- Merged at: 2026-07-07T23:53:26Z
+- PR state: MERGED
+- Issue closed: 2026-07-07T23:53:27Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #273 body
+
+> ## Summary
+>
+> - Adds a deterministic relational retrieval eval fixture for issue #266 with 20 Open Brain-native relational questions.
+> - Proves the target graph oracle has material lift over graph-off keyword baseline while preserving non-relational behavior.
+> - Adds a real `search_brain` MCP-tool graph-off guard proving current keyword behavior cannot recover relational-only answers.
+> - Covers unreadable namespace exclusion and archived link/entity exclusion in the default infra-free test.
+> - Adds an `OPENBRAIN_TEST_DATABASE_URL`-gated Postgres predicate test over real `ob_entities`, `ob_links`, `thoughts`, `decisions`, `projects`, and `sessions`.
+> - Registers the new live Postgres suite in the CI anti-skip guard so DB coverage cannot silently skip.
+> - Updates the Plan 3F markdown, verifier command, tracked HTML source, and finished collab HTML status for the issue #266 branch.
+>
+> Closes #266.
+>
+> ## Validation
+>
+> - `bun install --frozen-lockfile`
+> - `bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts scripts/assert-db-tests-ran.test.ts` -> 14 pass, 2 skipped DB-gated locally because `OPENBRAIN_TEST_DATABASE_URL` is unset, 1 todo for the #267 graph-on real-tool assertion.
+> - `bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts` -> 46 pass, 2 skipped, 1 todo.
+> - `bunx tsc --noEmit`
+> - `git diff --check`
+> - `specs/plan-3f-gbrain-sprint.verify.sh --artifact-only` -> PASS, including repo source vs finished collab site byte comparisons.
+> - CI `db-integration` anti-skip guard -> PASS with 22 live-Postgres testcases across 6 required suites, including `search_brain relational retrieval eval fixture (live Postgres): 1 tests`.
+>
+> ## Review / Fix Verification
+>
+> - Initial correctness and adversarial review found blockers around false-comfort oracle coverage, CI anti-skip coverage, cross-source DB fixture breadth, and stale Plan 3F HTML status.
+> - Fixes landed in commit `7673624`.
+> - Focused SME/correctness fix verification: no material issues.
+> - Focused adversarial fix verification: no material issues.
+> - Known residual risk is intentionally scoped to #267: the graph-on real-tool assertion remains `it.todo` until the graph-powered `search_brain` arm exists.
+>
+> ## Deploy / Downstream
+>
+> No core01 deploy, live DB mutation, hosted NATS setup, fleet-bus rollout, or Hermes canary. NATS issue 223 remains open and outside this sprint slice.
+>
+> Downstream rollout classification: not applicable for runtime rollout because this PR adds tests/eval fixtures and planning/status docs only. It does not change MCP contracts, server runtime behavior, Python client behavior, transport behavior, auth, namespace semantics, or hosted Open Brain behavior.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the eval could become a false comfort if it tests only an in-memory oracle instead of the real tool boundary. Fixed by adding a real `search_brain` graph-off guard; #267 still owns graph-on real-tool pass.
+> - Assumptions that could be wrong: the DB-gated SQL shape may need adjustment when #267 implements the production graph arm.
+> - Missing/weak tests: local shell does not run the DB-gated section because `OPENBRAIN_TEST_DATABASE_URL` is unset; CI db-integration proves the suite runs against ephemeral Postgres.
+> - Security/permission risk: namespace leakage is covered in both fixture logic and DB-gated predicates; no production auth behavior changes.
+> - Migration/deploy risk: none; no migration or deploy path changes.
+> - Downstream client/runtime risk: none for runtime behavior; #267 remains the implementation gate before consumers see graph retrieval.
+> - Rollback/cleanup concern: revert this PR to remove the eval fixture and plan-status updates; no data cleanup required.
+> - Fixes made before PR: corrected fixture content so graph-off recall is zero, added real-tool graph-off guard, added DB-gated predicate coverage across target tables, registered the live suite in CI anti-skip guard, corrected verifier/test paths, and synced the collab HTML copy.
+> - Known residual risk: #267 still must wire the real graph retrieval arm into `search_brain` and pass this eval before readiness.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no recurring MEDIUM+ review pattern was found; the blockers were fixed in this PR and documented in the PR comments.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured in PR review/fix-verification comments
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this is a test/eval/docs PR only and does not change hosted Open Brain runtime behavior.
+>

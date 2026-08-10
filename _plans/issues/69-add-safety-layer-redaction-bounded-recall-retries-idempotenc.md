@@ -66,3 +66,40 @@ Can start partly in parallel with #68 after #67 has settled the client call/erro
 - Retry/spool replay cannot create obvious duplicate writes in tested paths.
 
 Parent: #66
+
+---
+
+## Resolution
+
+Closed by **PR #74** — feat: add memory safety layer
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `54093bf00de2f1fffde006b53b2338d658a0db9b`
+- Merged at: 2026-06-11T00:26:51Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T00:26:52Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #74 body
+
+> Closes #69
+>
+> ## Summary
+> - Add safety primitives for redaction, bounded retry policy, idempotency keys, and JSONL spooling.
+> - Wire AgentMemory writes through conservative redaction and optional failed-write spooling.
+> - Keep non-idempotent writes out of automatic retry; only session_start retries by session key.
+> - Add bounded prompt/context tests and spool safety tests.
+>
+> ## Acceptance criteria
+> - Redacts bearer tokens, API keys, GitHub tokens, private-key blocks, env-style and colon/JSON-style secret patterns before writes/spool persistence.
+> - Recall output remains bounded by count and character budget.
+> - Retry is bounded and covered for transient session_start failure.
+> - Failed writes spool to JSONL with 0600 data and lock files, redacted payloads, max-line/max-byte trimming, symlink rejection, and replay ack semantics.
+> - Replay dispatch receives full SpoolRecord including idempotency_key and removes successful records while preserving failed ones.
+>
+> ## Verification
+> - uv run pytest in python/openbrain-memory: 45 passed, 1 skipped.
+> - bun test at repo root: 579 passed, 16 skipped.
+> - git diff --cached --check: passed.
+>
+> ## Notes
+> Live writes are intentionally redacted before calling Open Brain per #69. Non-idempotent writes are spooled on failure instead of retried in-process to avoid duplicate writes after ambiguous transport failures.

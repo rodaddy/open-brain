@@ -26,6 +26,56 @@ The irony: `/health` answers the same question correctly on the same process, be
 
 ---
 
+## Resolution
+
+Closed by **PR #590** — fix(tracing): resolve Langfuse release from deploy stamp
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a9aaca6d54e56ac93e9da60ce3d21cdf24c6d7e7`
+- Merged at: 2026-08-06T01:17:37Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T01:17:38Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #590 body
+
+> Fixes #587
+>
+> ## Summary
+>
+> - Read the deployed revision through the same `.deployed-revision` parser used by `/health`.
+> - Fall back to `git rev-parse --short HEAD` only when no deploy stamp is available.
+> - Add a regression test for a stamped runtime with no usable git checkout.
+> - Capture the post-merge deployment-shape miss in `docs/sme/gotcha-agent.md`.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` — pass.
+> - `bun test server/observability/langfuse-tracing.test.ts` — 44 pass, 0 fail.
+> - `git diff --check` — pass.
+> - Failure proof: temporarily changed `resolveRepoRelease` to skip the deploy stamp; the new test failed with expected `"0123456"` and received `undefined`. Restored the stamp-first logic and reran the focused suite green.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Release lookup order could still prefer checkout metadata over the deployed artifact; the regression test makes the git path unusable and requires the stamp value.
+> - Assumptions that could be wrong: `.deployed-revision` remains beside the runtime tree and retains the `short_sha` key parsed by `/health`; both were verified in the deploy script and current health code.
+> - Missing/weak tests: No live Langfuse export was sent; the focused test covers the resolver boundary without constructing an exporter or opening a socket.
+> - Security/permission risk: None; the change reads an existing local revision stamp and does not alter auth, namespaces, payloads, or permissions.
+> - Migration/deploy risk: No migration; deployed archives already contain the stamp, while unstamped development checkouts retain the git fallback.
+> - Downstream client/runtime risk: None; no MCP schema, protocol, transport, or client-facing contract changed.
+> - Rollback/cleanup concern: Reverting the two implementation files restores the previous checkout-only behavior; the worktree is intentionally left in place.
+> - Fixes made before PR: Reused `readDeployedRevision` instead of adding a second stamp parser and added the deployment-shape regression test.
+> - Known residual risk: A malformed or unreadable stamp falls back to git and can still yield no release in a gitless runtime, matching the existing best-effort unknown-release behavior.
+> - SME review-memory update: [x] docs/sme/ updated - added the deployed-artifact identity check from issue #587.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: issue #587's deployment-shape miss was added to `docs/sme/gotcha-agent.md`.
+> - Live Open Brain checks: [x] not applicable because: this change only resolves process build metadata and does not read or write Open Brain data.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-06T01:18:55Z

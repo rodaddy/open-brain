@@ -13,3 +13,69 @@ Closed: 2026-08-05T19:12:58Z
 ---
 
 Found by the #578 egress verifier's first live run (drive check emit_proven FAIL: watermark offset never advanced; capture_exit PASS). Reproduced under `env -i` with only the four OPENBRAIN_TRACING_* vars resolved non-empty from local-clone.env — so this is not env-var typo rejection (config.py:560-564 hypothesis disproved this session). The observation lane declines or fails silently while the hook exits 0: the #529/#536 silent-zero-capture class, now with a deterministic reproduction command (scripts/eval-langfuse-egress.ts --drive --tag <t>). Downstream effect: ZERO traces arrive at Langfuse, so #560's cost acceptance cannot even be measured. Verify phase authenticated and polled fine (31 polls) — the write side is the defect. Cross-ref #529, #560, #571.
+
+---
+
+## Resolution
+
+Closed by **PR #586** — fix(eval): make egress drive failures actionable
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a5a127425614a01f2d1ab785dddea7e15ceb3a48`
+- Merged at: 2026-08-05T19:12:57Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T19:12:59Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #586 body
+
+> Fixes #582.
+>
+> ## Summary
+>
+> - Require raw-capture coordinates before `eval-langfuse-egress.ts --drive` starts a real Stop-hook child.
+> - Build that child environment from declared capture and observation settings only, dropping unrelated `OPENBRAIN_*` values that Python rejects.
+> - Fall back to `sqlite3 -ifexists` when Bun cannot immediately reopen the child-written watermark database.
+> - Verify only capture-emitter traces and recognize the actual Langfuse public-API model and cost field names.
+> - Add regression coverage for the previous silent, successful child result, environment isolation, transient watermark-read failure, and shared-session server traces.
+>
+> ## Diagnosis
+>
+> All four tracing variables were confirmed present without disclosing their values. The previous driver copied unrelated `OPENBRAIN_*` names from the parent process into the Python child. `load_capture_settings()` rejects those names, `stop.capture_stop_with()` swallows the resulting `UnknownEnvironmentVariableError`, and the child returns `0` before it reaches the observation path. Under a strict tracing-only environment, raw capture is instead missing its endpoint/token and follows the same silent hook-success path before observation can run.
+>
+> The repair preserves the raw-first watermark contract. It reports either setup defect from the egress CLI as stderr plus exit `2`, rather than treating an unstarted observation lane as a Langfuse emission result. If Bun cannot reopen the just-written watermark database, the verifier uses `sqlite3 -ifexists`; a persistent failure remains non-zero.
+>
+> The live read path also exposed a separate verifier defect: the raw lane's `session_start` gives Open Brain server tracing the same Langfuse session ID as the capture emitter. The verifier now retains only the emitter's stable `open-brain-capture` tag. Its public API returns `model` and `totalPrice`, not the legacy field spellings the verifier previously required.
+>
+> ## Validation
+>
+> - `BUN_TMPDIR=/Volumes/ThunderBolt/_tmp/open-brain/_scratch/bun-tmp bun test scripts/eval-langfuse-egress.test.ts` (21 tests)
+> - `BUN_TMPDIR=/Volumes/ThunderBolt/_tmp/open-brain/_scratch/bun-tmp bunx tsc --noEmit`
+> - `UV_CACHE_DIR=/Volumes/ThunderBolt/_tmp/open-brain/_validation-runs/uv-cache uv run mypy src/openbrain`
+> - `UV_CACHE_DIR=/Volumes/ThunderBolt/_tmp/open-brain/_validation-runs/uv-cache uv run ruff check src tests`
+> - `UV_CACHE_DIR=/Volumes/ThunderBolt/_tmp/open-brain/_validation-runs/uv-cache uv run pytest -q` (593 passed, 1 skipped, 19 deselected)
+> - Tracing-only configuration returns the raw-capture setup error on stderr and exits `2`; no values were printed.
+> - A configured live drive wrote both raw and `observe:` watermark rows. Its Langfuse verification now passes with 1 capture trace, 4 observations, and 3 generations; no credential values were printed.
+>
+> ## Downstream Rollout
+>
+> Not applicable: this changes a repository-local evaluation script and does not change an MCP, transport, database, generated-skill, or Python client contract.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the child environment must retain the two raw-capture coordinates while rejecting foreign `OPENBRAIN_*` names.
+> - Assumptions that could be wrong: a future valid Stop-hook setting may need forwarding; the driver currently needs only raw endpoint/token plus its own observation settings.
+> - Missing/weak tests: the test suite uses a synthetic child environment; it does not assert Langfuse arrival over the network.
+> - Security/permission risk: the child receives a capture token, but the driver never serializes the environment or error values.
+> - Migration/deploy risk: no migration or deployment behavior changes.
+> - Downstream client/runtime risk: no externally consumed Open Brain contract changes.
+> - Rollback/cleanup concern: reverting this two-file change restores the earlier driver behavior; no persisted state is created.
+> - Fixes made before PR: added fail-fast raw configuration validation, filtered the Python child environment to declared settings, added a durable watermark read fallback, and filtered the verifier to capture-owned traces using the public API field names it actually receives.
+> - Known residual risk: a persistently unreadable watermark returns a non-zero verifier error rather than a false receipt; a future emitter tag change must update the verifier fixture.
+> - SME review-memory update: [x] not applicable because: no reusable source-path review pattern changed; this is a bounded evaluator configuration repair.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: no MEDIUM+ finding remained after the source-path diagnosis and focused regression checks.
+> - Live Open Brain checks: [x] not applicable because: the local evaluation driver stops before any network call when required raw-capture configuration is absent.
+>

@@ -37,6 +37,135 @@ Related: #464 / PR #533, #431 / PR #532, #439, #526.
 
 ---
 
+## Resolution
+
+Closed by **PR #541** — fix(pack): reject unknown request keys instead of serving a default (#535)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `6d98fc900cd2484a811556df5e5844dcc5ffc8bc`
+- Merged at: 2026-08-04T03:34:04Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T03:34:05Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #541 body
+
+> ## Summary
+>
+> - Closes #535. `agent_context_pack` answered `sections: [...]` — the near-miss spelling of `requested_sections` — with `status: "ok"` and the working_set-only default. A typo in one key was indistinguishable from a correct minimal request, and it burned real debugging time at least twice (#439's own text records it; the #526 empty-skull hunt crossed it again).
+> - **The key never reached the tool.** The MCP SDK builds its validating schema from the raw shape with a plain `z.object()`, which *strips* undeclared keys **before dispatch**. A handler-side check cannot see the mistake — by then the key is already gone. This is why the first attempt at this fix (a guard inside `parseAgentContextPackArgs`) did nothing when driven through a real MCP client, and the probe that caught it is why the fix moved.
+> - **The fix:** registration passes a `.strict()` object as `inputSchema` instead of the raw shape, putting the rejection in the only layer that still holds the raw arguments.
+>
+> Three consequences, all of them the point:
+>
+> 1. The failure names the offending key **and** the accepted vocabulary (the #431/PR #532 pattern). The message carries the vocabulary itself rather than relying on `installValidationSummaryFormatter`, because the serving entrypoint (`server/main.ts`) **does not install it** — only `src/server.ts` does. Anything living only in the formatter is invisible on the surface that actually runs.
+> 2. `tools/list` now advertises `additionalProperties: false`, so a caller can see the rule *before* breaking it rather than after.
+> 3. `sections_receipt` names requested vs served, catching the case neither validator can: a section spelled correctly, accepted, then dropped downstream (budget eviction is the live case). Requested-and-absent is now stated in the payload instead of left for the caller to diff from memory.
+>
+> **Rejection, not a `#533`-style receipt, for this surface specifically.** Every key the pack accepts selects work it must do, so an ignored one silently changes the answer. That is the opposite of the capture lane (#464/PR #533), where genuinely future lifecycle keys are expected and naming what was ignored is the right shape. Forward tolerance is a per-surface decision and this surface does not want it.
+>
+> **Fixed in both trees.** `server/main.ts` is the serving entrypoint (`scripts/local-clone.ts` `SERVING_ENTRYPOINT`), but `src/index.ts` is still reachable through `bun start`, `deploy/open-brain.service`, and `scripts/run-two-worker.ts` — fixing only the rewrite would have left a live path that still fails silently.
+>
+> Unknown *values* inside `requested_sections` were already rejected by the `z.enum` with the accepted set listed; that guarantee is now pinned by a test so it cannot regress silently.
+>
+> ### Wire behavior after the fix
+>
+> ```
+> agent_context_pack {..., sections: ["durable_memory"]}
+>   -> isError: true
+>      "Unrecognized key(s) for agent_context_pack: sections.
+>       Accepted keys: agent, budget, channel_id, include_unreviewed_recovery,
+>       namespace, platform, prior_context, query, repo, requested_sections,
+>       server_id, session_key, thread_id."
+>
+> agent_context_pack {..., requested_sections: ["working_set","recovery"]}
+>   -> sections_receipt: {"requested":["working_set","recovery"],
+>                         "served":["working_set"],
+>                         "requested_not_served":["recovery"]}
+> ```
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> `bunx tsc --noEmit` — clean. `bun test` — **3074 pass, 2 fail**. The 2 failures are the pre-existing `scripts/backup+restore` failures tracked in #537 (`runPgRestore stderr sanitization`, `runPgDump failure handling`); confirmed unrelated by stashing this branch's changes and re-running `bun test scripts/`, which fails the same 2 on clean `origin/main`. `--no-verify` on push was used **solely** for those two pre-existing failures.
+>
+> **Red-proven, both trees.** Reverting registration to the raw shape (`agentContextPackInputSchema`) fails exactly the new unknown-key tests and nothing else:
+>
+> - `server/tools/context-pack.test.ts` — 25 pass / **3 fail** reverted, 28 pass / 0 fail fixed.
+> - `src/tools/__tests__/agent-context-pack.test.ts` — 9 pass / **1 fail** reverted, 10 pass / 0 fail fixed.
+>
+> The red failure message is the defect stated plainly: `agent_context_pack accepted the request instead of rejecting it — the silent-default defect is back`.
+>
+> Not run: live service smoke. No service was touched, per the task directive; this is a validation/schema change with no migration and no runtime state.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: `.strict()` now rejects requests that previously succeeded. Any existing caller passing an undeclared key — even a harmless one — starts getting a hard `-32602` instead of a silently-stripped success. That is the intended behavior change and the whole point of the issue, but it is a breaking change for a tolerant caller, and the blast radius is every `agent_context_pack`/`agent_reflex_pointers` client.
+> - Assumptions that could be wrong: that no live caller currently depends on passing extra keys. I verified the in-repo callers (the reflex delegation passes already-parsed args and does not re-enter the parser; the NATS bridge and eval harness pass declared keys only), but I did **not** audit external consumers — mcp2cli, rtech-hermes, or generated skills could pass a stray key I cannot see from here. Second assumption: that `z.core.$ZodObjectParams` error-callback shape is stable across the pinned zod 4.3.6; it is a typed cast and a zod minor bump could move it.
+> - Missing/weak tests: no test covers the `strictRequestSchema` error callback for a NON-`unrecognized_keys` issue code (it returns `undefined` to fall through to zod's default, verified by the enum-rejection test passing, but not directly asserted). No test drives the `rejectUnknownRequestKeys` defense-in-depth path through a non-MCP direct caller — it is exercised only incidentally. No live-service test; the whole suite is fake-pool.
+> - Security/permission risk: none identified. The change is strictly *more* restrictive on input and touches no auth, namespace, or read predicate. Rejection happens before dispatch, so an unauthorized-namespace probe with a bogus key now fails at validation rather than at the namespace gate — this leaks no additional information, since the validation error names only the schema's own public vocabulary, which `tools/list` already publishes.
+> - Migration/deploy risk: no schema migration, no DB change, no state. Deploy risk is the caller-compatibility break above, not the deploy itself. `additionalProperties: false` appearing in `tools/list` changes the advertised contract, so a client that caches tool schemas should refresh.
+> - Downstream client/runtime risk: **this is the real one.** Per `docs/downstream-rollout.md` this is an MCP tool/schema/client-facing change, so mcp2cli cache/skill refresh and any rtech-hermes or generated-skill caller that constructs pack arguments should be re-checked before this is treated as fully rolled out. I have **not** performed that rollout — it is out of this task's scope (no service touch authorized) and is flagged below as not-complete rather than not-applicable.
+> - Rollback/cleanup concern: clean single-commit revert; no data or state to unwind. The two `.bak` files used for red-proofing were written under `{temp_workspace}/open-brain/_scratch/` and are not in the repo.
+> - Fixes made before PR: (1) the original guard was placed in `parseAgentContextPackArgs`, which a live MCP probe proved never runs for stripped keys — moved to registration. (2) The first test set asserted a thrown error; the SDK actually returns an `isError` result — corrected against observed behavior rather than assumption. (3) The stock `.strict()` message named only the offending key, not the accepted set, which fails the issue's explicit requirement — added `strictRequestSchema` so the vocabulary rides in the message, since the serving entrypoint has no summary formatter. (4) A scripted edit left the guard's doc comment attached to the wrong function; reordered in both files.
+> - Known residual risk: an external caller passing an undeclared key breaks loudly on deploy. That is the requested behavior ("fail loudly and make us think about it"), but it is unmeasured outside this repo — see the downstream rollout box, which is deliberately left unchecked.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> `docs/sme/gotcha-agent.md` already carries this defect family from PR #533 ("MCP silently ignores dropped args"). This PR is the same family reaching the read surface; the audit inventory below is the reusable artifact.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the task directive forbade touching the service; this is a schema/validation change with no runtime state, verified against the real MCP client/server pair in-process.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: the parity fixtures cover `python/openbrain-memory/`, `clients/ts/`, `contracts/`, `src/contract.ts`, and `src/contract-schemas.ts` (`contracts/parity-paths.txt`); none of the five files changed here is in that set, and the fixtures do not model MCP `inputSchema` or `additionalProperties` at all. `bun test contracts/` passes 13/13 unchanged.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [ ] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - These four are deliberately **unchecked, not marked not-applicable.** This is an MCP tool/schema/client-facing change, so by `docs/downstream-rollout.md` the rollout genuinely applies — but the task authorized no service touch, so it is **not done**. Marking them not-applicable would be false. State: **merged-pending-rollout**, not deployed.
+> - The specific downstream action: any client that caches tool schemas needs a refresh to pick up `additionalProperties: false`, and any caller constructing pack arguments should be checked for stray keys, which now fail hard instead of being stripped.
+>
+> ## AUDIT — remaining tool surface with the same silent-default shape (#535 follow-up inventory)
+>
+> Reported, not fixed, per scope. **All 63 remaining tool registrations pass a raw shape**, so every one of them strips unknown top-level keys before dispatch. Stripping alone is not the defect — the defect is stripping that yields a *success-shaped answer a caller reads as truth*. Ranked by that criterion, probed live against the registered server with a fake pool:
+>
+> **HIGH — a dropped key silently changes the answer, and the answer looks fine**
+>
+> | Tool | File | Evidence (observed, this session) |
+> |---|---|---|
+> | `search_brain` | `server/tools/search-brain.ts:80` | `{query:"x", tabel:"thoughts"}` → `[]`, `isError` unset. The table filter is dropped and an empty result is indistinguishable from "nothing matched". |
+> | `list_recent` | `server/tools/list-recent.ts:116` | `{tabel:"thoughts", dayz:3}` → `{"entries":[],"total_count":null,"offset":0,"limit":20,"has_more":false}`. Two dropped selectors, a complete-looking envelope. |
+> | `skill_usage_report` | `server/tools/skill-usage.ts:229` | `{dayz:7}` → `{"window_days":7,...}` — but `7` is the **default**, not the request. The receipt echoes a number that only coincidentally matches, which is worse than omitting it. |
+> | `repo_fact_search` | `server/tools/repo-facts.ts:160` | Five optional narrowing filters (`namespace`/`repo`/`collection`/`path`/`fact_type`); any typo widens the search silently. Same lane as #517/#526, where a mis-bound repo filter was the actual bug. |
+> | `scan_namespace` | `server/tools/scan-namespace.ts:75` | `target_namespace`/`table`/`since` optional. A typo'd `target_namespace` scans the wrong namespace and reports success. Namespace-adjacent, so worth prioritising. |
+>
+> **MEDIUM — dropped key degrades to a default; less likely to be read as a full answer**
+>
+> `adjacent_context` (`adjacent-context.ts:69`), `citation_recall` (`citation-recall.ts:116`), `find_duplicates` (`find-duplicates.ts:144`), `search_all` (`search-all.ts:213`), `get_stats` (`reporting.ts:170`), `access_report` (`reporting.ts:77`), `session_load` (`session-save-load.ts:86`), `list_stale`/`tier` reads (`tiering.ts:85,208`).
+>
+> **LOW — writes and single-required-arg tools.** Writes (`capture.ts`, `realtime-append.ts`, `session-lifecycle.ts`, `entities.ts`, `people.ts`, `source-registry.ts`, `tier-mutations.ts`, `update-entry.ts`, `promote-entry.ts`, …) mostly fail on a missing *required* field, so a typo usually surfaces. They are still exposed on **optional** keys — a dropped optional write field lands a row missing metadata and returns `saved`, which is exactly #464/PR #533. `get_contract` and `operator_doctor` register `{}` and take no input.
+>
+> **Recommended follow-up shape:** promote `strictRequestSchema` (added here in both trees) to a shared registration helper and apply it tool-by-tool, HIGH tier first, each with its own red-proven test. Rejecting is right for read tools with narrowing filters; the #533 `ignored_optional_request_keys` receipt is right where forward tolerance is deliberate. That is a per-surface decision and should not be blanket-applied.
+>
+> Caveat on scope: the HIGH/MEDIUM ranking is a judgment call from schema shape plus the five probes above, not an exhaustive 65-tool behavioral sweep. The five HIGH rows are observed; the MEDIUM/LOW tiers are inferred from their schemas.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-04T03:34:26Z

@@ -40,6 +40,74 @@ Verify the #147 identity/key model is actually ENFORCED on the deployed server a
 
 ---
 
+## Resolution
+
+Closed by **PR #169** — feat(auth): add first-class promoter role (#159)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a2ae64d15e8b293f12f076b29b1d7be7f507e2b3`
+- Merged at: 2026-06-19T16:39:33Z
+- PR state: MERGED
+- Issue closed: 2026-06-19T16:39:34Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #169 body
+
+> ## Summary
+>
+> Adds a first-class `promoter` role (#159) so the promotion service is a tightly-scoped identity rather than the `clientId`-on-`n8n` convention (which carried full n8n capability and depended on an operator-provisioned per-user token that was absent on the live server).
+>
+> - `types.ts`: `Role` union gains `"promoter"`.
+> - `auth.ts`: `VALID_ROLES` + `AUTH_TOKEN_PROMOTER` env key.
+> - `permissions.ts`: RWD on thoughts/decisions/relationships/sessions, RO on projects (promotion never authors projects; deliberately NOT broad admin-delete on everything).
+> - `namespace-policy.ts`: `isPromoterIdentity` true for `role==="promoter"` (legacy clientId convention preserved for the in-process legacy CLI); `canWriteNamespace` + `writableNamespaces` allow promoter to write any namespace incl. shared-kb.
+> - `read-policy.ts`: `readableNamespaces` returns all for promoter (sources promotion candidates). Deliberately NOT granted the legacy-collab read gate or the `"all"` keyword convenience.
+> - `promote-entry.ts`: tool accepts promoter alongside admin/n8n.
+>
+> Closes #159. Unblocks #161 (lane→shared-kb).
+>
+> ## Root cause
+>
+> #147 closed with the promoter modeled as `role ∈ {admin,n8n} + promoter clientId`. The live audit (#159) found the promoter token was never provisioned on the host, and the convention gave the promoter full n8n (admin-equivalent) power. A first-class scoped role is the correct end-state per #147's "tightly scoped, tightly monitored" intent.
+>
+> ## Validation
+>
+> - `bun test` → 739 pass, 0 fail (19 env-gated DB tests skip).
+> - `bunx tsc --noEmit` → clean. The `Record<Role,...>` in `permissions.ts` makes the new role exhaustiveness-checked.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Namespace/auth boundary widening. Mitigated by minimal surface — promoter appears in exactly the gates it needs (isPromoterIdentity, canWriteNamespace allow, writableNamespaces, readableNamespaces, promote-entry tool) and NOWHERE else; explicitly NOT in the legacy-collab read gate, the `"all"` keyword gate, or curate-with-delete.
+> - Assumptions that could be wrong: That promoter needs cross-namespace read (it does — to source promotion candidates from agent namespaces). That projects should be RO (promotion never authors projects).
+> - Missing/weak tests: Namespace-policy/read-policy/permissions/auth all have promoter regression tests proving the exact predicates; non-promoter roles (agent/discord/readonly + bare admin/n8n) still rejected from shared-kb. No end-to-end live test (token not yet provisioned on host — that's a deploy step before #161).
+> - Security/permission risk: This IS the security change. Audited: no over-grant. Promoter gets write-any-namespace + read-any-namespace + promote + RWD-curation-tables/RO-projects; nothing more. Bare admin/n8n still cannot write shared-kb (regression test proves it).
+> - Migration/deploy risk: No schema change. Requires `AUTH_TOKEN_PROMOTER` provisioned on the host before the promoter identity can authenticate (gate for #161). No behavior change for existing roles.
+> - Downstream client/runtime risk: None — additive role; existing admin/n8n/agent/discord/readonly behavior unchanged.
+> - Rollback/cleanup concern: Pure additive role, trivially revertible.
+> - Fixes made before PR: reverted an over-broad legacy-collab read grant for promoter (not needed; collab is frozen).
+> - Known residual risk: The legacy clientId-on-n8n promoter convention is retained for backward-compat (the in-process legacy CLI). It can be removed once that CLI is retired.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no new reviewer-lane pattern emerged; existing security lane (namespace authority) already covers this and the change follows it.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: promoter token not yet provisioned on host; live verification belongs to the #161 rollout where the token is added and used.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Server-side auth role addition; no client/contract/schema change, so downstream items are not applicable. Provisioning `AUTH_TOKEN_PROMOTER` on the host is a deploy step, tracked as the prerequisite for #161 (lane→shared-kb).
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-19T14:09:52Z

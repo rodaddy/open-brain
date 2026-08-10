@@ -74,3 +74,67 @@ decisions, or shared knowledge.
 ## First Next Action
 
 Define exact-scope RAM working-set schema and budget rules before implementation.
+
+---
+
+## Resolution
+
+Closed by **PR #252** — feat(#222): add scoped working set context pack
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7c52a8bc86b92a46b1dd48394911be5afc93224e`
+- Merged at: 2026-07-06T17:54:13Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T17:54:14Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #252 body
+
+> ## Summary
+>
+> Closes #222.
+>
+> - Add RAM-first scoped working-set storage with exact-scope keys:
+>   `namespace + agent + platform + server_id + channel_id + thread_id + session_key`.
+> - Add local MCP tools:
+>   - `working_set_append` for scoped RAM-only working context writes.
+>   - `agent_context_pack` for exact-scope working-set reads.
+> - Keep working-set content explicitly labeled `working_context` and `not_durable_memory`.
+> - Expose TTL/budget/counter metadata for dropped, expired, and trimmed entries.
+> - Update TypeScript contract metadata to `2026-07-06.memory-tools.v16`.
+> - Update Python `openbrain-memory` contract snapshot and thin wrappers.
+>
+> ## Validation
+>
+> - `bun test src/realtime/working-set.test.ts src/tools/__tests__/agent-context-pack.test.ts src/contract.test.ts`
+> - `bunx tsc --noEmit`
+> - `uv run pytest -q tests/test_client.py tests/test_contract.py`
+> - `uv run mypy src/openbrain_memory`
+> - `uv run ruff check src tests`
+> - `git diff --check`
+>
+> ## Deploy / Rollout
+>
+> - Local-only implementation and validation.
+> - No core01 deploy performed.
+> - NATS transport remains planned under #223 and is not enabled here.
+> - Downstream live rollout remains separate from this PR.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: working-set scope isolation must not leak active context across namespace, agent, platform, server, channel, thread, or session.
+> - Assumptions that could be wrong: in-process RAM is enough for #222 before #221 recovery WAL lands; restart behavior intentionally loses working-set state until #221.
+> - Missing/weak tests: no live hosted canary; tests cover local MCP protocol and exact-scope denial with fake transport only.
+> - Security/permission risk: new append/read tools must enforce server-side auth and namespace authority. Tests cover readonly append denial and exact-scope read denial metadata.
+> - Migration/deploy risk: no DB migration and no deploy in this PR; contract version bumps to v16 and downstream consumers need release-gated rollout.
+> - Downstream client/runtime risk: Python snapshot and wrappers are updated; Hermes/mcp2cli live rollout is deferred.
+> - Rollback/cleanup concern: disabling/removing the tools reverts working-set availability; no durable data migration to roll back.
+> - Fixes made before PR: critical self-review found module-only implementation was insufficient, so this PR wires MCP tools and Python wrappers before opening.
+> - Known residual risk: working-set state is process-local and non-recoverable until #221 implements recovery WAL.
+> - SME review-memory update: [ ] `docs/sme/` updated [x] not applicable because: no new MEDIUM+ review pattern has been identified before the initial swarm.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured before merge; initial swarm is running and findings will be posted as PR comments before readiness.
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: this is a local-only PR with no core01 deploy or live runtime rollout.
+>

@@ -51,3 +51,70 @@ Integrate all nine context-pack sections under one budget and prove the complete
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Resolution
+
+Closed by **PR #364** — test(330): validate the complete context pack
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `f12ee52e6c99f9e0bfd779f9f25fbb348c8bebc7`
+- Merged at: 2026-07-23T15:51:09Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T15:51:11Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #364 body
+
+> ## Summary
+>
+> - add the EVAL-3 complete context-pack fixture, transport support, gate, CLI, and functional tests
+> - assemble and classify all nine declared sections under one serialized budget
+> - verify exact-scope isolation, citation bijection, expected recall, content-free receipts, and per-record teardown
+>
+> Closes #330
+>
+> ## Validation
+>
+> - focused complete-pack tests: **40 passed, 0 failed**
+> - full `eval/open-brain/` suite: **155 passed, 0 failed**
+> - `bunx tsc --noEmit`: passed
+> - `git diff --check`: passed
+> - real hosted EVAL-3 run against core01 at exact head `e8c07e071115fb002daf3572460ba7b4caf7d947`: **PASS**
+>   - serialized sections `6199 / 22800`
+>   - 4 emitted items and 4 matching unique citations; no dangling or uncited items
+>   - every expected recall ID present
+>   - exact-scope denial passed; zero namespace leaks
+>   - explicit negative control denied the cross-namespace read
+>   - six seeded records archived; zero teardown failures
+>   - every section present or classified as a production-truthful defined empty/opt-in absence
+>
+> ## Downstream rollout classification
+>
+> Not a server behavior or public schema change. This PR adds a local/live functional validation gate and transport support for existing tools.
+>
+> - Open Brain local functional validation: complete
+> - hosted Open Brain EVAL-3 canary: complete and passed on exact head `e8c07e0`
+> - server deploy, mcp2cli, rtech-mcps, client, and Hermes changes: not applicable
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a false-pass gate that accepts missing sections, duplicate/orphan citations, partial expected recall, forged scope-denial warnings, content-bearing status/reason labels, budget overflow, or incomplete teardown.
+> - Assumptions that could be wrong: recovery is legitimately absent without explicit opt-in, while namespace-bound empty guidance/pointer envelopes are truthful defined-empty states.
+> - Missing/weak tests: per-section relevance contribution is structural/count-based in this gate; broader quality A/B tuning remains #335/#347.
+> - Security/permission risk: live fixtures use a fresh isolated namespace, seed a negative namespace, require an explicit cross-namespace authorization denial, and archive only per-record seeded IDs.
+> - Migration/deploy risk: no migration or server deployment; the gate calls the hosted server only under explicit env opt-in.
+> - Downstream client/runtime risk: none; no public server/client contract changes.
+> - Rollback/cleanup concern: revert eval-only files; the final live teardown archived all six seeded records with zero failures.
+> - Fixes made before PR: aligned the classifier with production empty shapes, then hardened citation identity to exactly one unit/one citation, required every expected seed, rejected populated-section denial contradictions, and sanitized server-controlled labels.
+> - Known residual risk: final integrated metric tuning remains #347 after reflex/source/FTS work lands.
+> - SME review-memory update: [x] `docs/sme/` updated — the explicit-isolation-denial review pattern is captured by PR #361 commit `bdb6dc4`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below
+>
+> Hosted EVAL-3 evidence is recorded in Validation above; the final run used a fresh isolated namespace and completed clean teardown.
+>

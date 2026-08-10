@@ -55,6 +55,80 @@ Recall durable memory for extracted concepts under exact scope and remove anythi
 
 ---
 
+## Resolution
+
+Closed by **PR #359** — feat(333): suppress explicitly supplied prior context
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `1d78a53c352d5bbd07d5b21f6919a83469bdd6c5`
+- Merged at: 2026-07-23T02:54:08Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T02:54:09Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #359 body
+
+> ## Summary
+>
+> Adds deterministic prior-context suppression to the existing `agent_context_pack` durable-memory recall path.
+>
+> - accepts a bounded optional `prior_context` array containing only explicit `citation_id` and/or `source_ref` references
+> - reuses the existing #327 hybrid durable-memory retrieval stack unchanged
+> - suppresses exact referenced matches after recall and before the final character budget
+> - retains unknown, identity-less, and still-relevant records
+> - reconciles item counts, truncation, citations, source references, and budget accounting against the net-new result
+> - preserves auth-derived namespace and seven-coordinate scope predicates
+> - persists no extracted suppression keys and performs no raw prompt/transcript inference
+> - introduces no MCP `_meta` injection or runtime-owned prompt placement
+>
+> Closes #333
+> Part of #320
+>
+> ## Verification
+>
+> - prior-context suppression + durable-memory + context-pack: 59 passed, 0 failed
+> - merged #328 guidance/repo-facts regression cross-check: 77 passed, 0 failed
+> - `bunx tsc --noEmit`: passed
+> - `git diff --check origin/main...HEAD`: passed
+> - post-fix head `3fa24fd5d14dc5da3acc538cecc22b362ff542f5`
+> - initial review found one P2 empty-envelope truth defect; fixed with mutation-sensitive regressions
+> - focused fix verification: ZERO KNOWN ISSUES
+> - exact-head GitHub checks: passed
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: suppression could remove unreferenced memories, hide cross-namespace leakage instead of rejecting it, or leave stale citations/counts after filtering.
+> - Assumptions that could be wrong: citation IDs and source references remain stable enough for callers to echo explicitly; identity-less records should remain visible because they cannot be proven already supplied.
+> - Missing/weak tests: no hosted caller replay yet; deterministic unit/integration tests cover citation-only, source-ref-only, mixed, unknown, duplicate, all-suppressed, namespace-negative, counts, citations, and budget behavior.
+> - Security/permission risk: suppression occurs only after the existing namespace- and seven-coordinate-scoped recall query; it cannot broaden reads or authorize another namespace, and raw prior content is not accepted.
+> - Migration/deploy risk: no database migration; additive optional tool input defaults to existing behavior when omitted.
+> - Downstream client/runtime risk: direct callers may optionally pass the new input; no standalone Python/TypeScript wrapper is changed in this slice and no implicit prompt placement is introduced.
+> - Rollback/cleanup concern: revert the one feature commit; no stored data or extracted keys require cleanup.
+> - Fixes made before PR: preserved and completed the prior worker WIP, added five durable-memory integration regressions, and resolved the #328 schema overlap additively during rebase.
+> - Known residual risk: the record-level suppression helper trusts the owning recall SQL namespace predicate rather than duplicating per-row authority checks; existing durable-memory isolation tests guard that boundary.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: hosted changed-tool validation occurs only after merge, before issue closure.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: this adds an optional server tool input without changing standalone wrapper call shapes or the required manifest contract.
+>
+> ## Downstream Rollout
+>
+> - [x] Checked `docs/downstream-rollout.md`
+> - Hosted Open Brain changed-tool canary remains the post-merge closure gate
+> - Python and future TypeScript clients remain runtime-neutral; no direct Hermes integration is in scope
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-23T02:57:09Z

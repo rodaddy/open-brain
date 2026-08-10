@@ -57,6 +57,17 @@ Create the namespace-bound approved-source registry and replace the null `extrac
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-22T23:16:19Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-22T23:16:18Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-22T21:31:26Z

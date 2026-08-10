@@ -48,3 +48,32 @@ Create a BrainBench/gbrain-evals-inspired evaluation harness for Open Brain memo
 - eval runner command passes locally
 - `bun run typecheck`
 - targeted tests for eval runner utilities
+
+---
+
+## Resolution
+
+Closed by **PR #114** — feat: add Open Brain memory eval harness
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `ea2030df87645bb63ef8964ec35ebd3abae338ba`
+- Merged at: 2026-06-15T19:24:38Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T19:24:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #114 body
+
+> ## Summary
+> - Adds an offline Open Brain memory eval harness under eval/open-brain.
+> - Adds synthetic/public corpus fixtures with sealed probe expectations across recall, precision, temporal, identity, citation, contradiction, namespace, and scale categories.
+> - Adds bun run eval:memory plus focused runner tests and docs.
+>
+> Closes #109
+>
+> ## Validation
+> - bun run eval:memory -- --report /Volumes/ThunderBolt/_tmp/open-brain-memory-eval-109-scorecard.json: PASS, recall@k=1.000, precision@k=0.469, citation=1.000, namespace_leaks=0, p95=3.828ms
+> - bun test eval/open-brain/__tests__/runner.test.ts: 4 pass
+> - bun run typecheck: pass
+> - git diff --check HEAD~1 HEAD: pass
+> - bun test: 637 pass, 16 skip
+>

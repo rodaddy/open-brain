@@ -30,6 +30,70 @@ Repro receipts and traceback captured 2026-07-21 during the 0.1.10 rollout.
 
 ---
 
+## Resolution
+
+Closed by **PR #314** — fix(python): scope-aware spool drain — replay parked units under their own exact scope
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7aa529a120c836fe258ef20aa413563c8135fba2`
+- Merged at: 2026-07-22T00:08:54Z
+- PR state: MERGED
+- Issue closed: 2026-07-22T00:08:55Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #314 body
+
+> Closes #310. Auto-drain now replays each parked unit under the exact scope it was parked with, instead of validating every replayed `session_start` against the runtime's *current* scope — which made units parked in project A re-fail (with a wasted live dispatch each time) on every healthy operation in project B, forever.
+>
+> **Change (client-local, `FirstClassMemoryRuntime`):**
+> - `_drain_spool` rebuilds a `RuntimeScope` from each spooled `session_start` record's own payload (`agent/platform/server_id/channel_id/session_key/thread_id` — all already recorded) and validates the lane echo against *that* scope. Namespace stays bound to the runtime's auth config — only lane coordinates come from the record, so no isolation boundary moves.
+> - A tampered/mismatched lane echo still fails the exact-scope proof and retains the unit (regression-tested with a tampering fake transport).
+> - A spooled start record missing scope coordinates is retained without any wasted live dispatch.
+> - Package version 0.1.11.
+>
+> **Tests (fake transport, per repo standard):** cross-scope unit drains on a healthy current-scope write with the parked coordinates proven in the dispatched calls; tampered lane echo for the parked scope → unit retained, its write never dispatched; incomplete scope record → retained with zero dispatches; all existing drain/replay ordering tests unchanged and passing.
+>
+> **Gates (post swarm-fix, eab2bbc):** `uv run pytest` 373 passed / 5 skipped; `uv run mypy src/openbrain_memory` clean; `uv run ruff check src tests` clean.
+>
+> **Downstream rollout classification (docs/downstream-rollout.md):** client-behavior bugfix — no MCP tool/schema/protocol or receipt change; contract v22 untouched (min client stays 0.1.8, fleet pins unaffected). Applicable rollout = wheel 0.1.11 build + Development adapter pin bump + re-activation on the Macs; rtech-mcps/mcp2cli/Hermes runtime steps not applicable.
+>
+> ## Contract Parity
+> - Contract parity: [x] runtime-specific because: client-local replay validation ordering only — no request shape, receipt schema, or contract capability change.
+>
+> ## Critical self-review
+> - Highest-risk behavior: deriving validation scope from spool-file content. Bounded: same-user 0600 file, namespace still auth-config-bound, and a forged record can only target scopes the bearer token already reaches — identical power to a normal write.
+> - Assumptions that could be wrong: every legitimately-spooled `session_start` payload carries the full coordinate set (it does — `start_session` builds it; incomplete records fail closed to retention).
+> - Missing/weak tests: no live multi-project drain test in CI (env-gated canary planned at rollout; the 2026-07-21 core01/local observations are the field repro).
+> - Security/permission risk: none new — exact-scope proof still enforced per replayed unit; tamper test proves it.
+> - Migration/deploy risk: none — spool format unchanged, replay of existing parked units just starts succeeding.
+> - Downstream client/runtime risk: none — receipts/contract unchanged; fleet can stay on 0.1.10.
+> - Rollback/cleanup concern: revert restores current-scope-only draining; parked units return to waiting for scope-matched operations (today's behavior).
+> - Fixes made before PR: contract test version pins updated with the 0.1.11 bump.
+> - Known residual risk: `_replay_scope` is instance state guarded by the operation lock; a future concurrent-drain refactor must keep it per-drain (noted in code comment).
+> - SME review-memory update: [x] `docs/sme/` updated (b8e4d2c: correctness latch-reset pattern, security spool-provenance pattern)
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` (both swarm MEDIUMs, commit b8e4d2c)
+> - Live Open Brain checks: [x] not applicable because: client-only replay change validated by the fake-transport suite; live receipts land with the 0.1.11 wheel activation rollout recorded on #310 closure.
+>
+> Fresh-context review swarm complete — receipt below (gotcha-agent lane run, mandatory for `python/openbrain-memory/`).
+>
+> ## Review swarm receipt
+>
+> Fresh-context swarm (SME-injected lanes: correctness, adversarial, quality, security, domain-backend, gotcha-agent) on head b30b0f4. Findings and dispositions, all fixed in eab2bbc:
+>
+> - **MEDIUM (correctness):** no test guarded the `_replay_scope` finally-reset — deleting it left every test green while a stale foreign scope would fail all subsequent live `session_start`s, degrading writes to SPOOLED. **Fixed:** `test_live_write_after_foreign_unit_drain_validates_against_own_scope`; mutation-verified (both resets removed → test fails with exactly the predicted SPOOLED + scope-proof error, restored → green).
+> - **MEDIUM (security):** runtimes with different namespaces sharing one spool file could transplant a unit's lane content across namespaces (records carried no namespace provenance). **Fixed:** `TrackingSpool` stamps client-internal `_parked_namespace` on parked `session_start` payloads; drain strips it before dispatch and retains units whose parked namespace differs from the runtime's config namespace (zero live dispatches). Tests: provenance stamp asserted on runtime-parked records; mismatched-namespace unit retained.
+> - **LOW:** `_replay_scope` now also resets per record at dispatch top (stale-latch trap if future replayable ops become scope-validated).
+> - **LOW:** tampered-lane-echo test parameterized over `agent`, `source`, `thread_id`, `namespace`, `metadata.server_id` (channel_id already covered).
+> - **Gotcha lane:** clean; empirically confirmed the tamper test depends on the runtime validator (neutered-validator experiment flipped it to failing).
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-22T00:16:42Z

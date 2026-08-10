@@ -29,3 +29,110 @@ Sending `event_type: "finding"` to the provider produced exit 0, no output, and 
 
 ## Non-goals
 Changing which values are in the vocabulary. Adding `finding` is a separate discussion.
+
+---
+
+## Resolution
+
+Closed by **PR #428** — feat(412): one event vocabulary, imported not duplicated
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a5533b75e4c31c9afb424be3d56b24900ae51c4f`
+- Merged at: 2026-07-26T20:46:55Z
+- PR state: MERGED
+- Issue closed: 2026-07-26T20:46:56Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #428 body
+
+> ## Summary
+>
+> Closes #412.
+>
+> The provider now imports `EVENT_TYPES` from `openbrain-memory` through the workspace dependency instead of carrying a literal of its own, and `EVENT_TYPES` is promoted to that package's public surface so consuming it does not mean reaching into `agent.py`.
+>
+> **Two findings changed the shape of the slice.**
+>
+> **1. The drift the issue reports is already repaired.** Python, the TS client, and the TS server all carry the same nine values today, and `question` is present in every one. So the durable deliverable is not a repair — it is the guard the issue itself calls for: *"the drift guard; without it the two copies re-diverge silently."*
+>
+> **2. There were not two copies. There are six, plus SQL.** Writing the guard immediately found four the issue never named:
+>
+> | Surface | File |
+> |---|---|
+> | Python (the definition) | `openbrain_memory/agent.py` |
+> | TS client | `clients/ts/src/runtime.ts` |
+> | TS server set | `src/agent-memory.ts` |
+> | `MemoryEventType` union | `src/agent-memory.ts` |
+> | **MCP tool schema** | `src/contract-schemas.ts` |
+> | tiering `EventType` union | `src/tiering.ts` |
+> | SQL write path | `src/tools/table-constants.ts` |
+> | **CHECK constraint** | `src/db/migrations/013_session_events.sql` |
+>
+> That is the argument for a test rather than a convention — nobody holds six declarations in their head. A final assertion fails if a seventh appears, so the guard cannot silently stop covering what it guards.
+>
+> **The SQL constraint is included and matters most.** Postgres is the authority, so a code set drifting *wider* than the constraint reproduces the exact reported symptom: validation passes, the insert is refused, and the caller sees exit 0 with no row. That is the worst failure available to a memory write, because success is indistinguishable from a no-op.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> Memory 545 pass, provider 98 pass, TS 2386 pass / 0 fail, `bunx tsc --noEmit` clean, mypy and ruff clean on both packages.
+>
+> **Mutation-verified.** Removing `question` — the value from the original bug — from each of the six surfaces in turn fails exactly that surface's assertion:
+>
+> ```
+> RED  test_typescript_client_matches_python      <- clients/ts/src/runtime.ts
+> RED  test_typescript_server_matches_python      <- src/agent-memory.ts
+> RED  test_mcp_tool_schema_matches_python        <- src/contract-schemas.ts
+> RED  test_tiering_union_matches_python          <- src/tiering.ts
+> RED  test_table_constants_match_python          <- src/tools/table-constants.ts
+> RED  test_database_constraint_matches_python    <- 013_session_events.sql
+> ```
+>
+> Re-run after refactoring the shared failure message, to confirm the extraction did not quietly unbind the assertions. Provider-side, replacing the re-export with a literal fails four tests including the no-redeclaration check and the `question` acceptance criterion.
+>
+> ## Acceptance criteria
+>
+> - [x] Exactly one definition across both packages — the provider re-exports, and `test_provider_declares_no_vocabulary_of_its_own` fails if a literal is added there.
+> - [x] A test asserts the provider's set equals `openbrain_memory`'s and fails if either side changes — `test_provider_set_is_the_memory_set`.
+> - [x] `question` is accepted by the provider — asserted by name, since it is the value whose absence was the bug.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the guard parses TypeScript and SQL with regex anchors. A refactor that renames a declaration makes the anchor miss. Mitigated by `_extract_quoted_block` failing loudly on a missing bracket and by the equality assertion reporting an empty set rather than passing vacuously — a missed anchor fails, it does not silently succeed.
+> - Assumptions that could be wrong: that all six surfaces should be identical. Checked — each gates a different stage of the same write path, so a value valid at one and not another is by definition a bug.
+> - Missing/weak tests: `IMPORTANCE_LEVELS` and `CANDIDATE_TYPES` are duplicated the same way and are not guarded here. Deliberate — out of scope for #412, and worth its own issue rather than silently widening this one.
+> - Security/permission risk: none. No auth, namespace, or credential surface.
+> - Migration/deploy risk: none. The migration is read, never modified.
+> - Downstream client/runtime risk: `EVENT_TYPES` is newly public in `openbrain-memory`. Additive only — no existing import path changed, so no consumer breaks.
+> - Rollback/cleanup concern: reverting drops the guard and the re-export; nothing depends on either yet, since the provider has no dispatch path until #414.
+> - Fixes made before PR: my first anchor for the tool schema matched a different enum earlier in `contract-schemas.ts`, and the second picked up `type: "enum"` before the list. Both caught because the test failed loudly rather than matching nothing. Also corrected the migrations path (`src/db/migrations`, not `migrations/`), which was silently skipping the constraint check — the assertion that matters most was not running.
+> - Known residual risk: the no-seventh-copy check greps for `"blocker"`, so a new declaration that happens to omit that value would not be flagged. Chose a real value over a sentinel because a sentinel drifts too.
+> - SME review-memory update: [x] not applicable because: no review findings yet; this is the implementing PR.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] not applicable because: no server, transport, or MCP tool behavior changes — the tool schema is read by a test, never modified.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no wire or capability surface changed. `git diff origin/main...HEAD --name-only` is six Python files; nothing under `src/`, `contracts/`, or `clients/ts/`. The pre-push gate matched the `openbrain-memory` path rather than an actual contract edit.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board: no tool, schema, protocol, or client-facing change. The only new public symbols are `openbrain_memory.EVENT_TYPES` (additive) and `openbrain_provider.vocabulary`, which has no external callers.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

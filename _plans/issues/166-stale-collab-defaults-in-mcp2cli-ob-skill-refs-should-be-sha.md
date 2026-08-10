@@ -38,6 +38,17 @@ Surfaced 2026-06-19 while building the first-class promoter role (#159). Rico fl
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-06T03:19:09Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-06T03:19:54Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-05T05:12:45Z

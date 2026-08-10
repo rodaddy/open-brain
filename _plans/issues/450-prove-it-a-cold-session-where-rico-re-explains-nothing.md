@@ -40,6 +40,17 @@ Type: prototype (HITL). Rico is the instrument; the agent cannot score this alon
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-04T00:39:44Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-04T00:39:44Z.
+
+---
+
 ## Discussion (5)
 
 ### rodaddy — 2026-08-01T23:25:43Z

@@ -52,3 +52,41 @@ Depends on #67. Build this only after `OpenBrainClient` has proven the real MCP-
 - Implementation depends on the #67 client API instead of speculative protocol shapes.
 
 Parent: #66
+
+---
+
+## Resolution
+
+Closed by **PR #73** — feat: add AgentMemory facade
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5c175b91e474208b3d6a52c847b65e026f2ad428`
+- Merged at: 2026-06-11T00:12:58Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T00:12:59Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #73 body
+
+> Closes #68
+>
+> ## Summary
+> - Add AgentMemory facade over OpenBrainClient wrappers.
+> - Add bounded MemoryContext/MemoryItem/MemoryPolicy types plus MemoryClient and MemorySpool protocols.
+> - Route session lifecycle, recall, facts, decisions, checkpoint, and wrap calls through schema-valid client wrapper calls.
+> - Update README quickstart for the public facade.
+>
+> ## Acceptance criteria
+> - Public API matches the issue: AgentMemory(client, agent, project=None, policy=None, spool=None), start_session, recall, append_event, remember_fact, remember_decision, checkpoint, wrap_session.
+> - Fake-client tests verify wrapper routing without network.
+> - Fact writes route through log_thought; decision writes route through log_decision.
+> - Recall returns bounded context and raw search output is opt-in.
+> - Checkpoint and wrap route to session_wrap with valid schema fields.
+> - No Hermes adapter code is included.
+>
+> ## Verification
+> - uv run pytest in python/openbrain-memory: 33 passed, 1 skipped.
+> - bun test at repo root: 579 passed, 16 skipped.
+> - git diff --cached --check: passed.
+>
+> ## Notes
+> Unsupported kwargs are rejected instead of forwarded to MCP tools, so the facade stays aligned with the live Open Brain tool schemas.

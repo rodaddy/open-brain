@@ -44,3 +44,81 @@ Paired with: #269.
 - No full admin SPA.
 - No job runner/minion system.
 - No external monitoring replacement.
+
+---
+
+## Resolution
+
+Closed by **PR #277** — feat: add operator doctor/status surface
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5e4e2bc183e8b8343c5b7715f420bab0292a63e6`
+- Merged at: 2026-07-08T02:57:56Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T02:57:57Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #277 body
+
+> ## Summary
+>
+> - add a privileged operator doctor/status surface with stable machine-readable JSON covering runtime version, contract version, DB connectivity, migration status, embedding provider availability plus recent degraded failures, qmd availability when configured, transport mode/availability, and log/audit health
+> - REST `GET /api/v1/operator/doctor` behind the auth middleware plus a server-side admin/ob-admin role check (401 unauthenticated, 403 non-privileged); public `/health` stays minimal and unchanged
+> - MCP tool `operator_doctor` with the same server-side role gate; both surfaces return a generic error envelope on failure so raw error messages (which can carry paths or env detail) never reach a client
+> - optional-dependency failures (embedding provider, qmd) are fail-open: they mark the dependency unavailable but never make the service unhealthy; overall status degrades only on DB disconnect, pending migrations, or requested-NATS-transport unavailability
+> - no secrets, raw env values, or filesystem paths in any output field, proven by explicit non-containment tests on the serialized payload
+> - contract bump to `2026-07-08.memory-tools.v20` adding the `operator_doctor` capability and tool contract; schema hash updated in lockstep
+> - Python client: contract pin bump, `operator_doctor` first-class wrapper, required-tool and help coverage
+>
+> Closes #270
+>
+> ## Validation
+>
+> - `bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts src/server.test.ts src/contract.test.ts src/tools/__tests__/get-contract.test.ts` - PASS, 31 pass / 0 fail (255 expect() calls)
+> - `bunx tsc --noEmit` - PASS
+> - `bun test` - PASS, 1213 pass / 54 skip / 0 fail (1267 tests, 88 files)
+> - `git diff --check` - PASS (and `git diff --cached --check` before commit)
+> - Python client (`python/openbrain-memory`):
+>   - `uv sync` - PASS
+>   - `uv run pytest -q` - PASS, 225 passed / 5 skipped
+>   - `uv run mypy src/openbrain_memory` - PASS, no issues in 8 source files
+>   - `uv run ruff check src tests` - PASS, all checks passed
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: the doctor payload leaking secrets, raw env values, or filesystem paths (directly or via error paths). Mitigated by allowlisted output fields only, `last_error: "redacted"`, migration readdir failure fully caught, and generic catch envelopes on both the REST handler and the MCP tool; tests assert the serialized payload does not contain the embedding API key, embedding host, or log file path.
+> - Assumptions that could be wrong: that admin/ob-admin is the correct privilege boundary for the doctor (readonly/agent/discord/n8n are denied); that probing `EMBEDDING_BASE_URL/models` and `bun $QMD_PATH --help` are faithful availability proxies for the real call paths; that DB + migrations + requested-transport are the right inputs to overall healthy/degraded.
+> - Missing/weak tests: no live smoke against hosted core01 (deferred to release path); qmd availability probe is exercised only via the not_configured branch in unit tests, not with a real qmd binary; the readdir-failure fallback branch is covered by review rather than a dedicated test.
+> - Security/permission risk: new privileged surface. Auth is enforced server-side twice on REST (auth middleware, then role check) and server-side in the MCP tool handler via `extra.authInfo`; no client-side checks are relied on. No SQL takes caller input (fixed `SELECT filename FROM _migrations`).
+> - Migration/deploy risk: none - no migrations, no schema changes, no deploy from this PR. Contract version bump requires the normal release/rollout path for downstream consumers.
+> - Downstream client/runtime risk: contract bump to v20 adds `operator_doctor` as a required contract tool in the Python client; downstream pin refresh (mcp2cli schema cache, generated skills, rtech-hermes) is required at release, per the rollout section below.
+> - Rollback/cleanup concern: revert removes the endpoint, tool, contract entry, and client wrapper cleanly; a reverted server with clients pinned to v20 would fail contract validation until client pins are reverted too.
+> - Fixes made before PR: (1) wrapped the migrations-directory `readdir` in try/catch so a filesystem error cannot leak a raw path through MCP error text or Express error pages; (2) `runtime.version` now reads package.json (cached) instead of relying on `npm_package_version`, which is unset when launchd runs bun directly; (3) added defensive catch envelopes to both the REST handler and MCP tool so unexpected errors return a generic message.
+> - Known residual risk: `qmd.configured` tracks explicit `QMD_PATH` while `search_all` falls back to a default path (`/opt/qmd/src/qmd.ts`); the doctor can report `not_configured` on a host where search still probes the default. Doctor contract version string is dated 2026-07-08 to match the memory-tools v20 bump.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no MEDIUM+ review finding has been produced yet; PR remains draft until the review swarm completes.
+>
+> ## Downstream rollout classification
+>
+> Checked `docs/downstream-rollout.md`. Rollout applies: this PR changes the public contract (new MCP tool `operator_doctor`, contract version bump to `2026-07-08.memory-tools.v20`, schema hash change) and `python/openbrain-memory` client behavior (contract pin, required tools, new wrapper).
+>
+> - Open Brain local verification is complete (server tests, typecheck, full suite, Python package tests above).
+> - Hosted Open Brain deploy, mcp2cli schema cache invalidation and generated-skill refresh, rtech-mcps handoff, rtech-hermes runtime/plugin check, Hermes live rollout, and live agent canaries are NOT run in this PR. They are deferred to the release `v*` tag path after merge, consistent with the local-first sprint flow. The mcp2cli stale-schema-cache known issue (mcp2cli#58) applies at that point because this is a contract bump.
+> - No generated skill content under `skill/` is touched here; skill regeneration happens as part of the deferred mcp2cli refresh.
+> - **Rollout ordering (load-bearing):** hosted Open Brain MUST deploy contract v20 (`2026-07-08.memory-tools.v20`) BEFORE the openbrain-memory 0.1.6 client is published or rolled out to mcp2cli/Hermes. A published v20-pinned 0.1.6 client hard-rejects a v19 server (exact contract-version pin plus the required `operator_doctor` tool), so client-first rollout is a hard outage for every consumer. Server deploys first; client publish/roll follows.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: no review swarm has run yet; PR remains draft until standard review completes.
+> - [ ] Initial review swarm complete
+> - [ ] Material findings fixed or explicitly deferred
+> - [ ] Fix verification complete
+> - [ ] CI passed for this PR head
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this is local-first sprint work; no core01 deploy or live DB mutation is approved for this PR.
+>
+> ## No deploy / release note
+>
+> No core01 deploy is performed by this PR. The doctor surface, contract bump, and Python client changes ship to the hosted service and downstream consumers only via the normal `v*` release tag path after merge and verification.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+>

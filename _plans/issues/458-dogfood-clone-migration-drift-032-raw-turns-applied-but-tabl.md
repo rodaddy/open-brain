@@ -53,6 +53,17 @@ Split out of #453 so closing that ticket (all four gate legs now proven by psql 
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-04T00:35:32Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-04T00:35:32Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-08-01T09:56:19Z

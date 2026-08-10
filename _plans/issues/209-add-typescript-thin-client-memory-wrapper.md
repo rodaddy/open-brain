@@ -34,6 +34,100 @@ Parent plan: docs/agent-memory-substrate-plan.md
 
 ---
 
+## Resolution
+
+Closed by **PR #218** — feat: add Open Brain agent memory substrate local slice
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `9da20c4c5ca24c39d1ed9e052ba66dd927757282`
+- Merged at: 2026-06-27T02:02:45Z
+- PR state: MERGED
+- Issue closed: 2026-06-27T02:02:46Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #218 body
+
+> Closes #207
+> Closes #208
+> Closes #209
+> Closes #210
+> Closes #211
+> Closes #212
+> Closes #213
+> Closes #214
+> Closes #215
+>
+> ## Summary
+>
+> - define the Open Brain agent memory adapter contract, lightweight receipt contract, and local/downstream ownership boundaries
+> - add TS AgentMemory wrapper, Python receipt helpers, Codex dry-run smoke updates, and Hermes lifecycle contract fixtures
+> - harden delegated/header share-candidate source reads before classifier access
+> - add deterministic OKF-like disclosure bundle export and a memory-substrate eval fixture
+>
+> ## Stop Gate
+>
+> - #216 is not executed in this PR.
+> - Hosted Open Brain deploy, mcp2cli generated skill refresh, rtech-mcps handoff, rtech-hermes runtime/plugin changes, and Hermes live canaries remain deferred pending Rico approval.
+>
+> ## Validation
+>
+> - [x] `bun test src/__tests__/agent-memory.test.ts src/contract.test.ts eval/open-brain/__tests__/runner.test.ts`
+> - [x] `bunx tsc --noEmit`
+> - [x] `bun run eval:memory -- --fixture eval/open-brain/fixtures/memory-substrate.json`
+> - [x] `git diff --cached --check`
+> - [x] `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - [x] `cd python/openbrain-memory && uv run ruff check src tests`
+> - [x] `cd python/openbrain-memory && uv run pytest -q`
+> - [x] `bun test` (949 pass, 33 skip)
+> - [x] Temp install/runtime smoke under `/Volumes/ThunderBolt/_tmp/open-brain/runtime-install` against local DB `open_brain_tmp_memory_substrate`
+>   - `bun install --frozen-lockfile`
+>   - copied server booted on `127.0.0.1:3197`
+>   - startup migrations applied 19 migrations
+>   - `bun runtime-e2e-smoke.ts` passed real HTTP MCP + REST checks
+>   - DB readback confirmed 1 runtime lane, 3 session events, 1 REST thought, and `vector` extension installed
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: downstream agents or humans could mistake local wrapper/docs/eval proof for hosted Open Brain rollout proof.
+> - Assumptions that could be wrong: the OKF-like bundle shape is sufficient for #215 local completion; server-side import/assembly can remain a later slice.
+> - Missing/weak tests: hosted contract/canary checks are intentionally deferred to #216; local runtime install proof now covers server boot, migrations, MCP lifecycle writes/readback, REST write, auth spoof rejection, and disclosure export.
+> - Security/permission risk: namespace isolation remains server-side; this PR adds source-read scoping for delegated/header promoter identity and TS/Python metadata guards against authority spoofing.
+> - Migration/deploy risk: the public contract version moves to `2026-06-26.memory-tools.v9`; no hosted deployment is performed here.
+> - Downstream client/runtime risk: mcp2cli/generated skills/rtech-hermes must refresh and validate under #216 before rollout is claimed complete.
+> - Rollback/cleanup concern: revert contract/client/docs/eval changes together if the v9 manifest creates downstream incompatibility.
+> - Fixes made before PR: review-swarm findings were fixed for contract status, lane identity spoofing, TS receipt validation, OKF `type` frontmatter, wrapper/exporter eval proof, and OKF receipts export surface.
+> - Known residual risk: live hosted Open Brain and Hermes canaries are intentionally unverified until Rico approves #216.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: review findings were fixed before PR and did not expose a new durable missed-review pattern beyond the existing SME checks.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - [x] Initial review-swarm completed on pinned staged diff
+> - [x] Fixes completed for every known finding
+> - [x] Fix-verification completed with zero known unresolved issues
+> - [x] #216 hosted/downstream rollout remains deferred
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this PR is the local-complete slice and hosted/live checks are the explicit #216 stop gate.
+>
+> ## Review-Swarm Receipt
+>
+> Review-swarm: PASS
+> Pinned diff: a2698fa41833f47188ba0101d0b3d2f5eb5c71d3..staged-index
+> Fresh-context lanes: correctness, adversarial, quality, security, backend/domain
+> Findings: MEDIUM findings fixed for contract status drift, disclosure bundle identity, receipt evidence validation, OKF frontmatter type, wrapper/exporter eval proof, and OKF receipts surface.
+>
+> Fix-verification: PASS
+> Zero known unresolved issues: yes
+> Validation: commands listed above.
+>
+> ## Downstream Rollout Classification
+>
+> - Downstream applicable: yes.
+> - Deferred issue: #216.
+> - Deferred work: hosted Open Brain deploy, mcp2cli generated skill refresh, rtech-mcps handoff, rtech-hermes runtime/plugin changes, and Hermes live canaries.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-26T21:51:52Z

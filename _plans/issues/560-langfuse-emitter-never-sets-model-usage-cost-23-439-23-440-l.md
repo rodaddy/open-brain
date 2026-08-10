@@ -24,6 +24,17 @@ Until this lands, every cost dashboard/score computes over NULL -- the instance 
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-05T19:15:47Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-06T05:17:21Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-08-05T06:14:32Z

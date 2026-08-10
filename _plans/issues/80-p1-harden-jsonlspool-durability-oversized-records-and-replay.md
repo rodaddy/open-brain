@@ -32,6 +32,17 @@ During outage recovery, replay can block foreground spool writers for long perio
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-11T01:56:12Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-11T01:56:12Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-11T01:56:12Z

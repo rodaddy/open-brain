@@ -43,3 +43,86 @@ Paired with: #271.
 ## Dependency
 
 Depends on the relational retrieval arm and eval gate.
+
+---
+
+## Resolution
+
+Closed by **PR #278** — feat: expose graph-expanded evidence in brain_answer and search_all
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `686ef547068f27d48db1b47d7de86b0996c88688`
+- Merged at: 2026-07-08T02:48:48Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T02:48:49Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #278 body
+
+> ## Summary
+>
+> - expose graph-expanded evidence in `brain_answer` and `search_all` by inheriting `search_brain`'s relational graph retrieval arm (#267 / PR #274) — both consumers now pass `{ enableGraph: true }` to the shared retrieval helpers; no second traversal is built
+> - graph candidates hydrate into normal `SearchRow`s with standard Open Brain source refs, so `brain_answer` stays extractive/cited and keeps its gap/staleness/conflict reporting, and `search_all`'s `UnifiedResult` output shape is unchanged
+> - qmd federation stays separate and fail-open: the graph arm runs only on the brain side of `search_all`, and remains disabled entirely under `source_scope`
+> - add `src/tools/__tests__/graph-evidence-consumers.test.ts` with 15 consumer-surface tests
+>
+> Closes #268.
+>
+> ## Design decision: default inheritance, not opt-in
+>
+> The sprint spec allowed a consumer-surface opt-in flag only if default inheritance would silently change cited answer behavior or downstream contracts. From the actual code, it does not:
+>
+> - Graph rows are hydrated real rows (thoughts/decisions/projects/sessions) run through `withSourceRefs`, identical in shape to vector/FTS rows. `brain_answer` cites them extractively through the same `Citation` path; nothing is synthesized from edges, and rows lacking preview/citation metadata are still skipped with a gap.
+> - No input schema, output shape, error envelope, or `get_contract` change. `CONTRACT_VERSION` and `src/contract*.ts` are untouched; the Python client pin is unaffected.
+> - The arm activates only for deterministic relational query patterns ("what depends on X?" etc.); all other queries are byte-identical in behavior. It is already skipped under `source_scope` inside `executeSearch`.
+> - Link-path metadata is NOT exposed at either consumer surface: `brain_answer` citations contain only `{index, source_ref, excerpt, score, stale}`, and both consumers pass `includeLinks: false`, so graph rows carry no `explicit_links`. A test pins the citation key set.
+> - Namespace read policy is enforced server-side exactly as in `search_brain`: `canReadNamespace` denial before retrieval, and the auth-derived `namespaceFilterFor` value is the same parameter the graph seed/traversal SQL binds on every hop (`l.namespace = seed.namespace`, target `namespace = l.namespace`, `archived_at IS NULL` on links, entities, and hydrated rows). Tests assert the graph SQL receives the auth-derived namespace list at the consumer surface.
+>
+> An opt-in flag would have required a new input schema field (a real contract change with downstream rollout cost) to guard against a change that alters no shapes — worse than the default.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` - PASS
+> - `bun test src/tools/__tests__/graph-evidence-consumers.test.ts` - PASS, 15 pass / 0 fail (71 expect calls)
+> - `bun test` (full suite, mandatory for shared retrieval changes) - PASS, 1220 pass / 54 skip / 0 fail (1274 tests, 87 files)
+> - `git diff --check` - PASS
+> - `git diff --cached --check` - PASS before commit
+>
+> ## Critical self-review
+>
+> Critical self-review:
+> - Highest-risk behavior: graph-hydrated rows entering the cited-answer path could leak cross-namespace or archived content if the shared arm's predicates were ever bypassed; mitigated because both consumers reuse the exact #267 arm (no new SQL), and consumer-surface tests assert the auth-derived namespace parameter reaches the graph query and unreadable/archived targets never surface.
+> - Assumptions that could be wrong: that the PR #274 arm's SQL predicates are correct (proven by its live-Postgres predicate test, which this PR relies on rather than re-proving); that no consumer depends on brain_answer/search_all returning strictly vector/FTS-ranked rows for relational-pattern queries.
+> - Missing/weak tests: consumer tests use a graph-aware mock pool (same convention as PR #274's unit tests); no new live-Postgres test at the consumer surface — the live predicate proof lives in search-brain-relational-retrieval.test.ts and the SQL is shared, not duplicated.
+> - Security/permission risk: namespace denial happens before any pool query (asserted); graph SQL binds the auth-derived namespace filter; link-path metadata is not exposed (citation key set pinned by test).
+> - Migration/deploy risk: none — no migrations, no schema, no env changes.
+> - Downstream client/runtime risk: no MCP tool names, input schemas, output shapes, annotations, auth semantics, or error envelopes change; retrieval ranking for relational-pattern queries improves, which is the issue's intent. Python client untouched.
+> - Rollback/cleanup concern: revert is two `{ enableGraph: true }` arguments plus one test file; no state to clean up.
+> - Fixes made before PR: none needed beyond the initial implementation; typecheck and full suite passed first run.
+> - Known residual risk: relational-pattern queries in brain_answer/search_all now weight graph candidates (3x RRF) ahead of lexical matches; if a deployed workflow depended on the old ordering for those exact phrasings, results reorder. Judged acceptable and intended per #268.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no review swarm has produced a MEDIUM+ finding yet; PR remains draft until review completes.
+>
+> ## Downstream rollout classification
+>
+> Checked `docs/downstream-rollout.md`.
+>
+> - Does not apply: no MCP tool names, input schemas, output shapes, annotations, auth/namespace semantics, or error envelopes change; no transport, migration, `python/openbrain-memory`, or generated-skill changes. `get_contract` and `CONTRACT_VERSION` are untouched.
+> - The change is server-internal retrieval behavior (which rows the existing tools return for relational-pattern queries). rtech-mcps, mcp2cli schema refresh, rtech-hermes, and Hermes canary steps are not applicable.
+> - Value-distribution note: relational-phrased queries now include graph-sourced rows whose `score` derives from clamped link weight (bounded to [0,1]) rather than vector distance; no schema change.
+> - Hosted deploy/live smoke remains release-phase work via the normal v* tag path; not performed by this PR.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: no review swarm has run yet; PR remains draft until standard review completes.
+> - [ ] Initial review swarm complete
+> - [ ] Material findings fixed or explicitly deferred
+> - [ ] Fix verification complete
+> - [ ] CI passed for this PR head
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this is local-first sprint work; no core01 deploy or live DB mutation is approved for this PR.
+>
+> ## No deploy / release note
+>
+> No core01 deploy is performed by this PR. The sprint remains local branches, PRs, and CI first. After the sprint issues are merged and verified, the release step is a v* tag.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

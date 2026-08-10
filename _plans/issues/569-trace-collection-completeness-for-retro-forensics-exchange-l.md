@@ -25,6 +25,17 @@ Depends on: #560 (metadata), #561 (masking). State: measured facts RUNNING-verif
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-06T12:32:10Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-06T12:32:09Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-08-05T23:49:15Z

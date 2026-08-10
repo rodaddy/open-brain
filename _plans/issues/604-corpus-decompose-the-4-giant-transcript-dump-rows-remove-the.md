@@ -29,6 +29,72 @@ Per the standing order-of-operations rule: this removes a cap on real data and f
 
 ---
 
+## Resolution
+
+Closed by **PR #606** — fix(search): restore full retrieval evidence and remediate transcript dumps
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `12e8eec607f0bd8c43c6be283c06bff298db5cba`
+- Merged at: 2026-08-07T21:40:00Z
+- PR state: MERGED
+- Issue closed: 2026-08-07T21:40:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #606 body
+
+> Fixes #604
+>
+> ## Summary
+>
+> - restore full masked retrieval evidence in both serving trees by removing the 300-character projection slice
+> - retain ids/counts-only rank input and keep `MAX_ACTIVE_SPAN_BYTES` as an emergency circuit breaker for pathological corpus rows
+> - add dry-run-first `scripts/decompose-oversize-thoughts.ts` and functional detector/planning coverage
+> - record the issue #604 operator ruling in the adversarial SME entry
+> - remediate the four live raw-JSONL transcript dumps and file #605 for the broader chunk-write caller gap
+>
+> ## Verification
+>
+> - `bunx tsc --noEmit` — passed
+> - focused tests — 71 passed, 0 failed
+> - full `bun test` with `/Users/rico/.config/open-brain/env.release-test` sourced — 3,701 passed, 35 skipped, 0 failed across 241 files
+> - `OPENBRAIN_TEST_DATABASE_URL` was populated and the registered live-Postgres suites executed; the anti-skip audit found one separate skip: `local clone real PostgreSQL boundary (live Postgres)` because `OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL` is not present in the requested release-test environment
+> - mutation proof: restoring both old 300-character slices made both new full-evidence tests fail on the missing tail; restoring this patch made them pass
+> - live dogfood remediation and `search_brain` receipts: https://github.com/rodaddy/open-brain/issues/604#issuecomment-5208118786
+> - chunk-write investigation: https://github.com/rodaddy/open-brain/issues/604#issuecomment-5208132517
+>
+> ## Data Remediation
+>
+> - dry-run plan posted before mutation: https://github.com/rodaddy/open-brain/issues/604#issuecomment-5208089983
+> - 4 active transcript-dump rows / 3,437,076 bytes became 0 active monster rows
+> - 1,218 active replacement rows now carry `parent_id`, `promoted_from`, and `source_refs`; all are keyword-searchable
+> - all 4 originals have `archived_at` set and complete reversible copies in `discarded_entries`
+> - replacement embeddings are pending repair; this PR does not claim vector readiness for those rows
+>
+> ## Downstream Rollout
+>
+> Not applicable: no MCP tool name, schema, response shape, auth/namespace behavior, transport behavior, migration, Python client, generated skill, or Hermes-facing contract changes. The changed evidence projection is internal observability data.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: The remediation script performs a multi-row lifecycle transition against live data; it is dry-run by default and applies all four originals in one transaction before archiving them.
+> - Assumptions that could be wrong: The detector assumes the pathological class is valid JSONL with at least 100 records and transcript identity fields on at least 80% of records; live measurement showed all 1,073 records on each target carry those fields.
+> - Missing/weak tests: The script has functional detector/planning tests and a successful live apply receipt, but no isolated fault-injection test that throws midway through the 2,360 proposal loop and observes rollback.
+> - Security/permission risk: The script uses the operator-supplied database identity directly and emits IDs/counts only; no transcript bodies, tokens, or connection values were posted or committed.
+> - Migration/deploy risk: No schema migration is required; deploying the code does not rerun the already-completed remediation because the script is operator-invoked and dry-run-first.
+> - Downstream client/runtime risk: Public MCP results are unchanged; only masked tracing evidence regains full row content, while rank input remains ids/counts-only.
+> - Rollback/cleanup concern: Originals remain present with `archived_at` and are copied in full to `discarded_entries`; rollback would restore originals and archive the issue-604 pieces through normal lifecycle rather than hard-delete.
+> - Fixes made before PR: Corrected the live transcript detector after measuring message-field distribution, proved the new evidence tests fail against the old slice, updated stale SME guidance, and filed #605 instead of broadening this PR across unrelated writers.
+> - Known residual risk: The 1,218 replacement rows have pending embeddings, and server/REST/lane thought writers still bypass the shared chunk writer until #605 is resolved.
+> - SME review-memory update: [x] `docs/sme/` updated [ ] not applicable because: the issue #604 operator ruling supersedes PR #599 H2's routine per-row shortening recommendation.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [ ] MEDIUM+ review findings were captured — controller owns this checkbox after fresh-context review
+> - Live Open Brain checks: [x] linked below [ ] not applicable because: dry-run, apply, database, provenance, and live `search_brain` receipts are linked in Verification and Data Remediation.
+>
+
+---
+
 ## Discussion (4)
 
 ### rodaddy — 2026-08-06T18:10:04Z

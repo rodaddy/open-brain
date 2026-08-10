@@ -23,3 +23,45 @@ Either:
 
 ## Context  
 Dream cycle 2026-04-09. Found 239 additional warm entries hiding beyond the first 200 that needed tier management.
+
+---
+
+## Resolution
+
+Closed by **PR #30** — feat: add total_count to list_recent, raise limit to 500
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a433db2b04d9e4eb7ec0442a52f3055785a9d0e9`
+- Merged at: 2026-06-08T03:50:17Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T03:50:18Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #30 body
+
+> Closes #24
+>
+> ## Changes
+> - Response now returns `{entries, total_count, offset, limit, has_more}` instead of raw array
+> - `total_count` tells callers exactly how many matching entries exist for pagination
+> - `has_more` boolean for easy "load more" logic
+> - Limit raised from 250 to 500
+> - Count query runs in parallel with data query via `Promise.all` (no perf impact)
+> - 11 tests updated and passing
+>
+> ## Before
+> ```json
+> [{...}, {...}, ...]  // raw array, no idea how many more exist
+> ```
+>
+> ## After
+> ```json
+> {
+>   "entries": [{...}, {...}, ...],
+>   "total_count": 427,
+>   "offset": 0,
+>   "limit": 20,
+>   "has_more": true
+> }
+> ```
+>
+> **Breaking change:** callers that `JSON.parse` the response and expect an array need to access `.entries` instead.

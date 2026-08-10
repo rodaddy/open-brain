@@ -38,6 +38,17 @@ After the memory-tiering pipeline (#159 → #160/#161). Lower priority; collab i
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-07T20:55:40Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-07T20:55:28Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-07T18:27:37Z

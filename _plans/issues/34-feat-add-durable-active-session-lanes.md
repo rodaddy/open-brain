@@ -57,3 +57,29 @@ CREATE TABLE ob_session_lanes (
 - Agents can load active lane state without semantic search.
 - Existing `sessions` behavior remains backward-compatible.
 - Lane records are searchable by existing OB search and filterable by namespace/status/tags.
+
+---
+
+## Resolution
+
+Closed by **PR #43** — feat: add durable session lanes (#34)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bfbadad9041b993db06e640b3de4fb0a649255f4`
+- Merged at: 2026-06-08T04:23:49Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T04:23:51Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #43 body
+
+> Adds first-class durable session lanes to Open Brain so agents can attach ongoing work to a stable key and reload current context without semantic search.
+>
+> Changes:
+> - Migration 010: ob_session_lanes table
+> - lane_upsert tool: Idempotent upsert by namespace + session_key
+> - lane_load tool: Direct key lookup with multi-filter query builder
+> - Leveled logging: LOG_LEVEL env var support (debug/info/warn/error)
+> - 33 functional tests: Full path coverage
+> - Logger upgrade: level gating via LOG_LEVEL env
+>
+> Closes #34

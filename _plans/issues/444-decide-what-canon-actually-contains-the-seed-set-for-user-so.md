@@ -39,6 +39,17 @@ Type: grilling (HITL). Rico decides; do not answer this one alone.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-01T22:41:37Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-01T22:41:37Z.
+
+---
+
 ## Discussion (5)
 
 ### rodaddy — 2026-08-01T17:00:54Z

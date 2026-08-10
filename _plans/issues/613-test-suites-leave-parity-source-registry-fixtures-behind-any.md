@@ -27,3 +27,164 @@ Fix cleanup in the suites that create \`parity-source-registry-*\` fixtures so t
 ## SME
 
 Pattern captured in \`docs/sme/correctness.md\` → \`review.producer_activation_promotes_inert_fixtures\` (2026-08-07).
+
+---
+
+## Resolution
+
+Closed by **PR #620** — fix(contracts): tear down every namespace the parity fixtures seed
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bd114cea8815819f1cddfab48b47aaf56bcba83b`
+- Merged at: 2026-08-08T04:34:09Z
+- PR state: MERGED
+- Issue closed: 2026-08-08T04:34:10Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #620 body
+
+> ## Summary
+>
+> - The server parity suite (`contracts/server-tool-parity.test.ts`) built a per-fixture namespace and never deleted what it wrote. It left approved/active `ob_sources` rows behind, plus rows in 8 other namespaced tables. This makes each suite teardown exactly what it seeds, at the owning boundary.
+> - The rows were inert only because nothing produced from them. The maintenance sweep is a cross-namespace producer by design — `selectSourcesNeedingDerivation` receives `undefined` writable namespaces, because a server-owned sweep must serve every namespace — so in PR #609 the leftovers became real queued `graph.derive` jobs mid-suite and broke an unrelated test: `026 maintenance queue` expects exactly one due job to exist ANYWHERE, and `claimDueJobs` filters on `state`/`run_after` only, so both racers claimed one (Expected 1, Received 2).
+> - Fixed in the shared harness, not in one fixture. The namespace is constructed in exactly one place (`contracts/server-tool-parity.test.ts:233`), which is why every one of the 39 parity fixtures leaked and why a per-fixture patch would have been the wrong boundary. Each test now records the namespaces it is about to use, and the suite's `afterAll` deletes those exact namespaces from the tables the fixtures actually write.
+> - Namespaces are recorded on the way IN, before the steps run, so a fixture that throws partway still gets cleaned up. Those are the rows most worth removing.
+> - Acceptance gate added: `scripts/done-means/613-fixtures-torn-down.sh`.
+>
+> Two deliberate non-choices, both narrower than the obvious fix:
+>
+> - Not a `parity-%` wildcard sweep. That would delete a concurrently running lane's rows out from under it.
+> - Not a schema-walking table list. Deriving tables from `information_schema` would silently widen the blast radius every time a namespaced table is added. The list is explicit, measured against a real run, and ordered foreign-key-safe (`ob_raw_turns` before `ob_session_lanes`, `ob_source_files` before `ob_sources`). When a fixture starts writing somewhere new, the done-means check fails and the list gets updated on purpose.
+>
+> Scope held: no global cleanup sweep was added, and no unrelated suite was touched. `server/maintenance/maintenance.pg.test.ts` keeps its own `job_kind` cleanup from #609 — that guards a different dimension (the producer's), and removing it would re-open #609's failure.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> `bunx tsc --noEmit` — clean.
+>
+> Python: not applicable, nothing under `python/openbrain-memory/` is touched.
+>
+> Live smoke: not applicable. This changes test-suite teardown only; no server, schema, or client-facing code path is modified. The dogfood service and core01 were not touched by any run below — every run created and dropped its own throwaway database.
+>
+> **RED — before the fix, on clean origin/main**
+>
+> ```
+> === done-means #613: do parity suites tear down what they seed? ===
+> throwaway database: done_means_613_57141_1786162479
+>
+> PASS  (1) created done_means_613_57141_1786162479
+> PASS  (1) migrations applied
+> PASS  (2) precondition: 0 parity-source-registry-% rows before the run
+> INFO  (3) running contracts/server-tool-parity.test.ts ...
+>  75 pass
+>  0 fail
+> Ran 75 tests across 1 file. [1.82s]
+> PASS  (3) suite exited 0
+> FAIL  (5) 2 parity-source-registry-% row(s) left behind in ob_sources
+>
+> --- leftover rows ---
+>                       namespace                       | source_kind |               external_id               | approval_state | lifecycle_state
+> ------------------------------------------------------+-------------+-----------------------------------------+----------------+-----------------
+>  parity-source-registry-current_src-57607             | git         | https://example.invalid/parity-repo.git | pending        | active
+>  parity-source-registry-server_rewrite_scaffold-57607 | git         | https://example.invalid/parity-repo.git | pending        | active
+> (2 rows)
+>
+> === RESULT: FAIL (2 failing clause(s)) ===
+> INFO  teardown: dropped done_means_613_57141_1786162479
+> ```
+>
+> Note the suite exits 0 while leaking. That is the whole defect: a green suite and residue are not mutually exclusive, which is why the gate observes the database rather than the exit code.
+>
+> **GREEN — after the fix**
+>
+> ```
+> === done-means #613: do parity suites tear down what they seed? ===
+> throwaway database: done_means_613_97198_1786162586
+>
+> PASS  (1) created done_means_613_97198_1786162586
+> PASS  (1) migrations applied
+> PASS  (2) precondition: 0 parity-source-registry-% rows before the run
+> INFO  (3) running contracts/server-tool-parity.test.ts ...
+>  75 pass
+>  0 fail
+> Ran 75 tests across 1 file. [1069.00ms]
+> PASS  (3) suite exited 0
+> PASS  (4) suite really executed (75 passing tests, not a silent skip)
+> PASS  (5) 0 parity-source-registry-% rows remain in ob_sources
+>
+> === RESULT: PASS — parity suites tear down what they seed ===
+> INFO  teardown: dropped done_means_613_97198_1786162586
+> ```
+>
+> **Residue across every affected table**
+>
+> The issue names `ob_sources`, but a full parity run against a freshly migrated database leaked into 9 tables. Measured before and after, same fresh-database method:
+>
+> | table | before | after |
+> |---|---|---|
+> | `ob_sources` | 4 | 0 |
+> | `ob_entities` | 10 | 0 |
+> | `thoughts` | 6 | 0 |
+> | `ob_raw_turns` | 4 | 0 |
+> | `ob_session_lanes` | 4 | 0 |
+> | `sessions` | 4 | 0 |
+> | `decisions` | 2 | 0 |
+> | `ob_links` | 2 | 0 |
+> | `relationships` | 2 | 0 |
+> | `content_occurrences` | 0 | 0 |
+> | `ob_source_files` | 0 | 0 |
+>
+> The `ob_raw_turns` row confirms the second half of the maintenance comment: leftover `parity-raw-turn-*` fixtures were feeding the distill arm the same way.
+>
+> **Full-suite differential**
+>
+> The #609 lesson is that a single-file run cannot distinguish a pre-existing failure from ordering-dependent leakage. Both runs used a separate worktree and a separate freshly-created, freshly-migrated database:
+>
+> | run | result |
+> |---|---|
+> | clean `origin/main` (worktree `baseline-613-origin-main-differential`) | **3710 pass / 0 fail**, 3745 tests across 242 files |
+> | this branch | **3710 pass / 0 fail**, 3745 tests across 242 files |
+>
+> Identical. No regression, and no test depended on the leaked rows.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the `afterAll` deletes by namespace across 11 tables. If a namespace string collided with something real, this would delete production-shaped rows. It cannot: the namespaces are recorded from the values this suite itself constructs, which embed `process.pid`, and only namespaces this process actually built are ever in the set. It never deletes by pattern.
+> - Assumptions that could be wrong: (1) that the 11-table list is complete. It is measured against a full run today, not proven complete for all future fixtures — mitigated by the done-means check failing loudly when a new fixture leaks somewhere unlisted. (2) That the inner `describe`'s `afterAll` runs before the file-level `afterAll` that calls `pool.end()`. If that ordering inverted, teardown would throw on a closed pool. Verified empirically: the GREEN run leaves zero rows, which is only possible if the deletes ran against a live pool.
+> - Missing/weak tests: the done-means gate covers the `ob_sources` count named by the issue; the other 10 tables are verified by the measured table above rather than by an automated assertion. A regression that re-leaked only `thoughts` would be caught by the manual method, not by CI.
+> - Security/permission risk: none. No auth, namespace-isolation, or read-policy code path is touched. The deletes are parameterized on namespace; table names come from a hardcoded `as const` allowlist, never from input, per the repo's SQL rule.
+> - Migration/deploy risk: none. No migration, no schema change, no runtime code. Test-file and script changes only.
+> - Downstream client/runtime risk: none — checked `docs/downstream-rollout.md`. No MCP tool, schema, protocol, or client-facing surface changes, so rtech-mcps, mcp2cli, and rtech-hermes are unaffected.
+> - Rollback/cleanup concern: reverting restores the leak, nothing worse. The done-means script drops only the database it created itself, by a name it generated, and contains no `rm` of any kind.
+> - Fixes made before PR: the gate's step (4) originally grepped the suite log for the fixture id to prove the suite had not silently skipped. That was a false negative — Bun's default reporter names a test only when it FAILS, so the clause failed on a fully passing run. Rewritten to assert a non-zero pass count, which distinguishes a real run from `describe.skip` in both outcomes. Caught because the RED run failed clause (4) for the wrong reason.
+> - Known residual risk: the explicit table list is a maintenance obligation. It is the intended trade — an implicit schema-walking list would never go stale but would quietly grow its blast radius, which is worse in a teardown path.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the pattern is already captured as `review.producer_activation_promotes_inert_fixtures` in `docs/sme/correctness.md` (2026-08-07), added by #609. This PR is that entry being acted on, not a new finding.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: test-only change with no server, schema, or client-facing code path modified.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no fixture content changed. The `.fixture.json` files and the recorded expectations are untouched; this changes only the harness that runs them, and both providers (`current-src`, `server-rewrite-scaffold`) are cleaned identically. All 75 parity tests pass unchanged.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable on every line: the change is confined to `contracts/server-tool-parity.test.ts` and a new `scripts/done-means/` script. No MCP tool, schema, transport, or Python client surface is altered, so no downstream consumer can observe this change.
+>
+> Closes #613
+>

@@ -40,6 +40,17 @@ unblocking the loader (#446), the writer (#445/#447), and the enforcement gate
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-01T09:20:47Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-01T09:20:41Z.
+
+---
+
 ## Discussion (4)
 
 ### rodaddy — 2026-08-01T05:28:34Z

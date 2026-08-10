@@ -55,6 +55,17 @@ Return the reflex result as budget-bounded cited pointers that clients and runti
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-23T18:46:31Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-23T18:46:30Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-23T16:38:34Z

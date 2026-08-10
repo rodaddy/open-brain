@@ -28,3 +28,120 @@ The repo pre-push hook runs `bun test` and therefore blocks EVERY local push fro
 ## Wanted
 
 Diagnose the local spawn difference and make the fake-tool harness environment-independent, so the pre-push gate is trustworthy again on the dev machine. Until then, a local `bun test scripts/` failure on these two names is known noise — but ONLY these two names.
+
+---
+
+## Resolution
+
+Closed by **PR #540** — fix(backup): strip terminal control sequences before classifying child stderr (#537)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a4471ebfc5b762ed6fc35bc12ab33f17846e827b`
+- Merged at: 2026-08-04T03:02:53Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T03:02:54Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #540 body
+
+> Closes #537.
+>
+> ## Summary
+>
+> - `summarizeChildStderr` strips the `pg_dump:`/`error:` prefix with a `^`-anchored regex. When the child colorizes its own stderr, SGR escapes sit **before** that prefix, the anchor never matches, nothing is stripped, and the cut-at-first-colon step returns the escape-prefixed tool name instead of the error class.
+> - Fixed at the owning boundary: the sanitizer now removes OSC/CSI/two-character escape sequences and any residual C0/C1 control characters from each line **before** classification. No test assertion was weakened.
+> - Added five regression tests plus an SME entry for the pattern.
+>
+> ## Root cause (diagnosed, with evidence)
+>
+> The local dev environment exports `FORCE_COLOR=3`; CI exports nothing. That single variable is the whole divergence.
+>
+> `runPgDump`/`runPgRestore` pass the ambient environment to the child, so the fake tool spawned as `bun <fake-tool>` inherits `FORCE_COLOR` and Bun colorizes `console.error` **even though stderr is a pipe**. Measured on this machine (`ESC` below is the literal `0x1B` byte, shown as octal `033` by `od -c`):
+>
+> ```
+> $ bun fake.ts 2>&1 >/dev/null | od -c     # FORCE_COLOR=3 inherited
+> 033   [   0   m 033   [   3   1   m   p   g   _   d   u   m   p   : ...
+>
+> $ env -u FORCE_COLOR bun fake.ts 2>&1 >/dev/null | od -c
+> p   g   _   d   u   m   p   :       e   r   r   o   r   : ...
+> ```
+>
+> Feeding both forms to the real function isolates the defect to the sanitizer, with no test harness involved:
+>
+> ```
+> plain   -> "query failed"
+> colored -> "^[[0m^[[31mpg_dump"
+> ```
+>
+> The chain: a leading `ESC[0m` `ESC[31m` defeats the anchored prefix regex `/^(pg_dump|pg_restore|error|...):\s*/i`, so no prefix is consumed; the subsequent search for the first colon-or-quote character then cuts at the *first* colon, which is the one immediately after `pg_dump`. The error class is discarded and the tool name is returned in its place.
+>
+> **This is a production defect, not a test artifact.** A real `pg_dump` attached to a terminal — or run under any wrapper setting `FORCE_COLOR`/`CLICOLOR_FORCE` — emits the same bytes, so live receipts had the same blind spot. Control characters are also non-printable payload: an escape surviving into a receipt can reposition a cursor or recolor the terminal of whoever displays it, which is exactly what a content-free receipt is supposed to exclude.
+>
+> Ruled out by the evidence above: spawn shell, `PATH`, TMPDIR relocation of the fake tool, and Bun stderr buffering. None of them alter the byte stream; `FORCE_COLOR` alone does.
+>
+> ## Red-proof
+>
+> Reverting **only** `scripts/backup-lib.ts` (tests untouched) reproduces the issue's reported failures exactly:
+>
+> ```
+> ### REVERTED SANITIZER ###
+> --- scripts/backup.test.ts ---   2 pass 1 fail
+> Received: "pg_dump exited with code 1 (^[[0m^[[31mpg_dump)"
+> --- scripts/restore.test.ts ---  32 pass 1 fail
+> Received: "pg_restore exited with code 1 (^[[0m^[[31mpg_restore)"
+> ```
+>
+> That matches issue #537's `2 pass / 1 fail` and `32 pass / 1 fail` counts byte for byte. The five new `backup-lib.test.ts` tests also fail on the old sanitizer (`Expected "query failed"` / `Received "^[[0m^[[31mpg_dump"`), proving they can fail.
+>
+> With the fix applied, on the same machine and shell:
+>
+> | File | Before | After |
+> |---|---|---|
+> | `scripts/backup.test.ts` | 2 pass **1 fail** | **3 pass 0 fail** |
+> | `scripts/restore.test.ts` | 32 pass **1 fail** | **33 pass 0 fail** |
+> | `scripts/backup-lib.test.ts` | 57 pass 5 fail (new tests) | **62 pass 0 fail** |
+> | `bun test scripts/` | — | **289 pass, 29 skip, 0 fail** |
+> | `bun test` (full repo) | — | **3071 pass, 506 skip, 0 fail** |
+>
+> `bunx tsc --noEmit` exits 0. **The pre-push hook ran the full suite and passed on both pushes of this branch — no `--no-verify` was needed.** That is the issue's acceptance criterion demonstrated live: the gate is trustworthy on the dev machine again.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable — no `python/` paths touched; the pre-push gate skipped that lane accordingly
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable: this is a local operator-script sanitizer with no service, transport, or schema surface
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: over-stripping. The sanitizer now deletes byte ranges from stderr before classification, so an over-broad pattern could eat real class text. Mitigated by consuming only well-formed escape sequences plus the C0/C1 ranges, which cannot appear inside a legitimate pg error class, and by the existing 62-test file covering the plain-text paths unchanged.
+> - Assumptions that could be wrong: that the first *non-empty after stripping* line is still the right class line. A line that is purely color codes now correctly falls through to the next real line (test added), but a child that emitted a decorative separator line first would classify on the separator — the same behavior as before this change, not a regression.
+> - Missing/weak tests: no test drives a genuinely TTY-attached child, since allocating a pty in `bun test` is disproportionate here; `FORCE_COLOR` reproduces the identical byte sequence and is what actually occurs on this machine. Non-UTF8/binary stderr is not covered.
+> - Security/permission risk: net reduction. Control characters can no longer reach an error message or receipt, closing a terminal-injection vector in operator-displayed output. No auth, namespace, or SQL path is touched.
+> - Migration/deploy risk: none — no schema, migration, or config change.
+> - Downstream client/runtime risk: none. `summarizeChildStderr` is internal to `scripts/backup-lib.ts` and consumed only by `scripts/backup.ts` and `scripts/restore.ts`; verified with `rg` that no MCP tool, transport, or Python surface imports it. Per `docs/downstream-rollout.md` this is not a contract-changing change.
+> - Rollback/cleanup concern: revert is one commit and self-contained; the worktree is removed at wrap.
+> - Fixes made before PR: an initial Prettier run reflowed 33 lines of unrelated prose in `docs/sme/gotcha-agent.md`; reverted and re-appended so the diff is a pure 43-line addition.
+> - Known residual risk: the leak guards were deliberately left at full strength — the cut at the first colon/quote still bounds the class, and the new tests re-assert that a *colorized* COPY failure carries no row sentinel and no quote character.
+> - SME review-memory update: [x] `docs/sme/` updated — new gotcha-agent entry on anchored parsers vs. terminal escapes, including the "green in CI" dismissal that let this be filed as known noise
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/`
+> - Live Open Brain checks: [x] not applicable because: no service, transport, MCP tool, or schema surface is touched — the change is confined to a local operator-script stderr sanitizer
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: `summarizeChildStderr` is a private helper in `scripts/backup-lib.ts` with no contract fixture, client binding, or wire representation
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable
+>
+> Notes/evidence:
+>
+> - No MCP tool, schema, transport, or client-facing surface is modified. Changed files are `scripts/backup-lib.ts`, `scripts/backup-lib.test.ts`, and `docs/sme/gotcha-agent.md`.
+>

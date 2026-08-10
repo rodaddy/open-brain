@@ -49,3 +49,41 @@ Add a synthesized-answer memory tool, tentatively `brain_answer` or `think`, tha
 - `bun run typecheck`
 - targeted tests for the new tool
 - `bun test`
+
+---
+
+## Resolution
+
+Closed by **PR #113** — feat: add cited brain answer tool
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7a1187711ebd2c4162e7a8e4dac0ea58d2705e73`
+- Merged at: 2026-06-15T19:05:22Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T19:05:23Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #113 body
+
+> ## Summary
+>
+> - Adds `brain_answer`, a read-only extractive memory answer tool over Open Brain retrieval.
+> - Returns cited answer bullets, citation source refs, known gaps, and uncertainty instead of fabricating uncited facts.
+> - Preserves readable namespace enforcement before synthesis and documents Codex usage.
+>
+> ## Behavior
+>
+> - Uses hybrid Open Brain retrieval by default.
+> - Cites every answer bullet with returned `source_ref` identity.
+> - Returns `answer: null` with gaps when no readable evidence exists.
+> - Flags stale evidence and simple contradictory evidence as uncertainty.
+> - Supports `include_raw` for debugging while keeping default output citation-focused.
+>
+> Closes #107
+>
+> ## Validation
+>
+> - `bun test src/tools/__tests__/brain-answer.test.ts` passed.
+> - `bun run typecheck` passed.
+> - `git diff --check` passed.
+> - `bun test` passed, 626 pass / 16 skip / 0 fail.
+>

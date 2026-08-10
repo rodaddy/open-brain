@@ -60,6 +60,17 @@ This is steady-state successor work to #145. #145's legacy `collab → shared-kb
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-19T17:22:36Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-19T17:22:35Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-19T13:55:15Z

@@ -35,3 +35,35 @@ Nothing — foundational piece
 
 ## Blocks
 #55 (REST API), #56 (Dreamer promotion)
+
+---
+
+## Resolution
+
+Closed by **PR #58** — feat: explicit namespace param on core write tools
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `27bf67518a0f8914ac27fa5ca16070142f68c263`
+- Merged at: 2026-06-10T10:35:41Z
+- PR state: MERGED
+- Issue closed: 2026-06-10T10:35:42Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #58 body
+
+> Closes #54
+>
+> ## Summary
+> - New `namespace-policy.ts` module — `canWriteNamespace(auth, ns)` enforcing: admin/n8n → any namespace, agent → own + collab, discord → own only
+> - Added `namespace` param to `log_thought`, `log_decision`, `upsert_person`, `session_save` — defaults to `auth.clientId` when omitted
+> - Added namespace policy enforcement to `session_start`, `session_wrap`, `lane_upsert`, `upsert_entity`, `append_session_event` (had namespace param but no policy check)
+> - Migration 014: namespace-scoped unique indexes (content_hash, person_name) — allows same content in different namespaces for promotion
+> - Response JSON now includes `namespace` field
+>
+> ## Test plan
+> - [x] 528 tests pass, 0 fail
+> - [x] Typecheck clean
+> - [x] New namespace policy tests (8 cases covering all roles)
+> - [x] New log_thought namespace tests (4 cases: default, explicit, cross-namespace deny, admin override)
+> - [ ] Smoke test: Bilby `log_thought` with `namespace=bilby`, search confirms isolation
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

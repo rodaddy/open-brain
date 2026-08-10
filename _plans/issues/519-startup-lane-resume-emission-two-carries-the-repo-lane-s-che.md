@@ -28,3 +28,73 @@ Operator direction 2026-08-03: "startup should already know most of this stuff a
 - Adapter lanes #511/#512 inherit this (Pi/Codex sessions get lane resume for free).
 
 Blocks nothing; sequenced after #517 (merged, PR #518) whose derivation it reuses.
+
+---
+
+## Resolution
+
+Closed by **PR #521** — feat(canon): emission two carries the repo lane's resume (#519)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `496e3be89f19fbff6551606bbc3fc8fff737e358`
+- Merged at: 2026-08-03T06:28:58Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T06:28:59Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #521 body
+
+> Closes #519.
+>
+> ## Summary
+>
+> - Operator amendment 2026-08-03 to the canon-only ruling, by scope not reversal: a **repo-scoped** lane resume auto-loads at session start; cross-lane history stays explicit-on-request. Scope IS the contamination guard — an unresolvable repo reads no lane, never a fallback.
+> - Lane key follows #517's precedence: explicit `OPENBRAIN_CANON_SESSION_KEY` wins, else `dev:<git-root basename>` from cwd. One `session_context` call (the `event_limit` #516 restored) on the canon client shape; a failed lane read logs content-free and the pack emits WITHOUT the trailer — the lane never costs the canon.
+> - Rendered `resume.py --brief` shape: checkpoint first line + newest day's intent events (fact excluded), bodies whole, time order. Empty lane says so in one line.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> pytest 470 pass / mypy clean / ruff clean. Live-probed pre-merge via branch-installed tool: open-brain probe ends with `LANE RESUME (dev:open-brain)` carrying today's decisions; Development probe returns `dev:development`'s own Codex checkpoints (the provider write side already lanes per repo — the read side now matches).
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: emission-two size when a day is decision-heavy; bodies are carried whole by the no-reduction rule, and oversized additionalContext degrades to the harness's persisted-file path rather than breaking. Watched item, not a code guard, per the standing content rule.
+> - Assumptions that could be wrong: `dev:<repo>` is the lane convention — confirmed for open-brain and development live; other repos accrete lanes as they capture.
+> - Missing/weak tests: `_lane_resume_text`'s client construction is untested live-path (same stance as `_canon_context`); renderer and key resolution are fully covered.
+> - Security/permission risk: read-only, token-scoped namespace, no delegation.
+> - Migration/deploy risk: none server-side; client is `uv tool install --force` (already installed from this branch on the dogfood box).
+> - Downstream client/runtime risk: dogfood-scoped; #511/#512 adapters inherit the behavior when they adopt this hook stack.
+> - Rollback/cleanup concern: single-commit revert + tool reinstall; setting `OPENBRAIN_CANON_SESSION_KEY` pins the old behavior immediately.
+> - Fixes made before PR: fixture-name mismatch in tests caught on first run.
+> - Known residual risk: the docstring's amended ruling and canon.md/`_plans/canon-always-known.md` now diverge — the model docs need a follow-up line recording the 2026-08-03 amendment.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: operator-directed single-lane feature; the #515/#516 port-parity pattern for `gotcha-agent.md` is already queued separately.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because:
+>
+> Live checks: probes recorded in the commit body; #519 carries the design and its evidence trail.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: client-side rendering and scope resolution only; `session_context` and `agent_context_pack` wire contracts unchanged.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Dogfood-only client hook change; no MCP surface moved. Operator-directed run ("go", 2026-08-03); merge on operator direction per the merge gate's operator arm.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

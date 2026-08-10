@@ -69,6 +69,37 @@ This is functional but wrong. Should be corrected in the user configs.
 
 ---
 
+## Resolution
+
+Closed by **PR #18** — fix: prevent session leak exhausting MAX_SESSIONS
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `825e97d03a14678be8991b2af49a9c9f0ba01205`
+- Merged at: 2026-04-09T16:57:45Z
+- PR state: MERGED
+- Issue closed: 2026-04-09T16:57:47Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #18 body
+
+> ## Summary
+> - **Delete-first pattern**: `expireSession()` removes the session from the map *before* calling `transport.close()`, so a rejected close can never leave a leaked entry
+> - **`lastActivity` timestamp**: Tracks last activity on each session to enable the sweeper
+> - **Safety-net sweeper**: Runs every 5 minutes, force-cleans any session that survived past 2x TTL (60 min) — catches anything the timer missed
+>
+> ## Root cause
+> Timer callbacks called `transport.close()` without `await` or `try/catch`. If `close()` rejected (e.g., transport already dead from a dropped SSE connection), `sessions.delete()` never executed and the session leaked permanently. Leaked sessions accumulated until hitting `MAX_SESSIONS` (100), returning 503 to all clients.
+>
+> ## Test plan
+> - [x] `bun test` passes (324 pass, 0 fail)
+> - [ ] Deploy and confirm `search_all` works for all token types
+> - [ ] Monitor logs for sweeper activity over 24h — should see `Session sweeper tick` with `swept: 0`
+>
+> Fixes #17
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
 ## Discussion (1)
 
 ### Skippy-the-Magnificent-one — 2026-04-07T18:01:38Z

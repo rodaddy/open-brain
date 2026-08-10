@@ -60,3 +60,40 @@ Returns:
 - Tools respect namespace/auth visibility rules.
 - Tools do not require agents to know DB schema.
 - Output is concise enough for compaction recovery.
+
+---
+
+## Resolution
+
+Closed by **PR #45** — feat: add session event journal + context tools (#35, #36)
+
+- Linkage: Closed by commit `3f768908f8fce60f1cbe8f0676aca2a8f544346e`, which is the merge commit of this pull request.
+- Merge commit: `3f768908f8fce60f1cbe8f0676aca2a8f544346e`
+- Merged at: 2026-06-08T04:37:10Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T04:37:12Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #45 body
+
+> ## Summary
+> - **Migration 013**: `ob_session_events` table — append-only event stream for session lanes
+> - **`append_session_event` tool**: Write facts, decisions, blockers, artifacts, receipts, corrections, and more to a lane
+> - **`session_context` tool**: Load lane state + recent events by session_key or channel_id, with type/importance filters
+> - 36 tests, full auth coverage, embedding resilience
+>
+> ## Event Types
+> `fact`, `decision`, `blocker`, `action`, `artifact`, `receipt`, `question`, `correction`, `handoff`
+>
+> ## Importance Levels
+> `hot`, `warm` (default), `cold`
+>
+> ## Test plan
+> - [x] `bunx tsc --noEmit` passes
+> - [x] 437 tests pass (36 new)
+> - [x] Auth gates verified (admin/agent/n8n allowed, discord/readonly/no-auth denied for writes, readonly allowed for reads)
+> - [x] Embedding failure is non-fatal
+> - [x] Lane-not-found returns clean error
+>
+> Closes #35, closes #36
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

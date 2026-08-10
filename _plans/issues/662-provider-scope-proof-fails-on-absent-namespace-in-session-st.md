@@ -34,3 +34,116 @@ Setting OPENBRAIN_DELEGATE_NAMESPACE=1 with a delegating (ob-admin) token does N
 3. This is the last known blocker for the #578 E2E gate's capture leg going green. (The gate's clause (e) teardown failure is separate: PR #653's branch predates the merged #655 purge — fixed by merging main into that branch, not by this issue.)
 
 Related: #529 (scope-proof failures on operator capture, same validate_started_lane neighborhood — check whether one fix covers both shapes and say so either way).
+
+---
+
+## Resolution
+
+Closed by **PR #664** — fix(662): name the absent-namespace session_start refusal instead of dead-ending
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `94f7e81913afaee07e7aa276d56c9dfaafbaa47b`
+- Merged at: 2026-08-09T00:07:16Z
+- PR state: MERGED
+- Issue closed: 2026-08-09T00:07:17Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #664 body
+
+> ## Summary
+>
+> - Fixes #662. A session_start lane object carrying NO namespace key fell through to the generic "session_start result did not prove exact Open Brain scope: namespace" — the exact dead-end message #654's own comment says must never be produced for this key, because namespace is env-carried and has no request spelling for the operator to correct.
+> - Root cause: #654 (PR #657) diagnosed the MISMATCH case behind the guard `if "namespace" in lane and served != namespace` at _runtime_validation.py:107-116. Absence walks past that guard into validate_exact_fields, where a missing key counts as a mismatch and gets reported by name. Same defect #654 fixed, on the other side of its own if.
+> - Decided at the owning boundary, and the boundary is the VALIDATOR, not the server. The dispatch proposed a possible server-side fix; checked and rejected on evidence. Both session_start implementations already return namespace unconditionally — server/tools/session-lifecycle.ts:13 (startLaneFields, used by all three sub-paths at :144, :167, :186) and src/tools/session-start.ts:9 (LANE_COLUMNS) — and the mcp2cli fallback calls the same session_start tool (_runtime_router.py:145-149), so it inherits the same shape. Confirmed live: a raw tools/call against the serving process on 127.0.0.1:3100 returned the namespace in the lane object. There is no server-side omission to correct, so a "always return it" change would edit code that already does it.
+> - The lane object is untrusted input to this validator — it is the thing being validated — so "our server always sends it" is not a reason to leave a hostile-input branch dead-ended. The codebase already contains namespace-less lane SELECTs on a neighbouring path (server/tools/context-pack-durable-lane.ts:292-293, src/tools/agent-context-pack-durable-lane.ts:265), and #662 was filed because a real run reached this branch.
+> - Absence and mismatch now carry different messages because they are different faults. A mismatch has a remedy: delegate the namespace. An absence does not, because the server never stated one, so repeating the delegation advice would be a false remedy — a dead end with more words. The absent refusal names the configured namespace, says the response omitted it, and points at OPENBRAIN_BASE_URL as the thing to check.
+> - It stays a REFUSAL. An unproven namespace is not a proven one; accepting the lane would be the silent mis-scope #654 exists to prevent.
+>
+> **On #529, checked and stated either way as asked:** this fix does NOT cover it, and #529 needs no further work from this issue. #529 (CLOSED) reported the same validator's generic message naming agent, channel_id, source. Those keys differ in the way that matters: they ARE request keys, carried in the caller's scope object, so naming them is already actionable — the operator has a field to correct. namespace is the sole scope key with no request spelling, which is why it needed #654 and needs this. Scope was deliberately not expanded. Clause (e) of the done-means pins the distinction so a future change cannot quietly reroute the request-key shapes into a namespace-flavoured message; if those shapes are ever judged insufficiently actionable, that is its own lane.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/662-absent-namespace-scope-proof.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> **RED (pre-fix, at the committed check against origin/main's validator) — real exit 1:**
+>
+> ```
+> (a) absent namespace not dead-ended     : FAIL - RED ANCHOR PRESENT - generic dead-end error returned: [session_start result did not prove exact Open Brain scope: namespace]
+> (b) absent refusal is actionable        : FAIL - says-omitted=False names-configured=False error=[session_start result did not prove exact Open Brain scope: namespace]
+> (c) absent namespace still refused      : PASS - refused
+> (d) control, #657 mismatch intact       : PASS
+> (e) control, #529 request keys intact   : PASS - error=[session_start result did not prove exact Open Brain scope: agent]
+> (f) control, correct lane validates     : PASS - clean
+>
+> === DONE-MEANS 662: FAIL (2 failing clause(s)) ===
+> EXIT=1
+> ```
+>
+> Two clauses red with four controls green is the discriminating shape — a check that failed everywhere would only prove it fails. Each RED was read for WHY, not tallied: (a) fails because the dead-end string is present, (b) because the message names neither the omission nor the configured namespace.
+>
+> **GREEN (post-fix, clean committed worktree) — exit 0:**
+>
+> ```
+> (a) absent namespace not dead-ended     : PASS - the generic scope-proof dead end is gone
+> (b) absent refusal is actionable        : PASS - says-omitted=True names-configured=True error=[session_start did not return a namespace for the lane, so it cannot prove the configured 'bilby'. ... Check that OPENBRAIN_BASE_URL points at an Open Brain whose session_start returns the lane's namespace. Nothing was written to 'bilby'.]
+> (c) absent namespace still refused      : PASS - refused
+> (d) control, #657 mismatch intact       : PASS - error names token-namespace, bilby, and OPENBRAIN_DELEGATE_NAMESPACE
+> (e) control, #529 request keys intact   : PASS
+> (f) control, correct lane validates     : PASS - clean
+>
+> === DONE-MEANS 662: PASS ===
+> EXIT=0
+> ```
+>
+> **Pytest regression, proven red-first by file-copy (no stash — round-13 rule):** with origin/main's validator restored under the new tests, test_absent_namespace_names_the_response_shape_not_a_false_remedy FAILED on the dead-end assertion (1 failed, 21 passed). Its sibling test_absent_namespace_is_still_refused_never_accepted passes both pre- and post-fix by design: it is a control proving the fix does not loosen the refusal, not a red anchor. Fix restored, 22 passed.
+>
+> **Gates:**
+>
+> - bun run test:isolated — 3747 pass, 35 skip, 0 fail across 244 files, database ob_isolated_11875_msl19achic created and dropped
+> - bunx tsc --noEmit — clean, exit 0
+> - uv run mypy src/openbrain_memory — Success, no issues in 17 source files
+> - uv run ruff check src tests — All checks passed
+> - uv run pytest -q — 579 passed, 14 skipped (skip count checked, not just the pass count — round-10 lesson)
+>
+> **Hermetic by design, per ledger 26.2.** All six clauses drive the shipped validator in-process with constructed lane objects: no service, no database, no credentials. This is deliberate rather than a gap. The absent-namespace lane is not a shape the current server can emit (see the boundary evidence above), so a live clause could only confirm what is already known and would go stale on the next redeploy — the round-12 non-portable-receipt problem. There is no post-deploy clause because there is no server-side change to deploy: the fix ships inside the Python package.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the branch that decides whether a capture is allowed to proceed. Getting it wrong in the permissive direction means writing into a lane whose namespace was never proven, which is a cross-tenant landing, not a cosmetic error. The fix adds a raise on a path that previously also raised, so the permissive direction is not reachable by this diff; clause (c) and a dedicated pytest case both assert the refusal survives.
+> - Assumptions that could be wrong: that no live server omits namespace from a session_start lane. Verified for both in-repo implementations by source and confirmed live against the local dogfood service, but NOT verified against hosted core01 at 10.71.1.21:3100 — I did not query it. If core01 runs an older build that omits the key, this change is what makes that situation legible rather than opaque, so the assumption failing makes the fix more valuable, not less. Second assumption: that an operator reading "check what OPENBRAIN_BASE_URL points at" can act on it; that is a judgement about usefulness and is not machine-checkable.
+> - Missing/weak tests: no test asserts a real server response can never omit the key — that would be a server-side contract test, and it is not what this issue is about. The message assertions are substring-based, so a reworded-but-still-actionable message would fail them; that is intentional (the text IS the deliverable) but it makes them brittle to unrelated copy edits.
+> - Security/permission risk: the change tightens rather than loosens. Namespace isolation is a security boundary in this repo, and the absent case now refuses by name instead of refusing opaquely. No auth, role, or predicate logic is touched. No new input is trusted.
+> - Migration/deploy risk: none. No schema change, no migration, no server change, no config key.
+> - Downstream client/runtime risk: this IS a Python client change, so downstream-rollout classification applies and is filled in below. The change is to error TEXT on an already-failing path plus one new raise on a path that already raised — no tool schema, no protocol, no wire shape, no public signature changes. A downstream consumer that string-matches the old generic error for the absent case would see the new message, which is the point of the issue.
+> - Rollback/cleanup concern: revert of a single commit touching four files; no state to unwind. Lane worktree and lane database are torn down by the lane.
+> - Fixes made before PR: the driver's import was switched to importlib after reading the round-18 lesson — a static import of a symbol absent at the pre-fix tree kills the driver before any clause prints, producing a false RED shaped exactly like a real one. Nothing imported here is new, but the pattern is now the default. Also split the actionable-message assertion from the still-refused assertion into separate clauses and separate tests, after the round-17 lesson that a two-halved claim in one clause passes for the wrong reason.
+> - Known residual risk: hosted core01's session_start lane shape is unverified from this lane (stated above, not implied away). Separately, the absent-case message tells the operator to check the endpoint, which is the honest advice available at the client, but it cannot name WHICH server build is answering — a version field in the response would make it sharper and does not exist today. PROPOSED, not filed.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the dead-end-error class is already captured for reviewers by the #654/#646 material and the lane-contract round-15 Tightening, and this lane's reusable lesson is an operating one for lanes (a guard written as "key present AND wrong" leaves the absent branch unguarded) which belongs in the lane contract's Tightenings via the controller's harvest, not in a reviewer lane file.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the fix is client-side and ships in the Python package with nothing to deploy, and the defect's input shape cannot be produced by the running server, so a live clause would exercise the healthy path only. The live probes that WERE run are recorded above as boundary evidence, not as acceptance.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: this changes only the Python provider's refusal text for a response shape it rejects either way. No tool contract, schema version, or wire field changes, so there is no cross-runtime fixture to update.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Classified per docs/downstream-rollout.md as a Python-client change with NO contract surface. No MCP tool, schema, protocol, or client-facing signature is modified: the diff adds one raise on an already-raising path and rewords one error string. rtech-mcps and mcp2cli mediate tool contracts, which are untouched, so no handoff or cache refresh applies.
+> - rtech-hermes consumes this package. The behavioral delta a Hermes runtime could observe is the error TEXT on a session_start response that was already being rejected — captures that failed before still fail, with a message that names the fault. No Hermes code change is required and no canary is gated on this; a Hermes agent picks up the new text on its next package bump.
+> - Truth labels: the fix is MERGED-to-branch only, i.e. WRITTEN and pushed, not merged and not deployed. Every clause result above is RUNNING as of this lane's execution against the committed branch tree. The claim that the serving process returns namespace is RUNNING, observed live on 127.0.0.1:3100. The claim about hosted core01 is explicitly unverified.
+>

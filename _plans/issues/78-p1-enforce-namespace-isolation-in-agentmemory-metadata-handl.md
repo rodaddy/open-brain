@@ -28,3 +28,33 @@ Potential tenant/agent namespace isolation bypass in shared agent runtimes or pl
 - If namespace override is required, expose it through an explicit privileged API/constructor flag, not arbitrary metadata.
 - Add tests for `remember_fact(..., namespace="other")` and `remember_decision(..., namespace="other")` proving normal clients reject or ignore cross-namespace values.
 - Document the namespace authority model: bearer token/server, headers, and facade-level behavior.
+
+---
+
+## Resolution
+
+Closed by **PR #86** — fix: reject AgentMemory namespace metadata spoofing
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5c9d191c1b3ade16db2c070d28a928bdeb512c59`
+- Merged at: 2026-06-11T01:54:37Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T01:54:38Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #86 body
+
+> ## Summary
+> - Remove `namespace` from generic `AgentMemory` fact and decision metadata pass-through.
+> - Treat namespace/header/token/role authority-shaped metadata as reserved before client calls, including nested decision context and event metadata.
+> - Preserve semantic nested context fields like `source`, `summary`, `title`, and `rationale` for user-owned decision context/alternatives.
+> - Document the namespace authority model in the openbrain-memory README.
+>
+> ## Validation
+> - `cd python/openbrain-memory && uv run pytest tests/test_agent.py tests/test_safety.py`
+> - `cd python/openbrain-memory && uv run pytest`
+> - `cd python/openbrain-memory && uv build`
+> - `bun test`
+> - `git diff --check`
+>
+> Closes #78
+>

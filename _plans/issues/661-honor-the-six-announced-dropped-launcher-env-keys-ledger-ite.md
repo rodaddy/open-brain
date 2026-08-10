@@ -24,6 +24,114 @@ Fast-lane eligible (ledger 22): known class (round-18 allowlist entry + sme allo
 
 ---
 
+## Resolution
+
+Closed by **PR #663** — fix(local-clone): honor five ruled env keys, stop announcing suppressions
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c44b1f6369a9a623caecee9715bb55841e3dfb65`
+- Merged at: 2026-08-09T00:08:44Z
+- PR state: MERGED
+- Issue closed: 2026-08-09T00:08:45Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #663 body
+
+> ## Summary
+>
+> - Fixes #661. Adds five operator-configured keys to CHILD_ENV_KEYS in scripts/local-clone.ts so they reach the server child: LOG_LEVEL, LOG_MAX_BYTES, LOG_MAX_FILES, OPENBRAIN_MCP_AUDIT_ENABLED, SERVICE_NAME. Each was set with a real value in the operator-owned clone env file and dropped in silence for its whole life. Fourth instance of the deploy-coupling class already documented at the #530 tracing comment, after #530 and #659.
+> - **Scope amended mid-lane, by operator ruling 29.2a.** Ledger item 29.2 said all six announced keys be honored. Writing the done-means red-first proved the sixth could not be: EMBEDDING_WATCHDOG_RESTART_SCRIPT is in PROHIBITED_PATH_KEYS at src/local-clone-mode.ts:15, refused with any non-empty value at lines 190-194, pinned by a passing test at src/local-clone-mode.test.ts:138-145. The launcher threw on it before the allowlist was ever consulted. Honoring it would have handed the clone a capability its own isolation guard exists to refuse.
+> - **Why it was in that boot line at all.** The deployed env file sets it EMPTY (local-clone.env:17), which docs/local-clone-dogfood.md:147 documents as the suppression form, the same shape as an explicit empty QMD_PATH. The #659 drop reporter skipped only on undefined, so a deliberately-DISABLED key was reported as dropped CONFIGURATION. A human read that false positive and filed an issue asking that a prohibited key be honored.
+> - So describeDroppedChildEnvironment now reads three states rather than two: unset (absent, not reported), set-empty (a deliberate off switch, not reported), set-valued (configured, reported if the child will not receive it). This is not a new semantic. Clone mode already requires an explicit empty QMD_PATH to suppress the production default, at src/local-clone-mode.ts:203-209; the reporter now reads an empty value the same way the validator already does.
+> - Announcing a drop remains the correct mechanism and is still not the resolution. Announcing a deliberate suppression is the mirror defect: a false positive that teaches an operator the boot line is noise, which costs exactly what silence costs. This PR has a live receipt for that cost.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/661-launcher-honors-six-keys.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> RED, before the fix, real nonzero exit. Clause (b) reproduced the live 2026-08-08 boot line verbatim, all six keys named:
+>
+> ```
+> FAIL  (a) ruled keys DROPPED by the launcher: LOG_LEVEL, LOG_MAX_BYTES, LOG_MAX_FILES, OPENBRAIN_MCP_AUDIT_ENABLED, SERVICE_NAME
+> FAIL  (b) boot on the deployed env file: exit=0, announce lines=1 ... local-clone launcher ADJUSTED the server child's environment: 6 configured key(s) are NOT in the child allowlist and were dropped -- EMBEDDING_WATCHDOG_RESTART_SCRIPT, LOG_LEVEL, LOG_MAX_BYTES, LOG_MAX_FILES, OPENBRAIN_MCP_AUDIT_ENABLED, SERVICE_NAME
+> PASS  (c) control: the allowlist still holds ... AND the announce mechanism still names them, without echoing values
+> PASS  (d) control: DB_*, AUTH_TOKEN_*, AUTH_TOKEN_USER_* and OPENBRAIN_TRACING_* and the #659 capture-health keys all still reach the child
+> FAIL  (e) EMBEDDING_WATCHDOG_RESTART_SCRIPT: explicitly-empty was ANNOUNCED as dropped configuration
+> clauses: 5 run, 3 failed
+> DONE-MEANS #661: FAIL
+> EXIT=1
+> ```
+>
+> The first RED run failed clause (b) with "Local clone mode prohibits EMBEDDING_WATCHDOG_RESTART_SCRIPT" rather than an announcement mismatch. Reading WHY the clause failed instead of banking the tally is what surfaced the prohibition and produced the amended ruling. Controls (c) and (d) passed pre-fix throughout, so the check discriminates rather than merely failing.
+>
+> GREEN, after the fix:
+>
+> ```
+> PASS  (a) all 5 operator-ruled keys reach the server child with their configured values, and the clone-mode-prohibited EMBEDDING_WATCHDOG_RESTART_SCRIPT correctly does not
+> PASS  (b) boot on the deployed env file: exit=0, announce lines=0, ruled keys missing from the spawned child=none -- a fully-honored env file boots quiet
+> PASS  (c) control: the allowlist still holds AND the announce mechanism still names them, without echoing values
+> PASS  (d) control: DB_*, AUTH_TOKEN_*, AUTH_TOKEN_USER_*, OPENBRAIN_TRACING_* and the #659 capture-health keys all still reach the child
+> PASS  (e) three-state rule holds under mutation: set-empty is a suppression (not announced), set-valued-and-unlisted is a drop (announced), unset is neither
+> clauses: 5 run, 0 failed
+> EXIT=0
+> ```
+>
+> Suite and typecheck, from the lane worktree:
+>
+> - bun run test:isolated -- 3752 pass, 35 skip, 0 fail, 244 files, database ob_isolated_2835_msl18cscj2 created and dropped on exit.
+> - bunx tsc --noEmit -- exit 0.
+> - scripts/local-clone.test.ts alone went 14 to 19 tests, 51 assertions, proving the five new tests execute rather than trusting a green run (Bun names tests only on failure).
+>
+> Mutation results, three mutants:
+>
+> - Removing the empty-skip line: clause (e) FAILS on both probe keys. Killed.
+> - Removing LOG_LEVEL, LOG_MAX_BYTES, LOG_MAX_FILES from the allowlist: clause (a) FAILS naming exactly those three. Killed.
+> - Swapping the empty test for a truthiness test: SURVIVES, and this is reported rather than hidden. It is an equivalent mutant at this type. The value is string-or-undefined, undefined is skipped one line earlier, and every non-empty string is truthy, so no fixture can separate the two spellings. Clause (e) still probes "0" and "false" to guard the reachable regression, which is a future refactor that widens the type, coerces, or trims. The driver comment records this honestly instead of claiming a kill the check did not make.
+>
+> Live smoke is not applicable from the lane: this changes what the launcher hands its child, and the proof is a redeploy plus a boot-log read, which is the controller's step and explicitly a non-goal here.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the empty-skip in describeDroppedChildEnvironment. It is a deliberate narrowing of a safety announcement, so a key genuinely meant to carry a value but accidentally left empty in the env file is now silent where it used to be loud. Judged correct because an empty value is the documented suppression form in this repo and the launcher cannot distinguish "empty on purpose" from "empty by mistake"; the alternative keeps a permanent false positive on every boot.
+> - Assumptions that could be wrong: that empty-means-suppressed generalizes beyond QMD_PATH and the watchdog script to every server-config key. It is the established repo reading and matches both documented cases, but it is now applied uniformly rather than per key.
+> - Missing/weak tests: no test asserts LOG_LEVEL actually changes server behavior once delivered. server/config.ts reading it is the coupling this PR restores, and proving it needs a running server, which is the post-merge redeploy step. The done-means proves delivery to the child, not consumption by it, and names that seam rather than implying more.
+> - Security/permission risk: low, and one boundary was actively defended. The prohibition on EMBEDDING_WATCHDOG_RESTART_SCRIPT in clone mode is preserved; the original ruling would have removed it. Clause (c) proves the allowlist still excludes unlisted keys, including junk keys carrying the LOG_ and SERVICE_ prefixes this PR touches, so no prefix family was waved through. The drop report still names keys and never values, so an unlisted AUTH_TOKEN_ spelling cannot be logged.
+> - Migration/deploy risk: no migration. Deploy risk is that the clone must be redeployed for any of this to be RUNNING; until then the merged change is MERGED and dark, which is precisely the #659 conflation this thread exists to stop.
+> - Downstream client/runtime risk: none. No MCP tool, schema, transport, or Python client surface changes; scripts/local-clone.ts is the local dogfood launcher only.
+> - Rollback/cleanup concern: revert the commit. The five allowlist entries and the empty-skip are independent, so either half can be reverted alone. No state is written and nothing persists.
+> - Fixes made before PR: corrected the stale PASS banner in the shell wrapper that still said "six" after the amendment, since an inaccurate receipt is the silent-adjustment class this repo bans. Corrected a driver comment that claimed the falsiness mutation was a kill when it is an equivalent mutant.
+> - Known residual risk: LOG_LEVEL taking effect in the server, and the boot line going silent on the real clone, are both unproven here and belong to the post-merge redeploy. Stated as MERGED-not-RUNNING rather than implied complete.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the reusable lesson is a lane-operating one, not a reviewer-facing code pattern, and it is being harvested into the Tightenings in docs/lane-contract.md by the merge pass. The underlying accept-and-ignore pattern is already SME gotcha-agent #464.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the behavior changed is what the launcher hands its child process, which no live API call can observe. Its proof is the post-merge redeploy boot log, the controller's step.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: this is the local-clone launcher's process-env projection, which has no cross-runtime contract surface and no Python client equivalent.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board. No MCP tool, schema, protocol, or client-facing surface is touched; the change is confined to the local dogfood launcher's child-environment projection and its drop reporter.
+> - Post-merge, the controller redeploys the clone and reads the boot log for two things: the ADJUSTED line absent (all configured keys now honored or correctly suppressed), and LOG_LEVEL taking effect so server/config.ts stops defaulting. Both are RUNNING claims this PR does not make.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-08T23:44:59Z

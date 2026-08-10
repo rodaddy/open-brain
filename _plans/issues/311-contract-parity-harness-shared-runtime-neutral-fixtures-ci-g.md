@@ -26,3 +26,77 @@ Deliverables:
 7. Server-side tripwire: log per-request client contract id/schema hash mismatches so escaped drift is visible in live telemetry.
 
 Follow-ups tracked separately: TS client implementation against these fixtures; Development-side Claude adapter cutover.
+
+---
+
+## Resolution
+
+Closed by **PR #313** — feat(contracts): contract-parity harness — shared fixtures, CI gate, hooks, tripwire
+
+- Linkage: Closed by commit `ddffd8a2f10224edd5d40b1c8fecff426304e6ba`, which is the merge commit of this pull request.
+- Merge commit: `ddffd8a2f10224edd5d40b1c8fecff426304e6ba`
+- Merged at: 2026-07-21T18:42:38Z
+- PR state: MERGED
+- Issue closed: 2026-07-21T18:42:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #313 body
+
+> ## Summary
+>
+> Implements #311: the contract-parity harness that makes TS/Python client drift a build failure instead of a discipline. Phase 1 of the matched-clients plan (#312 TS client builds against these fixtures; rodaddy/development#43 cutover follows).
+>
+> - `contracts/memory/`: 12 runtime-neutral fixtures across 7 capabilities (contract declaration v22, session lifecycle shapes, exact-scope proof #294, spool backpressure #300, redaction #304, auto-drain allowlist #307, receipt shapes with the TS-only error_category taxonomy #308 marked runtime-specific) — pure extraction from the existing Python contract tests, no behavior change.
+> - `contracts/memory/parity-manifest.json` + `contracts/check-parity.ts`: capability map (python: implemented, ts: pending/runtime-specific with reasons); validator fails on undeclared asymmetry. Passing: 12 fixtures / 7 capabilities.
+> - `tests/test_contract_fixtures.py`: pytest replays every python/both fixture over fake transport.
+> - CI: `contract-parity` job on client/contract paths; `.githooks/pre-push` runs the same gate locally when those paths are touched.
+> - PR-body validator: PRs touching client/contract paths must carry a literal `Contract parity:` disposition line.
+> - Wire tripwire: Python client sends `X-OB-Contract: <id>;schema_hash=<sha>`; server request-logger emits a structured `client_contract_mismatch` warning on malformed or mismatched declarations (log-only, no rejection).
+> - `docs/memory-contract.md`: contract-parity section (gate + declared-asymmetry rule) so other projects can adopt the same pattern.
+>
+> ## Gates (all re-run independently by the controller)
+>
+> - `uv run pytest -q`: 362 passed / 5 skipped (fixture replay + manifest-set test included)
+> - `uv run mypy src/openbrain_memory`: clean; `uv run ruff check src tests`: clean
+> - `bun contracts/check-parity.ts`: passed, 12 fixtures / 7 capabilities (incl. live TS schema_hash assertion)
+> - `bun test` (validate-pr-body, request-logger): 24 pass / 44 assertions
+> - `bunx tsc --noEmit`: clean
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: the PR-body validator and pre-push gate add friction to every client-touching change; scoped by path filters so unrelated PRs are unaffected.
+> - Assumptions that could be wrong: fixture extraction is faithful to current asserted behavior (mitigated: pure extraction, original tests retained, both suites green); the X-OB-Contract header format stays stable (single parse regex, versioned by contract id).
+> - Missing/weak tests: no live-server tripwire observation yet (log-only path; verified by unit test, will be observed during the next hosted deploy); TS-side fixture consumption is necessarily pending until #312 exists — manifest marks it pending rather than pretending.
+> - Security/permission risk: none — no auth/namespace changes; header is advisory and logged, never trusted.
+> - Migration/deploy risk: additive; server change is log-only middleware.
+> - Downstream client/runtime risk: Hermes/mcp2cli unaffected (no tool schema change); Python package adds one request header.
+> - Rollback/cleanup concern: fully additive; revert removes the gate without touching client behavior.
+> - Fixes made before PR: controller completed/verified the work of a worker killed mid-lane (twice, 10-min worker cap) and re-ran every gate; no material rework found in audit.
+> - Known residual risk: the harness only catches drift the fixtures encode — behaviors never extracted stay unguarded until added; the manifest's not-yet-extracted markers make that gap explicit.
+> - SME review-memory update: [x] docs/sme/ updated — swarm MEDIUM+ findings promoted to correctness/adversarial/quality/security lanes with provenance, plus standing rejected-by-design entries (commits c20ec90, d3acadc).
+>
+> ## Downstream rollout classification (docs/downstream-rollout.md)
+>
+> Touched surfaces: Python client (one additive header), server logging middleware (log-only), repo process files. No MCP tool names/schemas, auth, transport, or DB changes.
+>
+> - Step 1 (local verification): complete, gates above.
+> - Step 2 (hosted verification): tripwire warning observation folded into the next core01 deploy; log-only, no behavior risk.
+> - Steps 3-4 (rtech-mcps / mcp2cli): [x] not applicable because: no registry, schema, or tool-surface change.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured — 6 MEDIUM findings from the 2026-07-21 swarm, all fixed in-branch and promoted to docs/sme/ (see swarm receipt below)
+> - Live Open Brain checks: [x] not applicable because: server change is log-only middleware verified by unit test; live observation rides the next deploy.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+>
+> Refs #294, #300, #304, #307, #308, #312.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+> ## Review swarm receipt (2026-07-21)
+>
+> Fresh-context swarm: 6 SME lanes (correctness, adversarial, security, quality, domain-backend, gotcha-agent — mandatory, python client touched), all returned. Key findings, all fixed in-branch (`c20ec90`): executable TS↔fixture schema_hash assertion added to check-parity.ts (the three-hand-copied-literals drift gap); exact fixture-ID set enforcement (manifest `expected_fixture_ids` + pytest non-empty/manifest match); CI zero-SHA fallback now uses merge-base with origin/main (matches hook range); placeholder runtime-specific reasons rejected; contract tripwire throttled to one warn per declaration per 5-minute bucket; parity path filter centralized in `contracts/parity-paths.txt` (was 4 copies). MEDIUM+ findings promoted to `docs/sme/` with provenance; standing design rejections recorded in security.md/adversarial.md (`d3acadc`). All gates re-run green after fixes: check-parity 12/7, pytest 362 passed, mypy/ruff clean, bun test 24 pass, tsc clean.
+>

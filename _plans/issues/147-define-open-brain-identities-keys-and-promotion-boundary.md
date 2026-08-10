@@ -77,6 +77,57 @@ Define and verify the Open Brain identity/key model for users, agents, and privi
 
 ---
 
+## Resolution
+
+Closed by **PR #150** — Document identity and self-review gates
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `1f7525f34c1d95b89a1d0c61c46d85f385270754`
+- Merged at: 2026-06-18T22:08:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T22:08:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #150 body
+
+> ## Summary
+> - Tighten the identity boundary docs so `promoted_by` is explicitly auth-derived bearer-token identity.
+> - Add verification hooks for person/agent/promoter identities and shared-kb write boundaries.
+> - Add the critical self-review receipt directly to the PR template so non-trivial PRs carry the gate by default.
+>
+> Closes #147
+> Closes #148
+>
+> ## Verification
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: docs/template could overstate enforcement; this PR only templates and documents the gate, while repo policy remains the enforcement layer.
+> - Assumptions that could be wrong: GitHub PR template is the right practical process check for #148.
+> - Missing/weak tests: docs/template change has no runtime test; validated by focused auth/namespace/promotion tests and typecheck for referenced behavior.
+> - Security/permission risk: identity doc now explicitly says `promoted_by` is bearer-token derived, not caller-supplied text.
+> - Migration/deploy risk: none; docs/template only.
+> - Downstream client/runtime risk: none for runtime behavior; PR template affects future contributor workflow.
+> - Rollback/cleanup concern: revert this PR to remove the template/docs wording.
+> - Fixes made before PR: aligned identity docs with #149 implementation and added PR template receipt.
+> - Known residual risk: process compliance still depends on reviewers/controllers checking the receipt content is real, not boilerplate.
+>
+> ## Downstream Rollout
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+> - Docs/template only; no MCP schema or runtime client contract change.
+> - `git diff --check`
+> - `bun test src/auth.test.ts src/namespace-policy.test.ts src/rest-promotion.test.ts src/tools/__tests__/promote-entry.test.ts` -> 48 pass
+> - `bunx tsc --noEmit`
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-19T01:01:32Z

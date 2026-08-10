@@ -41,3 +41,54 @@ The agent memory setup relies on namespace/source/actor attribution to audit whi
 
 ## Not fixed by rtech-hermes #213
 rtech-hermes #213 changed provider fallback so generic gateway identity no longer sends source=default. It does not control server-side created_by attribution.
+
+---
+
+## Resolution
+
+Closed by **PR #206** — fix: expose session event writer provenance
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `8021d3e46df3ba0772da775d5577abbb8c6dd077`
+- Merged at: 2026-06-26T02:35:29Z
+- PR state: MERGED
+- Issue closed: 2026-06-26T02:35:30Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #206 body
+
+> ## Summary
+> - add explicit writer/token/delegation provenance to append_session_event responses
+> - persist the same provenance under metadata._openbrain.writer for session_context/readback
+> - bump required memory contract to 2026-06-26.memory-tools.v7 and append_session_event to v4
+> - update python/openbrain-memory contract pin to match
+>
+> ## Why
+> Fixes #205 by making the ambiguous Nagatha case auditable. If a Rico token writes into namespace=nagatha without delegated headers, created_by remains rico and the event now says writer_identity=rico/token_identity=rico. If the request is correctly delegated with X-Namespace/X-Agent-Id, the event says writer_identity=nagatha/token_identity=rico and created_by is nagatha.
+>
+> This intentionally does not let caller-provided source spoof created_by.
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: treating caller-provided source as authorship would allow spoofed created_by values; the implementation keeps created_by tied to authenticated effective identity.
+> - Assumptions that could be wrong: downstream clients may parse only event_id and ignore new provenance fields, so live Nagatha verification still has to inspect metadata._openbrain.writer through session_context.
+> - Missing/weak tests: no hosted live Open Brain write was run before PR because deployment happens after merge; local protocol and contract tests cover the server behavior.
+> - Security/permission risk: exposing token_identity could leak service identity labels, but not tokens or secrets; it is needed to audit delegated writes.
+> - Migration/deploy risk: contract bump to 2026-06-26.memory-tools.v7 requires hosted Open Brain deployment and mcp2cli cache/skill refresh before agents rely on it.
+> - Downstream client/runtime risk: rtech-hermes/Nagatha still may need mcp2cli or transport header changes if live writes show namespace_source=token and writer_identity=rico.
+> - Rollback/cleanup concern: rollback is reverting this PR and contract pin to v6; events written during rollout may retain _openbrain writer metadata as harmless extra metadata.
+> - Fixes made before PR: added regression tests for token-sourced cross-namespace writes and header-delegated writes, then bumped TS and Python contract pins.
+> - Known residual risk: this PR clarifies provenance but does not force Nagatha to authenticate as herself over the wire; that remains a downstream rollout verification item.
+> - SME review-memory update: [ ] docs/sme/ updated [x] not applicable because: no durable SME review lesson changed; this is an issue-specific auth/provenance fix.
+>
+> ## Review Gate
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: this PR is pre-merge server code; live hosted validation is the required downstream rollout after merge.
+>
+> ## Validation
+> - bun test src/tools/__tests__/append-session-event.test.ts src/contract.test.ts
+> - bunx tsc --noEmit
+> - cd python/openbrain-memory && uv run pytest tests/test_client.py tests/test_contract.py -q
+> - bun test
+> - cd python/openbrain-memory && uv run pytest -q
+> - git diff --check
+> - ggshield secret scan repo .

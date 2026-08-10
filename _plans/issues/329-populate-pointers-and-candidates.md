@@ -56,6 +56,83 @@ Implement lightweight cited `pointers` and clearly unconfirmed `candidate_memory
 
 ---
 
+## Resolution
+
+Closed by **PR #360** — feat(329): populate pointers and candidate memory
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `6e4d9745ddf340b23ef66441c4be5075a10b1758`
+- Merged at: 2026-07-23T06:39:26Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T06:39:27Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #360 body
+
+> ## Summary
+>
+> - add lowest-priority `pointers` and `candidate_memory` sections to `agent_context_pack`
+> - reuse the existing authorized durable-memory hybrid recall and existing whole-pack fitter
+> - emit body-free structural pointers with canonical `brain_record:${source_type}:${id}` identities and citation bijection
+> - return a truthful empty candidate envelope until an explicit candidate predicate exists
+>
+> ## Behavior
+>
+> - `pointers` contains resolvable identity/source references and structural metadata only; no body, preview, or label text
+> - pointers dedupe against items actually retained in the final fitted `durable_memory` section
+> - durable rows removed by whole-pack fitting remain pointer-eligible instead of disappearing
+> - pointers-only requests make all authorized recalled rows eligible without emitting `durable_memory`
+> - candidate-only requests run no recall and return:
+>   - `confidence: "unconfirmed"`
+>   - `auto_promotable: false`
+>   - `empty_reason: "candidate_predicate_unavailable"`
+>   - no items or citations
+> - allocation order remains deterministic, with `pointers` and `candidate_memory` after `repo_facts`
+>
+> Closes #329
+>
+> ## Validation
+>
+> - `bun test ./src/tools/__tests__`: **746 passed, 32 skipped, 0 failed** across 68 files
+> - focused #329 identity/pointer tests: **36 passed, 0 failed** (exact current head)
+> - `bunx tsc --noEmit`: passed
+> - `git diff --check`: passed
+> - full `bun test`: **2021 passed, 154 skipped, 2 failed**; both failures are unrelated backup/restore ANSI-stderr expectations and reproduce unchanged on the parked base checkout:
+>   - `scripts/backup.test.ts` expects `query failed`
+>   - `scripts/restore.test.ts` expects `COPY failed for table`
+>
+> ## Downstream rollout classification
+>
+> Applicable because `agent_context_pack` output behavior and tool descriptions change.
+>
+> - Open Brain local verification: complete
+> - hosted Open Brain deployment and changed-tool canary: required after merge
+> - mcp2cli live schema/cache verification and generated Open Brain skill refresh: required after deploy
+> - rtech-mcps registry/process change: not currently indicated; verify during rollout
+> - Python and TypeScript client code changes: not required for this server-side additive section behavior
+> - Hermes runtime/plugin and live Hermes canaries: not applicable by explicit project direction; this change is runtime-neutral and has no direct Hermes integration
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: whole-pack fitting could orphan citations, duplicate a retained durable item as a pointer, or silently lose rows trimmed from `durable_memory`.
+> - Assumptions that could be wrong: generic authorized recall still has no explicit candidate lifecycle discriminator; the implementation therefore returns a truthful empty candidate section instead of inferring status.
+> - Missing/weak tests: no live PostgreSQL test is required because this slice adds no SQL and reuses the existing namespace-filtered search path; black-box MCP tests cover output, authorization denial before recall, authorized pointer resolution, fitting, and citation reconciliation.
+> - Security/permission risk: namespace authorization remains server-side before recall; pointers are derived only from already authorized rows and resolution is verified through `get_entry` with the token-derived namespace predicate.
+> - Migration/deploy risk: no schema or migration change; deployment changes only server assembly/output behavior.
+> - Downstream client/runtime risk: additive sections and descriptions require hosted schema/cache refresh and generated-skill verification; clients that ignore unrequested sections are unchanged.
+> - Rollback/cleanup concern: revert the two commits and redeploy the previous `main`; no data migration or persistent mutation requires cleanup.
+> - Fixes made before PR: replaced legacy/bare identities with canonical citation identity, changed dedupe to post-fit retained durable items, made pointer-only top rows eligible, removed candidate-only recall/dead identity bookkeeping, strengthened resolution/budget/isolation tests, and split an oversized test file.
+> - Known residual risk: `candidate_memory` intentionally remains empty until a future explicit authorized candidate predicate is added.
+> - SME review-memory update: [x] not applicable because: the initial swarm found no new MEDIUM+ reusable pattern; all findings were P3 test/comment hardening.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR is not merged or deployed yet; deployment and hosted canary remain post-merge gates
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-23T06:48:28Z

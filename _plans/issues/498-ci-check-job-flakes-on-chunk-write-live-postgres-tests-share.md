@@ -79,6 +79,197 @@ implemented and none of the options above has been attempted.
 
 ---
 
+## Resolution
+
+Closed by **PR #505** — fix(chunking): stop the split loop at the end of the text
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `ccb80c7ef1238b9df8e55efd41ff13b0c7aa8178`
+- Merged at: 2026-08-02T23:15:29Z
+- PR state: MERGED
+- Issue closed: 2026-08-02T23:15:30Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #505 body
+
+> ## Summary
+>
+> Closes #498, which was filed as a CI infrastructure flake. It is not one. There
+> is a real product defect in `chunkText`, and the flake is its symptom.
+>
+> `src/chunking.ts` did not terminate its split loop on its own terms. Once `end`
+> clamped to `text.length` it stayed pinned there, so `end - overlap` stopped
+> advancing and the `start + 1` progress floor crawled the cursor forward **one
+> character per iteration**, emitting a shrinking near-duplicate copy of the tail
+> for every remaining character.
+>
+> The giveaway is that the spurious count was driven by `overlap`, not by the
+> text. The same 14,000-character entry produced **410 chunks at overlap=400 and
+> 208 at overlap=200**, where ~11 is correct. The last chunk's entire text was
+> `"."`.
+>
+> | Input | chunkSize/overlap | Before | After |
+> |---|---|---|---|
+> | `"Sentence about the migration plan. ".repeat(400)` | 2000/400 | 410 | 11 |
+> | same | 2000/200 | 208 | 9 |
+> | `"A long operator explanation…".repeat(1250)` | 2000/400 | 443 | 44 |
+> | `"x".repeat(9000)` (no sentence breaks) | 2000/400 | 406 | 6 |
+> | `"S. ".repeat(667)` | 2000/400 | 401 | 2 |
+>
+> The fix is one line at the owning boundary — `if (end >= text.length) break;`
+> after the chunk is pushed. The `start + 1` floor stays, because it still
+> guarantees forward progress for a degenerate chunk in the *middle* of the text,
+> which is now the only case that can reach it.
+>
+> ### Why this was worth finding rather than raising the timeout
+>
+> Every caller paid for the junk chunks, not just CI:
+>
+> - `src/tools/log-thought.ts:121` → `writeEntryChunks` wrote each one as a row in
+>   `thoughts`.
+> - `src/embedding.ts:353` spends **one network embed call per segment**, so a long
+>   entry cost ~400 embed round-trips instead of ~11.
+> - `src/decomposition.ts:74` proposed them as replacement rows.
+>
+> Raising the test timeout — option 3 in the issue — would have left all of that
+> in production and removed the only signal pointing at it.
+>
+> ### How the flake follows from it
+>
+> `src/chunk-write.pg.test.ts` writes ~2050 rows across its six cases, of which
+> ~97% were degenerate tail rows. Under self-hosted runner load that exceeded the
+> 5000ms per-test budget. The `thoughts_parent_id_fkey` violation reported
+> alongside it was fallout — an unhandled error *between* tests, after teardown
+> raced the in-flight writes — not a second defect. Measured against an isolated
+> Postgres, same six tests, no assertion touched:
+>
+> ```text
+> BASELINE (no fix): 6 pass / 0 fail, 361 expect() calls, Ran 6 tests [2.03s]
+> WITH FIX:          6 pass / 0 fail,                     Ran 6 tests [129ms, 142ms, 142ms]
+> ```
+>
+> ~14x faster. The 5000ms budget went from ~2.5x margin locally — which runner
+> load pushed past 5s — to ~35x. No test was skipped, no assertion deleted, no
+> timeout raised, no flaky-retry added.
+>
+> ## Tests
+>
+> `src/chunking.test.ts` is **new**. The chunker had *no* unit coverage at all,
+> which is how this shipped and stayed hidden: the only thing exercising it was a
+> live-Postgres suite measuring storage properties, so 400 spurious rows per entry
+> read as "slow CI" rather than a chunker bug.
+>
+> The tests assert **both directions**, deliberately:
+>
+> - *nothing is lost* — every non-whitespace character appears in some chunk
+> - *nothing is spurious* — the count tracks text length, and the loop terminates
+>
+> Asserting only the first is exactly what let this defect through. Asserting only
+> the second would let a chunker "pass" by dropping the tail.
+>
+> **Red-proved.** With the tests unchanged and only the product fix reverted:
+>
+> ```text
+> OLD chunker: 6 pass / 3 FAIL   ("Expected: < 20   Received: 410")
+> NEW chunker: 9 pass / 0 fail, 86 expect() calls
+> ```
+>
+> ### A note on the coverage helper, because it nearly lied
+>
+> Three drafts of the coverage check located chunks with `text.indexOf(chunk.text)`
+> and all three were **unsound for repetitive input**: `indexOf` matches an earlier
+> identical occurrence, so the cover map fills at the wrong offsets and reports
+> gaps that do not exist. For `"Sentence about the migration plan. ".repeat(400)`,
+> chunk 1 truly begins at offset 1209 and `indexOf` anchors it at 19, because the
+> phrase repeats every 35 characters.
+>
+> Each draft was caught the same way — by running it against the buggy **and** the
+> fixed chunker and getting byte-identical failures from both (36, then 40, then a
+> phantom hole at 1785). A coverage assertion that fails identically on both is
+> measuring itself, not the code.
+>
+> The final helper derives offsets from the chunker's boundary arithmetic instead
+> of searching text. That mirror is kept honest by its own test — `models the same
+> chunk boundaries the chunker produces` — which asserts the model's chunk count
+> equals production's across 7 texts × 3 configs, so the mirror cannot silently
+> drift and make the coverage assertions vacuous.
+>
+> ## Validation
+>
+> ```text
+> - bunx tsc --noEmit: exit 0
+> - bun test (full, OPENBRAIN_TEST_DATABASE_URL set so Postgres suites really ran):
+>   3415 pass / 35 skip / 0 fail, 14364 expect() calls, 225 files, 35.33s
+> - bun contracts/check-parity.ts: passed — 52 fixtures across 45 capabilities and
+>   2 server providers; 63/63 current-src MCP tools fixture-covered, 0 explicit gaps
+> - src/chunking.test.ts: 9 pass / 0 fail; 3 fail on the reverted product fix
+> - src/chunk-write.pg.test.ts: 6 pass / 0 fail, 2.03s -> 0.129s
+> - Test database: a throwaway `ob_chunkfix_498_*` created with `-E UTF8 -T
+>   template0`, used, then dropped. The dogfood database
+>   `open_brain_local_20260724` was never written to and is still present.
+> - core01 / 10.71.1.21: NOT contacted. Out of scope by operator policy.
+> ```
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the chunker feeds every write and embed path, so a
+>   wrong boundary silently loses text. Coverage is therefore asserted directly —
+>   every non-whitespace character of the source must land in some chunk — across
+>   6 text shapes (sentences, no-break, newline-only, one-very-long-word, unicode,
+>   marker-in-middle) and 3 size/overlap configs.
+> - Assumptions that could be wrong: that no caller depended on the old chunk
+>   count. Checked by reading all three callers (`log-thought.ts:121`,
+>   `embedding.ts:353`, `decomposition.ts:74`) — each consumes chunks as a
+>   sequence and none asserts a count — and by the full 3415-test suite passing.
+> - Missing/weak tests: the chunker's `avg_chunk_size` log field and the
+>   `logger.info("chunked_text")` emission are not asserted. Ranking quality of
+>   the resulting embeddings is not measured here either; this PR proves the
+>   chunks are correct and complete, not that retrieval improved.
+> - Security/permission risk: none. No auth, namespace, SQL, or transport surface
+>   is touched; the change is a loop-termination condition in a pure function.
+> - Migration/deploy risk: no schema change and no migration. Rows already written
+>   by the old shape stay valid — they are real text under a real `parent_id`, and
+>   read paths reassemble with `ORDER BY chunk_index`, which the now-absent
+>   duplicate tail rows do not disturb. This PR does not backfill or delete them;
+>   that is a separate, operator-owned decision and is deliberately not bundled
+>   here.
+> - Downstream client/runtime risk: none. `git diff origin/main` touches only
+>   `src/chunking.ts` plus a new test file, and nothing in
+>   `contracts/parity-paths.txt`. No contract, schema, or served tool changes;
+>   parity was run anyway and passed.
+> - Rollback/cleanup concern: revert is the single `break` line. The temporary
+>   test database was dropped and verified gone; the worktree is removed after
+>   merge.
+> - Fixes made before PR: three unsound coverage helpers were caught and replaced
+>   before this PR existed, each detected by red-proving against the unfixed
+>   chunker rather than trusted because it was green.
+> - Known residual risk: the ~400-per-entry junk rows already written to
+>   `thoughts` in the dogfood database by the old shape are still there. They are
+>   harmless to reads but they inflate storage and duplicate-detection counts.
+>   Not cleaned up here on purpose — deletion is the operator's call, and this PR
+>   is scoped to stopping the bleeding.
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this is a pure-function
+>   loop-termination fix with no MCP, transport, auth, or contract surface; it was
+>   verified against an isolated throwaway Postgres, and core01 is out of scope by
+>   operator policy while this box is in dev mode.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: the diff touches only
+>   `src/chunking.ts` and a new `src/chunking.test.ts`, neither of which is in
+>   `contracts/parity-paths.txt`; no contract, schema, client, or served tool
+>   surface changes. `bun contracts/check-parity.ts` was run anyway and passed.
+>
+> Refs #498
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-02T23:18:50Z

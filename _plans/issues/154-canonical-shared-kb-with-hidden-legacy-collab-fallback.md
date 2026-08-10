@@ -77,3 +77,52 @@ Create a separate background promoter issue/PR after Phase 1:
 - Focused namespace/search/write-policy tests cover canonical + legacy fallback behavior.
 - PR body links this issue and states whether live canaries are applicable.
 - Review swarm required before merge because this changes namespace/security behavior.
+
+---
+
+## Resolution
+
+Closed by **PR #155** — Implement canonical shared-kb legacy fallback
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `ef458a49c00829f6714d4c7ac00395f186880a40`
+- Merged at: 2026-06-19T00:28:08Z
+- PR state: MERGED
+- Issue closed: 2026-06-19T00:28:09Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #155 body
+
+> ## Summary
+> - add canonical/physical/legacy shared namespace config with SHARED_NAMESPACE_CANONICAL, SHARED_NAMESPACE_PHYSICAL, and SHARED_NAMESPACE_LEGACY support while preserving existing OPENBRAIN_* fallback env names
+> - route canonical shared-kb reads through physical shared storage with hidden legacy collab fallback for explicit shared-kb and omitted scoped reads
+> - store promoted/logged shared writes in the physical namespace while returning canonical shared-kb output, and use physical target checks for promotion/scan duplicate paths
+> - add regression coverage for config resolution, physical predicates, promoter shared writes, implicit legacy fallback, and repo facts fallback
+>
+> Closes #154
+>
+> ## Validation
+> - bunx tsc --noEmit
+> - bun test src/shared-namespace.test.ts src/read-policy.test.ts src/namespace-policy.test.ts src/tools/__tests__/log-thought.test.ts src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts src/tools/__tests__/brain-answer.test.ts src/tools/__tests__/repo-facts.test.ts src/tools/__tests__/promote-entry.test.ts src/rest-promotion.test.ts src/tools/__tests__/scan-namespace.test.ts
+> - bun test (721 pass, 16 skip)
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: omitted-namespace reads now may include hidden legacy collab fallback when primary scoped results are weak, so ranking and dedupe behavior are the main behavior risk.
+> - Assumptions that could be wrong: fallback sufficiency based on result count is enough for this phase; score/confidence fallback can be refined later.
+> - Missing/weak tests: explicit score-threshold fallback is not covered because the current policy is count-based.
+> - Security/permission risk: collab remains denied as a normal readable namespace; fallback calls are server-owned and canonicalized before output.
+> - Migration/deploy risk: no schema migration is included; physical shared-kb rows depend on existing namespace text storage.
+> - Downstream client/runtime risk: clients that omit namespace may see canonical shared-kb results sourced from legacy collab during transition.
+> - Rollback/cleanup concern: rollback is reverting this PR; no data migration or irreversible write path is introduced.
+> - Fixes made before PR: added explicit canonical/physical helpers, implicit fallback for scoped reads, physicalized shared writes, and tests after worker mapping found the omitted-namespace fallback gap.
+> - Known residual risk: content-hash or semantic dedupe between migrated shared-kb and legacy collab rows remains limited to existing row-id based search dedupe.
+> - SME review-memory update: [x] not applicable because: this PR does not add a new MEDIUM+ review finding pattern yet; review swarm still pending.
+>
+> ## Review Gate
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR is server-side local validation only; live deploy/canary is a follow-up after review and merge.
+>
+> ## Review notes
+> - Full review swarm required before merge per repo gate.
+> - Legacy collab remains server-internal fallback only; clients should continue to request shared-kb.
+>

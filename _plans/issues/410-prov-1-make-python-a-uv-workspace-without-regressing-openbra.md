@@ -31,3 +31,187 @@ Make `open-brain/python/` a uv workspace so a sibling package can exist beside `
 
 ## Non-goals
 No provider code. No changes to `openbrain-memory` source.
+
+---
+
+## Resolution
+
+Closed by **PR #421** — feat(409): uv workspace and openbrain-provider skeleton (PROV-1, PROV-2)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `028820a9c65af80ccba2e0d742fcc80af2c8a559`
+- Merged at: 2026-07-26T04:56:15Z
+- PR state: MERGED
+- Issue closed: 2026-07-26T04:56:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #421 body
+
+> Closes #410. Closes #411.
+>
+> First two slices of #409: make `python/` a uv workspace, then add the
+> `openbrain-provider` package skeleton (config + observability) that will replace
+> the TypeScript lifecycle adapter currently shipped as a content-addressed
+> `sha256-<hash>` install directory.
+>
+> Skeleton only. Request parsing, receipts, dispatch, reflex recall, observation
+> export, and hook entry points are PROV-3..9 (#412-#418).
+>
+> ## What landed
+>
+> **PROV-1 (#410)** — `python/` becomes a uv workspace. Root `pyproject.toml`,
+> one lock file, one `.venv`. Membership is a glob rather than a hand-maintained
+> list, because uv accepts a listed member that does not exist: it resolves clean,
+> writes no lock entry, and reports nothing. A list cannot tell you whether a
+> package actually joined the workspace; the filesystem can.
+>
+> `.python-version` pins 3.13 to match CI. Without it uv selected 3.14 locally, so
+> local gates and CI would have run different interpreters.
+>
+> **PROV-2 (#411)** — the `openbrain-provider` package:
+>
+> ```
+> src/openbrain_provider/
+>   constants.py       bounds, each verified against the adapter and cited by line
+>   config.py          the only place environment is read
+>   observability.py   thin adapter over rtech-obs; hook-specific policy only
+> ```
+>
+> Config fails closed at construction: every object is a frozen dataclass
+> validating in `__post_init__`, so an invalid value raises at boot rather than at
+> first use.
+>
+> ## Defects found and fixed during this work
+>
+> Four of these are in my own PROV-2 code, found by a critical self-review after
+> the gates were already green. Recording them because the pattern matters: no
+> lint, type, or test gate reads packaging metadata, a shared contract, or a
+> comment's truthfulness.
+>
+> **1. A console script whose target module does not exist.** `[project.scripts]`
+> declared `ob-memory-provider = "openbrain_provider.cli_provider:main"`, but
+> `cli_provider.py` is PROV-9. uv installs the shim anyway, so `.venv/bin` held a
+> present, executable file that died on `ModuleNotFoundError`. Found by a cold
+> clone, not by any gate. Removed until the module lands, and
+> `tests/test_packaging.py` now imports every declared entry-point target.
+>
+> **2. The package grew its own logger.** `rtech-standards` ships `rtech-obs` as a
+> shared implementation; this package built a parallel one that emitted loguru's
+> internal `{"text":..., "record":{...}}` shape — none of the five expected
+> top-level fields, an uppercase level, no `host`. Any query written against the
+> shared envelope would have missed it entirely. `logger.py` deleted;
+> `observability.py` now wraps `rtech-obs` and holds only what it cannot know.
+>
+> That needed two mechanisms, not one. `stdout=False` covers the normal path, but
+> an unwritable `LOG_FILE` makes `rtech-obs` add a stdout sink — overriding
+> `stdout=False` by design. Its default location `/mnt/logs/services/` is not
+> provisioned, so that fallback would fire on every run today, and for a hook that
+> means logging onto its own response channel. `resolve_log_file()` probes a
+> writable directory (shared location if present, temp otherwise) so it never
+> does, and needs no change when the mount eventually lands.
+>
+> **3. Constants claimed provenance they did not have.** `constants.py` said
+> "carried over from the TypeScript adapter". Measured against it, not one
+> matched:
+>
+> | constant | adapter | was | drift |
+> |---|---:|---:|---:|
+> | `MAX_INPUT_BYTES` | 65,536 | 1,000,000 | 15.3x |
+> | `MAX_CONTEXT_PACK_MAX_TOKENS` | 20,000 | 100,000 | 5.0x |
+> | `MAX_PACKAGE_OUTPUT_BYTES` | 1,000,001 | 4,000,000 | 4.0x |
+> | `MAX_INGEST_INPUT_BYTES` | 2,097,152 | 8,000,000 | 3.8x |
+> | `MAX_DISTILLED_*` | 16,384 bytes | 20,000 chars | unit changed |
+>
+> Ten of twelve had no callers. The unused ten are deleted; the two that are
+> enforced are corrected and cited by line. This surfaced
+> `MIN_CONTEXT_PACK_MAX_TOKENS = 100`, which was being ignored entirely — the
+> budget is now bounded at both ends, exactly matching the adapter's 100..20,000.
+>
+> The 5x ceiling error was live: PROV-6 would have accepted a 100k-token budget
+> the TS path rejects at 20k, which is the cross-runtime disagreement this port
+> exists to remove.
+>
+> **4. `base_url` was validated by nothing.** All of these constructed
+> successfully while the module docstring promised it failed closed:
+> `not a url`, `file:///etc/passwd`, `javascript:alert(1)`, `$(whoami)`,
+> `http://127.0.0.1:3100 ; rm -rf /`. Now scheme-allowlisted to http/https with
+> host, port, whitespace, and control-character checks.
+>
+> **5. A cross-repo relative path source that only worked here.** `rtech-obs`
+> resolved via `../../../rtech-standards`, which resolves against the checkout's
+> location. A cold clone proved it fails anywhere the two repos are not siblings,
+> which includes CI. Repinned to an immutable git commit.
+>
+> ## Verification
+>
+> Cold clone, empty uv cache, `rtech-standards` not present as a sibling:
+>
+> | check | result |
+> |---|---|
+> | `uv sync --all-packages --frozen` | lock complete, `rtech-obs` from git |
+> | interpreter | 3.13.14, matching CI |
+> | `openbrain-provider` gates | ruff format, ruff, mypy strict (src + tests), pytest — 81 passed |
+> | `openbrain-memory` gates | unchanged: 515 passed, 9 skipped |
+>
+> Wheel checks: `py.typed` is packaged, no `entry_points.txt` ships, and a
+> separate consumer under `mypy --strict` against the installed wheel resolves the
+> types and catches a deliberate `int = str` error.
+>
+> Envelope conformance verified end to end: five top-level fields, lowercase
+> level, RFC 3339 UTC timestamp, populated `host`, empty stdout.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: `resolve_log_file()`. It exists to stop `rtech-obs`
+>   from attaching a stdout sink, because stdout is the hook's machine-readable
+>   return channel. If it ever returns an unwritable path, the fallback fires and
+>   a hook silently corrupts its own response. Covered by tests for the fallback,
+>   the preference order, and probe cleanup, plus a test asserting nothing reaches
+>   stdout with no `LOG_FILE` configured.
+> - Assumptions that could be wrong: that `rtech-obs` is the right shared
+>   dependency. It is four commits old, infra's first pass, and this package is
+>   its first consumer. If it turns out wrong, `observability.py` is ~110 lines
+>   and replaceable. Also assumed: `/mnt/logs` will eventually exist at the path
+>   the contract names.
+> - Missing/weak tests: no test asserts the two enforced constants still match the
+>   TypeScript adapter, so that provenance can silently rot again — the adapter is
+>   outside this repo, so a real guard needs the values checked in. No test
+>   exercises `configure_observability` under concurrent hook invocations writing
+>   the same log file. The review swarm found a third: a test named after a hazard
+>   that asserted an adjacent property instead (see the fix comment below).
+> - Security/permission risk: `base_url` validation is new and is the only input
+>   sanitization in this PR. It allowlists http/https and rejects whitespace and
+>   control characters, but does not restrict hosts, so an operator-set value can
+>   still point anywhere. That is intended at this layer. No namespace or auth
+>   logic is touched.
+> - Migration/deploy risk: none. No migrations, no schema changes, no runtime
+>   code path is wired to this package yet. The `sha256` adapter still serves live
+>   traffic and is untouched until PROV-11.
+> - Downstream client/runtime risk: none for this PR — no MCP tool, transport, or
+>   client-facing schema changes. `openbrain-memory` is unmodified and its test
+>   baseline is byte-identical. The `rtech-obs` git pin is on an immutable commit,
+>   so an upstream branch move cannot change this build.
+> - Rollback/cleanup concern: reverting the branch removes the workspace root, so
+>   anyone with an existing `python/.venv` needs one `uv sync`. The deploy script
+>   excludes `python/dist` and both `.venv` paths already.
+> - Fixes made before PR: all five defects above, each with a test that fails on
+>   the old behavior — verified red-then-green for the console-script guard.
+> - Known residual risk: `observability.py` writes the shared log envelope
+>   locally instead of depending on `rtech-obs`, because `rtech-standards` is
+>   private and this repo's CI passes no token — no git URL can reach it. That is
+>   a second implementation of a shared envelope, which is the drift the contract
+>   exists to prevent. Bounded by being ~90 lines, using the contract's field
+>   names, and testing conformance against a literal copy of the contract's field
+>   list. Swap back in one commit once the package is installable here (publish it,
+>   or wire a cross-repo checkout secret).
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR adds an unwired Python package with no server, MCP tool, or database path; no live Open Brain behavior changes.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no MCP tool, transport, schema, or client-facing contract is touched; `openbrain-memory` is unmodified and its 515/9 test baseline is unchanged.
+>

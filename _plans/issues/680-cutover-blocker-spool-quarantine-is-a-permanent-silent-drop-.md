@@ -39,3 +39,159 @@ On core01 this is the memory-durability guarantee. A quarantine drop is permanen
 4. Operationally: the 15 turns + lifecycle events already quarantined are lost; decide whether to attempt a manual replay of the sidecar before cutover.
 
 Truth grammar: RUNNING — the drop is on disk and the absence is confirmed in the live DB this session.
+
+---
+
+## Resolution
+
+Closed by **PR #689** — fix(capture): #680 a spool quarantine is never a silent drop — loud at the lane and counted in /health
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `df00a46cef44e78fd461010568d5abae2163bb87`
+- Merged at: 2026-08-09T16:57:30Z
+- PR state: MERGED
+- Issue closed: 2026-08-09T16:57:32Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #689 body
+
+> ## Summary
+>
+> - Closes #680 (cutover blocker B2). A spool quarantine was a permanent SILENT drop: after `DEFAULT_QUARANTINE_THRESHOLD=5` consecutive replay failures a unit moves to a `.quarantine.jsonl` sidecar and is never retried, and every operator-facing count read the LIVE spool — so the drop made the number go DOWN. On 2026-07-30, 15 raw turns and ~44 lifecycle records were abandoned while `/health` read `spool_pending:0, reason:"capture lane delivering"`.
+> - The mechanism was DESIGNED loud and BUILT silent. `SpoolStatus.quarantined_count` had existed the whole time with ZERO consumers outside the module that computed it. This PR wires it to readers at three owning boundaries; it does not invent a new mechanism.
+> - **Client** (`apps/capture/outage.py`, `apps/hooks/stop.py`): `spool_quarantined()` counts abandoned ENVELOPES; unreadable reports `None`, never a guessed 0. The notice gives abandonment its OWN clause and words — deliberately NOT folded into the spool depth, because one number meaning both "drains itself" and "never will" is the defect in a new place. The Stop hook reads the sidecar **even when the latch reports no change**: abandoned records are a standing condition, and the outage RECOVERING is exactly when the loss used to get buried.
+> - **Server** (`liveness-observer.ts`, `transport/health.ts`): `quarantined_count` is published in the capture block and raises a named fault. Optional and ABSENT rather than 0 when nothing reported it — "nothing was abandoned" and "nobody looked" are different facts. The fault is deliberately NOT gated on the liveness quorum, unlike the other three.
+> - **Operator triage** (`scripts/replay-quarantined-spool.py`): report-only by default, `--restore` to replay. The replay-vs-accept decision for the EXISTING sidecar is the operator's and is stated below, undecided on purpose.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/680-quarantine-loud.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> **RED (pre-change tree)** — 9 clauses red, 3 controls green:
+>
+> ```
+> PASS  setup-quarantined: 5 forced failures -> quarantined_count=1 pending_count=0
+> FAIL  a-pending-or-loud: pending=0 quarantined=<missing>   <- the silent sidecar
+> FAIL  b-notice-names-quarantine / c-control-healthy-quiet / d / e
+> PASS  f-sidecar-replayable: 1 envelope, consecutive_failures=5
+> FAIL  (a-quarantine-is-stale) stale=false reason="capture lane delivering"
+> FAIL  (b-count-published) quarantined_count=undefined
+> FAIL  (c-control-healthy-green) / (e-live-health-degraded) GET /health -> 200
+> PASS  (d-unobserved-is-not-zero) / (f-control-absence-not-staleness)
+> DONE-MEANS #680: FAIL
+> ```
+>
+> **GREEN (this branch)** — 13/13:
+>
+> ```
+> PASS  a-pending-or-loud: pending=0 quarantined=1
+> PASS  b-notice-names-quarantine: '... (quarantined: 1 - ABANDONED - replay gave up, operator action required)'
+> PASS  (e-live-health-degraded) live GET /health -> 503, capture.quarantined_count=3
+> PASS  (d-unobserved-is-not-zero) quarantined_count=undefined (absent, not a fabricated 0)
+> PASS  (f-control-absence-not-staleness) no observer -> 200, no capture block
+> DONE-MEANS #680: PASS
+> ```
+>
+> Also: `bunx tsc --noEmit` clean. `uv run mypy src/openbrain` clean (50 files). `uv run ruff check src tests` clean. Observer tests 8 -> 14. Python suite measured against a SEPARATE clean `origin/main` worktree: 611 passed / 1 skipped -> 622 passed / 1 skipped. Exactly +11, and the **skip count is unchanged** — a green suite after a change can hide silently disabled tests.
+>
+> **Mutation-proven, not merely green.** Two mutants, each killed:
+>
+> 1. `quarantined_count: quarantined ?? 0` (the fabricated zero, the defect's own shape) -> 12 pass / 2 fail.
+> 2. Restoring the latch gate `if notice is None: return` (the pre-fix behaviour) -> killed by the load-bearing test only, while its control still passed.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the Stop hook now stats one extra file on EVERY Stop, inside a 5-second deadline. Bounded deliberately — a `Path.exists()` on a file that does not exist for a healthy machine, which is the same cost the pending read already pays when it speaks. No client is built, no unit parsed, no lock taken.
+> - Assumptions that could be wrong: (1) that repeating the line every Stop until triage is right rather than annoying — it is deliberate, and the operator may rule otherwise; (2) that the quarantine fault should fire below the liveness quorum, which I argue for in the code but which is a judgment call; (3) that no non-hook caller of `spool_notice` passes a third positional argument by accident — the parameter defaults to 0, so existing two-argument callers are provably unchanged and pinned by a test.
+> - Missing/weak tests: no test drives the REAL Stop hook end-to-end with a quarantined sidecar through `capture_stop_with`; the coverage is at `announce_outage_state` (the boundary that owns the decision) plus the done-means driving the real spool. No Postgres test drives the observer's gatherer SQL with a quarantine value, because the gatherer deliberately does not report one.
+> - Security/permission risk: none new. No namespace predicate, auth path, or SQL is touched. The sidecar reader is read-only and content-free — it counts envelopes and never prints payloads, preserving the existing redaction boundary.
+> - Migration/deploy risk: none. No schema change, no migration. `quarantined_count` is an OPTIONAL field added to a health response, so existing readers are unaffected.
+> - Downstream client/runtime risk: `TransportCaptureHealth` is a client-facing contract and gains an optional field. Additive and optional, so no client breaks; but a client that pins an exact health schema would see a new key. Flagged below as needing a rollout classification I could not complete from this lane.
+> - Rollback/cleanup concern: revert is clean — no state is migrated and nothing was deleted. The lane's worktree and database are torn down; the restore-proof artifacts are archived, not removed.
+> - Fixes made before PR: two false REDs in my own check (a wrong `append()` kwarg that measured nothing; an `AttributeError` on the not-yet-existing symbol that killed every clause after the first — now resolved through a sentinel). One clause rewritten after it failed against the correct fix, then re-proven RED. One FALSE GREEN caught during that re-prove, where a `cp` restore silently did not land and the whole suite passed against an unreverted tree.
+> - Known residual risk: the existing sidecar is UNTOUCHED and the 15 turns are still not in the database — that decision is the operator's (below). The `announce_outage_state` swallow means a sidecar that cannot be read still degrades to silence at the hook, though `/health` remains loud. Clause 1 of the SME gate is RED on `origin/main` and remains red here (inherited, see below).
+> - SME review-memory update: [x] `docs/sme/` updated — `2026-08-09-a-hardcoded-zero-standing-in-for-an-unmeasured-quantity-is-a-silent-data-loss.md` (gotcha-agent lane), with `EXPECTED_ENTRY_COUNT` raised in the same commit.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the lane never contacts core01 (10.71.1.21) by hard rule, and the local dogfood service is deliberately not used as a test target. Every claim here is proven against an isolated lane database and an ephemeral 127.0.0.1 listener. The core01 application step is written below for the runbook rather than executed.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: `quarantined_count` is an optional field on the server's `/health` capture block, which the Python contract fixtures do not mirror — the Python `CaptureLiveness` model is the reader's own twin and gains no field in this PR (the client REPORTS the count; it does not consume the health block). If a reviewer judges the health block itself to be parity-covered, this needs a fixture and I would rather be told than guess.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [ ] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - **UNRESOLVED, and deliberately not self-certified.** This adds an optional field to a client-facing health response. It is additive, so nothing should break, but classifying the four boxes above requires surveying rtech-mcps, mcp2cli, and Hermes for readers that pin the health schema — outside this lane's scope and its network rules. Left unchecked for the controller rather than ticked on reasoning.
+>
+> ## OPERATOR DECISION REQUIRED — the existing sidecar (#680 item 4)
+>
+> **The 15 turns are still gone. Nothing in this PR replayed or deleted them.**
+>
+> Inspected read-only this session with `scripts/replay-quarantined-spool.py` (dry run), and the file was verified byte-for-byte unchanged afterwards (69,699 bytes, mtime unchanged):
+>
+> ```
+> sidecar : ~/.local/state/openbrain-memory/claude-spool.jsonl.quarantine.jsonl
+> ABANDONED UNITS: 23
+>   append_session_event      2 record line(s)
+>   ingest_raw_turn           1 record line(s)   -> 15 raw turns
+>   session_start            22 record line(s)
+>   session_wrap             20 record line(s)
+>   consecutive failures per unit : [5]
+>   failure window : 2026-07-23 23:18:43 .. 2026-07-30 19:16:12
+> ```
+>
+> That matches the issue exactly: 15 raw turns plus 44 lifecycle records.
+>
+> **Option 1 — REPLAY.** Restores every abandoned unit to the live spool; the provider's ordinary drain delivers them on its next healthy operation.
+>
+> ```bash
+> python3 scripts/replay-quarantined-spool.py            # confirm the numbers first
+> python3 scripts/replay-quarantined-spool.py --restore  # writes a timestamped backup, then restores
+> ```
+>
+> Then verify the turns landed:
+>
+> ```bash
+> set -a; . ./.env; set +a
+> psql -At -c "select count(*) from ob_raw_turns where turn_uuid in ('<uuids from the sidecar>');"
+> ```
+>
+> Proven working against a synthetic sidecar quarantined through the real code path: `pending=0/quarantined=1` -> `pending=1/quarantined=0`, backup written, both turn_uuids read back intact. Ordering is restore-then-empty on purpose: a crash between the two re-delivers (at-least-once, consumers dedupe on `idempotency_key`), where the reverse would lose them outright.
+>
+> **Option 2 — ACCEPT THE LOSS.** Leave the sidecar. The records stay on disk and out of the database. Worth saying explicitly so the loss is a decision on the record rather than an oversight — which is the entire failure mode #680 is about.
+>
+> Risk worth naming for option 1: these units failed 5 consecutive times each between 07-23 and 07-30. If the cause was the payload rather than reachability, they will fail again and re-quarantine — which is now LOUD, so a second attempt is cheap to observe and costs nothing but a drain cycle.
+>
+> ## CORE01 APPLICATION STEP (written, NOT executed)
+>
+> Per the lane's hard rule, nothing here touched core01 (10.71.1.21). For the cutover runbook:
+>
+> 1. Deploy this change with the rest of the cutover; no migration, no config key, nothing to set.
+> 2. After deploy, read the FEATURE's own signal, not just the revision (#659's lesson): `curl -s http://10.71.1.21:3100/health | jq '.capture'` — a worker composing the observer publishes the capture block. `quarantined_count` will be ABSENT there, and that is correct: the server-side gatherer cannot observe a client-side sidecar, so it reports nothing rather than a fabricated 0.
+> 3. The count becomes non-absent only when a reporting client supplies `spoolQuarantined`. Wiring a client reporter is NOT in this PR and is not required to close #680 — it is the natural follow-up, and I would rather file it than smuggle it in.
+> 4. On each capture host (not core01), `python3 scripts/replay-quarantined-spool.py` is the standing triage command once the notice fires.
+>
+> ## Refusals, deviations, and inherited failures
+>
+> - **design-lookup-gate fired twice as a FALSE POSITIVE** on this change: once matching "limits" inside a citation of a doc FILENAME, once matching "How many" in the EXISTING docstring wording I was preserving verbatim. No cap, bound, or reduction is proposed anywhere in this PR. Complied both times by rewording rather than retrying a variant. Reported, not fought.
+> - **fast-tools-gate** refused a `grep -E`; used `rg`. The rule working.
+> - **Two foreign stashes** were present in the repo (`stash@{0}`, `stash@{1}`, both other branches'). Not touched — red/green proofs used file-copy, per the round-13 rule.
+> - **INHERITED, main-owned, NOT fixed here:** the SME gate's clause 1 is RED on `origin/main` — `2026-08-08-guards-must-judge-the-operation-not-the-vocabulary.md` (from PR #638) uses a different frontmatter style and carries no `## ` heading. Proven by running the gate in a separate clean `origin/main` worktree: main fails clauses 1 AND 4; this branch fails only clause 1. I fixed clause 4 (see next) and left another lane's entry file alone.
+> - **EXPECTED_ENTRY_COUNT reconciled 227 -> 232.** It was already stale on main: 231 dated headings against a pin of 227, so four entries landed across #645/#648/#673 without the same-commit bump the rule requires. 231 inherited + 1 mine = 232. Reconciled rather than absorbed, because a gate left red for reasons nobody owns is one people learn to skip.
+> - **CI caught a real defect a local run could not (self-reported).** `python-capture` failed D205 on the first push. The ruff fix had been made locally during the lane and NEVER COMMITTED — it sat in the working tree while the commit meant to carry it went out with the old text. Local ruff passed because it read the dirty file; CI read the commit. "Passes on my machine" and "CI is flaky" were both available readings and both wrong. Settled by reading the committed blob (`git show <sha>:<path>`) instead of the working file, which is the only way to tell the two apart. Fixed in `571f8ee`; CI green at that head, all 8 checks.
+> - **Flagged for the decisions pass:** the every-Stop repetition of the quarantine notice is a deliberate departure from this module's "a notice is a state change, never an event" convention. I argue for it in the code (a standing condition is not an event, and the latch's silence is what made the loss permanent), but it touches a recorded convention and deserves a ruling rather than my say-so.
+>

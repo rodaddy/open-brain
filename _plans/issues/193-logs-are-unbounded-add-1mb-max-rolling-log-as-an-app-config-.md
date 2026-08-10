@@ -45,6 +45,149 @@ Run via launchd `com.rico.open-brain` on the Mac (workers on 3100/3101/3102), St
 
 ---
 
+## Resolution
+
+Closed by **PR #233** — fix(logger): 1MB rolling file sink as an app config standard (#193)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `9653cf86d0ff770eb929915c61d11ce5f0f499fc`
+- Merged at: 2026-07-05T21:30:44Z
+- PR state: MERGED
+- Issue closed: 2026-07-05T21:30:45Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #233 body
+
+> Refs #193
+>
+> This PR builds the capability but does NOT by itself bound the actual #193
+> file: `console.*` still writes stdout unconditionally and launchd's
+> `StandardOutPath` owns `/opt/homebrew/var/log/open-brain.log`, so #193 closes
+> only after the deploy-gated core01 plist/env step below is applied and
+> verified live.
+>
+> ## What & why
+>
+> OB log files grew unbounded. The app only writes structured JSON to
+> stdout/stderr via the shared logger (`src/logger.ts` -> `console.*`); on core01
+> the launchd service `com.rico.open-brain` redirects that stream via
+> `StandardOutPath` to a single `/opt/homebrew/var/log/open-brain.log`, which had
+> no size cap (16MB and growing per the issue). launchd owns the file — the app
+> just writes stdout. Host newsyslog/logrotate was explicitly ruled out; the cap
+> must be a built-in app config standard every deployment inherits.
+>
+> ## Change (scoped to logging)
+>
+> - `src/rotating-file.ts` — reusable size-capped rolling file sink. Rotates the
+>   active file to `.1` (shifting `.1->.2...`, pruning past `maxFiles`) when the
+>   next line would exceed `maxBytes`, and rotates again immediately after any
+>   write that leaves the active file over the cap (so a single oversized line —
+>   even as the very first write — never lingers as an over-cap active file).
+>   `rotate()` reports whether the active file was verifiably cleared; the size
+>   counter is only zeroed on verified rotation, otherwise it re-syncs from disk
+>   so failed rotations (read-only dir, EXDEV, ENOSPC) are retried on the next
+>   write instead of silently unbounding the file. Files are created `0o600`,
+>   directories `0o700`. Size is checked at write time (no cron), and every
+>   write is best-effort — logging can never throw or crash the server.
+> - `src/logger.ts` — when `LOG_FILE` is set, mirror every emitted line into the
+>   rotating sink (console output unchanged). When `OPEN_BRAIN_WORKER_NAME` is
+>   set (the two-worker launcher sets a distinct name per child), the effective
+>   path is derived per worker automatically (`open-brain.log` ->
+>   `open-brain.<worker>.log`, name sanitized so it cannot change the directory),
+>   so workers inheriting one configured `LOG_FILE` never share an active file or
+>   rotation chain. New env, with issue defaults:
+>   - `LOG_FILE` — active log path (enables the sink; unset = today's behavior)
+>   - `LOG_MAX_BYTES` — rotate threshold, default `1_000_000` (1MB); values < 1
+>     fall back to the default
+>   - `LOG_MAX_FILES` — rotated files retained, default `3`; `0` keeps only the
+>     active file
+>
+> Because all OB code and sibling processes (legacy-promoter, backup) log through
+> this one shared logger, they all inherit the cap.
+>
+> ## Tests (functional, black-box)
+>
+> `src/rotating-file.test.ts` and `src/logger-file.test.ts` — all writes confined
+> to `mkdtemp` temp dirs, asserting observable outcomes only: write >1MB through
+> the sink and through the real `logger.info` (child processes for env wiring);
+> active and rotated files stay `<= cap`; retained count `<= maxFiles`
+> (`maxFiles=0` keeps only the active file); recent content survives rotation
+> boundaries in order; oversized lines — including as the very first write — are
+> rotated immediately and bounded to their own file; a failed rotation
+> (read-only parent dir) never zeroes the counter and rotation is retried on the
+> next write after recovery (fails on the old behavior, verified); created files
+> are `0o600` and created dirs `0o700`; `LOG_MAX_BYTES=0` falls back to the 1MB
+> default; two workers sharing one configured `LOG_FILE` get divergent
+> per-worker files; `deriveWorkerLogPath` unit coverage incl. path-traversal
+> safety; no `LOG_FILE` ⇒ no files created. Full suite: `bunx tsc --noEmit`
+> clean, `bun test` 976 pass / 0 fail.
+>
+> ## Review fix rounds
+>
+> Cross-model review (Codex gpt-5.5):
+> - P2-1: shared-LOG_FILE multi-worker race — fixed in code via automatic
+>   per-worker path derivation from `OPEN_BRAIN_WORKER_NAME` (not docs), with a
+>   two-worker regression test proving the effective paths diverge.
+> - P2-2: oversized first write bypassing the cap — fixed via post-write
+>   rotation, with a first-write-over-cap regression test.
+> - P3: test cleanup `rmSync` guarded with `if (dir)`; unused `describe` import
+>   removed.
+>
+> Review swarm:
+> - P2: rotation-failure counter desync — `rotate()` now returns verified
+>   success and callers never zero the counter on failure (re-sync from disk,
+>   retry next write). Regression test reproduces the reviewer scenario
+>   (chmod 0500 parent dir) and fails on the old behavior.
+> - P3: log files created `0o600`, dirs `0o700` (mode-bits asserted in test).
+> - P3: `LOG_MAX_BYTES` values < 1 rejected at parse (fall back to default) so
+>   the zero-cap case is intentional in one place; `LOG_MAX_FILES=0` kept.
+> - P3: issue linkage changed from Closes to Refs (see top note) — the launchd
+>   `StandardOutPath` file is only bounded after the deploy-gated plist/env step
+>   is verified live.
+>
+> ## Deployment notes (documented — NOT executed anywhere host-level)
+>
+> The macOS CI runner is core01 (production); nothing host-level was run here.
+> To activate on core01 and actually close #193, an operator must, at deploy
+> time:
+>
+> 1. Set `LOG_FILE=/opt/homebrew/var/log/open-brain.log` (and optionally
+>    `LOG_MAX_BYTES` / `LOG_MAX_FILES`) in `/Users/rico/.config/open-brain/env`.
+>    Under the two-worker launcher each worker automatically writes
+>    `open-brain.<worker-name>.log`; no per-worker env is needed.
+> 2. Edit the launchd plist `com.rico.open-brain`: stop redirecting
+>    `StandardOutPath` to the same base path the app now owns via `LOG_FILE`
+>    (point it elsewhere or keep stdout minimal) to avoid double-writing.
+>    Keep `StandardErrorPath` for crash/bootstrap output.
+> 3. `launchctl kickstart -k system/com.rico.open-brain` to pick up env/plist.
+> 4. Verify live per the issue acceptance: watch the derived log files stay
+>    <= 1MB with <= 3 rotated siblings, then close #193.
+>
+> No DB migration. No MCP tool/schema/transport/Python-client change, so
+> `docs/downstream-rollout.md` does not apply (internal logging config only).
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Silent cap bypass was the top risk in two forms — the multi-worker rotation race (now prevented in code: per-worker path derivation from `OPEN_BRAIN_WORKER_NAME`, proven by a two-child regression test) and the rotation-failure counter desync (now prevented: counter only zeroed on filesystem-verified rotation, proven by a read-only-dir regression test that fails on the old behavior).
+> - Assumptions that could be wrong: That launchd owns the 16MB file via stdout redirection — verified: logger only calls `console.*`, no plist in repo, deploy script relies on server-side `StandardOutPath`. That the launcher always sets distinct `OPEN_BRAIN_WORKER_NAME` values — verified at `scripts/run-two-worker.ts`. That `existsSync` after a rename attempt is a sufficient success check — it verifies the active path was cleared, which is exactly the invariant the counter depends on.
+> - Missing/weak tests: No test for two processes writing the exact same effective path concurrently (unreachable through the launcher, possible via operator misconfiguration); no ENOSPC/EXDEV simulation (the read-only-dir test covers the same failure edge — rename fails while append succeeds); byte-for-byte survival across pruned rotations is not asserted (old data is discarded by design).
+> - Security/permission risk: Log files are now created `0o600` and directories `0o700` (asserted in test) instead of umask-default world-readable; the worker-name path suffix is sanitized with a traversal test proving it cannot change the directory; no secrets are added (payload is the same JSON already emitted).
+> - Migration/deploy risk: No schema change; if `LOG_FILE` is unset behavior is identical to today (pure opt-in), so the code ships safely ahead of the plist change. During a persistent rotation-failure window (e.g. dir perms broken) the active file can exceed the cap — writes must land somewhere and log loss was judged worse — but it now rotates on the first write after recovery. Pre-existing log files keep their old modes; only newly created files get `0o600`.
+> - Downstream client/runtime risk: None — no client-facing, MCP, transport, or protocol surface is touched.
+> - Rollback/cleanup concern: Revert the commit or unset `LOG_FILE`; rotated `.1..N` files remain on disk and can be removed manually, and are bounded by design.
+> - Fixes made before PR: Corrected an under-sized test loop (~285KB) so the suite genuinely writes >1MB; cross-model round: per-worker path derivation, post-write rotation, guarded test cleanup; swarm round: verified-rotation counter fix (old behavior empirically fails the new test), `0o600`/`0o700` modes, bounded env parse, and Closes->Refs linkage honesty.
+> - Known residual risk: The actual #193 file stays unbounded until the deploy-gated core01 plist/env step is applied and verified live (why this is Refs, not Closes); an operator-forced identical worker name across processes can still recreate the shared-path race; during a sustained rotation-failure window the active file exceeds the cap until the filesystem recovers.
+> - SME review-memory update: [x] not applicable because: no new cross-cutting review pattern surfaced — this is a scoped, additive logging config change with functional tests, not a security/isolation predicate or contract fix that the SME lanes track.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: live 1.21 verification is a host-level deploy step held pending explicit approval per the no-live-server constraint; no live OB smoke can run from this PR.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-22T01:50:39Z
