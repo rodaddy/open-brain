@@ -3,11 +3,12 @@
 
 # #711 — core.hooksPath is absolute in .git/config, so every lane worktree runs the primary checkout's hooks
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T01:53:52Z
-Updated: 2026-08-10T01:53:52Z
+Updated: 2026-08-10T14:13:17Z
+Closed: 2026-08-10T14:13:17Z
 
 ---
 
@@ -82,3 +83,129 @@ folded into the #709 PR: #709's fix is confined to
 `_githooks/install.sh`'s guarantees and needs its own red-first check.
 
 Related: #709, #706, #705 (same family), and `docs/lane-contract.md` round 28.
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-10T14:13:17Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-10T14:13:16Z.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-10T14:13:16Z
+
+## Closed — fixed and verified RUNNING on the primary
+
+Merged as `183d0668444134edfa6bfad313c99b0ec5c28f5f` (PR #717) into
+`wip/2026-08-07`.
+
+### 1. The question the issue asked, answered by measurement
+
+**"Git resolves a relative `core.hooksPath` against the worktree root" — PROVEN,
+not assumed.** Throwaway worktree, a distinct marker line planted in each tree's
+copy of `_githooks/pre-push`, driven with `git hook run pre-push` (the shipped
+resolution, not a reimplementation of it):
+
+| config | run from | hook that executed |
+|---|---|---|
+| absolute | worktree | `MARKER: PRIMARY-COPY` ← the defect |
+| relative `_githooks` | worktree | `MARKER: WORKTREE-COPY` ← the fix |
+| relative `_githooks` | primary | `MARKER: PRIMARY-COPY` ← control, unchanged |
+
+Clause (a) of the done-means check reproduces this hermetically (its own
+throwaway repo) on every run, so a future git that changed this behaviour goes
+red here instead of silently reverting the fix.
+
+### 2. The config, per suggested direction 1 — done, and recorded
+
+`core.hooksPath` is per-clone state in `.git/config`, so it is not a committed
+file and the flip could not ship in the PR. Applied on this machine **via the
+installer** rather than by hand, so the installer is proven to be the remedy the
+new refusal text points at:
+
+```
+$ ./_githooks/install.sh
+core.hooksPath changed: /Volumes/ThunderBolt/Development/open-brain/_githooks -> _githooks
+```
+
+Live now: `git config --local --get core.hooksPath` → `_githooks`.
+
+### 3. Drift detection, per suggested direction 2 — done
+
+`_githooks/pre-push` asserts the effective `core.hooksPath` matches what the
+installer writes, before any validation work and before the `--explain` early
+exit. It **fails the push** rather than warning, because when this is wrong the
+verdict the gate is about to give is about the wrong tree — and a gate that
+knows its own answer is untrustworthy and returns it anyway is worse than one
+that stops. The refusal prints the configured value, the expected value, and the
+literal `./_githooks/install.sh` command.
+
+The issue asked for a positive assertion on the VALUE rather than a check that
+hooks merely ran; that is what this is. **Unset stays legal**: git then falls
+back to `.git/hooks` and this file is not running at all, so it cannot be the
+thing complaining — that is #311, not #711.
+
+### 4. Bootstrap reporting, per suggested direction 3 — done
+
+`scripts/lane-bootstrap.ts` LANE READY now states which hooks the new worktree
+will run. It reports and never fixes; the probe never throws, because a failed
+hooks probe is not a reason to fail a lane whose worktree, env, and deps are
+good.
+
+### 5. Found during the fix — a live loaded gun, not in the issue
+
+`scripts/install-hooks.sh` ran `git config core.hooksPath .githooks`, and
+`.githooks/` **does not exist in this repo**. That does not fail loudly: git
+finds no hooks and every tracked hook silently stops running — the exact #311
+half-landed state the `_githooks` installer was written to end, preserved as a
+one-line command that reintroduces it. It also wrote without `--local` and
+without resolving a repo root, so what it configured depended on the caller's
+cwd. One run would have disabled the whole gate this issue is about. Now a
+refusing stub pointing at `_githooks/install.sh` (not deleted:
+`docs/standards/REPO_BOOTSTRAP.md:54` references it by name).
+
+### Verification
+
+`bash scripts/done-means/711-hookspath-relative.sh` — **5/5 GREEN, exit 0**, run
+from the merged primary at `183d066`:
+
+```
+CLAUSE e (live core.hooksPath matches the installer): PASS — local core.hooksPath is _githooks, matching the installer.
+CLAUSE a (relative hooksPath resolves per-worktree; absolute does not): PASS
+CLAUSE b (the hook REFUSES an absolute/divergent core.hooksPath): PASS (exit=1)
+CLAUSE c (the refusal names the value, the expectation, and the fix command): PASS
+CLAUSE d (the installer's own value is NOT refused (mutation control)): PASS
+```
+
+RED before the fix: **(b) and (c) FAIL while (a) and (d) PASS.** (d) is the
+mutation control, so an assertion that simply refused everything could not have
+reached green by accident.
+
+Also: `bunx tsc --noEmit` clean; full `pre-push` green on the branch push; CI
+`PR Body / validate` and GitGuardian SUCCESS; verify-lane receipt bound to
+`c9bfe3b` via `bun scripts/verify-lane.ts 717`.
+
+### The family consequence this closes
+
+`docs/lane-contract.md` round 28 named this the third instance of one family —
+a gate resolving its base or its tree from something other than the change under
+review. This was the structural root: a lane fixing a git hook **could not
+exercise its own fix on push**, and a lane BREAKING one pushed green.
+
+**This lane ran its own hook fix**, which is the first time that has been true in
+the #705–#714 family. At verification time `rg -c "issue #711"` found the new
+assertion in the lane worktree's `_githooks/pre-push` (2 matches) and **not** in
+the primary's (0 — still on the base branch), and the lane's `git hook run
+pre-push` executed it. The `-c core.hooksPath=<worktree>/_githooks` workaround
+PR #708 needed is no longer required.
+
+Journal: `_plans/worklog/fix-711-2026-08-10.md`.
+Lessons are held for the tracking-scribe in PR #717 (root-only law,
+`docs/sop-rlvr-lanes.md` step 5).

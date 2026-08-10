@@ -3,11 +3,12 @@
 
 # #714 — pr-body-gate never sets PR_HEAD_REF, so the validator's branch fallback is dead in the gh pr create path it was written for
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T02:53:17Z
-Updated: 2026-08-10T02:53:17Z
+Updated: 2026-08-10T14:11:38Z
+Closed: 2026-08-10T14:11:38Z
 
 ---
 
@@ -97,3 +98,92 @@ this and did NOT route around it (no `--no-verify`, no weakened body, no false
 
 Related: #706 and #709 (the two prior instances of a gate judging from the wrong
 tree), #711 (absolute `core.hooksPath`, same family).
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-10T14:11:38Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-10T14:11:37Z.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-10T14:11:37Z
+
+## Closed by PR #718 (merge `ca1d6ca`) — but the filed premise was STALE, and the fix is narrower
+
+### The premise, re-verified first
+
+Canon: an issue older than the current code re-verifies its premise before implementation. This one was filed against pre-#709 code, and the headline claim does **not** reproduce.
+
+`.claude/hooks/pr-body-gate.ts` **does** set `PR_HEAD_REF`. PR #713 (issue #709) landed it: the hook parses `--head`/`-H` off the intercepted `gh pr create`, derives a branch from the `cd` target otherwise, and passes it in the validator's env. `scripts/done-means/709-hook-feeds-head-ref.sh` runs 5/5 GREEN holding that, and the #716 landing separately observed the cwd tier answering from a lane worktree.
+
+So the direction this issue suggested — "have the hook derive the head ref and pass it" — was already done. Implementing it as filed would have added a second `PR_HEAD_REF` assignment beside the working one.
+
+### What re-verification actually found
+
+The residue is one layer in and genuinely broken: **a branch NAME is not a ref until something can resolve it.**
+
+`gh pr create --head <branch>` names a branch on the REMOTE. Run from a root checkout that has fetched it but never created a local branch of that name — no `cd`, no worktree on disk, which is exactly the shape this issue's "Suggested direction" describes — the bare name resolves to nothing:
+
+```
+$ git -C primary cat-file -e lane/714-fixture:scripts/done-means/lane-only-check.sh
+fatal: invalid object name 'lane/714-fixture'.      exit=128
+$ git -C primary cat-file -e origin/lane/714-fixture:scripts/done-means/lane-only-check.sh
+                                                    exit=0
+```
+
+Reproduced against the unfixed hook at `17ada37`, driving the REAL hook with a synthetic PreToolUse payload against a genuine bare remote:
+
+```
+[pr-body-gate] tree under review: the hook payload's cwd (.../primary)
+[pr-body-gate] head ref: lane/714-fixture (source: explicit --head on the gh command)
+- Verification field 'Done-means' must name an existing repo-relative path;
+  not found: scripts/done-means/lane-only-check.sh
+  (looked in: .../primary, /Volumes/ThunderBolt/Development/open-brain;
+   and in ref lane/714-fixture)                                        EXIT=2
+```
+
+Note the contrast with this issue's own transcript: the head ref **is** supplied here, and the refusal **does** carry `; and in ref ...`. That clause is #709 working. The tier was fed — and still could not answer.
+
+### Direction taken, and why that one
+
+`resolvableRef()` resolves the branch name to a ref the tree being asked can actually read, before it becomes `PR_HEAD_REF`:
+
+1. **the name as given** — a local branch, a SHA, a tag, or a caller who already spelled it right (`--head origin/lane/x`). First, so a correct ref is never mangled and a local-only checkout with no remote keeps working.
+2. **`<remote>/<name>` for each configured remote, origin first.** Remotes are enumerated via `git remote` rather than assuming `origin` exists.
+
+Each candidate is asserted on **positively** (`rev-parse --verify --quiet <ref>^{commit}`), per lane-contract round 28: a lookup whose failure is indistinguishable from its legitimate empty case must be asserted on positively. A name resolving nowhere yields null and the branch tier is **skipped** rather than fed a dead string — and the announcement says so by name, naming both what `--head` said and what actually resolved (AGENTS.md: nothing is adjusted silently).
+
+**Why not the alternatives:**
+
+- *Blindly prepend `origin/`.* Breaks an already-correct ref (`origin/origin/x`), breaks local-only checkouts, and assumes the remote is named origin. Clauses 2 and 6 of the new check fail exactly this.
+- *Widen `existsInRef` in the validator.* Wrong boundary. The validator is handed a ref and correctly reports finding nothing; the **hook** is what knows which repository is being asked and therefore what can resolve there. Fixing it validator-side would also let CI's own correct ref get second-guessed.
+- *Accept an unresolvable ref / make the field advisory.* That is the blanket pass the gate exists to prevent. Clause 3 fails it.
+
+A second-order fix rides along: the old refusal printed `; and in ref lane/x` for a ref resolving to nothing, which reads as *"your check is not on the branch either"* when the truth is *"that name means nothing here."* A refusal that misdirects is worse than one that admits it looked nowhere, because the cheapest way past a misdirecting refusal is a false receipt — the very reflex ledger item 17 and this issue's own "Why it matters" section are about. The head-ref line now has a distinct third state naming the unresolvable value and the remedy.
+
+The containment guard on the PATH (`existsInRef`, absolute/`..` refused) is untouched. This widens WHERE a check may resolve, never WHAT may be named — as this issue requested.
+
+### Receipts
+
+- **PR:** #718 · **merge:** `ca1d6ca` · **done-means:** `scripts/done-means/714-head-ref-resolves-remote.sh`
+- **verify-lane:** VERIFIED, receipt bound to `6f9603f`, check exited 0, head re-checked unchanged.
+- **Red-first:** 3/6 clauses RED before the fix (1, 4, 5), 6/6 GREEN after. Clauses 2/3/6 were green from the start **by design** — they are the controls that fail a *bad* fix (double-prefixing, blanket pass, remote-dependency regression), not the defect.
+- **Regression surface, all GREEN:** `709-hook-feeds-head-ref.sh` (5/5), `pr-body-gate-fires.sh` (7/7), `706-done-means-resolves-pr-head.sh` (5/5), `pr-template-passes-validator.sh` (3/3), `done-means-field-required.sh` (5/5), `bunx tsc --noEmit` (0).
+
+### The trap worth recording
+
+`709-hook-feeds-head-ref.sh` clause 3 already drives `--head` through the real hook and **passed throughout this defect's entire lifetime** — because its fixture holds the lane branch LOCALLY, so the bare name resolves. It proves `--head` is *parsed*, never that the parsed value is *resolvable*.
+
+Round 28 says the invocation shape must be real. This adds: the fixture's **environment** must also be able to express the defect. A check whose fixture makes the defect impossible passes forever. The new check therefore builds a genuine bare-remote + clone rather than faking the ref layout.
+
+### Declared, not routed around
+
+Pre-push blocked on `test_receipts_gate_crosslang.py::test_python_capture_receipt_clears_the_gates_capture_block`, which fails identically on the untouched wip head `17ada37` — proven in a detached probe worktree carrying none of this lane's files. That is **#704**, already filed, and this lane touches no Python. Pushed using the test's own documented `OPENBRAIN_CONTEXT_BUDGET_GATE` override, the route #704 records the #512 lane using. `--no-verify` was not used; the rest of the suite passed.
