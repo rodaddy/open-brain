@@ -87,6 +87,63 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-09 (round 28) — harvest of the #705/#706 gate-fix lane (PR #708)
+
+- **A SEAM ADDED TO MAKE A GATE TESTABLE IS NOT THE PATH THAT RUNS.** This
+  lane's `--explain` flag let clauses (a)-(e) drive base selection without
+  the multi-minute validation phases — and all five PASSED against a fix
+  that still reproduced #705 on the very first real push, because
+  `--explain` resolves from the symbolic `HEAD` while a real push supplies
+  a raw SHA. When a check drives a convenience entry point, at least one
+  clause MUST drive the real invocation shape (for pre-push: a genuine
+  stdin range with a zero remote SHA). New spelling of the false-green
+  family; the sibling of round 22's stub-the-boundary rule.
+- **`@{upstream}` needs a SHORT BRANCH NAME, and both wrong forms fail
+  silently in the same direction.** `<sha>@{upstream}` is meaningless and
+  `refs/heads/x@{upstream}` is a hard `fatal: no such branch` — neither is
+  distinguishable from "no upstream configured", so both fall through to
+  the fallback. Any lookup whose failure mode is indistinguishable from its
+  legitimate empty case must be asserted on POSITIVELY (name the ref you
+  expected), never by observing that nothing broke.
+- **A function that PRINTS its result and is called via `$(...)` cannot set
+  globals** — the subshell swallows them. Here that blanked only the
+  ANNOUNCEMENT while the flags stayed correct, i.e. it failed GREEN in the
+  one dimension nobody asserts on by reflex. Caught solely because two
+  clauses asserted on the announcement. Assert on announcements, or they
+  rot silently.
+- **Three instances of one family in one lane: a gate resolving its base or
+  its tree from something other than the change under review** —
+  `import.meta.dir` (#706), a hardcoded `origin/main` (#705), and an
+  absolute `core.hooksPath` (found live). The third means a lane worktree
+  runs the PRIMARY checkout's hooks, so **a lane fixing a hook structurally
+  cannot exercise its own fix on push**, and a lane fixing the PR-body gate
+  cannot name its own new check. Ask of every gate: which tree answered,
+  and which ref did it compare against? SME entry:
+  `docs/sme/entries/2026-08-09-a-gate-that-judges-from-a-tree-other-than-the-one-under-review.md`.
+- **Bootstrap ordering is declared, never routed around.** When the fixed
+  gate cannot yet judge its own PR, cite a pre-existing check that GENUINELY
+  judges the change (here `pr-body-gate-fires.sh`, the standing acceptance
+  test for the very hook being modified), print both the accepting and
+  refusing validator runs in the body, and say plainly why. `--no-verify`
+  and hook bypass were not used; the live proof was produced with an
+  explicit `-c core.hooksPath=<lane worktree>`, which is running the FIXED
+  gate, not skipping a gate.
+- **Changing an assertion after seeing a result obliges a full RED re-proof.**
+  Clause (d) here was wrong (it demanded the absence of a word that legitimately
+  appears in the correct answer — the round-9/17/23 negative-match family), so
+  the CORRECTED clause set was re-run against the pre-fix sources before any
+  green was claimed.
+- **Pre-existing failures are proven against the untouched primary checkout,
+  then filed.** `sme-per-entry-files.sh` was already RED at `a45e7d9` on two
+  clauses (231 entries vs a pinned 227, and one level-1 undated heading). The
+  pin was reconciled to 232 WITH a comment naming the four entries that were
+  never this lane's, and the heading defect was filed as #707 rather than
+  absorbed into a gate-fixing PR.
+- **Two hook refusals were the rules working** (design-lookup-gate on a Bash
+  and a Write; the git guard on a commit whose heredoc mentioned protected
+  branches). Handled the sanctioned way — do the lookup, write the message
+  file in a separate call — never a retried spelling. Round 24's practice held.
+
 ### 2026-08-08 (round 26) — operator ruling on test-data cleanup (ledger item 31)
 
 - **A prefix-scoped SQL DELETE of rows a lane can PROVE are its own test
