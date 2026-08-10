@@ -53,6 +53,7 @@ item at a time.
 | PR-body enforcement | `.claude/hooks/pr-body-gate.ts` + `scripts/validate-pr-body.ts` + `.github/pull_request_template.md` | invalid bodies impossible at the boundary; CI backstop |
 | Review knowledge | `docs/sme/entries/` + generated lane files | reviewer-facing lessons, one file per entry |
 | Verifier agent | `.claude/agents/verifier.md` | classifies a change against known classes and runs the covering done-means checks; produces receipts, gates nothing |
+| Tracking-scribe agent | `.claude/agents/tracking-scribe.md` | OWNS step 5 (harvest) and the standing issue-mirror run; writes graph state to the ROOT checkout only; report-and-mirror, never closes or merges |
 | Truth grammar | RUNNING / MERGED / WRITTEN / PROPOSED | every claim, everywhere (LAW 0) |
 
 ### Verifier agent
@@ -85,6 +86,40 @@ definition itself: committed and visible in a fresh clone (the `.gitignore`
 `.claude/*` trap), every referenced path resolving, and the guardrail,
 loud-unknown, and three brain sources still present.
 
+### Tracking-scribe agent
+
+`.claude/agents/tracking-scribe.md` (built 2026-08-10, ledger item 8). It exists
+because step 5 below had no owner: harvest was described as an inline controller
+action, so it was absorbed by the head — the recorded failure of controller
+obligation 6 — and the tracking run itself lived only as a paste-in prompt the
+operator re-sent by hand ("TRACKING SCRIBE run for...").
+
+A prompt that is retyped from memory drops its own guardrails, and the one it
+kept dropping is where the writing goes. `aqmd up` indexes the ROOT checkout
+only, so a coordination file written in a lane worktree is invisible to search —
+functionally deleted from the knowledge base. Measured 2026-08-10: three copies
+of `docs/lane-contract.md`, none a superset, 164 lines of harvest rounds
+stranded (`_plans/worklog/reconcile-root-2026-08-10.md`). The agent's FIRST law
+is root-only-writes with that reason stated in the definition, so the constraint
+travels with the entity that does the writing.
+
+Two jobs, both bookkeeping: the **standing run** (`scripts/sync-issues.ts`
+refreshes the `_plans/issues/` mirror, `scripts/stale-blockers.ts` reports
+candidates, commit `_plans/issues` by explicit path, `aqmd up`) and the
+**harvest** (lanes' returned learnings routed to `docs/lane-contract.md`
+Tightenings, `docs/sme/entries/`, and the `docs/issue-graph.md` ledger).
+
+**It is report-and-mirror only.** It never closes an issue, never merges, never
+deletes. Stale-blocker output is a candidate list handed to the controller, not
+a verdict. Boundaries with its neighbours: the controller decides and dispatches,
+lanes write code, the verifier judges, `pr-scribe` writes PR bodies, and this
+agent writes repo state.
+`scripts/done-means/tracking-scribe-root-only.sh` gates the definition itself:
+committed and visible in a fresh clone (the `.gitignore` `.claude/*` trap), the
+root-only law FIRST and carrying its `aqmd` reason, the never-close/never-merge
+boundary stated, the three harvest targets named, and this SOP still naming the
+agent as the harvest owner.
+
 ## The head-session loop
 
 1. **Frontier**: `bun scripts/issue-graph.ts` — workable now, parked (with
@@ -101,11 +136,15 @@ loud-unknown, and three brain sources still present.
 4. **Merge pass**: squash-merge, branch dies, issues close by keyword or get
    an evidence comment naming what remains. New defects found by lanes become
    issues (with native blocked-by edges where they block).
-5. **Harvest (mandatory)**: refusals, workarounds, self-caught defects, and
-   surprises from every lane report go into `docs/lane-contract.md`
-   Tightenings with provenance. A lesson in a report that is not harvested is
-   a defect of THIS step. Review-facing lessons also become
-   `docs/sme/entries/` files.
+5. **Harvest (mandatory)** — **owned by the `tracking-scribe` agent**
+   (`.claude/agents/tracking-scribe.md`), dispatched by the controller. Refusals,
+   workarounds, self-caught defects, and surprises from every lane report go
+   into `docs/lane-contract.md` Tightenings with provenance. A lesson in a
+   report that is not harvested is a defect of THIS step. Review-facing lessons
+   also become `docs/sme/entries/` files; rulings and rejected alternatives go
+   to the `docs/issue-graph.md` ledger. All of it is written to the ROOT
+   checkout and indexed with `aqmd up` — see the agent's first law for why a
+   worktree write is functionally a deletion.
 6. **Decisions pass, WITH the operator**: judgment calls made since the last
    pass — deviations ratified or reversed, new rulings generalized — one item
    at a time, TL;DR each, recorded in the ledger with rejected options and

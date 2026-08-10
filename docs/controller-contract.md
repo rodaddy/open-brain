@@ -61,6 +61,13 @@ Prose beyond the fields is welcome AFTER them, never instead of them.
    `lessons` and incident fields land in `docs/lane-contract.md` Tightenings
    with provenance, or the report's PR carries an explicit `No new lessons:`
    line. ENFORCED: merge-gate harvest clause.
+   **DISPATCH IT, do not absorb it** (2026-08-10): the harvest is owned by the
+   `tracking-scribe` agent (`.claude/agents/tracking-scribe.md`), which also owns
+   the standing issue-mirror run. The head's job is to dispatch it with the lane
+   reports and to confirm the receipt says it wrote to ROOT and ran `aqmd up`.
+   Harvesting inline is obligation 6's failure mode wearing a bookkeeping label,
+   and it is how 164 lines of rounds ended up stranded in worktrees where `aqmd`
+   could not see them (`_plans/worklog/reconcile-root-2026-08-10.md`).
 2b. **Close the node out loud** (ledger item 32, operator ruling 2026-08-09).
    At merge, post a CLOSURE COMMENT on the ISSUE — not only on the PR —
    stating the direction taken, why that direction over the alternatives
