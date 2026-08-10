@@ -93,7 +93,19 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # gotcha-agent entry takes it to 232. The pin is being reconciled here, not
 # silently absorbed: if the operator wants those four re-examined rather than
 # adopted, this is the line that records that they were never accounted for.
-EXPECTED_ENTRY_COUNT=232
+#
+# 2026-08-10, the #709 lane: 232 -> 233. Exactly ONE entry added, and it is this
+# lane's own --
+# `2026-08-10-a-check-that-supplies-the-input-under-test-proves-only-half-the-wiring.md`
+# (lane: gotcha-agent, order 69), the review-facing half of the #709 harvest.
+# Nothing else was adopted: the count in the untouched primary checkout at
+# e3917ab is 232, matching this pin before the raise, so the four unaccounted
+# entries noted above are still exactly those four and no more have accumulated.
+# Clause 1 remains RED here for a reason that is NOT this lane's and is already
+# filed as #707 (one entry uses a level-1 undated heading); verified by running
+# this script in the untouched primary checkout, where clause 1 fails and
+# clause 4 passes.
+EXPECTED_ENTRY_COUNT=233
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

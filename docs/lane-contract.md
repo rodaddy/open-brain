@@ -87,6 +87,62 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-10 (round 29) — harvest of the #709 hook-feeds-head-ref lane
+
+- **ROUND 28'S FIRST BULLET RECURRED IN THE NEXT LANE, AND ITS OWN CHECK
+  STAYED GREEN THROUGHOUT.** #706 shipped a correct three-tier validator and a
+  hook that fed it neither the right tree nor the head ref at all, so the tier
+  the issue asked for by name was dead code from the only caller that runs.
+  `706-done-means-resolves-pr-head.sh` was 5/5 GREEN before, during, and after
+  the defect, because it calls the validator DIRECTLY and sets `PR_HEAD_REF`
+  itself. A check that supplies the input under test proves the consumer works
+  WHEN FED — never that anything feeds it. Writing the round-28 bullet did not
+  stop the lane that wrote it from reproducing it, which is the measurement:
+  the rule needs a clause driving the real entry point, not a paragraph.
+- **NAME THE DEAD SIDE OF EVERY SEAM.** When a fix spans a producer and a
+  consumer, the check must drive the PRODUCER's real entry point at least
+  once, and one clause must be impossible to pass without the specific wiring
+  under repair. Here clause 2 moves the file OUT of the lane worktree while it
+  stays committed on the branch, so a fix that merely read the `cd` target —
+  which passes clause 1 — still fails. Without that clause the lane would have
+  shipped a half-fix that looked complete, exactly as #706 did.
+- **A HOOK PAYLOAD'S `cwd` IS THE SESSION'S, NOT THE COMMAND'S.**
+  `cd <worktree> && gh pr create` in ONE Bash call does not move `input.cwd`.
+  #706's own source comment asserted the opposite in prose ("the tree the
+  command was actually run from — the lane worktree") and the code inherited
+  the claim. A comment stating what an input contains is not evidence; the
+  payload's shape is checkable and was not checked.
+- **PRINT THE GATE'S INPUTS ON THE REFUSAL PATH, NOT ONLY ON THE ALLOW.** #706
+  echoed which tree ANSWERED only when it passed. #709 had to be diagnosed
+  from a refusal that named the tree it searched but not where that tree came
+  from, so it read as "your path does not exist" when the truth was "the gate
+  looked in the wrong place". A refusal is precisely when someone must work
+  out why. Round 28 said assert on announcements; this adds: announce on the
+  branch where the reader actually lands.
+- **DEGRADE TO THE OLD BEHAVIOUR, NEVER TO A GUESS.** The new `cd`-target
+  reader refuses to resolve `cd -`, a variable-built path, or a detached HEAD,
+  and falls back to the payload cwd instead. `branchOf` uses
+  `symbolic-ref --short` rather than `rev-parse`, because a raw SHA is a valid
+  `git cat-file` argument and would make the announcement say "resolved in
+  branch 9f3a1c2" — a non-fact in the grammar of a fact.
+- **`lane-bootstrap` cuts from `origin/main` only, with no base flag.** A lane
+  building on work that merged to a wip branch must create and push the branch
+  at the right base first, then bootstrap continues on it. Announced in the
+  lane report rather than silently rebased. Small gap; worth a `--base` if it
+  recurs.
+- **Two blockers found live and FILED, not absorbed** (#711, #712).
+  `core.hooksPath` is absolute in `.git/config` so every worktree runs the
+  primary checkout's hooks — round 28's third-family instance, now with the
+  extra finding that `_githooks/install.sh` already writes the RELATIVE value
+  and nothing detects the divergence (#711). And `bun test` aborts with
+  `WriteFailed` when its stdout is git's pipe, so `_githooks/pre-push` fails
+  EVERY push while the suite itself is 3372 pass / 0 fail — reproduced on an
+  untouched primary checkout (#712). `--no-verify` was not used.
+- **A gate that fails identically for a green push and a broken one has
+  stopped carrying information**, and that is the state #712 leaves the push
+  path in. Filing it is cheaper than the habit it would otherwise train; #705's
+  own commit message predicted this exact slide into routine bypass.
+
 ### 2026-08-09 (round 28) — harvest of the #705/#706 gate-fix lane (PR #708)
 
 - **A SEAM ADDED TO MAKE A GATE TESTABLE IS NOT THE PATH THAT RUNS.** This
