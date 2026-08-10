@@ -98,12 +98,73 @@ if [ -n "$HOOKS_PATH" ] && [ "$HOOKS_PATH" != "$EXPECTED_HOOKS_PATH" ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# THE VALUE BEING RIGHT IS NOT THE DIRECTORY BEING COMPLETE (issue #719)
+# ---------------------------------------------------------------------------
+# The assertion above proves core.hooksPath points at the right DIRECTORY. It
+# says nothing about what is IN it — and `core.hooksPath` REPLACES the hooks
+# directory it displaces rather than overlaying it, so a correct value with an
+# incomplete directory silently drops every hook the previous value provided.
+# That is exactly how #719 survived #711: clause (e) of
+# `711-hookspath-relative.sh` proved the value, was 5/5 GREEN throughout, and
+# this repo still had NO pre-commit hook, so gitleaks secret scanning and the
+# LAW #8 protected-branch block were off for every commit made here.
+#
+# So the completeness of the directory is asserted HERE, in the hook that runs,
+# for the same reason #711's own value check lives here rather than only in a
+# done-means script: a drift that only an unrun check would catch is a drift
+# nobody catches.
+#
+# This WARNS rather than refusing, and the asymmetry is deliberate. A wrong
+# VALUE means the verdict this hook is about to give is about the wrong tree —
+# the answer is untrustworthy, so it must stop. A missing SIBLING hook does not
+# corrupt this hook's verdict; it means a DIFFERENT gate is missing. Failing the
+# push would block work on a defect the push cannot cause and the pusher may not
+# own, and a gate that refuses for something unrelated to the change in hand is
+# the condition that makes `--no-verify` habitual (#705, #712).
+GLOBAL_HOOKS_PATH="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+if [ -n "$GLOBAL_HOOKS_PATH" ] && [ -d "$GLOBAL_HOOKS_PATH" ] && [ "$GLOBAL_HOOKS_PATH" != "$ROOT/$EXPECTED_HOOKS_PATH" ]; then
+  DISPLACED_MISSING=""
+  for displaced_hook in "$GLOBAL_HOOKS_PATH"/*; do
+    [ -f "$displaced_hook" ] || continue
+    [ -x "$displaced_hook" ] || continue
+    displaced_name="${displaced_hook##*/}"
+    if [ ! -x "$ROOT/$EXPECTED_HOOKS_PATH/$displaced_name" ] \
+      && ! grep -q "^${displaced_name}:" "$ROOT/$EXPECTED_HOOKS_PATH/displaced-hooks-allowlist.txt" 2>/dev/null; then
+      DISPLACED_MISSING="$DISPLACED_MISSING $displaced_name"
+    fi
+  done
+  if [ -n "$DISPLACED_MISSING" ]; then
+    echo "  ! WARNING: core.hooksPath is correct, but $EXPECTED_HOOKS_PATH/ is INCOMPLETE." >&2
+    echo "      not provided here:$DISPLACED_MISSING" >&2
+    echo "      displaced directory: $GLOBAL_HOOKS_PATH" >&2
+    echo "" >&2
+    echo "    core.hooksPath REPLACES that directory — git consults exactly one and" >&2
+    echo "    never chains — so whatever those hooks enforced is NOT running in this" >&2
+    echo "    repo. Provide them in $EXPECTED_HOOKS_PATH/, or record the omission with" >&2
+    echo "    a reason in $EXPECTED_HOOKS_PATH/displaced-hooks-allowlist.txt so it is a" >&2
+    echo "    decision someone made rather than one nobody noticed." >&2
+    echo "" >&2
+    echo "    Full check: bash scripts/done-means/719-hooks-dir-complete.sh" >&2
+    echo "    (issue #719)" >&2
+  fi
+fi
+
 # Single source of truth for the parity path filter; CI and the PR-body
 # workflow read the same file, and check-parity.ts asserts it is non-empty.
 PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
 
 ZERO_SHA=0000000000000000000000000000000000000000
 SAW_RANGE=no
+
+# The last non-deleting ref pair seen on stdin, kept for the #719 push-side
+# secret scan and default-branch guard further down. They are captured in the
+# read loop rather than re-derived afterwards, because after the loop ends the
+# hook has no other way to know WHICH ref was pushed — and guessing it from
+# HEAD would be a gate judging something other than the thing in hand, which is
+# the #705-#714 family this file already carries two fixes for.
+PUSH_LOCAL_SHA=""
+PUSH_REMOTE_REF=""
 CHANGED_PYTHON=no
 CHANGED_OPENBRAIN=no
 CHANGED_PARITY=no
@@ -225,6 +286,12 @@ if [ "$EXPLAIN_ONLY" = no ]; then
     if [ "$local_sha" = "$ZERO_SHA" ]; then
       continue
     fi
+
+    # Remember this ref pair for the #719 guards below. A deleting push (the
+    # zero-SHA case above) is skipped: it adds no commits to scan, and there is
+    # nothing to refuse.
+    PUSH_LOCAL_SHA="$local_sha"
+    PUSH_REMOTE_REF="$_remote_ref"
     if [ "$remote_sha" = "$ZERO_SHA" ]; then
       # A brand-new branch: the remote has nothing to compare against, so the
       # base has to be chosen. This is EVERY first lane push, and it is the path
@@ -269,6 +336,92 @@ if [ "$EXPLAIN_ONLY" = yes ]; then
   echo "  changed_openbrain_memory=${CHANGED_PYTHON}"
   echo "  changed_openbrain=${CHANGED_OPENBRAIN}"
   echo "  changed_parity=${CHANGED_PARITY}"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# THE DISPLACED PUSH-SIDE CONTROLS (issue #719)
+# ---------------------------------------------------------------------------
+# `core.hooksPath = _githooks` REPLACES the operator's global hooks directory —
+# git consults exactly one, and it does not overlay. That directory's `pre-push`
+# carried two controls that this file, by existing, silently switched off:
+#
+#   1. a `gitleaks` scan of the commits actually being pushed
+#   2. a guard against pushing directly to a remote's DEFAULT branch
+#
+# #719 was filed about the missing `pre-commit`, and this second gap was found
+# by the sweep that issue's fix required: enumerate the WHOLE displaced set,
+# because an override replaces rather than overlays. Measured on the pre-fix
+# tree: `rg -n "gitleaks|ALLOW_DEFAULT_PUSH" _githooks/pre-push` returned
+# nothing, so secret scanning was absent from BOTH ends of the commit path, not
+# one.
+#
+# These run BEFORE typecheck and the test suite. A secret must be refused in
+# seconds rather than after a multi-minute suite, and a push to a protected
+# branch should not buy a full validation run first.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "  ✗ BLOCKED: gitleaks is required for secret scanning but is not installed." >&2
+  echo "    This gate fails CLOSED: it will not pass a push it could not scan." >&2
+  echo "        brew install gitleaks" >&2
+  exit 1
+fi
+
+# The default-branch guard, restored from the displaced global hook including
+# its one deliberate escape hatch. `ALLOW_DEFAULT_PUSH=1` is a CONSCIOUS HUMAN
+# override for a personal repo; agents get no override (AGENTS.md protected
+# branches). It is honoured here rather than dropped so this hook does not
+# quietly become stricter than the machine-wide rule it is restoring — a
+# silent tightening is still a silent adjustment.
+# `SAW_RANGE=yes` with an empty PUSH_LOCAL_SHA is a DELETE-ONLY push: every ref
+# on stdin carried the zero SHA. There are no commits to scan and no new tip to
+# judge, so both guards are inapplicable — and that is said out loud rather than
+# folded into the clean path.
+if [ "$SAW_RANGE" = yes ] && [ -n "$PUSH_LOCAL_SHA" ]; then
+  DEFAULT_REF="$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/|refs/heads/|')"
+  if [ -n "$DEFAULT_REF" ] && [ "$PUSH_REMOTE_REF" = "$DEFAULT_REF" ] && [ "${ALLOW_DEFAULT_PUSH:-}" != "1" ]; then
+    echo "  ✗ BLOCKED: direct push to the default branch ($PUSH_REMOTE_REF). Open a PR." >&2
+    echo "    Conscious human override only: ALLOW_DEFAULT_PUSH=1 git push ..." >&2
+    exit 1
+  fi
+
+  # Scan only what this push ADDS — commits reachable from the pushed tip that
+  # are not already on a known remote ref. A full-history scan on every push is
+  # explicitly forbidden by _DOCS/STANDARDS-git.md, and it would re-report
+  # every historical finding on every push until the noise trained everyone to
+  # pass `--no-verify`.
+  echo "  gitleaks: scanning the commits being pushed ..."
+  if ! gitleaks git --log-opts="$PUSH_LOCAL_SHA --not --remotes" --redact=100 --no-banner .; then
+    echo "" >&2
+    echo "  ✗ BLOCKED: gitleaks found a secret in the commits being pushed." >&2
+    echo "    The finding above is redacted; the file and rule are named." >&2
+    echo "    The secret is already in your local object store — rewrite the" >&2
+    echo "    history that contains it, do not just delete the file in a new commit." >&2
+    exit 1
+  fi
+  echo "  ✓ gitleaks found no secrets in the pushed commits"
+elif [ "$SAW_RANGE" = yes ]; then
+  echo "  gitleaks: delete-only push (all refs zero-SHA) — no commits to scan; NOT a clean verdict"
+else
+  # A manual/`--explain` invocation has no stdin range, so there is no set of
+  # commits to scan and no remote ref to compare against. SAID OUT LOUD rather
+  # than skipped silently: a reader must be able to tell "scanned and clean"
+  # from "there was nothing to scan" (AGENTS.md, nothing is adjusted silently).
+  echo "  gitleaks: no push range on stdin (manual invocation) — nothing to scan; NOT a clean verdict"
+fi
+
+# An escape hatch for `scripts/done-means/719-hooks-dir-complete.sh`, which
+# drives THIS hook through a real `git push` in a throwaway two-file fixture to
+# prove the secret and branch guards above actually refuse. Everything past this
+# point (typecheck, the full suite, the package gates) needs this repo's own
+# node_modules and cannot run in such a fixture at all, and takes minutes.
+#
+# THIS IS NOT A BYPASS OF THE CONTROLS UNDER TEST: it sits BELOW both guards, so
+# a check using it has already been judged by them — that is the whole point of
+# placing them first. It cannot weaken a real push either, because a real push
+# does not set it. It is announced, so it can never be mistaken for a full run.
+if [ -n "${OPENBRAIN_DONE_MEANS_719:-}" ]; then
+  echo "  (OPENBRAIN_DONE_MEANS_719 set — secret + branch guards ran above;"
+  echo "   stopping before typecheck/tests, which cannot run in a fixture repo)"
   exit 0
 fi
 

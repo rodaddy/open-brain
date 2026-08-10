@@ -63,6 +63,11 @@ printf '\nHooks git will now run from %s/:\n' "$target"
 for hook in "$repo_root/$target"/*; do
   name="${hook##*/}"
   [[ "$name" == "install.sh" ]] && continue
+  # Not hooks: the installer itself, and the #719 allowlist that records which
+  # displaced hooks are deliberately not provided. Skipped explicitly, because
+  # the "NOT executable" branch below would otherwise report a data file as a
+  # broken hook and send the reader chmod'ing something git never runs.
+  [[ "$name" == "displaced-hooks-allowlist.txt" ]] && continue
   if [[ -x "$hook" ]]; then
     printf '  %s\n' "$name"
   else

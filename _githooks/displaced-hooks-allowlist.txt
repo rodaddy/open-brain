@@ -1,0 +1,24 @@
+# Displaced-hook allowlist (issue #719)
+#
+# `core.hooksPath = _githooks` REPLACES whatever hooks directory was configured
+# before it. Git consults exactly one directory; it never chains and never
+# overlays. So every hook in the displaced directory that `_githooks/` does not
+# provide is a control that SILENTLY STOPPED RUNNING in this repo — which is
+# what #719 was: the displaced `pre-commit` carried gitleaks secret scanning and
+# the LAW #8 protected-branch block, and neither ran here for as long as the
+# override existed.
+#
+# `scripts/done-means/719-hooks-dir-complete.sh` clause (a) therefore reads the
+# displaced directory and requires each executable hook in it to be either
+# provided by `_githooks/` or listed HERE with a reason. The point of the file
+# is that dropping a control becomes a DECISION SOMEONE WROTE DOWN rather than
+# a side effect nobody noticed.
+#
+# Format, one per line:   <hook-name>: <reason it is deliberately not provided>
+#
+# A reason must say why the control is not needed HERE, not merely that nobody
+# has written it yet. "Not implemented" is a gap to file, not an allowlist
+# entry — put the issue number in and the next reader can find its status.
+#
+# Currently empty: both hooks in the displaced directory (`pre-commit`,
+# `pre-push`) are provided by `_githooks/`, so nothing is dropped.
