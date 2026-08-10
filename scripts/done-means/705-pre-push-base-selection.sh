@@ -86,6 +86,21 @@
 #       simply deleted the origin/main path would look like success while
 #       leaving upstreamless pushes ungated.
 #
+#   (f) THE REAL PUSH PATH, DRIVEN WITH A SHA. Clauses (a)-(d) go through
+#       `--explain`, which resolves from the symbolic `HEAD`. A REAL push does
+#       not: git feeds the hook a stdin range whose tip is a RAW SHA, and
+#       `<sha>@{upstream}` is meaningless, so an upstream lookup keyed on the tip
+#       silently falls through to origin/main -- the exact bug, still live, on
+#       the only path that actually runs. This clause therefore feeds the hook a
+#       real stdin range with a zero remote SHA (the new-branch shape, which is
+#       every first lane push) and asserts the zero-python lane is still charged
+#       nothing.
+#
+#       This clause exists because the fix SHIPPED WITHOUT IT and the first real
+#       push of this lane announced "base: origin/main -- fallback (no
+#       configured upstream)". An `--explain`-only check certified a resolution
+#       the live path never used.
+#
 #   (e) ONE IMPLEMENTATION. The hook defines exactly one base-resolution
 #       function and every base decision routes through it. The pre-fix file had
 #       the selection written TWICE (stdin-range path and manual path), which is
@@ -243,6 +258,10 @@ field() {
 CLAUSES=()
 record() { CLAUSES+=("$1|$2|$3"); }
 
+# The all-zero SHA git sends as the remote sha for a branch the remote does not
+# have yet. Clause (f) reproduces that shape exactly.
+ZERO_SHA_FIXTURE=0000000000000000000000000000000000000000
+
 # --- (a) the defect --------------------------------------------------------
 new_lane_branch "lane-nonpython" || fail_hard "could not create lane-nonpython"
 printf 'lane note\n' >> "$FIXTURE/docs/readme.md"
@@ -334,6 +353,37 @@ else
   record e FAIL "base selection is not funnelled through one function (definitions=$DEF_COUNT calls=$CALL_COUNT hardcoded-merge-base=$HARDCODED)"
 fi
 
+# --- (f) the real push path, driven with a SHA tip -------------------------
+# The fixture's package.json makes typecheck/test trivial, so the run reaches
+# the language gates quickly and the DECISION is what is judged. `uv` is not
+# available to the fixture, so a hook that wrongly decides "python changed" dies
+# in that gate -- which is the live #705 symptom and is read here as the
+# failure it is, from the hook's own prose.
+new_lane_branch "lane-realpush" || fail_hard "could not create lane-realpush"
+printf 'real push note\n' >> "$FIXTURE/docs/readme.md"
+git_f add -A >/dev/null && git_f commit -q -m "lane: docs only, pushed for real"
+
+F_TIP="$(git -C "$FIXTURE" rev-parse HEAD)"
+F_REF="refs/heads/lane-realpush"
+# The new-branch shape git actually sends: local ref, local sha, remote ref, and
+# a ZERO remote sha because the remote does not have this branch yet.
+F_OUT="$(
+  cd "$FIXTURE" && printf '%s %s %s %s\n' \
+    "$F_REF" "$F_TIP" "refs/heads/lane-realpush" "$ZERO_SHA_FIXTURE" \
+    | "$FIXTURE/_githooks/pre-push" origin "$FIXTURE" 2>&1
+)"
+
+F_BASE="$(printf '%s\n' "$F_OUT" | sed -n 's/^[[:space:]]*base:[[:space:]]*\(.*\)$/\1/p' | tail -1)"
+if printf '%s' "$F_OUT" | rg -qF "openbrain package changed" \
+  || printf '%s' "$F_OUT" | rg -qF "Python package changed"; then
+  record f FAIL "a REAL push of a zero-python lane still ran a Python gate — base line was '${F_BASE:-<none>}'"
+elif printf '%s' "$F_OUT" | rg -qF "openbrain package unchanged" \
+  && printf '%s' "$F_OUT" | rg -qF "Python package unchanged"; then
+  record f PASS "a real stdin-range push with a SHA tip charged no Python gate; base line: ${F_BASE:-<none>}"
+else
+  record f FAIL "the real push path produced no readable package decision: $(printf '%s' "$F_OUT" | tr '\n' ' ' | tail -c 400)"
+fi
+
 # ---------------------------------------------------------------------------
 # Teardown. The fixture is a throwaway repository this script created inside the
 # temp workspace; it is MOVED to the archive, never deleted (AGENTS.md: the
@@ -356,6 +406,7 @@ label_for() {
     c) printf 'the hook names the base ref it compared against' ;;
     d) printf 'no upstream still falls back to origin/main, announced' ;;
     e) printf 'base selection lives in exactly one function' ;;
+    f) printf 'a REAL stdin-range push (SHA tip) charges no Python gate' ;;
   esac
 }
 

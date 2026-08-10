@@ -73,7 +73,7 @@ BASE_REF=""
 BASE_SOURCE=""
 BASE_SHA=""
 
-# resolve_base <tip-rev>
+# resolve_base <tip-rev> [branch-ref]
 #
 # Sets BASE_SHA to the base to compare <tip-rev> against, and records the ref it
 # came from in BASE_REF / BASE_SOURCE. The ONLY place a base is chosen; both the
@@ -88,15 +88,38 @@ BASE_SHA=""
 #      pushes ungated, which is the opposite of the fix.
 #   3. the empty tree -- a repository with no main at all; everything counts as
 #      changed, which is the safe direction to fail.
+#
+# WHY THE BRANCH REF IS A SEPARATE ARGUMENT FROM THE TIP.
+# `@{upstream}` is a property of a BRANCH, and git can only answer it for
+# something that names one. On a real push git hands this hook the tip as a raw
+# SHA, and `<sha>@{upstream}` is meaningless -- git errors, the lookup returns
+# empty, and the resolution silently falls through to origin/main, which is
+# EXACTLY the bug being fixed. Observed live 2026-08-09: the first push of this
+# very lane announced "base: origin/main -- fallback (no configured upstream)"
+# and charged the lane a python/openbrain change it did not make, while
+# `--explain` (which passes the symbolic `HEAD`) resolved the upstream
+# correctly. So the caller passes the branch ref it already has, and the tip is
+# used only for the merge-base. A check that exercised only `--explain` could
+# not see this; scripts/done-means/705-pre-push-base-selection.sh now drives the
+# stdin-range path with a SHA tip for that reason.
 resolve_base() {
   local tip="$1"
+  local branch_ref="${2:-}"
   local upstream=""
 
-  # `@{upstream}` is resolved relative to the TIP being pushed, so a range push
-  # of a branch that is not currently checked out still asks about that branch.
+  # `@{upstream}` takes a SHORT BRANCH NAME. git sends the FULL ref on stdin
+  # (`refs/heads/lane/x`), and `refs/heads/lane/x@{upstream}` is a hard error --
+  # "fatal: no such branch" -- not a missing upstream, so it would fall through
+  # to origin/main just as silently as the SHA did. The prefix is therefore
+  # stripped here. `HEAD` is passed through unchanged because it already names a
+  # branch for this purpose.
+  local branch_name="${branch_ref#refs/heads/}"
+
   # `2>/dev/null` because git errors loudly when no upstream is configured,
   # which is an ordinary case here and not a failure.
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name "${tip}@{upstream}" 2>/dev/null || true)"
+  if [ -n "$branch_name" ]; then
+    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name "${branch_name}@{upstream}" 2>/dev/null || true)"
+  fi
 
   if [ -n "$upstream" ] && git rev-parse --verify "$upstream" >/dev/null 2>&1; then
     BASE_REF="$upstream"
@@ -155,7 +178,11 @@ if [ "$EXPLAIN_ONLY" = no ]; then
       # A brand-new branch: the remote has nothing to compare against, so the
       # base has to be chosen. This is EVERY first lane push, and it is the path
       # #705 was measured on.
-      resolve_base "$local_sha"
+      #
+      # `$_local_ref` is the LOCAL ref being pushed (e.g. refs/heads/lane/x).
+      # It is passed because git gives `$local_sha` as a raw SHA, which cannot
+      # answer `@{upstream}` -- see resolve_base's own note.
+      resolve_base "$local_sha" "$_local_ref"
     else
       # The remote already has this branch, so what the push actually adds is
       # exactly remote..local. Nothing to choose.
@@ -171,7 +198,7 @@ fi
 # A direct/manual invocation has no pre-push stdin. Compare the current branch
 # to its integration target so local hook testing retains useful behavior.
 if [ "$SAW_RANGE" = no ]; then
-  resolve_base HEAD
+  resolve_base HEAD HEAD
   classify "$BASE_SHA" HEAD
 fi
 
