@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T02:26:36Z
-Updated: 2026-08-04T23:27:49Z
+Updated: 2026-08-09T19:19:54Z
 
 ---
 
@@ -30,10 +30,24 @@ Refs: #443 (map), docs/memory-contract.md, PR #500 (fleet rollout plan), sibling
 
 ---
 
-## Discussion (1)
+## Discussion (3)
 
 ### rodaddy — 2026-08-04T23:27:49Z
 
 Sequencing decision, operator, 2026-08-04: the Codex adapter is to be done pretty soon if not next; then Pi, which is expected to be easy because it is the same shape and fully operator-controlled.
 
 Recorded for ordering only — this is NOT yet a go-ahead to start.
+
+---
+
+### rodaddy — 2026-08-09T18:55:58Z
+
+Status after PR #703 (squash 971ae13 on wip/2026-08-07, verify-lane VERIFIED, CI clean): **canon side is RUNNING on Codex** — live `codex exec` proof answered from injected canon, 7 Python-provider hooks in ~/.codex/hooks.json (.bak beside it), and the pre-existing Codex parser in bulk/formats.py fixed (time_to_first_token_ms optional; 27196 lines/430 turns/0 errors, was full-ingest abort on one line).
+
+**Left OPEN because capture is deliberately NOT wired:** openbrain-capture-stop reads Claude transcript shape; wiring it to Codex rollouts today would be a silent zero (#525/#544 class). mcp2cli remains Codex's write path until a Codex-shaped capture reader exists. Second blocker for fleet rollout: Codex hook trust has no non-interactive grant — new hooks silently don't run while printing Completed (documented in docs/codex-adapter.md). Follow-on scope = Codex capture reader + hook-trust rollout answer; #704 filed separately for the crosslang gate-test drift the lane surfaced.
+
+---
+
+### rodaddy — 2026-08-09T19:19:54Z
+
+Controller re-probe (2026-08-09, post-#703): the read-side RUNNING claim does NOT reproduce under plain non-interactive `codex exec`. From a neutral cwd the model answers **NO_CANON** and the SessionStart hook lines show `Failed` (from the repo cwd it looked green only because Codex natively loads the repo AGENTS.md — contaminated probe). The provider itself is healthy: invoking `openbrain-hook-env openbrain-session-start` directly emits the full CANON PACK (namespace=rico, profile_guidance=20, process_guidance=49). So the break is exactly the documented gap #2: **Codex hook trust** — the edited ~/.codex/hooks.json needs a one-time interactive trust grant (TUI), no non-interactive grant exists, and untrusted hooks fail. LAW 0 restate: provider RUNNING; Codex canon wiring WRITTEN, not working, pending the trust grant.
