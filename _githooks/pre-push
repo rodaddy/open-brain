@@ -47,6 +47,57 @@ fi
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# ---------------------------------------------------------------------------
+# WHICH HOOKS DIRECTORY IS THIS (issue #711)
+# ---------------------------------------------------------------------------
+# `.git/config` is SHARED BY EVERY LINKED WORKTREE. So an ABSOLUTE
+# `core.hooksPath` -- `/Volumes/.../open-brain/_githooks` -- points every lane
+# worktree at the PRIMARY CHECKOUT's hooks: the copy on the base branch, not the
+# copy the lane is changing. A RELATIVE value resolves against each worktree's
+# own root, which is why `_githooks/install.sh` writes `_githooks` and says so
+# in a comment written against this exact trap.
+#
+# Measured live before this assertion existed (throwaway worktree, a distinct
+# marker line in each tree's copy of this file, `git hook run pre-push`):
+#
+#   absolute config, from the worktree -> MARKER: PRIMARY-COPY
+#   relative config, from the worktree -> MARKER: WORKTREE-COPY
+#
+# THIS CHECK IS IN THE HOOK, NOT ONLY IN A DONE-MEANS SCRIPT, BECAUSE THE HOOK
+# IS THE THING THAT RUNS. The config had already diverged from its own installer
+# and nothing noticed: the installer is idempotent and reports "already set"
+# only on an exact match, and no check asserted the value. A drift that only a
+# check nobody runs would catch is a drift nobody catches.
+#
+# WHY THIS FAILS THE PUSH RATHER THAN WARNING. When this is wrong, the verdict
+# this hook is about to produce is about THE WRONG TREE -- a lane fixing a hook
+# cannot exercise its fix, and a lane BREAKING one pushes green. A gate that
+# knows its own answer is untrustworthy and returns it anyway is worse than one
+# that stops, so it stops, and it prints the one command that fixes it.
+#
+# The unset case is deliberately NOT an error here: a clone that never ran the
+# installer has no value and git falls back to `.git/hooks`, in which case this
+# file is not running at all and cannot be the thing complaining. If it IS set,
+# it must match.
+HOOKS_PATH="$(git config --get core.hooksPath 2>/dev/null || true)"
+EXPECTED_HOOKS_PATH="_githooks"
+if [ -n "$HOOKS_PATH" ] && [ "$HOOKS_PATH" != "$EXPECTED_HOOKS_PATH" ]; then
+  echo "  ✗ core.hooksPath does not match what _githooks/install.sh writes." >&2
+  echo "      configured: $HOOKS_PATH" >&2
+  echo "      expected:   $EXPECTED_HOOKS_PATH" >&2
+  echo "" >&2
+  echo "    .git/config is shared by every linked worktree, so a non-relative value" >&2
+  echo "    makes EVERY worktree run the primary checkout's hooks -- including this" >&2
+  echo "    one. The verdict this gate is about to give would be about a tree other" >&2
+  echo "    than the one being pushed, so it is refusing instead of guessing." >&2
+  echo "" >&2
+  echo "    Fix it by running, from the repo root:" >&2
+  echo "        ./_githooks/install.sh" >&2
+  echo "" >&2
+  echo "    (issue #711)" >&2
+  exit 1
+fi
+
 # Single source of truth for the parity path filter; CI and the PR-body
 # workflow read the same file, and check-parity.ts asserts it is non-empty.
 PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
