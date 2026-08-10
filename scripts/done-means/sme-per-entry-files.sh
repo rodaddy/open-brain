@@ -82,7 +82,18 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
-EXPECTED_ENTRY_COUNT=227
+# Raised 227 -> 232 by lane/fix-gates-705-706 (#705/#706), per this check's own
+# instruction to raise it in the commit that adds entries and say so in the PR.
+#
+# ANNOUNCED, because only ONE of those five is this lane's. The base commit
+# a45e7d9 already carried 231 dated entries against a pinned 227 -- verified by
+# running this script in the untouched primary checkout, which reports
+# "dated entries: 231 / baseline: 227" and RED. Four entries were therefore
+# added by earlier lanes without raising the pin, and this lane's single
+# gotcha-agent entry takes it to 232. The pin is being reconciled here, not
+# silently absorbed: if the operator wants those four re-examined rather than
+# adopted, this is the line that records that they were never accounted for.
+EXPECTED_ENTRY_COUNT=232
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
