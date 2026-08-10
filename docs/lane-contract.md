@@ -87,6 +87,47 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-10 (round 30) — harvest of the #716 issue-artifacts landing lane
+
+- **`--` BEFORE ANY PATTERN THAT CAME FROM DATA, AND `-F` DOES NOT IMPLY IT.**
+  The pre-rebase superset check ran `rg -qF "$line"` over the branch's added
+  lines; diff-derived lines routinely begin with `-`, ripgrep parsed that as a
+  flag, and the check reported **seven false MISSING lines** for content that
+  was present. Fixed with `rg -qF --`. Third distinct spelling of the same
+  family — round 19's `rg -r` (REPLACE, not recursive) and two `rg -E`
+  incidents (`--encoding`, not extended-regex) — so it is a standing class, not
+  three coincidences: a flag-shaped argument is accepted as a flag and the
+  command still exits 0. The failure mode is a **plausible-looking wrong
+  answer**, never an error. It bit once more while harvesting this round:
+  `rg -h "^order:"` printed ripgrep's help (`-h` is `--help`; `--no-filename`
+  is the flag), so the reflex is not yet trained out. Fixed-string mode
+  disables regex interpretation, not option parsing; only `--` stops the
+  second.
+- **A ONE-DIRECTIONAL CHECK CANNOT TELL "ABSENT" FROM "MY QUERY WAS BROKEN",
+  and here the broken answer pointed at the destructive move.** Believing those
+  seven MISSING lines meant "root is not a superset, keep the branch side" —
+  i.e. restoring stale graph-file content over newer root content, the precise
+  2026-08-10 reconcile failure the check existed to prevent. Where a check's
+  verdict authorizes a DROP or an OVERWRITE, it carries a positive control: one
+  line known present and one known absent, so a malformed query fails loudly
+  instead of confirming the alarming direction. Review-facing half:
+  `docs/sme/entries/2026-08-10-a-verification-command-that-takes-untrusted-text-as-a-pattern-needs-an-end-of-options-guard.md`.
+- **CLI-CLOSED ISSUES HAVE NO PR LINKAGE, WHICH IS THE LIVE ARGUMENT THAT
+  OBLIGATION 2b IS LOAD-BEARING RATHER THAN A COURTESY.** #710 and #712 were
+  closed from the CLI, so `sync-issues.ts` renders "Closed without a pull
+  request" for both. That is the renderer being HONEST, not a defect — and it
+  measures the gap ledger item 32 predicted from the other direction: this
+  repo's lanes squash-merge into a wip branch, so GitHub's auto-close linkage
+  frequently never registers, and a CLI close never creates one at all. The
+  resolution therefore cannot depend on linkage. It has to live in a CLOSURE
+  COMMENT on the issue, which the discussion mirror captures unconditionally.
+  Verified: #710's artifact carries its full closure rationale by that route
+  and nothing else. Controller-contract obligation 2b (direction + why +
+  receipts, at merge or at close) is the only thing standing between a
+  CLI-closed node and an artifact that records a CLOSED stamp with no reasoning
+  — do not treat it as optional when a PR happens to exist either, since the
+  linkage that would carry it is exactly what this flow drops.
+
 ### 2026-08-10 (round 29) — harvest of the #709 hook-feeds-head-ref lane
 
 - **ROUND 28'S FIRST BULLET RECURRED IN THE NEXT LANE, AND ITS OWN CHECK

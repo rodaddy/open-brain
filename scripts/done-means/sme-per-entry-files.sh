@@ -117,7 +117,19 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # base `origin/wip/2026-08-07`, and untouched by this lane's diff (verified:
 # `git diff origin/wip/2026-08-07..HEAD` names that file zero times). It is left
 # failing rather than absorbed into a gate-fixing PR, per lane-contract round 28.
-EXPECTED_ENTRY_COUNT=234
+# 2026-08-10, the #716 harvest (tracking-scribe, not a code lane): 234 -> 235.
+# Exactly ONE entry added, and it is this harvest's own --
+# `2026-08-10-a-verification-command-that-takes-untrusted-text-as-a-pattern-needs-an-end-of-options-guard.md`
+# (lane: gotcha-agent, order 71), the review-facing half of the #716 harvest
+# (lane-contract round 30). Nothing else was adopted: the count in the untouched
+# tree at 5e6105e is 234, matching this pin before the raise, so no further
+# unaccounted entries have accumulated beyond the four recorded above.
+# Clause 1 is STILL RED here for the same reason and the same file as the #709
+# and #712 lanes (`2026-08-08-guards-must-judge-the-operation-not-the-vocabulary.md`,
+# a level-1 undated heading) -- already filed as #707, present unchanged at this
+# harvest's base, and untouched by this diff. Left failing rather than absorbed,
+# per lane-contract round 28.
+EXPECTED_ENTRY_COUNT=235
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
