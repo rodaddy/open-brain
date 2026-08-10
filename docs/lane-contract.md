@@ -143,6 +143,66 @@ Newest first. Every entry: what changed, and the observation that forced it.
   path in. Filing it is cheaper than the habit it would otherwise train; #705's
   own commit message predicted this exact slide into routine bypass.
 
+### 2026-08-10 (round 29) — harvest of the #712 pre-push WriteFailed lane
+
+- **A GATE MUST NOT LET ITS OWN REPORTING CHANNEL DECIDE ITS VERDICT.**
+  `_githooks/pre-push` ran `bun test` bare, so bun inherited git's stdout and
+  stderr; when the CALLER pipes git's output, bun 1.3.14 dies mid-coverage-table
+  with `WriteFailed` and exits 1 on a suite that is GREEN. The real result
+  existed and was thrown away because the process died printing it. Read the
+  verdict from the EXIT CODE; send a child's output somewhere the caller cannot
+  make hostile, then replay for the human. Second instance of CLOSED #483's
+  family (there the inherited thing was `GIT_DIR`) — two instances make it a
+  family: audit what else a gate passes down untouched.
+- **Measure WHICH fd before fixing, or the obvious fix looks right and changes
+  nothing.** Redirecting each fd independently proved the failing writer is
+  **stderr** (stdout FILE + stderr PIPE still exits 1; stdout PIPE + stderr FILE
+  exits 0). `bun test > log` — the reflex spelling — leaves the defect 100% live
+  and passes review. The done-means clause must pin the fd that was MEASURED,
+  not the one that is conventional to redirect. Also measured: a fully-draining
+  `cat` does not help and output truncates mid-line, so "something downstream
+  stopped reading" was the wrong first hypothesis.
+- **A failure whose presence depends on HOW THE CALLER CAPTURED OUTPUT is
+  intermittent from the operator's seat** — the push "randomly" failed then
+  "randomly" worked, with text identical to a genuinely broken branch. That is
+  the precise profile that makes `--no-verify` habitual, so it is a severity
+  multiplier, not a footnote.
+- **Do NOT couple a check to the upstream bug's own threshold.** Reproducing
+  bun's internal ~214 KB stderr trigger was attempted and abandoned: a synthetic
+  4 MB stderr writer exits 0, and fixture suites of 300 and 1200 modules both
+  exit 0 through a pipe. A check that depended on it **would go green the day
+  bun fixes the bug**, silently un-testing the hook's classification logic —
+  which is the part this repo owns. Reproduce the child's OBSERVABLE CONTRACT
+  (fd 2 is a FIFO → `WriteFailed`, exit 1) via a PATH shim; keep the HOOK, the
+  pipe, and the stdin range real. Round 28 says the invocation shape must be
+  real; this says the *upstream defect* need not be, and names the line between.
+- **Know which spelling the subject actually invokes.** The fake runner was
+  first placed in `package.json` `scripts.test`, but the hook calls `bun test`
+  DIRECTLY, not `bun run test` — so the clause went red with "0 test files
+  matching", a false RED proving the FIXTURE wrong rather than the hook broken
+  (rounds 18/22/23 family). Round 18's read-WHY-it-went-red rule caught it.
+- **"Tests failed" and "the runner could not report" are different defects with
+  different owners, and a gate that collapses them stops carrying information.**
+  Two lanes were blocked on #712 before it was diagnosed. The fix names which,
+  and the mutant clause (b) holds the other direction: a genuinely failing suite
+  must still fail AND still be called a test failure.
+- **Round 28's pre-existing-failure practice held twice.** `sme-per-entry-files.sh`
+  clause 1 was RED for #707 (not this lane's file; zero mentions in this lane's
+  diff) — proven identically RED on the untouched primary at `e3917ab` and left
+  failing rather than absorbed. The count pin WAS this lane's and was raised in
+  the same commit as the entry, with the reason named.
+- **The #711 bootstrap trap is now the standing condition for hook lanes.**
+  `core.hooksPath` is absolute, so a lane worktree runs the PRIMARY's hook — a
+  lane fixing pre-push cannot exercise its own fix on push without an explicit
+  `-c core.hooksPath=<lane worktree>`. Used here (the #713 precedent: running
+  the FIXED gate is not a bypass), declared in the PR body, and `--no-verify`
+  was not used. This lane's own push through a piped git IS the live proof.
+- **A git-guard refusal and a design-lookup refusal were both the rules
+  working** — `git reset --hard` refused when re-basing the lane onto its real
+  integration target (rebuilt with `git checkout -B` instead), and a Write
+  refused pending a subject-relevant lookup. Neither was retried as a spelling
+  variant.
+
 ### 2026-08-09 (round 28) — harvest of the #705/#706 gate-fix lane (PR #708)
 
 - **A SEAM ADDED TO MAKE A GATE TESTABLE IS NOT THE PATH THAT RUNS.** This
