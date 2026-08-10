@@ -225,8 +225,93 @@ echo "  bun run typecheck ..."
 bun run typecheck
 echo "  ✓ TypeScript passed"
 
-echo "  bun test ..."
-bun test
+# ---------------------------------------------------------------------------
+# THE TEST SUITE (issue #712)
+# ---------------------------------------------------------------------------
+# `bun test` used to run here bare, inheriting git's stdout and stderr. When git
+# is invoked with its output captured (`git push ... | tail`, or any wrapper that
+# reads it), those fds are PIPES, and bun 1.3.14 aborts partway through writing
+# the full-suite coverage table:
+#
+#     src/validation-errors.ts       |  100.00 |   90.
+#     error: An internal error occurred (WriteFailed)
+#
+# It exits 1 having run a GREEN suite. Measured on the untouched primary at
+# e3917ab, clean tree, by redirecting each fd independently:
+#
+#   stdout PIPE  + stderr PIPE  -> exit 1 (WriteFailed)
+#   stdout FILE  + stderr FILE  -> exit 0 (3372 pass, 0 fail)
+#   stdout FILE  + stderr PIPE  -> exit 1 (WriteFailed)   <-- stderr is the writer
+#   stdout PIPE  + stderr FILE  -> exit 0
+#
+# So the failing writer is bun's STDERR -- which is where the coverage table and
+# the pass/fail summary go. Redirecting stdout alone would not have fixed this,
+# and a fix that "looked right" that way would have left the defect live. Piping
+# into a fully-draining `cat` does not help either, and the output truncates
+# MID-LINE, so this is bun's own write path against a pipe fd rather than a
+# consumer that stopped reading.
+#
+# WHY THIS MATTERS MORE THAN THE WASTED RUN. The verdict depended on how the
+# CALLER captured output, so the push failed "randomly" from the operator's
+# seat, with text identical to a genuinely broken branch. A gate that fails the
+# same way for a green push and a broken one has stopped carrying information,
+# and that is precisely the condition that makes `--no-verify` habitual. It is
+# the same family as CLOSED #483: something the hook INHERITED from its caller
+# decided its verdict. The rule both share -- a gate must not let anything it
+# inherited from its caller decide its verdict.
+#
+# THE FIX. Both fds go to a log file under the temp workspace, so neither is a
+# pipe no matter how git was called, and the verdict is read from bun's EXIT
+# CODE. The log is tee'd back afterwards so the operator still sees the output
+# they would have seen. The redirect is ANNOUNCED (AGENTS.md, nothing is
+# adjusted silently): a reader of the transcript can see where the output went
+# rather than wondering why the suite went quiet.
+#
+# AND THE TWO FAILURES ARE NAMED SEPARATELY. "the tests failed" and "the runner
+# could not write its output" are different defects with different owners, and
+# before this they were the same bare `WriteFailed` plus a refused push. The
+# WriteFailed marker is searched for in the log so that if this ever fires again
+# through a path not covered here, the hook says which one it was instead of
+# blaming the branch.
+TEST_LOG_DIR="${OPENBRAIN_TEMP_WORKSPACE:-/Volumes/ThunderBolt/_tmp}/open-brain/_scratch/pre-push"
+TEST_LOG="$TEST_LOG_DIR/bun-test-$$-$(date +%s).log"
+if ! mkdir -p "$TEST_LOG_DIR" 2>/dev/null; then
+  echo "  ✗ pre-push could not create the test log directory: $TEST_LOG_DIR" >&2
+  echo "    This is a HOOK environment problem, not a test failure." >&2
+  exit 1
+fi
+
+echo "  bun test ... (stdout+stderr -> $TEST_LOG, replayed below; #712)"
+
+# `set -e` is on, so the exit code is captured explicitly rather than letting a
+# non-zero status kill the hook before the log can be replayed and classified.
+TEST_EXIT=0
+bun test > "$TEST_LOG" 2>&1 || TEST_EXIT=$?
+
+# Replay what the operator would have seen. `cat` writes to the hook's OWN
+# stdout, which may still be git's pipe -- but a truncated REPLAY cannot change
+# the verdict, because the verdict was already decided by TEST_EXIT above. That
+# separation is the entire point of the fix. `|| true` so a broken replay is
+# never mistaken for a failing suite.
+cat "$TEST_LOG" 2>/dev/null || true
+
+if [ "$TEST_EXIT" -ne 0 ]; then
+  # Distinguish the two failures and SAY WHICH.
+  # POSIX `grep` deliberately, not `rg`: this is a git hook that must classify
+  # the failure in any environment it is installed into (CI image, fresh clone,
+  # a box without ripgrep). The repo's fast-tools rule governs what an AGENT
+  # types to search the tree, not what a shipped script depends on at runtime.
+  if grep -q "An internal error occurred (WriteFailed)" "$TEST_LOG" 2>/dev/null; then
+    echo "  ✗ THE TEST RUNNER COULD NOT WRITE ITS OUTPUT (WriteFailed) — this is NOT a test failure." >&2
+    echo "    bun exited ${TEST_EXIT} while writing its report, so the suite's real verdict is unknown." >&2
+    echo "    Full output: $TEST_LOG  (see issue #712)" >&2
+  else
+    echo "  ✗ TESTS FAILED (bun exit ${TEST_EXIT}) — the suite ran and reported failures." >&2
+    echo "    Full output: $TEST_LOG" >&2
+  fi
+  exit "$TEST_EXIT"
+fi
+
 echo "  ✓ Bun tests passed"
 
 if [ "$CHANGED_PYTHON" = yes ]; then
