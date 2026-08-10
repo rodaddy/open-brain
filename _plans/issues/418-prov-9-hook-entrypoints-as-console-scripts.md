@@ -32,6 +32,17 @@ Editing `settings.json` - that is PROV-11.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-01T05:27:17Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-01T05:27:10Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-07-28T20:05:16Z

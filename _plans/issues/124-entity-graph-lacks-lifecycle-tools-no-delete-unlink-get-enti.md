@@ -76,3 +76,33 @@ mcp2cli open-brain adjacent_context --params '{"type":"entity","id":"649f5c00-c4
 ## Priority
 
 Low-to-medium. The graph is fully usable for build-up today (writes, links, reads, traversal all work). These gaps bite on **cleanup and correction** — you can build the graph but you can't tidy it. #1 and #3 are the most useful to fix.
+
+---
+
+## Resolution
+
+Closed by **PR #125** — Fix entity graph lifecycle and hydration
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `ff0acab8f2753f25073b30af97f06539fb2b4890`
+- Merged at: 2026-06-18T04:58:08Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T04:58:09Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #125 body
+
+> ## Summary
+> - add soft-delete lifecycle for graph entities and links via archive_entity and unlink_entities
+> - add hydrate_entities to refresh entity embeddings immediately after imports/schema changes
+> - relax graph UUID validation and exclude archived entities/links from get/list/search/adjacency
+> - hydrate entity neighbor names/canonical IDs in adjacency/search explicit links
+> - update Python client wrappers and Open Brain skill docs
+>
+> Closes #124
+>
+> ## Validation
+> - bunx tsc --noEmit
+> - bun test
+> - cd python/openbrain-memory && uv run mypy src/openbrain_memory
+> - cd python/openbrain-memory && uv run ruff check src tests
+> - cd python/openbrain-memory && uv run pytest -q

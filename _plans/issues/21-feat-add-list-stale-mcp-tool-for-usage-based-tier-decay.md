@@ -13,3 +13,32 @@ Closed: 2026-06-08T03:57:40Z
 ---
 
 Hot tier entries never decay without manual intervention. Add a list_stale tool that queries entry_access_log to find entries not accessed in N days. Parameters: tier, days, limit. Enables automated dream cycle hot->warm decay. Discovered during manual dream cycle 2026-04-09.
+
+---
+
+## Resolution
+
+Closed by **PR #31** — feat: add list_stale MCP tool for usage-based tier decay
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c14302dc805272b97e419a2b5179a932d36bebc4`
+- Merged at: 2026-06-08T03:57:39Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T03:57:40Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #31 body
+
+> Closes #21
+>
+> Adds `list_stale` tool that queries `entry_access_log` to find entries not accessed in N days.
+>
+> ## Parameters
+> - `tier` (optional): filter to hot/warm/cold
+> - `days` (required): entries not accessed in this many days are "stale"
+> - `table` (optional): filter to specific table
+> - `limit` (optional): max results (default 20, max 500)
+>
+> ## Use Case
+> Dream cycle automation: find hot-tier entries that haven't been accessed in 30+ days and decay them to warm. Enables automated cognitive tiering without manual intervention.
+>
+> 12 tests, all passing.

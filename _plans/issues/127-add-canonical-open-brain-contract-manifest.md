@@ -29,3 +29,33 @@ Add a canonical contract source, exposed as an MCP tool and/or HTTP endpoint, fo
 - A client can call the contract source without guessing from docs.
 - Contract output is stable across process restarts when schemas do not change.
 - Contract changes are covered by tests and documented in docs/downstream-rollout.md.
+
+---
+
+## Resolution
+
+Closed by **PR #133** — Add Open Brain contract and repo fact tools
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `07ffc8784764ef714d237ba2f9edc30be154798a`
+- Merged at: 2026-06-18T07:18:35Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T07:18:37Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #133 body
+
+> ## Summary
+> - add get_contract as the canonical Open Brain contract/capability manifest for downstream runtime validation
+> - add upsert_repo_fact and list_repo_facts for curated qmd-derived repo facts stored as graph entities
+> - document downstream contract validation and qmd-to-OB repo fact promotion rules
+>
+> Closes #127
+> Refs #132
+>
+> ## Validation
+> - bun test src/contract.test.ts src/tools/__tests__/get-contract.test.ts src/tools/__tests__/repo-facts.test.ts
+> - bunx tsc --noEmit
+> - bun test
+>
+> ## Downstream rollout
+> This changes the public MCP tool surface. Do not merge/deploy until the review gate completes and the follow-up rtech-mcps -> mcp2cli -> hosted mcp2cli -> Hermes validation path is run.

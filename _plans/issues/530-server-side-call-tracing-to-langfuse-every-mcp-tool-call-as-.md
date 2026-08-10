@@ -37,6 +37,161 @@ One live session's worth of tool calls visible in Langfuse with a failing call c
 
 ---
 
+## Resolution
+
+Closed by **PR #534** — refactor(server): content-ful Langfuse trace per MCP tool call, rebuilt on SDK v4 (#530)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `71f604b2fe1904fe70dff0715e5d1a4283cbec04`
+- Merged at: 2026-08-04T03:01:12Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T03:01:13Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #534 body
+
+> Closes #530.
+>
+> **Rebuilt on Langfuse JS SDK v4 (OTel-based).** The v3 branch was stopped mid-fix per the operator decisions recorded on #530 on 2026-08-03. Both failures the v3 review measured are properties of v3's bespoke queue, so they are fixed by replacing the queue rather than by patching around it.
+>
+> ## Decision 1 — SDK v4, verified rather than recalled
+>
+> | package | version | why |
+> |---|---|---|
+> | `@langfuse/tracing` | 4.6.1 | `startObservation` / `updateTrace` |
+> | `@langfuse/otel` | 4.6.1 | `LangfuseSpanProcessor` |
+> | `@langfuse/core` | 4.6.1 | `configureGlobalLogger` (see the logger fix below) |
+> | `@opentelemetry/api` | 1.9.x | declared peer |
+> | `@opentelemetry/sdk-trace-base` | 2.x | `BasicTracerProvider`, declared peer |
+>
+> Package names and the API surface were confirmed by installing under Bun and reading the shipped `.d.ts`, not from memory. Two assumptions were wrong and were corrected against the types: `startObservation` takes **no** per-call `tracerProvider` (`StartObservationOpts` carries only `startTime`, `parentSpanContext`, `asType`), so binding goes through `setLangfuseTracerProvider` — the SDK's isolated-provider seam, which is explicitly *not* the OTel global, so this lane cannot hijack other instrumentation.
+>
+> This also converges the two lanes: the Python capture sink already runs on Python SDK v4 (`propagate_attributes` + `start_as_current_observation`).
+>
+> **Server compatibility, at the ingestion layer.** The processor POSTs OTLP-HTTP to `${baseUrl}/api/public/otel/v1/traces`. Against the self-hosted server:
+>
+> - `/api/public/health` → `{"status":"OK","version":"3.173.0"}`
+> - `POST /api/public/otel/v1/traces` unauthenticated → **401** (route exists, auth-gated)
+> - `POST /api/public/otel/v1/nope` → **404** (control: it is not a catch-all)
+> - An **authenticated probe span through this exact SDK** came back from `/api/public/traces` with its name, `userId`, `sessionId`, tags, and one observation intact — re-confirmed after trimming the dependency set.
+>
+> Server v3 and JS SDK v4 are separate version lines, not a mismatch; the server has carried the OTel route since v3.
+>
+> ## Decision 2 — outage behaviour
+>
+> Langfuse never stops or slows the brain. Losing a window's traces is **accepted**: no disk spool, no replay. Postgres audit + capture remain the system of record. The outage is visible on **state change only**:
+>
+> | line | level | when | carries |
+> |---|---|---|---|
+> | `mcp_tool_tracing_suspended` | warn | first failed background export after healthy | error label only |
+> | `mcp_tool_tracing_resumed` | info | first export that reaches the endpoint again | `droppedTraces` for that window |
+>
+> Never per call. `SinkHealthTracker` is the edge detector and resets per window, so a second outage reports its own count rather than a running total.
+>
+> Both edges are detected on the **export**, not on the tool call: handing a span to the batch queue succeeds whether or not anything is listening, so an outage is only knowable once the background export runs. Down edge = OTel's global error handler; up edge = a probe that runs only while already unhealthy and sends its own span, so an empty-queue flush cannot masquerade as recovery. A reported pair then starts a 30 s cooldown, so a flapping sink reports one pair rather than one per flap.
+>
+> ## The two carried-over failures
+>
+> **1. Shutdown is time-bound.** Belt *and* braces: the processor gets a 2 s export timeout, and the drain is *also* raced against a 2.5 s deadline, with a content-free warn on timeout and `database.close()` unconditionally after. A hung socket produces a promise that never settles, which ignores any config knob — so the race is not redundant with the timeout.
+> *Red-proven:* removing the race hangs the suite past 120 s on a never-settling sink.
+>
+> **2. Memory stays flat under a blackholed endpoint.** Measured against a non-routable endpoint (v3 baseline: 54.6 MB / 2000 calls):
+>
+> | calls | heap retained |
+> |---|---|
+> | 2,000 | 28.1 MB |
+> | 10,000 | 107.2 MB |
+> | 20,000 | 204.5 MB |
+>
+> That looked linear, so I checked instead of reporting it: at 20,000 calls with a longer settle the heap drops to **4.1 MB**, i.e. the growth is in-flight work draining, not retention. Under **sustained** traffic — the real operating shape — heap plateaus at **34-45 MB across 30,000 calls** with no upward trend. Enqueue stays off the request path (~7 µs/call). The mechanism is OTel's own documented behaviour: "The maximum queue size. After the size is reached spans are dropped."
+>
+> ## Also fixed from the v3 review
+>
+> - **SDK logger bypassed the content-free rule** (v3 MEDIUM, still true on v4). `@langfuse/core`'s logger writes export failures to `console.error` with the raw error attached, routing a transport message around this module's discipline *and* the shared logger's redaction. Measured: 2 lines emitted, injected `sk-lf-` string present. Now silenced at sink construction. Red-proven by deleting the one line.
+> - **Composition-order comment corrected** to the concrete order — audit installs first, tracing second (`server/main.ts:158`/`:162`), so tracing is outermost.
+>
+> ## Unchanged pinned design
+>
+> `registerTool` wrapper seam composing with `installMcpAudit`; verbatim content-ful input/output; error class + message on failure; caller identity incl. both `clientId` and `tokenClientId`; `sessionId` from `args.session_key` → transport fallback; `userId` = caller client id; tags `open-brain-server`/`mcp-tool`; off unless the flag is `"1"` **and** all three coordinates are present (one content-free warn otherwise, keys never logged); **one runtime per process**, not per MCP session; best-effort — no `await` in the request path, every tracing statement caught.
+>
+> ## Verification
+>
+> - `bunx tsc --noEmit` — **pass**
+> - `bun test` — **3098 pass / 506 skip / 2 fail**; tracing suite **40/40**
+> - The 2 failures are `scripts/backup.test.ts` + `backup-restore-live.test.ts`, **pre-existing and unrelated**: they fail identically on the untouched `main` checkout (`525e5fd`) with none of this branch present. Not fixed here — out of scope for #530.
+> - `OPENBRAIN_TEST_DATABASE_URL` was **not set**, so Postgres-backed tests skipped silently. Nothing in this lane touches Postgres.
+> - Pushed with `--no-verify` **and disclosed**: the pre-push hook runs the whole suite under `set -e`, so those 2 pre-existing failures block it. The gate's checks were run by hand instead — typecheck clean, tracing suite green, and `gitleaks` on each commit reports **no leaks**. The hook was not modified.
+>
+> ## Round 2 — adversarial review fixes (`2f053e3`)
+>
+> Four findings, all fixed. The two HIGHs were the same defect seen from two sides: the alert path could not fire in production, and the tests could not have caught that.
+>
+> **1. HIGH — the tracker was always `undefined` in production.** `installMcpTracing` built a `SinkHealthTracker` only when it OWNED the sink, and `server/main.ts` always passes a shared one, so `tracker` was undefined on the only path the server takes and every `if (tracker)` guard in `emitTrace` silently discarded the failure. Health now belongs to the **sink** (`TracingSink.health`), so the shared and owned paths report identically by construction.
+>
+> Detection had to move as well, and this is the part the finding correctly anticipated: `emit` is a synchronous enqueue that succeeds against a dead endpoint, so it *never* observes an outage. The down edge is now OTel's `setGlobalErrorHandler` — where `BatchSpanProcessorBase` routes a failed background export (verified in `@opentelemetry/sdk-trace` 2.10.0) — and the up edge is a probe that runs only while already unhealthy. Before this, an outage was invisible until shutdown flush, because this module deliberately silences the SDK's own error logger.
+>
+> **2. HIGH — the alert tests exercised a branch production never runs.** The outage suite now drives the production wiring (`createTracingRuntime` → `installMcpTracing({ sink })`), plus a new multi-session test proving N sessions over one shared sink still yield exactly one pair. *Red-proven:* restoring the old `shared ? undefined : new SinkHealthTracker()` line drops all four outage assertions to zero received lines.
+>
+> **3. MEDIUM — the docs promised a suspend warn that did not happen.** Now true, and re-probed rather than assumed. `.env.example` and `docs/CONFIG_REFERENCE.md` were also corrected to say the edges are detected on the export, not the call.
+>
+> **4. LOW — flapping emitted a pair per flap.** A reported pair now starts a 30 s cooldown (configurable). *Red-proven:* disabling the cooldown check reproduces the review's measured figure exactly — 10 suspend / 10 resume across 20 alternating calls, against 1 pair with it.
+>
+> ### Two further defects the live probe caught
+>
+> Neither was in the findings, and neither would have surfaced from tests alone — the first probe run is what exposed them:
+>
+> - **`droppedTraces` reported `1` for 500 lost traces**, because it counted failed export *batches* rather than traces. Traces are now counted as they are enqueued, including the in-flight batch handed over *before* the failure was discovered — that batch is exactly what the operator lost. (First fix attempt then reported `0`, for the mirror-image reason; both are now regression-tested.)
+> - **The drain path announced a recovery that never happened.** `forceFlush()` resolves whenever the queue ends up empty, *including* when the spans were already dropped by earlier failed exports — so a blackholed shutdown printed `resumed`. Recovery is now claimed only by the health probe, which enqueues its own span first so a resolve means that span was actually exported. The drain reports failures only.
+>
+> ### Observed outage lines (blackholed endpoint, 500 calls, 2026-08-04)
+>
+> ```
+> {"error":"Error","level":"warn","message":"mcp_tool_tracing_suspended",...}
+> [probe] shutting down (drain)...
+> [probe] done
+> ```
+>
+> One suspend line **while the process was still running** — that was zero lines before this fix — and **no** `resumed` line while the endpoint stayed unreachable. Re-pointed at a reachable endpoint, the recovery half completes:
+>
+> ```
+> {"error":"Error","level":"warn","message":"mcp_tool_tracing_suspended",...}
+> {"droppedTraces":25,"level":"info","message":"mcp_tool_tracing_resumed",...}
+> ```
+>
+> `droppedTraces: 25` is the exact call count lost, and the endpoint recorded a real request — so the recovery is genuine rather than an empty-queue artifact.
+>
+> ### Gates
+>
+> - `bunx tsc --noEmit` — **pass**
+> - tracing suite — **40/40**
+> - `bun test` — **3098 pass / 2 fail**, both the `scripts/` backup+restore tests (#537), reproduced on the stashed base commit
+> - `@opentelemetry/core` added as a direct dependency for `setGlobalErrorHandler`; already resolved transitively at 2.10.0 and deduped, one lockfile line
+> - Pushed `--no-verify`, disclosed: #537 keeps the pre-push hook red for everyone. Typecheck and the tracing suite were run by hand first.
+>
+> **Residual risk I would not want taken on trust:** `setGlobalErrorHandler` is process-global and OTel offers no per-processor seam, so this lane's handler sees export errors from any other OTel instrumentation added to the process later. It is installed only when a real sink is built, and it reports content-free rather than swallowing — strictly more visible than the silenced-diag default it replaced — but it is a global, and a second OTel consumer would need to revisit it.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the shutdown drain -- the only place this lane awaits anything, and getting it wrong strands `database.close()`. Bounded twice (SDK export timeout AND a `Promise.race` deadline) and red-proven by removing the race, which hangs the suite past 120 s.
+> - Assumptions that could be wrong: I assumed `startObservation` took a `tracerProvider` option and that the processor set an explicit max queue size. Both were wrong, both caught by reading the shipped `.d.ts` instead of trusting the draft. The second meant I had written a constant describing a bound I never actually set, so I deleted it rather than ship a false claim in a comment.
+> - Missing/weak tests: still no test driving a real socket -- the sink is injected everywhere, and the round-2 probe is manual. That gap is exactly what hid both HIGHs and both probe-caught defects, so it is the honest weak point of this PR. The memory figures remain measurements with nothing regression-guarding them; the drop-count and false-recovery rules now ARE regression-tested.
+> - Security/permission risk: this lane ships unredacted payloads off-process BY DESIGN (#530 supersedes #372 here) -- an accepted decision, not an oversight. The new logger fix closes the one path where a transport error string could reach local logs unredacted. Keys are never logged: the config warn emits booleans, and its field names deliberately avoid the shared logger's `SENSITIVE_KEY_PARTS` so the useful line is not redacted into noise.
+> - Migration/deploy risk: none. Off unless the flag is `"1"` and all three coordinates are present; config is read once at startup, so toggling needs a restart. Dependency swap only -- no schema, migration, or protocol change.
+> - Downstream client/runtime risk: none. No MCP tool, schema, transport, or Python-client surface changes; this is server-internal observability. `docs/downstream-rollout.md` classification: not applicable.
+> - Rollback/cleanup concern: revert the branch. Nothing persists locally and no state is written anywhere.
+> - Fixes made before PR: dropped the false queue-size constant; corrected the provider binding to the SDK's real isolation seam; silenced the SDK logger; fixed the log-capture helper to hook `console.log` (the shared logger's info channel) after it produced a green assertion against zero captured lines; corrected the composition-order note.
+> - Known residual risk: memory flatness is measured, not enforced -- a future SDK change could reintroduce growth silently. The 2 pre-existing backup-test failures remain and keep the pre-push hook blocked for everyone until fixed (separate issue, not this branch's).
+> - SME review-memory update: [x] not applicable because: the findings this round were SDK-version-specific (v3 queue behaviour) and are recorded in the PR thread reply rather than as reusable lane patterns.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this lane is server-internal observability and touches no Open Brain tool, schema, or namespace surface; verification was against the Langfuse server instead, recorded above.
+>
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-04T01:31:31Z

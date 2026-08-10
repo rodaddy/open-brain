@@ -43,3 +43,72 @@ Make the package facade support the same identity model:
 ## Relationship
 
 Related to #177 and #181. This is a blocker for deeper package adoption in `rtech-hermes` beyond the temporary provider bridge used in Run A.
+
+---
+
+## Resolution
+
+Closed by **PR #185** — fix: make OpenBrainClient namespace delegation opt-in
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `81369501c3fc44d1a91f2619dfa1fd8ab8b2d6c7`
+- Merged at: 2026-06-20T06:13:17Z
+- PR state: MERGED
+- Issue closed: 2026-06-20T06:13:18Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #185 body
+
+> ## Summary
+>
+> - makes `OpenBrainClient` namespace delegation opt-in with `delegate_namespace=False` by default
+> - omits `X-Namespace` for normal agent-role clients while preserving `X-Agent-Id`, `X-Role`, session lifecycle, and close behavior
+> - adds fake-transport coverage for default omission and explicit delegated `X-Namespace`
+> - updates README and SME review guidance for token-derived namespace authority and explicit privileged delegation
+> - adds the Run B tracker doc for the direct package client and downstream Hermes migration path
+>
+> ## Linked issues
+>
+> - Closes #184
+> - Supports #177
+> - Supports #181
+>
+> ## Validation
+>
+> - `cd python/openbrain-memory && uv run pytest tests/test_client.py -q` PASS: 45 passed
+> - `cd python/openbrain-memory && uv run pytest -q` PASS: 122 passed, 1 skipped
+> - `cd python/openbrain-memory && uv run ruff check src tests` PASS
+> - `cd python/openbrain-memory && uv run ruff format --check src tests` PASS
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` PASS
+> - `git diff --check` PASS
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: changing default `X-Namespace` behavior could break privileged callers that depended on implicit delegation. The new `delegate_namespace=True` flag preserves that path explicitly.
+> - Assumptions that could be wrong: agent-role tokens always derive namespace server-side in the deployed Open Brain auth policy. This matches the Nagatha failure and existing Hermes bridge behavior, but live package-facade canary still belongs after merge.
+> - Missing/weak tests: tests use fake/in-process transports, not a live hosted token. Live canary remains Run B follow-up before Hermes adapter replacement.
+> - Security/permission risk: safer default for agent tokens; delegation is now explicit and still server-validated. README and SME docs were updated so reviewers do not demand the stale always-header behavior.
+> - Migration/deploy risk: downstream Hermes still uses a provider bridge. This package change does not by itself update Hermes runtime/plugin code.
+> - Downstream client/runtime risk: `rtech-hermes` #94/#95 still need a follow-up PR to consume the direct package facade. Do not claim live agent readiness from this PR alone.
+> - Rollback/cleanup concern: rollback restores prior implicit delegation behavior by reverting this commit. No data/server migration is included.
+> - Fixes made before PR: added default and delegated header tests, added in-process `UrllibTransport` delegated-header coverage, updated streaming test expectation, README identity docs, SME review guidance, and Run B tracker.
+> - Known residual risk: contract DSL schema conversion remains open in #179, and expanded package canary/spool coverage remains open in #181.
+> - SME review-memory update: [x] `docs/sme/` updated [ ] not applicable because: -
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`.
+> - [x] Open Brain local verification complete: Python package tests/lint/typecheck above.
+> - [x] Hosted Open Brain deploy/smoke is not applicable for this PR because no server runtime or MCP schema changes are included.
+> - [x] rtech-mcps handoff is not applicable because no registry/tool/schema change is included.
+> - [x] mcp2cli cache/skill refresh is not applicable because no MCP tool schema or generated skill behavior changes are included.
+> - [ ] rtech-hermes Python runtime/plugin follow-up is required before claiming agent readiness.
+> - [ ] Hermes live rollout/canary is required after the Hermes follow-up PR, with Nagatha first.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: package-client behavior change only; no hosted Open Brain server deployment is included in this PR. Live Hermes/Nagatha canary is required after the downstream Hermes package-consumption PR.
+>
+> Review swarm required before merge. Because this touches `python/openbrain-memory/`, include the gotcha-agent lane from `docs/sme/gotcha-agent.md`.
+>

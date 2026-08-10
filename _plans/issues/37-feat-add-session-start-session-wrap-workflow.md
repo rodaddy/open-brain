@@ -40,3 +40,45 @@ Rico's agents need OB to act as operational memory, not just a search box. At se
 - Transient details can stay in event history without polluting durable memory.
 - Durable outputs preserve exact artifact paths and receipts.
 - Compaction/restart can load the latest lane context without broad search.
+
+---
+
+## Resolution
+
+Closed by **PR #46** — feat: add session_start and session_wrap lifecycle tools (#37)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2aed43ef67b4d1d8787f102842ed5ecb62f07adb`
+- Merged at: 2026-06-08T05:07:43Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T05:07:44Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #46 body
+
+> ## Summary
+> - **`session_start`**: Find/create/reactivate a session lane. Returns lane context + recent events. Idempotent entry point for agents resuming work after compaction.
+> - **`session_wrap`**: Persist a caller-provided summary to the `sessions` table and mark the lane as wrapped. Pure DB write — no LLM calls. The caller distills the summary from events using their local LiteLLM before calling this.
+> - 27 tests across both tools
+>
+> ## Design Decision
+> The wrap tool is a **data write, not an LLM call**. All callers have local LiteLLM access via mcp2cli, so they produce the summary themselves and pass it in. This keeps OB as a pure data layer and avoids adding latency to the compact dance.
+>
+> ## Compact Flow
+> 1. Agent's context is about to compact
+> 2. Agent calls `session_context` → gets lane + events
+> 3. Agent uses local LLM to distill summary/decisions/next_steps
+> 4. Agent calls `session_wrap` with the distilled output → OB persists + marks wrapped
+> 5. Context compacts
+> 6. Next session: agent calls `session_start` → gets lane (reactivated) + persisted summary
+>
+> ## Test plan
+> - [x] `bunx tsc --noEmit` passes
+> - [x] 468 tests pass (27 new)
+> - [x] Auth gates verified
+> - [x] Lane reactivation (wrapped→active, archived→active)
+> - [x] Embedding failure non-fatal
+> - [x] keep_active flag works
+>
+> Closes #37
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

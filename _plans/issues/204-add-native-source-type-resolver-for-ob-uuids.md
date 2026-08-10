@@ -13,3 +13,61 @@ Closed: 2026-07-06T01:54:16Z
 ---
 
 ## Problem\nHermes/Nagatha source-type canaries need to answer: given an OB UUID, what readable source_type, namespace, and fetch_path does it resolve to?\n\nLive contract 2026-06-25.memory-tools.v6 exposes get_entry, but get_entry requires the caller to already know the table. That forces clients/agents to brute-force thoughts/decisions/relationships/projects/sessions and often fall back to search. In the Nagatha clean-session canary, that produced skill load, 3 model API calls, 5 get_entry calls, and one search_all call for a simple source-type answer.\n\n## Requested tool\nAdd a read-only resolver, e.g. resolve_entry or resolve_source_type, with input:\n\n- id: UUID\n- optional namespace if authorized/current contract supports explicit namespace\n\nReturn:\n\n- resolved: boolean\n- id\n- source_type\n- namespace\n- fetch_path\n- checked_sources/tables\n- not_found_or_unreadable status when no readable row is found\n\n## Acceptance\n- One backend tool call resolves a UUID across readable OB source families under existing auth boundaries.\n- It distinguishes found, archived/not found, and not readable when possible.\n- It does not require semantic search for exact UUID resolution.\n- rtech-hermes can remove its temporary provider shim once this is available in the public contract.\n\n## Evidence\nCaptured in rtech-hermes finding F026 on branch wip/loop-run-next: Hermes currently adds a temporary resolve_source_type provider tool backed by get_entry so model-facing orchestration collapses to one tool call while preserving existing server-side auth checks.
+
+---
+
+## Resolution
+
+Closed by **PR #243** — feat(#204): add resolve_entry UUID resolver
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `3b8e47ac5d4b3b614fdd26f5609242b73204f928`
+- Merged at: 2026-07-06T01:54:15Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T01:54:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #243 body
+
+> Closes #204.
+>
+> ## Summary
+> - add read-only `resolve_entry(id, namespace?)` to resolve readable Open Brain UUIDs to source type, namespace, table, and `get_entry` fetch path without semantic search
+> - enforce existing auth-derived readable table and namespace policy, including canonical/physical shared namespace handling and admin `namespace: "all"` behavior
+> - bump the public contract to `2026-07-05.memory-tools.v12` and add the Python client snapshot/wrapper for `resolve_entry`
+> - update the local controller plan and roadmap with #204 local validation state
+>
+> ## Validation
+> - `bun test src/tools/__tests__/resolve-entry.test.ts src/contract.test.ts` -> 12 pass
+> - `bunx tsc --noEmit`
+> - `bun test` -> 1040 pass, 46 skip, 0 fail
+> - `cd python/openbrain-memory && uv run pytest -q` -> 193 pass, 5 skip
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `git diff --check`
+> - `ggshield secret scan repo .` -> no secrets found
+>
+> ## Critical self-review
+> - Highest-risk behavior: the resolver could become a cross-namespace or cross-table oracle. It now filters source families by `canRead()` and namespaces through the same read-policy helper used elsewhere.
+> - Assumptions that could be wrong: admin-only archived resolution is enough for operator diagnostics while ordinary clients should not distinguish archived UUIDs from missing/unreadable rows.
+> - Missing/weak tests: tests cover found rows, admin-only archived rows, non-admin archived non-disclosure, unreadable role, explicit unreadable namespace, and admin `namespace: "all"`; live DB canary is deferred by the local-only instruction.
+> - Security/permission risk: table names are hard-coded allowlisted source tables; namespace predicates are server-side and parameterized.
+> - Migration/deploy risk: no DB migration. Public contract/client snapshot changes require downstream rollout before release.
+> - Downstream client/runtime risk: mcp2cli, generated skills, and rtech-hermes must refresh/adopt the new contract before claiming runtime readiness.
+> - Rollback/cleanup concern: rollback is reverting this PR; no data mutation is introduced.
+> - Fixes made before PR: replaced hand-rolled namespace predicate logic with `namespaceFilterFor()` after finding the admin `namespace: "all"` edge case, then added a regression test.
+> - Fixes made during gauntlet: limited archived resolution to admin/ob-admin with non-admin non-disclosure tests, bumped `openbrain-memory` package/min-compatible version to `0.1.2`, and added `resolve_entry` to the Python wrapper dispatch regression.
+> - Known residual risk: downstream rollout and core01/live canary are intentionally deferred until the release/deploy phase.
+> - SME review-memory update: [x] not applicable because: current gauntlet findings are PR-specific implementation fixes and do not add a new durable MEDIUM+ review pattern beyond existing namespace-boundary and contract-version checklists.
+>
+> ## Downstream rollout
+> - I checked `docs/downstream-rollout.md`.
+> - Local Open Brain verification is complete.
+> - Hosted Open Brain deploy, mcp2cli schema refresh/generated skills, rtech-mcps handoff, rtech-hermes runtime/plugin changes, Hermes rollout, and live agent canaries are deferred by the current local-only instruction and must be completed before issue closure/release.
+>
+> ## Review gate
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: current instruction is local-only; hosted/core01 live checks are deferred to release/deploy phase.
+> - `pre-merge-gauntlet` is required because this PR changes MCP tool behavior, the public contract, and the Python client snapshot.
+> - Phase 1 critical review completed before PR creation; Phase 2+ starts after PR opens.
+>

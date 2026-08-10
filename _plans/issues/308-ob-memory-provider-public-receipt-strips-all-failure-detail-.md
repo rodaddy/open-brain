@@ -38,6 +38,17 @@ Mapping happens in the adapter from the package receipt's sanitized error string
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-21T04:03:39Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-21T04:03:38Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-21T04:03:38Z

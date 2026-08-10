@@ -16,6 +16,17 @@ Found by the #578 gate's FIRST live run (receipt: issues/578#issuecomment-519505
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-05T18:19:40Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-05T18:19:39Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-05T17:33:10Z

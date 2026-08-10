@@ -37,6 +37,17 @@ API primitives for a Dreamer process that promotes high-value agent memories int
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-15T20:59:16Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-15T20:59:15Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-10T16:04:39Z

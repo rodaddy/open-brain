@@ -84,3 +84,88 @@ conditional TTL and the write into `discarded_entries`. This issue owns only the
 
 Scope-shares with #300. Close whichever is redundant once both are specified; do
 not implement the envelope twice.
+
+---
+
+## Resolution
+
+Closed by **PR #574** — fix(doctor): alarm when distillation falls behind ingest
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `109e6da40c2dfc6bec459517b2344cfbb40c418b`
+- Merged at: 2026-08-05T08:52:32Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T08:52:33Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #574 body
+
+> Closes #381 (INGEST-2).
+>
+> Alarms when distillation falls behind ingest. The signal is backlog **age**, not
+> bytes: oldest undistilled turn age divided by the raw-turn TTL, per namespace.
+> As that ratio approaches 1, acknowledged content is about to expire before it is
+> ever distilled.
+>
+> ## What changed
+>
+> - `operator_doctor` gains a `distillation_lag` array: one entry per namespace
+>   with `undistilled_depth`, `oldest_undistilled_age_seconds`, `ratio`, and
+>   `level` (`ok` / `warning` / `critical`). Thresholds are 0.5 and 0.8 from the
+>   issue, exported as named constants.
+> - The query is the work-queue shape `idx_ob_raw_turns_undistilled` already
+>   indexes (`distilled_at IS NULL AND retention_tier = 'live'`), parameterized,
+>   grouped by namespace, and wrapped in the doctor's existing optional-timeout
+>   helper. A probe failure logs content-free and degrades to `[]` rather than
+>   failing the whole doctor payload.
+> - Critical lag degrades `status` to `degraded`; warning lag stays `healthy`.
+>   `unhealthy` remains reserved for a database hard failure, per the existing
+>   tier rules.
+> - `OPENBRAIN_RAW_TURN_TTL_SECONDS` (default 604800 = 7 days) supplies the
+>   denominator, documented in `.env.example`, `.env.schema`, and
+>   `docs/CONFIG_REFERENCE.md`.
+> - `DOCTOR_CONTRACT_VERSION` bumped to `2026-08-05.operator-doctor.v3`, with all
+>   four independent assertions of it updated.
+>
+> **Not in scope:** retention and eviction belong to #395. This PR reads the TTL
+> as an alarm denominator only; it never expires, archives, or deletes a turn. No
+> backpressure on ingest — the issue asks for that only if the alarm proves
+> insufficient in practice.
+>
+> ## Acceptance criteria
+>
+> - [x] Oldest undistilled age queryable per namespace, exposed content-free.
+> - [x] Warning and critical crossings observable and tested.
+> - [x] Depth / age / throughput exposed without payloads.
+> - [x] Namespace grouping preserved; no cross-namespace resolution.
+> - [x] No acknowledged turn is silently dropped (nothing is deleted at all).
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: critical lag degrades the doctor `status` tier, so a noisy alarm could mask a real embedding or migration degradation in an already-degraded payload; chose it deliberately because content about to be lost is what a doctor tier is for, and left warning-level neutral so only the near-loss case moves the tier.
+> - Assumptions that could be wrong: that the TTL is one global value — #395 owns the real conditional TTL and may make it per-namespace, which would turn this denominator into an approximation; and that `created_at` is the right age basis, since a spool-replayed turn has an older `occurred_at` and a batched backfill therefore under-reports its own age.
+> - Missing/weak tests: the SQL is not executed against a real Postgres — the pool is faked, so the aggregate, the `EXTRACT(EPOCH ...)` arithmetic, and index usage are unproven on a live server; classification, payload shape, tier effect, and probe-failure fallback are all covered, and the thresholds were mutation-checked by forcing the critical branch false, which fails two tests on the `level` value rather than merely on imports.
+> - Security/permission risk: low — the surface is already admin/ob-admin only via `canReadDoctor`, and the payload is content-free by construction (namespace, counts, ages) with a test asserting that content, content_hash, and turn ids present in a row never reach the serialized output; namespace names do become visible to a doctor reader, consistent with the rest of the privileged payload.
+> - Migration/deploy risk: none — no schema change, and it reads a table and indexes #380 already shipped; where migration 032 has not run the query throws and the fallback returns `[]`, so the doctor still answers.
+> - Downstream client/runtime risk: additive field on a frozen contract, so `DOCTOR_CONTRACT_VERSION` is bumped and any consumer asserting the exact key set or version literal must update — exactly the failure the second commit fixes in three in-repo places; the pre-push contract-parity subset reported client/contract paths unchanged.
+> - Rollback/cleanup concern: revert is clean — one field, one env var, no state written anywhere, nothing to unwind.
+> - Fixes made before PR: the contract bump had reached only the shape-lock test, leaving three assertions pinned at v2 — the MCP tool test (actively failing), `src/server.test.ts` (green only because its Postgres case skips silently without `OPENBRAIN_TEST_DATABASE_URL`, so it would fail wherever one is set), and a comment in `server/tools/operator-doctor.ts` citing the version while explaining the lock; all four now agree.
+> - Known residual risk: the age basis (`created_at` vs `occurred_at`) and the global-TTL assumption both need revisiting when #395 lands its real retention policy, though neither can lose data today since this PR only reports.
+> - SME review-memory update: [x] not applicable because: no new MEDIUM+ review finding surfaced — the one defect found (a stale contract-version literal in three places) is already policed by the existing shape-lock test convention documented in `src/operator-doctor.ts`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: no live service call is involved — the change is a read-only diagnostic field verified against a faked pool, with no deploy or hosted smoke performed in this PR.
+> - `bunx tsc --noEmit` — clean, exit 0.
+> - `bun test src/operator-doctor.test.ts src/tools/__tests__/operator-doctor.test.ts src/server.test.ts` — 43 pass, 0 fail.
+> - Full pre-push suite — 3191 pass, 506 skip, 0 fail across 231 files.
+> - Failure proven before trusting the test: mutating the critical threshold to a constant-false branch fails `crosses the warning and critical TTL ratios` and `reports content-free distillation lag separately for each namespace` on the `level` value.
+> - Note for reviewers: Postgres-backed tests skip without `OPENBRAIN_TEST_DATABASE_URL`, so the green run above does not exercise the real SQL. Worth a live-DB check of the aggregate before this is relied on operationally.
+>
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+> - `contracts/server/server-operator-diagnostics-admin.fixture.json` bumped to `2026-08-05.operator-doctor.v3` (the fifth version site the review swarm found hiding behind the silently-skipped parity suite). Parity suite executed with `OPENBRAIN_TEST_DATABASE_URL` set: 69 pass / 7 fail, the 7 being pre-existing `server-rewrite-scaffold` failures reproduced identically on an `origin/main` baseline worktree 3/3 runs — `server-operator-diagnostics-admin` passes for both providers.
+>

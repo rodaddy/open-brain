@@ -106,6 +106,159 @@ canon silently dead and needs either the fixed package or the wrapper line remov
 
 ---
 
+## Resolution
+
+Closed by **PR #566** — fix(config): declare OPENBRAIN_DEVELOPMENT_ROOT so a #557-installed box keeps canon (#565)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d46d68e252f4c8df55745aac5149926cd5039a37`
+- Merged at: 2026-08-05T03:15:36Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T03:15:37Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #566 body
+
+> Closes #565.
+>
+> ## What broke
+>
+> PR #557 taught `setup-client.sh` and `openbrain-hook-env` to pass
+> `OPENBRAIN_DEVELOPMENT_ROOT`, but never declared it in the `openbrain` package.
+> `config.unknown_prefixed_variables` rejects any `OPENBRAIN_*` variable matching
+> no declared field — and rejects the **whole environment**, not the one variable.
+> The `SessionStart` entrypoint swallows that rejection (fail-open observer
+> contract) and exits 0, so every box built from bundle
+> `air-bundle/20260804-203726` opened sessions with **no canon and no error the
+> operator could see**.
+>
+> Field-proved on two machines 2026-08-04: the Air hand-reverted its env pair, the
+> mini was restored from backups.
+>
+> This is the matched-pair ordering rule (declare in package → reinstall → wrapper
+> passes) violated by #557 itself, and the fourth instance of the defect class
+> after `OPENBRAIN_OBSERVATION_*`, `OPENBRAIN_SPOOL_PATH`, and
+> `OPENBRAIN_ALLOW_INSECURE_HTTP` (#544). It is also the sharpest form yet: the
+> package had **read** the variable since #556 (`receipts/scope.py`, via
+> `os.environ` per call), so it was rejecting a variable its own code depended on.
+> Consuming a name never registers it.
+>
+> ## The fix, at the owning boundary
+>
+> - **`config.py`** — declare `development_root` on `ServerSettings`, the
+>   process/machine-level section, because the value describes the **box**, not a
+>   lane. Declared to be RECOGNISED, not authoritative: `receipts.scope` and
+>   `openbrain_provider.development_scope` keep resolving the path from
+>   `os.environ`, spelled identically, so a writer and a reader can never land in
+>   different scopes. Declaring a name the config does not itself read is
+>   precedented — `OPENBRAIN_OBSERVATION_HMAC_SECRET` exists for that reason.
+> - **`config.py`** — add `_empty_string_means_unset`, the string counterpart of
+>   #544's `_empty_opt_in_means_unset`. The wrapper's `env -i VAR="${VAR:-}"`
+>   style cannot express "absent", so an unset variable arrives as `""`; without
+>   this it resolves to `Path("")` instead of the shipped default.
+> - **`session_start.py`** — visibility, minimal and at the same boundary. The
+>   config-rejection failure now names the offending variable(s) and the
+>   remediation on stderr, per the #558 precedent: loud diagnosis, non-blocking,
+>   stderr only, stdout left empty so the harness still reads "proceed normally,
+>   inject nothing". The prior warning named only the exception class, which is
+>   exactly why a dead canon read as a healthy session. Safe to print — the error
+>   carries variable NAMES, never values.
+>
+> **Packages declared:** `openbrain` only. Verified rather than assumed:
+> `openbrain-provider` reads `os.environ` directly and rejects nothing, and
+> `openbrain-memory` carries no such check, so only `openbrain` applies strict
+> prefix rejection today.
+>
+> ## Red proof
+>
+> Red first, both halves:
+>
+> - Before the declaration, 6 of 8 new tests failed with
+>   `UnknownEnvironmentVariableError`; the 2 that passed were invariants that were
+>   already correctly true.
+> - The stderr test was separately proven red by stashing only the hook change —
+>   `assert 'OPENBRAIN_DEVELOPMENT_ROOOT' in ''`.
+>
+> Live end-to-end, against the running service:
+>
+> - Broken wrapper pair → `SessionStart canon injection failed
+>   (UnknownEnvironmentVariableError)`, zero canon, exit 0.
+> - Fixed package, wrapper-shaped clean environment, `OPENBRAIN_DEVELOPMENT_ROOT`
+>   set → the identical invocation emits the **CANON PACK**.
+>
+> ## Gates
+>
+> - `openbrain`: 579 passed · mypy clean · ruff clean
+> - `openbrain-provider`: 596 passed, 1 skipped · mypy clean · ruff clean
+> - `openbrain-memory`: 569 passed, 9 skipped · mypy clean · ruff clean
+> - `bun install --frozen-lockfile`: ok
+>
+> ## Docs
+>
+> `docs/GOTCHAS.md` gains the matched-pair rule's **third clause**: a variable the
+> wrapper passes must be declared in EVERY package whose config applies strict
+> prefix rejection, with #557 as the case study, plus the new stderr line as the
+> fastest confirmation. `docs/CONFIG_REFERENCE.md` documents the field.
+>
+> ## Deployment warning
+>
+> Bundle `air-bundle/20260804-203726` ships the broken combination and **must not
+> be installed on new boxes** until superseded by a bundle carrying this package.
+>
+> ## Note found while fixing
+>
+> The repro also surfaced `OPENBRAIN_NAMESPACE`, present in the live
+> `claudex-observation.env` today and equally undeclared. It does not break hooks
+> only because `openbrain-hook-env` runs the child under `env -i` with a strict
+> allowlist that strips it. Recorded in #565; out of scope here.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the new stderr write in the `SessionStart` hook. It is
+>   additive and non-blocking, and the test asserts stdout stays empty so the
+>   injection contract is untouched; the failure path it sits on already existed.
+> - Assumptions that could be wrong: that only `openbrain` applies strict prefix
+>   rejection. Checked both sibling packages for `unknown_prefixed_variables` and
+>   `UnknownEnvironmentVariableError` and found neither, rather than assuming.
+> - Missing/weak tests: no test drives the real installed wrapper end-to-end — the
+>   wrapper lives outside the repo, so that leg was verified manually and is
+>   recorded above rather than automated.
+> - Security/permission risk: the stderr line prints an exception carrying only
+>   variable NAMES and fixed remediation text, never values, so no token can reach
+>   the stream. `SecretStr` fields are unaffected.
+> - Migration/deploy risk: none in-repo. The deploy-side risk is the ordering rule
+>   itself — this package must be installed before a wrapper passes the variable,
+>   which is what the GOTCHAS clause now states.
+> - Downstream client/runtime risk: no MCP tool, schema, transport, or
+>   client-facing contract changed; this is Python-package config plus a hook
+>   diagnostic, so `docs/downstream-rollout.md` classification is not applicable.
+> - Rollback/cleanup concern: revert is a single commit; the declared field is
+>   additive with a `None` default, so an older env without the variable behaves
+>   exactly as before.
+> - Fixes made before PR: switched the stderr emission from `print` to
+>   `sys.stderr.write`/`flush` to match the established `stop.py` convention after
+>   ruff flagged it; removed a `/tmp` literal from a test fixture payload.
+> - Known residual risk: `OPENBRAIN_NAMESPACE` remains undeclared and is protected
+>   only by the wrapper's allowlist — noted in #565, deliberately not fixed here
+>   to keep this change scoped to the reported defect.
+> - SME review-memory update: [x] not applicable because: the mandatory gotcha-agent lane was read (`docs/sme/gotcha-agent.md`) and none of its checks — live writes/redaction, namespace authority, spool durability/locking, transport bounds — are touched by an environment-variable declaration; the durable lesson here is the matched-pair rule, recorded in `docs/GOTCHAS.md` where that doctrine already lives.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below
+>
+> Live checks are the before/after `openbrain-session-start` runs against the
+> local dogfood service documented under "Red proof" — the broken pair reproducing
+> a silent uninjected session, and the fixed package emitting the CANON PACK.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: the change is confined to the Python `openbrain` package's environment-variable declaration plus one hook's stderr diagnostic; no MCP tool, schema, wire contract, or shared fixture is touched, and the TypeScript server neither reads `OPENBRAIN_DEVELOPMENT_ROOT` nor applies prefix rejection, so there is no parity fixture to update.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-05T03:18:01Z

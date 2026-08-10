@@ -33,3 +33,69 @@ Same command with `cwd` = an open-brain checkout emits `CANON PACK 1/2` normally
 ## Fix
 
 Omit the `repo` key when `settings.repo is None` — the pattern the receipts call already uses (`session.py:763-765`: `if repo is not None: arguments["repo"] = repo`). Regression test: fake-transport canon read with a non-repo cwd asserts the request omits the key AND that profile/process sections still inject.
+
+---
+
+## Resolution
+
+Closed by **PR #527** — fix(canon): omit repo from the pack call when underivable — null killed the whole pack (#526)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2920e1c8530d37d4148d1db4b8a3a1bd4fa68055`
+- Merged at: 2026-08-03T20:37:58Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T20:37:59Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #527 body
+
+> ## Summary
+>
+> - Fixes #526: `_canon_context` passed `repo=None` into `client.agent_context_pack(...)` (a pure `**arguments` pass-through), so the wire carried `repo: null` and the live server rejected the whole call — zero canon, profile/process included, for every session outside a git repo. This is what left Buzz-Skippy (cwd `~/.buzz`) with an empty skull on a box where the OB stack works.
+> - The `repo` key is now omitted when None (`#517`'s intended defined-empty `repo_facts` state requires the key to be absent), the same conditional shape the receipts call already uses at `session.py:763-765`.
+> - Regression tests drive `_canon_context` itself with a recording client at the wire boundary — `CanonPackReader` replaces the whole factory, so the existing harness could never see this argument.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> `uv run mypy` clean (48 files), `ruff` clean, `pytest` 492 passed / 1 skipped. Red-proof: reverting the conditional fails `test_a_none_repo_is_omitted_from_the_wire_call` and only it. Live: the failing probe (`openbrain-session-start` with `cwd=/Users/rico/.buzz`) reproduced `OpenBrainToolError` on deployed code, and the fixed entrypoint against the same live dogfood server emits `CANON PACK 1/2` normally.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: changing the canon read's wire arguments. Bounded: the only delta is key omission when None; a derived repo still binds exactly (second regression test).
+> - Assumptions that could be wrong: that no caller depends on sending `repo: null` — none can, the live server rejects it.
+> - Missing/weak tests: no live-server test in CI for the null shape (CI has no dogfood service); covered by the recorded live probes and the wire-boundary fakes.
+> - Security/permission risk: none; read-only call, no namespace change.
+> - Migration/deploy risk: needs the uv tool reinstall on this Mac to reach the deployed hooks (same step as every hook change; I'll run it on merge).
+> - Downstream client/runtime risk: none to MCP schema; Python hook side only.
+> - Rollback/cleanup concern: revert the commit; behavior returns to rejecting non-repo sessions.
+> - Fixes made before PR: ruff quoted-annotation nit.
+> - Known residual risk: other `**arguments` pass-through call sites could carry the same None-to-null trap; worth a sweep as a follow-up (not this fix's scope).
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: single-fix PR; the None-to-null pass-through pattern is a good future SME candidate once the sweep confirms other sites.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because: live probes under Verification.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no MCP tool/schema change; Python hook wire-argument construction only.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable: no contract change. Local deploy step on merge: `uv tool install --reinstall` of the `openbrain` package (same as #524's).
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

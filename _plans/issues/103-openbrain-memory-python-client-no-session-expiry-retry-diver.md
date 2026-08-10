@@ -19,3 +19,50 @@ Surfaced by the rtech-hermes PR #41 review swarm (retry-on-session-expired, rtec
 `docs/sme/domain-backend.md` (dual-client entry) requires MCP session TTL behavior verified against BOTH clients. The rtech-hermes `HttpTransport` now: detects session-gone responses (400 with the "missing session" body marker, or 404 per MCP spec), re-runs the initialize handshake, and retries the original call exactly once; 401/403 never retry. Port the same semantics here (see rtech-hermes packages/rtech-hermes-runtime/src/rtech_hermes_runtime/openbrain/http_transport.py for the reference implementation and fake-transport test patterns).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## Resolution
+
+Closed by **PR #117** — fix: retry expired Open Brain MCP sessions
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `14cc151887deb62f53ab144f242391ce97c94bd7`
+- Merged at: 2026-06-15T21:08:42Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T21:08:43Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #117 body
+
+> ## What
+>
+> Closes #103 by teaching the Python OpenBrainClient to recover from expired MCP sessions.
+>
+> ## Scope
+>
+> - Detect expired-session tool-call responses from Open Brain MCP transport:
+>   - 404 session-gone responses
+>   - exact 400 transport messages: missing/invalid MCP session
+> - Clear the cached session, re-run initialize + notifications/initialized, and retry the original tool call exactly once
+> - Do not retry auth failures or unrelated 400 validation errors
+> - Preserve the original JSON-RPC tool-call payload across retry
+>
+> ## Review
+>
+> Initial 3-lane review:
+> - Domain/backend: pass
+> - Gotcha-agent: pass
+> - Adversarial: found broad 400 matching risk
+>
+> Fix verification:
+> - DomainFix: pass
+> - AdversarialFix: pass
+>
+> ## Validation
+>
+> From python/openbrain-memory:
+> - uv run mypy src/openbrain_memory
+> - uv run ruff check src tests
+> - uv run pytest -q (86 passed, 1 skipped)
+> - uv run pytest -q tests/test_client.py -k 'expired_session or auth_error or tool_validation_400' (4 passed)
+> - uv build

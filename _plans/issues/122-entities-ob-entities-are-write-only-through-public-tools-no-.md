@@ -38,6 +38,36 @@ Without a read path, the entity/link graph (#38) can't back a hub-spoke knowledg
 
 ---
 
+## Resolution
+
+Closed by **PR #123** — [codex] expose graph entities through public tools
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c2c4632591a44929b2e1a5eee5e9b78f4c4fa6f2`
+- Merged at: 2026-06-18T03:54:45Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T03:54:46Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #123 body
+
+> Fixes rodaddy/open-brain#122.
+>
+> ## Summary
+> - Add public `get_entity` and `list_entities` tools for graph entities stored in `ob_entities`
+> - Include graph entity search via `search_brain(table: "entities")`
+> - Add `get_stats.graph_counts` for entity/link visibility without conflating graph entities with legacy `projects`
+> - Add Python client wrappers and contract docs clarifying that `entity_type: "project"` is not a `projects` row
+>
+> ## Validation
+> - `bunx tsc --noEmit`
+> - `bun test`
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `cd python/openbrain-memory && uv run pytest -q`
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-18T03:32:22Z

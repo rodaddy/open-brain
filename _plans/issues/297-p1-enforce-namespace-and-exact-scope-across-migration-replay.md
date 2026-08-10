@@ -31,6 +31,89 @@ P1 security boundary required by lane migration, automatic replay, and backup/re
 
 ---
 
+## Resolution
+
+Closed by **PR #316** — feat(isolation): per-surface disposition + cross-surface negative matrix (#297)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `465c796a6a88e01adf7bb7295f894b7acc0917d3`
+- Merged at: 2026-07-22T02:09:45Z
+- PR state: MERGED
+- Issue closed: 2026-07-22T02:09:46Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #316 body
+
+> Closes #297 per its closure assessment: the four named surfaces (migration, replay, restore, diagnostics) plus deletion/export/audit are now either enforced with cited authority or explicitly dispositioned — and the isolation boundary itself gets a cross-surface negative-matrix test instead of only per-tool positives.
+>
+> **`docs/memory-contract.md` — Operational-Path Isolation Disposition:** per-surface table with authority for each: spool replay enforced client-side (#309/#310/#314, `_parked_namespace` provenance, foreign units retained with zero dispatches); deletion/archive enforced server-side (`appendWriteNamespacePredicate`); export fail-closed (#305); `retire-collab-migration.ts` and operator-doctor named **intentionally global** under the issue's own carve-out (env-gated / role-gated + content-free); audit fail-open documented as the deliberate LAN-local trade; backup/restore **deferred-because-nonexistent** with the isolation requirement assigned to the #298 build. Ends with a standing review rule: new operational surfaces must add their row in the same PR.
+>
+> **`src/tools/__tests__/namespace-isolation-matrix.test.ts`** (11 cases, expanded post-swarm):
+> - `archive_entry` + `bulk_archive` header-scoped denial parameterized over **both** delete-capable header-scopable roles (admin, ob-admin): every UPDATE carries `AND namespace = ANY($2::text[])` bound to the caller's namespace only; denial is content-free and indistinguishable from not-found.
+> - `archive_entity`: entity-row predicate pinned; **mutation-verified** — deleting the `appendWriteNamespacePredicate` call fails the suite.
+> - `unlink_entities`: caller-supplied `namespace: "victim"` is denied at the `canWriteNamespace` gate with zero SQL issued.
+> - `archive_entry` override attempt: extra `namespace: "victim"` argument cannot influence the bound predicate (params stay `[id, ["bilby"]]`, "victim" absent from all SQL/params).
+> - `bulk_archive` non-delete role never reaches `pool.connect`; mixed own+foreign batch archives own row only (`{requested: 2, archived: 1}`, 1 COMMIT / 0 ROLLBACK); error-path leak test pins the sanitized response.
+>
+> **`src/tools/__tests__/namespace-isolation-matrix-live.test.ts`** (new): `OPENBRAIN_TEST_DATABASE_URL`-gated live-Postgres negative test (runs in CI db-integration): seeds a foreign-namespace thoughts row, header-scoped caller gets the not-found text and a direct SELECT proves `archived_at IS NULL`; the owner path then archives it (non-vacuous). Also executed against a throwaway locally-migrated Postgres during development: 1 pass.
+>
+> **`src/tools/bulk-archive.ts`** (post-swarm fix): transaction-failure response is now the stable string `Transaction failed`; logs carry `err.name`/`err.code` only, never raw `err.message` (SME PR #275/#262 patterns) — closes the one response path that contradicted the content-free claim.
+>
+> **Gates:** `bunx tsc --noEmit` clean; full `bun test src/tools/__tests__/` 628 pass / 29 skip / 0 fail (skips are the pre-existing DB-gated suites plus the new live suite when the env var is unset).
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — tsc clean, 628 pass / 29 skip / 0 fail tool tests
+> - [x] Python package checks passed or are not applicable — not applicable (no python changes; python surfaces cited, not modified)
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable (only runtime change is the bulk_archive error-path text/log sanitization, exercised by the new leak test; response schema and success paths unchanged; live-pg negative test additionally passed against a throwaway migrated database and runs in CI db-integration)
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: documenting a surface as "enforced" that later regresses; mitigated by the mutation-verified negative matrix, the live-Postgres negative test, and the standing add-a-row review rule.
+> - Assumptions that could be wrong: that header-scoped admin/ob-admin is the right cross-namespace denial cell — verified: `writableNamespaces` scopes ANY role to `[clientId]` when `namespaceSource === "header"`; token-sourced delete roles (admin/ob-admin/promoter) are global by design and now named as such in the table preamble.
+> - Missing/weak tests: frozen-namespace exclusion arm of the predicate not covered here (covered by existing namespace-policy tests); live-pg suite covers archive_entry only — the other surfaces rely on the mock matrix plus per-tool tests.
+> - Security/permission risk: bulk_archive error path no longer forwards raw pg `err.message` across the MCP boundary (swarm MEDIUM, fixed + leak-tested); no predicate or permission logic changed.
+> - Migration/deploy risk: none (tests, docs, and an error-message string).
+> - Downstream client/runtime risk: bulk_archive failure text loses the pg detail suffix — the detail was never contract-facing and no client parses it; success-path shapes unchanged.
+> - Rollback/cleanup concern: none — revert removes two test files, one doc section, and restores the old error string.
+> - Fixes made before PR: all 6 swarm MEDIUMs + actionable LOWs (full surface enumeration, ob-admin parameterization, override attempt, live-pg anchor, error sanitization, doc-row corrections) in 909badb.
+> - Known residual risk: the disposition table duplicates state that lives in code; the same-PR update rule is convention, not CI-enforced. Pre-#314 spool records without provenance drain under the replaying runtime's namespace — now documented as the spool row's carve-out.
+> - SME review-memory update: [x] `docs/sme/` updated — two fixed-pre-merge MEDIUM patterns added to `security.md` and `adversarial.md` with PR #316 provenance.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] not applicable because: only the bulk_archive error-path string changed; pinned by the new leak test and the CI db-integration live suite.
+>
+> ## Review swarm receipt
+>
+> 3-lane fable-medium swarm (correctness, security, adversarial) on fa87cbe. All MEDIUMs and the actionable LOWs fixed in 909badb:
+>
+> - **correctness MEDIUM:** archive_entity predicate droppable without failing any test → matrix case added, **mutation-verified** (removing `appendWriteNamespacePredicate` fails the suite); doc row's "every archive UPDATE" claim now enumerates its actual coverage.
+> - **security MEDIUM:** matrix proved SQL shape on mocks only vs. #297's negative-integration criterion → `OPENBRAIN_TEST_DATABASE_URL`-gated live-Postgres negative test added (foreign row stays `archived_at IS NULL`, owner path non-vacuous), runs in CI db-integration; also executed against a throwaway migrated local Postgres (1 pass).
+> - **security+adversarial MEDIUM (dup):** bulk_archive returned/logged raw pg `err.message` while the table certified the surface content-free → response is now the stable `Transaction failed`, logs carry name/code only, leak test injects a sensitive-looking pg error and asserts nothing leaks.
+> - **adversarial MEDIUM:** no caller-supplied-namespace attempt → override test proves the predicate is not caller-influenceable; unlink_entities `namespace: "victim"` denied at the gate with zero SQL.
+> - **adversarial MEDIUM:** only 2 of the delete-capable tools pinned → archive_entity + unlink_entities matrix cases; doc row enumerates archive_entry, bulk_archive, archive_entity, unlink_entities, demote_entry, curate_entries auto-archive, REST demote with mechanisms.
+> - **LOWs fixed:** ob-admin parameterization, bulk_archive permission-gate-before-connect, mixed-batch params-keyed mock, migration row's real gates (`--execute` + `COLLAB_RETIRE_APPROVAL_ENV` + remote-host approval), spool pre-#314 carve-out, preamble token-sourced-global clause, export row TS citations.
+> - **SME capture:** 2 new fixed-pre-merge patterns in `docs/sme/security.md` + `docs/sme/adversarial.md`.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — N/A (no tool/schema change)
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — N/A
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — N/A
+> - [x] Hermes live rollout/canaries are complete or not applicable — N/A
+>
+> Notes/evidence:
+>
+> - Docs + server-test-only change; no MCP tool/schema/protocol or client-facing change.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-07-20T07:22:21Z

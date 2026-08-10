@@ -143,3 +143,62 @@ Fail:
 - agent/operator must manually create the lane;
 - write only lands as an unscoped thought;
 - missing lane is returned as a generic unrecoverable failure.
+
+---
+
+## Resolution
+
+Closed by **PR #228** — feat: support first scoped append lane creation
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d124d570c29eb6dc7e101a16acf6ee581eacb5c7`
+- Merged at: 2026-06-28T20:06:35Z
+- PR state: MERGED
+- Issue closed: 2026-06-28T20:06:36Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #228 body
+
+> ## Summary
+> - Adds `append_session_event.create_if_missing` so a first scoped realtime append can create its session lane and write the event in one call.
+> - Binds and validates exact scope fields for agent/platform/server/channel/thread to prevent scoped writes from spilling across Discord scopes.
+> - Bumps the public contract to `2026-06-28.memory-tools.v11` with `append_session_event` contract version `5`, and updates the Python package pin.
+>
+> Closes #227.
+> Unblocks rodaddy/rtech-hermes#276.
+>
+> ## Validation
+> - `bun test src/tools/__tests__/append-session-event.test.ts src/contract.test.ts`
+> - `cd python/openbrain-memory && uv run pytest tests/test_client.py::test_required_contract_tools_have_first_class_wrappers_and_help -q`
+> - `bunx tsc --noEmit`
+> - `bun test src/tools/__tests__/append-session-event.test.ts src/contract.test.ts src/__tests__/agent-memory.test.ts`
+> - `git diff --check`
+> - `cd python/openbrain-memory && uv run pytest tests/test_client.py::test_required_contract_matches_server_source_of_truth tests/test_contract.py -q`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `bun test`
+> - `cd python/openbrain-memory && uv run pytest -q`
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: first-write lane creation could append into an existing lane with a mismatched Discord scope if scope comparison were too loose.
+> - Assumptions that could be wrong: Hermes will provide stable exact-scope fields when using `create_if_missing`; if it omits those fields, Open Brain can only enforce namespace/session_key and supplied fields.
+> - Missing/weak tests: local tests cover first-write create, existing append, race reuse, scope conflict, unthreaded-vs-threaded denial, and retryable DB failure; live hosted canary is deferred until deployment.
+> - Security/permission risk: namespace authorization still uses existing server-side `canWriteNamespace`; caller metadata is not trusted for writer provenance.
+> - Migration/deploy risk: no DB migration is required because existing lane columns and JSONB metadata are reused; hosted service must still be deployed before Hermes relies on `memory-tools.v11`.
+> - Downstream client/runtime risk: mcp2cli/generated skill refresh and rtech-hermes Nagatha integration must happen after Open Brain deploy; this PR only makes the server contract available.
+> - Rollback/cleanup concern: rolling back removes `create_if_missing` and returns Hermes to explicit `session_start`/manual ensure behavior; pending Hermes spool entries remain a Hermes-side concern.
+> - Fixes made before PR: tightened thread semantics so omitted `thread_id` in a realtime scoped append means unthreaded, not "any thread".
+> - Known residual risk: no live Nagatha canary has run yet because that belongs after hosted Open Brain rollout and rtech-hermes#276.
+> - SME review-memory update: [x] not applicable because: this PR adds tested contract behavior for a new issue and did not reveal a new missed-review pattern requiring `docs/sme/` capture.
+>
+> ## Review Gate
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR has not been deployed to hosted Open Brain; hosted `get_contract` and Nagatha canary are downstream rollout work after merge/deploy.
+> - Requested review scope: correctness/security review of first-write lane creation, exact-scope conflict checks, and public contract compatibility.
+> - Not requested: recovery WAL, hot working set, NATS/JetStream, promotion/relegation lifecycle, hosted deploy, or Hermes runtime changes.
+> - Current validation: local TypeScript, full Bun test suite, Python package tests, Python ruff, Python mypy, and PR body validator pass.
+>
+> ## Downstream Rollout
+> - Applies because this changes a public Open Brain tool contract, manifest version, and runtime write behavior.
+> - Deferred after merge/deploy: hosted Open Brain `get_contract` must report `2026-06-28.memory-tools.v11`, mcp2cli/generated skills must refresh the append schema, and rtech-hermes#276 must consume the new first-write behavior before the Nagatha live canary.
+>

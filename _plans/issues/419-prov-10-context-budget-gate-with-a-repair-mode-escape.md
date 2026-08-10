@@ -35,6 +35,17 @@ Changing the gate's policy about what it gates on when healthy.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-04T23:25:24Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-04T23:25:23Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-03T01:31:50Z

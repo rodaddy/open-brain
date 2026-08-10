@@ -28,3 +28,39 @@ Parallel deploys can corrupt node_modules, apply migrations out of order, or res
 
 ## Source
 Post-speed-run review swarm, CI/CD reviewer, adversarial-verified.
+
+---
+
+## Resolution
+
+Closed by **PR #100** — fix: scope read tools and harden followups
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `06a9092ae8d8274b1fb3c343c05c48cba3ee414e`
+- Merged at: 2026-06-11T04:32:20Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T04:32:22Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #100 body
+
+> ## Summary
+> - scope the remaining read-only tools from #96 to readable namespaces, including the follow-up session graph namespace-argument bypass found by review
+> - harden access-log reads with readable source-table checks and source_table filters
+> - skip malformed spool JSONL records safely and keep later valid records replayable
+> - add deploy concurrency and apply DreamEngine namespace/table filters for promotion candidates
+>
+> Closes #96.
+> Closes #97.
+> Closes #98.
+> Closes #99.
+>
+> ## Validation
+> - `bun test` (619 pass, 16 skip)
+> - `bun run typecheck`
+> - `uv run --python 3.11 pytest -q` (81 passed, 1 skipped)
+> - `uv run --python 3.11 ruff check src tests`
+> - `uv run --python 3.11 mypy src/openbrain_memory`
+> - `git diff --check`
+> - review swarm round 1 found and fixed auth delegation, spool shape, and tier source_table issues
+> - review swarm round 2 found and fixed the session graph namespace-argument bypass
+>

@@ -93,6 +93,17 @@ Every promoted item must record:
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-19T13:55:14Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-19T14:14:06Z.
+
+---
+
 ## Discussion (4)
 
 ### rodaddy — 2026-06-19T01:15:58Z

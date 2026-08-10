@@ -16,6 +16,142 @@ Found live 2026-08-04 during local NATS wiring: a durable_memory context pack fo
 
 ---
 
+## Resolution
+
+Closed by **PR #564** — fix(nats): answer an undeliverable reply with an error envelope, not silence (#549)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `dc94b111a731a3dba43b46807898364ffa0fc955`
+- Merged at: 2026-08-05T03:15:05Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T03:15:06Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #564 body
+
+> Closes #549.
+>
+> ## What was wrong
+>
+> The NATS bridge finished its work and then vanished. A `durable_memory` context
+> pack for namespace `rico` built a **58.5 MB** reply against a broker advertising
+> 8 MiB (measured live 2026-08-04); the caller got nothing and waited out its own
+> timeout with no client-visible reason.
+>
+> **The mechanism, read from the installed client's source.** `Msg.respond()`
+> publishes through `protocol.publish()`, which **throws**
+> `NatsError(MAX_PAYLOAD_EXCEEDED)` once the encoded length passes
+> `info.max_payload` (`nats-base-client/msg.js:72-78` → `protocol.js:786-788`).
+> That throw escaped to `processNatsSubscriptionMessage`, whose catch logged the
+> generic **`NATS context-pack bridge request failed`** and published nothing.
+>
+> `respond()` returns **false** in exactly one case: the request carried no reply
+> inbox at all. So `NATS request did not include a reply inbox` was never the
+> message this oversize path produced — it was reserved for its own, correct
+> condition, and it still is. (An earlier revision of this PR body described the
+> oversize failure as surfacing through that message; that account was wrong and
+> is corrected here.)
+>
+> The request side was already guarded at `src/nats-bridge.ts`; the reply side had
+> nothing.
+>
+> ## What changed
+>
+> At the respond seam only:
+>
+> - Before publishing, the encoded reply is compared against the figure the
+>   **broker itself advertises** on the connection (`connection.info.max_payload`),
+>   read per message so a reconnect to a broker advertising something different is
+>   picked up rather than judged against a stale value. Open Brain never supplies
+>   a figure of its own — this fleet's local broker advertises 8 MiB, the NATS
+>   protocol default is 1 MiB, and a hardcoded number would be wrong for one of
+>   them.
+> - When the reply exceeds what the broker will carry, the doomed publish is not
+>   spent.
+> - **Both respond calls are wrapped.** When the advertised figure is unreadable
+>   the reply cannot be pre-judged, so the publish is attempted — and a thrown
+>   `MAX_PAYLOAD_EXCEEDED` now routes into the **same** undeliverable-reply
+>   envelope instead of escaping to the handler-error catch and handing the caller
+>   silence. Matched by the error's machine **code**, never by message text:
+>   `NatsError` carries a stable code while its prose is the client's to reword,
+>   and matching prose would reopen this silently on a client upgrade. Any other
+>   throw is not the bridge's to reinterpret and is **rethrown unchanged**, so a
+>   connection-closed failure still reaches the handler-error path.
+> - The answer is a redacted error envelope with the same `correlation_id` a
+>   normal reply carries, which releases the waiting caller. It is content-free:
+>   it names what happened, the measured reply bytes, the broker's advertised
+>   figure, and the requested sections. No pack data crosses into it, and only
+>   known section names are echoed back.
+> - `no reply inbox` is logged only for the condition that actually produces it —
+>   `respond()` returning false.
+>
+> Nothing about what the handler builds changed. This changes only how an
+> undeliverable reply is answered.
+>
+> **Single-source confirmed:** one bridge serves both trees. `src/nats-worker.ts`
+> and `server/application/nats.ts:107` both call `startNatsContextPackBridge` from
+> `src/nats-bridge.ts`, so this lands once and covers both.
+>
+> ## Red proof
+>
+> Round two (`45e9de3`), against the unhardened source with the new tests kept:
+>
+> - `answers with an error envelope when the client THROWS MaxPayloadExceeded on
+>   the reply publish` — **fails**, the thrown `MAX_PAYLOAD_EXCEEDED` escapes
+>   through `respondWithinBrokerFigure` and **nothing is published**. This mock
+>   throws, mirroring the real client, rather than returning false.
+> - `rethrows a respond failure that is not the client's payload refusal` — proves
+>   a `CONNECTION_CLOSED` throw is not swallowed into a `payload_too_large`
+>   envelope that would misdescribe it.
+>
+> Round one (`8549d04`), with `src/nats-bridge.ts` reverted, all four fail — the
+> old code publishes nothing, so there is no reply to assert against:
+>
+> - answers with an error envelope when the broker refuses the reply publish
+> - answers with an error envelope without attempting a publish the broker's advertised figure rules out
+> - carries the reply normally when it fits the broker's advertised figure
+> - logs an accurate reason when even the error envelope cannot be published
+>
+> One pre-existing test (`resubscribes the real NATS subscription loop after
+> handler and iterator failures`) asserted the old throw reached the handler-error
+> path; it now asserts the accurate reply-inbox log instead.
+>
+> ## Gates
+>
+> - `bunx tsc --noEmit` — clean
+> - `bun test` — 3175 pass, 0 fail, 506 skip (Postgres-gated)
+> - `bun test src/nats-bridge.test.ts` — 29 pass, 0 fail
+> - `bun install --frozen-lockfile` — clean
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the respond seam now swallows a `MAX_PAYLOAD_EXCEEDED` throw and a false return instead of letting them escape. Scoped by code match, so only that one client condition is absorbed; every other throw is rethrown and still reaches the handler-error path. If the error envelope publish also fails the bridge logs and returns, so a message can complete with no reply on the wire — strictly better than the old path, which published nothing on every refusal.
+> - Assumptions that could be wrong: that `NatsError.code` stays `MAX_PAYLOAD_EXCEEDED`. Verified against the installed client (`nats-base-client/core.js`); the literal is reproduced in `src/nats-bridge.ts` rather than imported so the seam stays testable through its own driver interface. If a future client renames the code the guard stops matching and the failure reverts to the old visible-log-plus-silence shape — a regression to the prior behavior, not a new failure mode, and the test would not catch it. Also assumed: `connection.info.max_payload` is populated after reconnect; if absent the reply is not pre-judged and the throw guard covers it, which is why the round-two test pins `maxPayloadBytes: undefined`.
+> - Missing/weak tests: no live broker round-trip in this lane — the tests drive the seam through the driver interface with a simulated throw, not a real NATS server rejecting a real 58.5 MB publish. Left as a post-merge operator step.
+> - Security/permission risk: the error envelope is content-free by construction — byte counts and section names only, filtered against the known `SECTION_NAMES` set so arbitrary caller text cannot be reflected back. No pack data, no namespace data, no broker URL. The new catch does not log the error object, so no client-supplied prose reaches the log line.
+> - Migration/deploy risk: none — no schema, no config, no new env var. `maxPayloadBytes` is optional on `NatsRequestMessage`, so an existing driver that does not supply it keeps working.
+> - Downstream client/runtime risk: none to the wire contract. The existing error payload shape and the existing `payload_too_large` code are reused unchanged, so no fixture and no Python mirror edit were needed. Clients that already handle `status: "error"` handle this.
+> - Rollback/cleanup concern: two commits on one source file, one test file, one doc. The worktree is removed after merge.
+> - Fixes made before PR: the round-two commit exists because the round-one lane inferred the client's behavior from the false return instead of reading `msg.js`/`protocol.js`. Reading the source found both the unguarded path and the wrong narrative.
+> - Known residual risk: a 58.5 MB reply still does not fit an 8 MB broker, so `durable_memory` on this namespace returns a clear error rather than a pack. That is the reported-and-open half of #549 and is the operator's call; this PR closes the silence only. The runbook separates the two.
+> - SME review-memory update: [x] not applicable because: no new cross-cutting review pattern surfaced — this is a single-seam fix reusing an existing wire error shape, and the existing SME lanes already cover redaction on error paths.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: the live NATS round-trip needs a local broker restart, which is operator-visible, so it is recorded as a post-merge step rather than run in this lane.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no wire shape changed — the existing envelope error payload and the existing `payload_too_large` code are reused unchanged, so `nats-context-pack-wire.json` and the Python `nats_wire` mirror needed no edit and byte parity is untouched.
+>
+> ## Post-merge
+>
+> - [ ] Live NATS round-trip against the local broker: request `durable_memory` for namespace `rico` on `dev.ob.memory.context_pack` and confirm the caller receives a `payload_too_large` error envelope with a matching `correlation_id` instead of timing out.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-05T03:22:14Z

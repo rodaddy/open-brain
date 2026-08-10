@@ -32,3 +32,79 @@ rtech-hermes wants to retire its vendored fork and consume this package (tracked
 
 ## Non-goal
 Do NOT change the contract DSL emitted by `get_contract` to be JSON-Schema-valid — it's a deliberate internal format. The fix is making the package consumable + documented, not changing the wire format.
+
+---
+
+## Resolution
+
+Closed by **PR #238** — Fix openbrain-memory package contract
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `ee0a7c8dc02313c4bc3bdf6a387742265a11f0a4`
+- Merged at: 2026-07-05T22:05:15Z
+- PR state: MERGED
+- Issue closed: 2026-07-05T22:05:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #238 body
+
+> ## Summary
+>
+> - Package `openbrain-memory` as version `0.1.1` and expose `PACKAGE_VERSION` through the public root API and MCP initialize client info.
+> - Add `py.typed` so downstream typed Python consumers can use the installed wheel directly.
+> - Port the missing redaction superset parity for bare three-segment tokens and unlabeled high-entropy blobs while keeping heuristic redaction out of fail-closed receipt rejection.
+> - Document the stable public API, package SemVer pinning, live contract-version validation, and canonical redaction policy.
+>
+> Closes #177.
+>
+> ## Validation
+>
+> - `uv run mypy src/openbrain_memory`
+> - `uv run ruff check src tests`
+> - `uv run pytest -q` -> 193 passed, 5 skipped
+> - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -c 'import openbrain_memory; print(openbrain_memory.PACKAGE_VERSION)'` -> `0.1.1`
+> - `uv build` -> built:
+>   - `dist/openbrain_memory-0.1.1.tar.gz`
+>   - `dist/openbrain_memory-0.1.1-py3-none-any.whl`
+> - `uv pip install --python /Volumes/ThunderBolt/_tmp/open-brain/issue-177-wheel-smoke-6/bin/python dist/openbrain_memory-0.1.1-py3-none-any.whl`
+> - Installed-wheel smoke:
+>   - imports `openbrain_memory`
+>   - checks `PACKAGE_VERSION == "0.1.1"`
+>   - checks `OpenBrainClient` export
+>   - checks redaction for a slash-bearing base64-style opaque token shape while preserving a mixed-case branch identifier
+>   - checks `py.typed` is included
+>   - output: `wheel smoke ok 0.1.1`
+>
+> ## Downstream Rollout Classification
+>
+> Applies. This changes the installable Python client artifact and public package contract for downstream consumers such as Hermes adapters.
+>
+> This PR does not deploy hosted Open Brain, refresh downstream generated skills, or mutate Hermes. After merge, downstream rollout should pin the reviewed wheel/version or full commit SHA, then run the package live canary and consuming-runtime canary described in `docs/downstream-rollout.md` and `python/openbrain-memory/README.md`.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: heuristic redaction could over-match benign identifiers or leak if downstream keeps using forked regex lists.
+> - Assumptions that could be wrong: downstream consumers will import from the package root and validate the live `get_contract()` manifest instead of treating package install alone as readiness.
+> - Missing/weak tests: no live canary was run; package tests use fake transports and the wheel smoke is local-only.
+> - Security/permission risk: heuristic patterns are intentionally kept out of `SECRET_PATTERNS` so they do not widen fail-closed payload rejection in `agent._reject_secret_payload`.
+> - Migration/deploy risk: version `0.1.1` must be pinned by downstream hosts; moving branches remain unsafe for production host installs.
+> - Downstream client/runtime risk: Hermes still needs its own adapter migration and canary before retiring its vendored fork.
+> - Rollback/cleanup concern: generated `dist/` artifacts are ignored and were not committed; downstream can pin the previous package version/commit if this artifact regresses.
+> - Fixes made before PR: tightened the high-entropy symbol lookahead to only inspect the token body, added anti-regression tests for benign SHA-like IDs, package metadata/version behavior, source-tree package imports, and reran validation/build/smoke.
+> - Known residual risk: first live downstream adoption still needs a real host canary; heuristic redaction intentionally prioritizes diagnostic readability over fail-closed write rejection for unlabeled ambiguous shapes.
+> - SME review-memory update: [ ] docs/sme/ updated [x] not applicable because: review findings were fixed in package code/tests/docs and did not add a new reusable SME pattern beyond the existing package-version/source-import and redaction-boundary gates.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: package-only local artifact change; hosted Open Brain was not deployed or exercised in this PR.
+>
+> ## Pre-merge gauntlet
+>
+> - Phase 1 critical pass: completed before PR creation; see critical self-review above.
+> - Phase 2 review swarm: completed on pinned diff `86d46614fb7c9914841d79d9715452235719b7a0524208536df3b4a9f4322527`; findings posted in review receipt comment.
+> - Phase 4 fix verification: completed after amended head `310e955598f2ba4b8586a8dfbdd56a5bcf7ba526`; SME/gotcha clean, antagonist source-import finding fixed by `pyproject.toml` fallback and regression test.
+> - Phase 3 cross-runtime review: completed locally with `claude -p --model opus` because the GitHub `claude-review` workflow can report success around invalid-model output. Current final reviewed diff SHA-256: `b2d207bd380c6ad079edfa4b70cdaed192c2a6b40c15d53a81b91d85381f1d65`.
+> - Phase 3 findings addressed: over-broad redaction of benign paths/branches/env identifiers, dotted-token length-only matching, slash-bearing base64 redaction gap, heuristic-vs-write-rejection boundary, pure base62 false-negative docs, and 40-character heuristic floor docs.
+> - Phase 5 merge: blocked pending live CI completion and explicit merge approval.
+>

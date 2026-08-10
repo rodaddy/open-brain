@@ -29,3 +29,74 @@ Extend the dream cycle (which already promotes/demotes tiers) to detect oversize
 ## Why P1
 
 Wanted fairly soon, but **sequenced after** the repo-enforcement recall pattern is verified to work. The "always-known basics" direct-UUID-fetch design depends on cheap recall, so this becomes a priority right after that proof.
+
+---
+
+## Resolution
+
+Closed by **PR #246** — feat(#192): add compact get_entry render
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `b103e9849ce4258710ee5ffa6bd10979698b071f`
+- Merged at: 2026-07-06T04:25:15Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T04:25:17Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #246 body
+
+> ## Summary
+>
+> - add `get_entry` compact render for cheap exact-UUID recall without changing the default full-row behavior
+> - bump the public contract to `2026-07-06.memory-tools.v14` and `openbrain-memory` snapshot/package version to `0.1.4`
+> - document #192 Part B as deferred DreamEngine decomposition work behind dry-run-by-default safeguards and track it in follow-up #247
+>
+> Closes #192.
+>
+> ## Validation
+>
+> - `bun test src/tools/__tests__/get-entry.test.ts src/contract.test.ts` - 12 pass, 2 skip, 0 fail
+> - `bunx tsc --noEmit` - passed
+> - `bun test` - 1063 pass, 48 skip, 0 fail
+> - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py` - 69 passed
+> - `cd python/openbrain-memory && uv run pytest -q` - 193 passed, 5 skipped
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` - passed
+> - `cd python/openbrain-memory && uv run ruff check src tests` - passed
+> - `git diff --check` - passed
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: compact exact fetch could accidentally bypass the existing `get_entry` namespace/read boundary or become a new schema surface clients cannot discover.
+> - Assumptions that could be wrong: a projection-level compact preview is sufficient for #192 Part A without a stored summary column; dream decomposition can remain deferred if the deferral is explicit and durable.
+> - Missing/weak tests: compact render now has mock-pool boundary tests plus an `OPENBRAIN_TEST_DATABASE_URL`-gated live Postgres regression for long session length/truncation; no live table-by-table matrix beyond the session bug found in review.
+> - Security/permission risk: compact render uses the same table allowlist, `canRead`, `readableNamespaces`, archived-row exclusion, and namespace predicate as full render.
+> - Migration/deploy risk: no DB migration; hosted deploy and live canary are deferred by the current local-only instruction.
+> - Downstream client/runtime risk: this changes the public `get_entry` contract, contract version, and Python snapshot. mcp2cli/Hermes/generated skill rollout is deferred to the release phase.
+> - Rollback/cleanup concern: rollback is reverting this PR and contract/package version bump; no persisted data shape changes. Because the server contract and `openbrain-memory` snapshot are exact-version pinned, release/rollback must keep server and downstream client refresh in lockstep.
+> - Fixes made before PR: added Part B roadmap disposition doc so #192 does not close with dream-driven decomposition silently unresolved.
+> - Fixes made during gauntlet: corrected session compact render to measure full readable content, added compact permission/not-found tests, added a live Postgres compact-session regression, updated `docs/sme/correctness.md`, created follow-up #247 for DreamEngine decomposition, and clarified content-length semantics.
+> - Known residual risk: downstream clients will not see `render=compact` until the later release/deploy/schema-refresh phase.
+> - SME review-memory update: [x] `docs/sme/` updated with the compact-render/search-preview clipping pattern from this PR.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: initial swarm findings posted at https://github.com/rodaddy/open-brain/pull/246#issuecomment-4888934298
+> - [x] Fixes receipt posted at https://github.com/rodaddy/open-brain/pull/246#issuecomment-4888988006
+> - [x] Fix-verification receipt posted at https://github.com/rodaddy/open-brain/pull/246#issuecomment-4889006461
+> - [x] Phase 3 Claude/Opus cross-review posted at https://github.com/rodaddy/open-brain/pull/246#issuecomment-4889027510
+> - Live Open Brain checks: [x] not applicable because: current scope is local-only; hosted deploy, schema refresh, downstream rollout, and live canaries are deferred to the release phase.
+>
+> ## Downstream Rollout
+>
+> - Checked `docs/downstream-rollout.md`.
+> - Local Open Brain verification is complete.
+> - Hosted Open Brain deploy, mcp2cli cache/schema refresh, generated skills, rtech-mcps handoff, rtech-hermes runtime checks, Hermes rollout, and live canaries are deferred by Rico's current local-only instruction.
+> - Release/rollback note: server `get_contract` v14 and `openbrain-memory` 0.1.4 must roll forward/back together during the later deploy phase because contract validation is exact-version pinned.
+> - No core01 deploy performed.
+>
+> ## Notes
+>
+> - Compact render returns a bounded envelope with `content_preview`, `content_length`, `content_truncated`, `source_ref`, `full_available`, and a full-row `fetch_path`.
+> - `content_length` and `content_truncated` describe the readable compact projection, not every raw stored column; callers that need every stored column should follow `fetch_path` with `render: "full"`.
+> - Full `get_entry` remains the default and backward-compatible.
+>

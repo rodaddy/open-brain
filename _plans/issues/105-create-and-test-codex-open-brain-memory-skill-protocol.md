@@ -55,6 +55,17 @@ Create a Codex memory protocol/skill for using Open Brain as durable short-term 
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-15T18:05:00Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-15T18:05:33Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-15T18:04:59Z

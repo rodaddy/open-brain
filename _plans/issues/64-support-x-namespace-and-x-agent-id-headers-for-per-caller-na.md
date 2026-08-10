@@ -115,6 +115,63 @@ All agents authenticate to mcp2cli with their own bearer token and get `X-Agent-
 
 ---
 
+## Resolution
+
+Closed by **PR #65** — fix: honor delegated namespace headers
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `fa46caf6502c2cb6a954067e72b815d8a6287aed`
+- Merged at: 2026-06-10T22:33:32Z
+- PR state: MERGED
+- Issue closed: 2026-06-10T22:33:34Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #65 body
+
+> ## Summary
+> - Honor trusted mcp2cli delegated identity headers by using X-Namespace as the effective namespace while preserving the bearer-token profile for session identity checks.
+> - Scope read paths by effective namespace across search, search_all, list_recent, list_stale, and list_namespaces.
+> - Add request log audit fields for consumerId, effectiveNamespace, namespaceSource, and agentId.
+> - Lock writes to the delegated namespace when X-Namespace is present.
+>
+> Closes #64
+>
+> ## Swarm Review Findings
+>
+> 5-agent parallel review (correctness, adversarial, quality, security, domain specialist).
+>
+> ### Fixed in this PR
+>
+> | ID | Severity | Finding | Fix |
+> |---|---|---|---|
+> | H-1 | HIGH | Any role (including readonly) could set X-Namespace and read another namespace's data | Gate delegation to admin/n8n/agent roles; readonly/discord get 403 |
+> | H-2 | HIGH | `headerRole` (X-Role) stored unvalidated, never consumed — latent priv-esc risk | Removed `headerRole` from AuthInfo entirely |
+> | H-3 | HIGH | Delegated callers lost access to "collab" namespace (behavioral regression) | Delegated callers now get `[clientId, "collab"]` matching non-delegated behavior |
+> | M-1 | MEDIUM | Count queries passed `undefined` for unused SQL params $2/$3 | Separate `countNamespaceParamIndex` with `[days, readable]` params |
+>
+> ### Deferred (follow-up scope, pre-existing gaps)
+>
+> | ID | Severity | Description |
+> |---|---|---|
+> | H-4 | HIGH | 8 read tools (get-entry, session-load, find-person, access-report, find-duplicates, tier-recommendations, curate-entries, scan-namespace) lack namespace scoping for delegated callers |
+> | H-5 | HIGH | `created_by`/`accessed_by` columns record delegated namespace instead of token identity, corrupting audit trail |
+> | M-2 | MEDIUM | Duplicated `namespace === "all"` logic in `canReadNamespace` and `namespaceFilterFor` |
+> | M-3 | MEDIUM | No tests for namespace filtering in list-stale, list-recent, list-namespaces, search-brain, search-all, or transport identity |
+>
+> ### Security Checklist
+> - [x] Secrets scan (ggshield): PASS
+> - [x] Input validation: DELEGATED_ID_RE on X-Namespace, X-Agent-Id
+> - [x] SQL injection: parameterized queries throughout
+> - [x] Session integrity: `sameTokenIdentity` uses tokenClientId
+> - [x] Role gating: delegation restricted to admin/n8n/agent
+> - [x] Write lock: header-delegated writes locked to delegated namespace
+> - [x] Audit logging: consumerId, effectiveNamespace, namespaceSource, agentId
+>
+> ## Verification
+> - bun test (574 pass, 0 fail)
+> - bun run typecheck (clean)
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-10T18:27:23Z

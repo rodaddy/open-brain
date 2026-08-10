@@ -36,6 +36,69 @@ The AGENTS.md contract tells Claude to capture distilled in-flight events throug
 
 ---
 
+## Resolution
+
+Closed by **PR #591** — fix(python): accept contract-proven provider scope
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d299d533f484f0cd135fcb8cae488bc0ad9679e0`
+- Merged at: 2026-08-06T00:52:10Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T00:52:12Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #591 body
+
+> ## Summary
+>
+> - accept a successful contract-v2 `session_start` handshake as proof for omitted agent, platform/source, server, and channel lane echoes while still rejecting conflicting returned values
+> - keep namespace, session key, and nullable thread response-proven
+> - add the exact operator JSON capture regression and document the live-verified stdin recipe
+>
+> Fixes #529
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit`
+> - `bun test src/tools/__tests__/session-start.test.ts` — 12 passed
+> - `uv run mypy src/openbrain_memory` — clean
+> - `uv run ruff check src tests` — clean
+> - `uv run pytest -q` — 570 passed, 9 skipped
+> - live provider canary returned `status: saved`, `durable: true`, event `f5f0b9d1-a492-4c15-ae55-8f516527d44d`; direct database verification found exactly one matching `receipt` event
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: the operator JSON provider and its session_start proof validator exist only in the Python package; the TypeScript client has no matching provider runtime surface.
+>
+> ## Regression Failure Proof
+>
+> - Temporarily removed the contract-v2 handshake fallback from `validate_started_lane`.
+> - `tests/test_cli_request_diagnostics.py::test_operator_capture_accepts_contract_proven_sparse_start_lane` failed with `AssertionError: assert 'lost' == 'saved'`.
+> - Restored the guarded logic; the same test passed.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Treating omitted nullable lane echoes as proven could hide a server regression; the behavior is gated by the fresh reviewed contract-v2 manifest and never overrides a conflicting non-null echo.
+> - Assumptions that could be wrong: A successful session_start v2 call continues to mean the server established or matched agent, platform/source, server, and channel exactly as published in the contract.
+> - Missing/weak tests: No synthetic server violates its own v2 semantic contract while returning a sparse lane; the regression covers the observed operator shape and existing replay tests cover conflicting echoes.
+> - Security/permission risk: Namespace, session key, and nullable thread remain response-proven, and returned conflicts for agent, source, server, or channel still fail closed.
+> - Migration/deploy risk: No schema or migration change; the Python provider package must be refreshed through the normal post-merge install path before other installed copies receive the fix.
+> - Downstream client/runtime risk: No MCP schema changes; consumers only observe successful provider capture for the already-published session_start v2 behavior.
+> - Rollback/cleanup concern: Reverting the Python validator and README changes restores the prior loud lost receipt; the live canary row is an intentional receipt event and needs no cleanup.
+> - Fixes made before PR: Preserved conflicting-echo rejection, kept nullable thread response proof, added a public CLI-boundary regression, documented the operator recipe, and ran a live row canary.
+> - Known residual risk: A server falsely advertising session_start v2 could still violate the semantic promise; the fresh contract gate cannot prove implementation honesty by itself.
+> - SME review-memory update: [x] not applicable because: no new MEDIUM+ review pattern was found beyond the issue's already-documented session_start contract mismatch.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: none found in the solo critical self-review; the existing exact-scope conflict regressions remain green.
+> - Live Open Brain checks: [x] linked below
+>
+> Live receipt: branch provider capture saved event `f5f0b9d1-a492-4c15-ae55-8f516527d44d`, and direct database verification returned one matching row.
+>
+
+---
+
 ## Discussion (4)
 
 ### rodaddy — 2026-08-04T23:27:28Z

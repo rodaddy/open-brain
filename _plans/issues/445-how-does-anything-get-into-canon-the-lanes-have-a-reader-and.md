@@ -37,6 +37,17 @@ memory. Cited findings as a linked markdown file.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-30T01:22:34Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-30T01:22:34Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-30T01:22:33Z

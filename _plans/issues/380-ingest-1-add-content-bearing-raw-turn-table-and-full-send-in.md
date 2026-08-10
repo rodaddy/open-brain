@@ -59,3 +59,85 @@ exist**.
 ## Blocks
 
 Retention/backpressure (INGEST-2) must land before sustained use.
+
+---
+
+## Resolution
+
+Closed by **PR #423** — feat(380): raw-turn full-send ingest lane
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `0c0b48c487f99fb9b2cb86a575f5ddac05dc9136`
+- Merged at: 2026-07-26T05:01:28Z
+- PR state: MERGED
+- Issue closed: 2026-07-26T05:01:29Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #423 body
+
+> ## Summary
+>
+> - Splits the raw-turn full-send lane (#380) off the parked `feat/410-uv-workspace` branch, which had accumulated 21 commits / 14,148 insertions across 96 files. This is 4 commits / ~1,900 insertions across 20 files.
+> - Adds `032_raw_turns.sql` (content-bearing table, `UNIQUE(namespace, turn_uuid)` so a replayed batch is a no-op), the `ingest_raw_turn` MCP tool, and the Python client half on the runtime, agent, and CLI.
+> - **Why full-send:** client-side salience was measured failing on 2026-07-25 — **21 user turns and ZERO assistant turns** captured. The server owns redaction, harness-noise filtering, and dedupe, so one implementation serves Claude, Codex, and Python instead of three divergent heuristics. Client-side validation here is structural only (is it a turn at all), never salience.
+> - **The finding worth reading:** the cherry-pick silently reverted PR #379's tolerant CLI reader. No textual conflict, because the two changes touch adjacent lines rather than the same ones. `_validate_request_keys` came back, `_project_request` disappeared, both compatibility constants were dropped, and two pre-#379 strict tests returned. Caught only because this branch's own new test failed: `test_unknown_request_key_is_not_forwarded` expected `saved`, got `failed`. Fixed by restoring the upstream projection verbatim and keeping only the ingest-specific additions.
+> - `ingest` is now in the parametrized tolerant-reader matrix. It is the newest verb and the one an older adapter is most likely to call with an unknown field, so leaving it out is how it drifts back to fail-closed unnoticed.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> Evidence:
+> - `bunx tsc --noEmit` clean.
+> - Migration `032` applies on top of `031` against a fresh Postgres.
+> - 2482 TS tests pass, including the DB-backed raw-turn tests that skip without `OPENBRAIN_TEST_DATABASE_URL`.
+> - 536 Python tests, mypy clean, ruff clean.
+> - `bun contracts/check-parity.ts` — 14 fixtures across 9 capabilities.
+> - **One pre-existing failure inherited, not caused by this branch:** `src/source-sync.test.ts` fails in the full suite and passes alone. Reproduced identically on the base commit; filed as #422.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a content-bearing write path with no client-side salience filter. Mitigated by server-side redaction/dedupe and by the structural-only validator, but this lane carries raw transcript by design.
+> - Assumptions that could be wrong: that the server's redaction is complete. The client deliberately does not second-guess it, so a server-side gap is fully exposed here.
+> - Missing/weak tests: no concurrent-batch test against the UNIQUE constraint; replay idempotency is asserted at the schema level, not under parallel writers.
+> - Security/permission risk: namespace is caller-supplied and optional. Auth-derived namespace predicates on the server side remain the boundary.
+> - Migration/deploy risk: 032 is additive, no backfill, no destructive DDL. If code-brain (033/034) lands first, this needs renumbering.
+> - Downstream client/runtime risk: adds a Python client method with no TS peer — declared in the parity manifest rather than hidden.
+> - Rollback/cleanup concern: dropping the table loses ingested turns; there is no derived-from-distilled recovery path.
+> - Fixes made before PR: restored the tolerant CLI reader this cherry-pick had reverted; added `ingest` to the tolerant matrix; added the parity capability and its fixture.
+> - Known residual risk: the 2 MB raw-lane envelope ceiling is a judgment call, not measured against real transcript sizes.
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] not applicable because: this branch adds a tool and a table but changes no deployed server behavior until it merges; the hosted smoke would exercise the pre-merge build.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+>
+> The Python client gains `ingest_raw_turn`/`ingest_raw_turns` with no TS counterpart. Rather than bypassing the gate with a commit-message escape, this declares a `raw-turn-ingest` capability as `ts: runtime-specific` and adds the fixture the gate requires.
+>
+> The fixture asserts the property the lane exists for: turns reach the wire verbatim, both roles survive, one call per batch. **Verified it fails when assistant turns are dropped** — the exact regression measured on 2026-07-25.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - `ingest_raw_turn` is a **new additive** MCP tool. No existing tool schema, response shape, or client call changes, so no downstream client breaks by adding it.
+> - The Python client gains new methods only; existing methods are untouched. An older client that never calls `ingest_raw_turns` is unaffected.
+> - Downstream rollout becomes relevant when a runtime is wired to *call* this lane (the adapter cutover, #420). That is out of scope here.
+>
+> Closes #380
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

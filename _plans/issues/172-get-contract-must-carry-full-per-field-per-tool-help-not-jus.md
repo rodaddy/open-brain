@@ -52,6 +52,17 @@ Surfaced 2026-06-19 while designing #161: Rico clarified agents do everything fr
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-19T22:28:12Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-19T22:28:11Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-19T22:28:11Z

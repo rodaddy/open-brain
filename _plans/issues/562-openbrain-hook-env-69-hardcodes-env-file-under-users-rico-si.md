@@ -26,6 +26,103 @@ The installer writes this line, so every install carries the authoring user's ab
 
 ---
 
+## Resolution
+
+Closed by **PR #570** — fix(installer): derive the hook wrapper's ENV_FILE, and fail loud when it is missing (#562)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `80aa10f40ba18885b8323e294f026dec3d7f8469`
+- Merged at: 2026-08-05T06:14:03Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T06:14:04Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #570 body
+
+> Fixes #562. Unblocks **rodaddy/development#87 step 1**.
+>
+> ## The defect
+>
+> `openbrain-hook-env:69` carried its env-file path frozen from the machine that authored it:
+>
+> ```sh
+> ENV_FILE="/Users/rico/.local/share/openbrain-memory/env/claudex-observation.env"
+> ```
+>
+> It resolved on the mini and the Air only because both are `/Users/rico`. Under any other user the path did not exist, `. "$ENV_FILE"` found nothing, the Python config missed its environment, and — per the wrapper's own header — the hook entrypoint swallowed the exception (fail-open observer contract) and **exited 0 having captured nothing**, indistinguishable from a healthy no-op.
+>
+> Fourth instance of one defect class, after #555/#557's `OPENBRAIN_DEVELOPMENT_ROOT` default: a value correct on the origin box used as a silent fallback everywhere else.
+>
+> ## Where the fix lands
+>
+> There is **no in-repo source file** for the wrapper — `client-bundle.sh` copies the live installed copy off the build machine and `setup-client.sh` patches it at install time. The installer *is* the template, so that is what changed. The installed copy at `~/.local/share/openbrain-memory/env/` was treated as read-only throughout.
+>
+> `setup-client.sh` previously **rewrote** the frozen literal to the install target's absolute path. It now **removes** it:
+>
+> ```sh
+> ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || :)"
+> ```
+>
+> `dirname` rather than `readlink -f`: settings.json invokes the wrapper by absolute path, and BSD `readlink` without `-f` is still in the field on the older boxes this bundle exists to serve. `$HOME` stays a fallback only, so it can never mask a correct derivation.
+>
+> A missing env file now exits non-zero, one line on stderr naming the path *and* where it was derived from, stdout empty.
+>
+> The rewrite is idempotent and **normalising** — it converts both the legacy assignment and an earlier managed block into the current form, so a bundle staged from an older mini still lands correct — and it refuses a wrapper matching neither shape rather than guessing an insertion point, because a wrapper that sources the wrong file is the silent zero capture this exists to remove.
+>
+> `client-bundle.sh` gets a comment, not a second copy of the logic: the installer normalises on every install, and two copies of one rewrite drift.
+>
+> ## Verification — executed, not inferred
+>
+> Normalised a **copy of the real installed wrapper** (never the original):
+>
+> - ordering preserved — the `PARENT_OPENBRAIN_*` override capture still precedes `. "$ENV_FILE"`
+> - **foreign `$HOME`**: resolves and sources its env file, exit 0, child receives `OPENBRAIN_BASE_URL`
+> - **missing env file**: exit **1**, stderr exactly 1 line, stdout empty
+>
+> ```
+> openbrain-hook-env: env file missing or unreadable: .../noenv/claudex-observation.env (derived from wrapper directory derived from .../noenv/openbrain-hook-env)
+> ```
+>
+> - `bun test scripts/setup-client-hook-env.test.ts` → 6 pass
+> - `bun test scripts/` → 300 pass, 29 skip, **0 fail**
+> - `bash -n` clean on both installer scripts
+>
+> **The fail-loud test was mutation-checked**: neutering the guard turns it red (`5 pass, 1 fail`). A green assertion that cannot fail would not have proved the acceptance criterion.
+>
+> The new test drives the **real** heredoc extracted from the shipped `setup-client.sh` rather than a copy of the logic, since a copy is how a fix and its proof drift apart.
+>
+> ## Scope
+>
+> Untouched, per the ticket: the `env -i` allowlist semantics, the parent-override capture, the conditional `OPENBRAIN_ALLOW_INSECURE_HTTP` block and its string-vs-non-string caveat, and the `OPENBRAIN_DEVELOPMENT_ROOT` pass-throughs.
+>
+> ## Runtime provenance
+>
+> Code written by **Codex Sol** (`claudex sol low`). The first pass shipped a quoting-layer bug — a triple-quoted f-string turned `printf '%s\n'` into a literal newline, splitting the statement across two lines — caught by executing the emitted shell, returned to Sol verbatim, and fixed on the second pass. Reviewed, corrected, and verified by the owning Claude node.
+>
+> Not merged, per policy.
+>
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the hook wrapper now derives `ENV_FILE` from its own location instead of shipping a build-machine absolute path; a wrong derivation on a client box kills every capture hook at once. The mitigating half is the same PR: a missing/unreadable derived env file now fails LOUD (non-zero, stderr naming the derived path) instead of the prior exit-0 zero-capture, so a bad derivation is visible on first hook fire rather than silent forever.
+> - Assumptions that could be wrong: that every install layout keeps the env file in the wrapper-adjacent directory the derivation expects; a hand-moved env file that used to work by absolute path would now need to be where the derivation looks. `scripts/setup-client.sh:294-317` (already on main) writes it there, so installer-produced layouts conform.
+> - Missing/weak tests: `scripts/setup-client-hook-env.test.ts` covers derivation and the fail-loud path (":195-211" asserts stderr carries the derived path and "missing or unreadable"), but no test executes the wrapper on a box whose $HOME differs from the build machine — that is exactly the #562 field condition, and it is only simulated.
+> - Security/permission risk: none identified; no auth, token, namespace, or SQL surface. The env file path is derived, never interpolated from user input, and the failure message prints the path, not the file contents.
+> - Migration/deploy risk: no schema migration. Client boxes pick the change up on next installer run; an already-installed wrapper keeps working because the installer's ENV_FILE rewrite (main, `setup-client.sh:294-317`) already pinned its path.
+> - Downstream client/runtime risk: this is installer/client-lane, not MCP schema — but it IS client-facing per `docs/downstream-rollout.md`: #562 is a declared blocking prerequisite for rodaddy/development#87 (non-mini installs). Rollout to a real second box is the remaining proof.
+> - Rollback/cleanup concern: single-commit revert restores the hardcoded path (and its silent-failure behavior); nothing persisted. No cleanup needed.
+> - Fixes made before PR: CI test failure on Linux runners fixed in 94ae538 — the test hardcoded macOS-only `/Volumes/ThunderBolt/_tmp/...` at module top level, which threw EACCES on Linux before any test ran; scratch now lives under the gitignored `out/test-fixtures` (verified `git check-ignore -v`: `.gitignore:5`).
+> - Known residual risk: fail-loud is proven by test, not in the field; the derivation has not run on a box with a different $HOME this session. State: WRITTEN/merged-pending, not deployed.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no review swarm has run on this PR yet (it is queued behind this body gate); the one reusable gotcha — module-top-level absolute paths in tests explode on foreign runners before any test executes — will be promoted to `docs/sme/` if the swarm rates it MEDIUM+.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: no MCP tool, schema, or live service surface changes; this is the client installer/hook-env lane, and the live proof belongs to the #87 rollout step, not this merge.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-05T02:09:58Z

@@ -55,6 +55,17 @@ Run the existing spool replay and quarantine flow as a scheduled maintenance job
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-04T01:40:50Z by rodaddy
+- State reason: NOT_PLANNED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-04T01:40:49Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-07-24T18:30:00Z

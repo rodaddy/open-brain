@@ -22,6 +22,108 @@ Discovered during the NATS fleet-bus deploy (v0.1.0-rc.3).
 
 ---
 
+## Resolution
+
+Closed by **PR #305** — fix: #293-family memory hardening — spool redaction/backpressure, disclosure isolation slice, doctor audit probe, deploy labels
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `624075e7ea86d144740fec13c71e35edb4b624e0`
+- Merged at: 2026-07-20T21:50:33Z
+- PR state: MERGED
+- Issue closed: 2026-07-20T21:50:35Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #305 body
+
+> ## Summary
+>
+> Verified-and-fixed pass over the #293-family review findings (handoff from session 29ed90f3). Every finding was independently re-derived from source before fixing.
+>
+> | Issue | Verdict | Fix |
+> |---|---|---|
+> | #304 spool persists raw payloads | CONFIRMED (`spool.py` `_record_line`) | Redact via `redact_value` before serialization; replay deliberately replays the redacted form. Fixes #304 |
+> | #300 silent eviction of acknowledged records | CONFIRMED (`append_batch` while-loop) | Backpressure: full spool raises `SpoolFullError`, file left byte-for-byte unchanged. Addresses the "never silently drop an acknowledged checkpoint" criterion; broader #300 capacity work stays open. Refs #300 |
+> | #297 export has no server-side namespace/scope gate | PARTIALLY STALE — both exports are pure local formatters; **no server-side export path exists to gate** | Formatter-boundary slice, symmetric Python/TS: fail closed on conflicting lane identity and on cross-scope/namespace-tagged items; immutable session-derived isolation stamp (top-level + index frontmatter). Refs #297 |
+> | #287 deploy targets `system/` label with sudo | CONFIRMED | `gui/$(id -u)` labels, no sudo, warn-only nats-worker kickstart in deploy + rollback paths; rollout doc line updated. Fixes #287 |
+> | #281 doctor hardcodes `audit_storage` | CONFIRMED | Computed from `readMcpAuditConfig()` + bounded parameterized `to_regclass` probe, fail-open to `not_available`; value set unchanged, no `DOCTOR_CONTRACT_VERSION` bump. Fixes #281 |
+>
+> One commit per fix. Built via a four-lane Claudex workflow (Sol ×3, Terra ×1, all codex companions, write-scoped, disjoint file ownership); controller diff-audited every lane before commit.
+>
+> ## Gates
+>
+> - `bunx tsc --noEmit` clean; `bun test` 1346 pass / 0 fail (1410 across 101 files)
+> - `uv run mypy src/openbrain_memory` clean; `uv run ruff check src tests` clean; `uv run pytest -q` 344 passed / 5 skipped
+> - `shellcheck scripts/core01-deploy-local.sh` clean
+> - gitleaks over the tree: 14 findings, all pre-existing dummy fixtures (verified identical against the pre-change baseline; none introduced by this diff)
+>
+> ## Critical self-review
+>
+> ```text
+> Critical self-review:
+> - Highest-risk behavior: spool saturation semantics flip from evict-oldest to
+>   reject-newest. A full spool now surfaces an explicit SpoolFullError to the
+>   caller (as an error note on the failed write) instead of silently destroying
+>   previously-acknowledged records. Intended, but degraded environments will see
+>   more visible write failures.
+> - Assumptions that could be wrong: redact_value's pattern coverage defines what
+>   "secret" means — content it doesn't match still persists to the spool;
+>   disclosure items' agent/project fields are assumed to denote scope identity;
+>   to_regclass reachability is treated as "audit storage available" without
+>   proving INSERT permission.
+> - Missing/weak tests: no concurrent-append test at the exact capacity boundary;
+>   doctor "available" asserted against a fake pool, not live core01 (post-deploy
+>   verify listed below); deploy script covered by shellcheck only.
+> - Security/permission risk: disclosure export remains entirely client-side —
+>   this PR does NOT add a server-side gate because no server export path exists;
+>   runtime-level namespace/7-coordinate stamping is an explicit follow-up on #297.
+> - Migration/deploy risk: no migrations. Deploy-script change is exercised only
+>   by the next real dispatch/tag deploy; label values match the live install
+>   described in #287.
+> - Downstream client/runtime risk: SpoolFullError subclasses ValueError so
+>   existing handlers keep working; DisclosureBundle gains a required `isolation`
+>   key (additive for consumers of the value, breaking for TS code constructing
+>   the type); callers that previously passed mismatched lane identity got silent
+>   rewriting and now get an error.
+> - Rollback/cleanup concern: spool files written BEFORE this fix still contain
+>   raw payloads on disk; this PR does not retro-redact existing spool files, and
+>   replaying a pre-fix spool can still transmit previously-persisted raw
+>   content. Flagged on #304 as follow-up.
+> - Fixes made before PR: worker lanes validated green before handback; controller
+>   diff-audit found no material issue requiring rework; stale
+>   system/com.rico.open-brain reference in docs/downstream-rollout.md updated.
+> - Known residual risk: pattern-bounded redaction; pre-existing unredacted spool
+>   files; namespace unverifiable at the AgentMemory layer (rejected fail-closed
+>   rather than validated).
+> ```
+>
+> - SME review-memory update: [x] `docs/sme/` updated — promoted the #304 redact-before-disk, #300 acknowledged-data-saturation, and #297 fail-closed-identity patterns into security/correctness/gotcha lanes and superseded the spool half of the 2026-06-11 redaction stance (commit c8c8acf).
+>
+> ## Downstream rollout classification (docs/downstream-rollout.md)
+>
+> Touched surfaces: `python/openbrain-memory` client behavior (spool semantics, export validation/shape) and TS client modules (`agent-memory.ts`, `disclosure-bundle.ts`); `operator-doctor` output value (computed instead of hardcoded — value set and schema unchanged).
+>
+> Not touched: MCP tool names/input schemas/annotations/auth/error envelopes, transport/SSE/session behavior, DB migrations, generated skills.
+>
+> - Step 1 (local verification): complete, evidence above.
+> - Step 2 (hosted verification): applicable for the doctor field and the deploy script — after merge, next `workflow_dispatch` deploy (or `v*` tag) exercises the fixed restart path; then verify live doctor reports `audit_storage: "available"`.
+> - Step 3 (rtech-mcps handoff): N/A — no registry/schema/secret-map change.
+> - Step 4 (mcp2cli cache/skill refresh): N/A — no tool schema change.
+> - Hermes/Python runtime: behavior-additive plus new fail-closed errors on inputs that were previously silently rewritten; picked up on next package refresh, no pinned-contract break identified. Live Hermes canary not required for this slice; flagged on #297 for the future runtime-level export wrapper.
+>
+> Refs #293.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` (commit c8c8acf)
+> - Live Open Brain checks: [x] not applicable because: no MCP tool/schema/transport surface changes pre-merge; the one hosted-visible change (doctor `audit_storage`) can only be exercised by the post-merge core01 deploy, which is scheduled in the rollout classification above.
+>
+> Refs #293.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-20T06:55:26Z

@@ -33,3 +33,68 @@ The `create_if_missing` lane INSERT omits `embedding`/`content_hash`/`embedded_a
 - SME capture (cross-tool write/read shape coherence) — added to `docs/sme/correctness.md`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## Resolution
+
+Closed by **PR #249** — fix(#229): harden first-write session lanes
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `e4fc7def43735163e1e0d4997ace5ce510494f4d`
+- Merged at: 2026-07-06T05:50:38Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T05:50:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #249 body
+
+> Fixes #229.
+>
+> ## Summary
+>
+> - Makes `append_session_event.create_if_missing` first-write lane creation atomic with the first event insert by using a pooled-client transaction only for `create_if_missing` appends.
+> - Adds first-write lane embedding parity with `lane_upsert` by embedding from `topic` plus `project` and storing lane `content_hash`, `embedded_at`, and `embedding_model`.
+> - Adds migration `020_session_lane_namespace_hash.sql` so lane `content_hash` uniqueness is namespace-scoped, matching the app's namespace isolation boundary.
+> - Adds `scripts/archive-idle-session-lanes.ts`, a dry-run-by-default local maintenance sweep for idle realtime lanes, with explicit `--execute` required and broad-sweep refusal unless scoped.
+> - Updates Plan 3F with the current #229 branch status, gauntlet findings, fixes, and validation gap.
+> - Addresses second-round gauntlet findings by filling accepted first-write embeddings after commit, preserving the original error when rollback fails, failing loud if a transactional pool is unavailable, and removing the redundant archive execute CTE limit.
+>
+> ## Validation
+>
+> - `bun test src/tools/__tests__/append-session-event.test.ts scripts/archive-idle-session-lanes.test.ts` - 56 pass, 7 skip, 0 fail.
+> - `bun test src/tools/__tests__/append-session-event.test.ts src/tools/__tests__/lane-upsert.test.ts src/tools/__tests__/session-start.test.ts scripts/archive-idle-session-lanes.test.ts` - 90 pass, 10 skip, 0 fail.
+> - `bunx tsc --noEmit` - pass.
+> - `git diff --check` - pass.
+> - `bun test` - 1072 pass, 50 skip, 0 fail.
+> - CI after gauntlet fixes: `validate`, `check`, `db-integration`, `python-package`, and GitGuardian pass; `deploy` skipped.
+>
+> Local DB-backed suites were not run because `/Users/rico/.config/open-brain/env.release-test` is missing on this box. CI `db-integration` supplied the live Postgres gate.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a failed event insert after speculative lane creation must not leave an orphan realtime lane; covered by rollback test with `BEGIN`/`ROLLBACK` and no `COMMIT`.
+> - Assumptions that could be wrong: first-write lane embedding should match `lane_upsert` topic/project behavior even though future lane search is not shipped yet.
+> - Missing/weak tests: local real-Postgres suites are skipped without `OPENBRAIN_TEST_DATABASE_URL`; CI `db-integration` must supply that coverage.
+> - Security/permission risk: namespace and scope authorization paths are unchanged; idle-lane archive script defaults narrow and refuses an unscoped broad sweep.
+> - Migration/deploy risk: migration `020_session_lane_namespace_hash.sql` changes only the lane `content_hash` index from global uniqueness to namespace-scoped uniqueness; no core01 deploy is included. Production idle-lane archival is operator-run only and dry-run by default.
+> - Downstream client/runtime risk: append response shape is unchanged, but `create_if_missing` appends now use a transaction and first-write lanes become searchable once lane search ships.
+> - Rollback/cleanup concern: reverting restores prior non-transactional append behavior, global lane hash uniqueness, and removes the local archival script.
+> - Fixes made before PR: narrowed transactions to `create_if_missing` appends only and added explicit F7 script/test coverage instead of deferring silently.
+> - Fixes made during gauntlet: moved first-write embedding work out of the transaction, then tightened it to run only after an append is accepted; rechecked archive execute eligibility in the `UPDATE` CTE; namespace-scoped lane `content_hash` uniqueness with a live Postgres regression; preserved the original append error if rollback also fails; and made missing transactional pool support fail loud outside explicit tests.
+> - Known residual risk: local release-test env is absent, so CI DB-backed tests remain the required merge gate for live Postgres coverage. First-write lane/event embeddings are now filled after commit; if the process crashes or the embedding provider stays down after a successful append, those accepted rows can remain `embedding IS NULL` until a future backfill handles them.
+> - SME review-memory update: [x] not applicable because: the gauntlet findings are fixed in this PR with regression coverage and do not require a new reusable SME rule beyond the existing namespace-isolation and transaction-boundary guidance.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured and fixed: transaction-open embedding calls, stale archive execute update, and global lane content-hash uniqueness.
+> - Live Open Brain checks: [x] not applicable because: this is local-only code/test/script hardening with no core01 deploy or hosted runtime change.
+>
+> ## Downstream Rollout
+>
+> Not applicable for this PR before merge: no public contract version, Python package, mcp2cli, Hermes plugin, or hosted runtime change is introduced. Full release/deploy remains optional and separate under `docs/local-release-deploy-sop.md`.
+>
+> ## No Deploy
+>
+> This PR must not deploy core01. Merge and deploy remain separate phases.
+>

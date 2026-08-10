@@ -55,3 +55,179 @@ This is ON the rewrite path per operator decision. The Python emitter piece sequ
 - Issue carries `wayfinder:task`.
 - Issue is a native sub-issue of map #443.
 - Map #443 records the Python-remainder placement and the server-rewrite pointer.
+
+---
+
+## Resolution
+
+Closed by **PR #495** — feat(telemetry): skill and canon usage metrics -- who invoked what, how often
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a55c804e5a638c86255961f0f918403e9b3162b4`
+- Merged at: 2026-08-02T20:09:38Z
+- PR state: MERGED
+- Issue closed: 2026-08-02T20:09:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #495 body
+
+> Closes #469 (server + Python emitter halves).
+>
+> Counts skill and canon invocations so Rico can decide what to rotate, shelve, or
+> retire **from facts**. The tools themselves decide nothing: "no automatic
+> retirement. What I need is something that gives me metrics so that decisions can
+> be made on facts and not on feel."
+>
+> ## What landed
+>
+> **`src/db/migrations/046_skill_usage_log.sql`** — a new log table.
+>
+> Issue #469's title proposes logging into `entry_access_log`, and that table
+> genuinely cannot hold these rows: its `source_table` CHECK
+> (`006_cognitive_tiering.sql:34`) admits only `thoughts`, `decisions`,
+> `relationships`, `projects`, `sessions`, and a skill invocation points at an
+> `ob_entities` row. Widening that enumeration is the wrong repair — `entry_id` is
+> read as an entry-table id by the tiering and access-report joins
+> (`reporting.ts accessLogStats()` derives namespace by joining it back to the
+> named table), so admitting a non-entry id would make those joins silently miss
+> rows. The five-table enumeration is load-bearing, so the new fact gets its own
+> table.
+>
+> No verdict, score, or lifecycle column — a column shaped like a judgement is an
+> invitation to write one, and the issue forbids all five verbs by name.
+>
+> **`server/tools/skill-usage.ts`** — `record_skill_usage` (write) and
+> `skill_usage_report` (read): counts per skill × agent × repo × runtime,
+> last-used timestamps, prior-window counts, and an explicit never-used list.
+> The trend is returned as *two counts*, not as a word, because the word would be
+> a judgement this tool is not allowed to make.
+>
+> **`python/.../apps/hooks/post_tool_use.py`** — stub → real hook. For `Skill`
+> calls only, it records one metric; every other tool returns before settings load
+> or a client is built.
+>
+> ## Namespace scoping is by join, not by column
+>
+> `skill_usage_log` has no `namespace` column, matching `entry_access_log`
+> deliberately. The only thing keeping one tenant's usage pattern away from
+> another is the join back to `ob_entities` with the auth predicate applied there
+> — the rule `reporting.ts:360-398` already establishes. A dropped join still
+> returns plausible-looking counts, which is why it gets a red-proven test rather
+> than a reviewer's eye.
+>
+> ## The open question stays open
+>
+> Tool input and output are the ~96% of `ob_raw_turns` that
+> `capture-never-drops-a-turn.md` leaves **undecided** (memory vs observability),
+> and the old stub's docstring warned against resolving it by accident. This does
+> not: `PostToolUseHook` does not declare `tool_response` **at all**, and reads
+> exactly one key out of `tool_input` — the skill's name, which *is* the metric.
+> The decision is left open structurally, not by good intentions, and a test
+> proves no tool content reaches the wire.
+>
+> ## Verification
+>
+> Run against an isolated test database (`ob_test_469_*`); the dogfood database
+> was never touched.
+>
+> - `bunx tsc --noEmit` — clean
+> - `bun test` — **3357 pass / 0 fail** (baseline 3348 + the 9 new)
+> - `bun contracts/check-parity.ts` — passed, **63/63** current-src tools, 0 gaps
+> - Python — `pytest` 320 passed, `mypy` clean (35 files), `ruff` clean
+> - Anti-skip guard — new suite registered, executed **9/9**; 342 live testcases
+>   against the raised floor of 53
+>
+> **Both new behaviors red-proven, not assumed:**
+>
+> 1. Neutralized the namespace predicate (keeping SQL and parameter count valid) →
+>    **exactly one** failure, `hides another namespace's usage`, with
+>    `foreign-only-skill` leaking into the reader's report. The other 8 stayed
+>    green, so the test targets the predicate and nothing else.
+> 2. Widened the metric to carry `tool_input` → **exactly one** failure,
+>    `test_no_tool_content_is_ever_sent`, with the sentinel on the wire.
+>
+> **One pre-existing guard failure, proven not mine:** `local clone real
+> PostgreSQL boundary` needs a separate `OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL`
+> clone database that CI supplies. With all my changes stashed, that suite fails
+> identically on the pristine base (6 pass / 1 fail).
+>
+> ## Registration and parity
+>
+> Registered on the **`server/` registry only**, not `src/tools`: the operator put
+> #469 on the rewrite path ("We're rewriting it, so this seems like a good place
+> to add new functionality"), so new surface does not land on the stack being
+> replaced. `check-parity.ts` scans only `src/tools/**` for registrations, so the
+> gap map is untouched and parity stays 63/63 with 0 gaps — verified before and
+> after.
+>
+> ## Scope
+>
+> Weekly-report integration is **out of scope** — Rico wires that himself. This
+> delivers the data and the report surface it reads from.
+>
+> **LAW-0 states:** migration, tools, and hook are WRITTEN and test-proven against
+> an isolated database. Nothing here is deployed, and the local service was not
+> restarted — MERGED-pending, not RUNNING.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no changed path matches
+>   `contracts/parity-paths.txt` (`python/openbrain-memory/`, `clients/ts/`,
+>   `contracts/`, `src/contract.ts`, `src/contract-schemas.ts`) — this adds two
+>   tools to the rewrite-only `server/` registry, which the current-src gap map
+>   does not track, and `bun contracts/check-parity.ts` passes unchanged at 63/63.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the namespace join in `skillUsageReadScope()` — the log
+>   has no namespace column, so a dropped join leaks which skills another tenant
+>   runs and how often, while still returning plausible counts. Red-proven by
+>   neutralizing the predicate and confirming exactly that one test fails.
+> - Assumptions that could be wrong: that the Skill tool's input key is `skill`.
+>   Taken from the captured `PostToolUse.json` shape plus the live tool schema; if
+>   a future harness renames it, `skill_slug()` returns None and invocations go
+>   uncounted silently rather than wrongly. Also assumes basename-of-cwd is an
+>   acceptable repo name, which matches every other surface here but is a
+>   convention, not a guarantee.
+> - Missing/weak tests: no test drives the real `OpenBrainClient` transport for
+>   `record_skill_usage` — the recorder is injected, so the actual HTTP call shape
+>   is covered only by the shared client tests. No multi-worker concurrency test
+>   on the entity upsert; it relies on the existing `ON CONFLICT` index.
+> - Security/permission risk: `record_skill_usage` seeds an `ob_entities` row on
+>   first use, so a writer can create entities in its own namespace by invoking a
+>   skill. Bounded by `canTargetNamespace(identity, "write", ...)`, and the
+>   cross-namespace write denial is tested. The report is read-gated and its
+>   never-used list carries its own predicate, tested separately, because it reads
+>   `ob_entities` directly rather than through the log join.
+> - Migration/deploy risk: 046 is additive — `CREATE TABLE IF NOT EXISTS` plus one
+>   index, no backfill, no change to an existing table, so rollback is dropping an
+>   unused table. Applied cleanly to a fresh database (46 → 47 migrations) and
+>   verified with `psql \d`.
+> - Downstream client/runtime risk: none for existing clients — two new tools on
+>   the rewrite registry only, no contract, schema, or existing-tool change, and
+>   `get_contract`'s hash is untouched. The Python hook is fail-open: an
+>   unreachable server logs content-free and exits 0.
+> - Rollback/cleanup concern: reverting the commit leaves the table behind
+>   harmlessly (nothing reads it). The `PostToolUse` entry point moved from
+>   `STUB_EVENTS` to `REAL_EVENTS` in the test table — a revert must move it back
+>   or the stub test will assert against a real module.
+> - Fixes made before PR: caught and corrected while writing — `settings.agent_id`
+>   is a required `str`, not optional, so the conditional attach was wrong; and
+>   `token` is a `SecretStr` needing `.get_secret_value()`, matching
+>   `_started_memory`. Both verified against the real definitions rather than
+>   assumed.
+> - Known residual risk: `PostToolUse` fires on every tool call, so a
+>   high-frequency skill user adds one HTTP round trip per Skill invocation with a
+>   0.7s timeout and a single pinned attempt. That budget is inherited from the
+>   capture lifecycle rather than independently measured under load.
+> - SME review-memory update: [x] not applicable because: no new missed-review
+>   pattern surfaced — this is new surface, and both of its risky behaviors were
+>   caught by red-proven tests during authoring rather than by a review escape.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: nothing was deployed or
+>   restarted; all verification ran against an isolated test database, and the
+>   dogfood service was deliberately never touched per the DB rule for this task.
+>

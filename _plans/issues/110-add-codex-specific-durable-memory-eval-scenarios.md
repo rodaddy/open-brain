@@ -45,3 +45,35 @@ Add Codex-specific memory eval scenarios that prove Open Brain supports real cod
 - eval runner command for Codex scenarios
 - `bun run typecheck`
 - relevant targeted tests
+
+---
+
+## Resolution
+
+Closed by **PR #115** — feat: add Codex memory workflow eval scenarios
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2411d6edf00d20a7ff6b1b567d2a1960de5d7d11`
+- Merged at: 2026-06-15T19:54:18Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T19:54:19Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #115 body
+
+> Closes #110.
+>
+> ## Summary
+> - add a dedicated Codex workflow eval fixture covering session resume, decision reuse, validation evidence lookup, durable preference vs one-off instruction, stale-memory avoidance, memory citation, synthesis-tool selection, and unreadable namespace refusal
+> - add `--fixture` support to `bun run eval:memory` while keeping the original smoke fixture as the default
+> - extend runner tests and docs for the new `codex` scorecard category
+>
+> ## Validation
+> - `bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json --report /Volumes/ThunderBolt/_tmp/open-brain-memory-eval-110-scorecard.json` PASS: 8/8 probes, recall@k=1.000, precision@k=0.938, citation=1.000, namespace_leaks=0
+> - `bun test eval/open-brain/__tests__/runner.test.ts` PASS: 11 pass
+> - `bun run typecheck` PASS
+> - `git diff --check` PASS
+> - `bun test` PASS: 644 pass, 16 skip
+>
+> ## Open PR Hygiene
+> - Checked open PRs #89 and #101 before opening this PR. Neither is appropriate to close from this goal run: both contain commits not present on current main; #101 is the larger embedding/local-provider branch tied to the original dirty checkout, and #89 has non-trivial Python/deploy changes that conflict with current main rather than being superseded.
+>

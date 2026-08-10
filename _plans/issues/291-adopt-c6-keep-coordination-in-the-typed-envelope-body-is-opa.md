@@ -34,6 +34,17 @@ fleet-bus now makes **[C6 — Envelope vs. Message Body](https://github.com/roda
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-22T01:38:29Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-22T01:38:28Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-22T01:38:28Z

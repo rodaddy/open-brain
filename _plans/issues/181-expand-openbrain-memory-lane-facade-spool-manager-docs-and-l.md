@@ -25,6 +25,101 @@ Scope:
 
 ---
 
+## Resolution
+
+Closed by **PR #187** — feat: add openbrain memory readiness helpers
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `3e00c5b8741a9ae52ffd1334193ecd766f9e94e4`
+- Merged at: 2026-06-20T17:06:59Z
+- PR state: MERGED
+- Issue closed: 2026-06-20T17:07:00Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #187 body
+
+> ## Summary
+>
+> Closes #181.
+>
+> Adds the remaining package-side helpers needed before Hermes can consume `openbrain-memory` instead of maintaining a parallel Open Brain fork:
+>
+> - adds `validate_required_memory_contract()` as the package default wrapper around the canonical `get_contract` manifest validator;
+> - expands `AgentMemory` with reusable session/lane/query/repo-fact convenience helpers while keeping Hermes-specific policy and namespace delegation out of the package facade;
+> - adds `JsonlSpool.status()` / `SpoolStatus` for redacted pending-write diagnostics;
+> - expands env-gated live canary coverage for `get_contract`, read helpers, explicit lane/session writes, and optional repo-fact writes;
+> - updates README canary expectations and package helper documentation.
+>
+> ## Boundary
+>
+> `get_contract` remains the source of truth. The package helper validates a live manifest against the package's required memory contract snapshot, required tool list, and client version compatibility when a client version is supplied.
+>
+> This PR does not move Hermes-only policy into Open Brain:
+>
+> - no Hermes `READ_TOOL_ALLOWLIST`;
+> - no Hermes protected/session-derived `session_key` behavior;
+> - no Hermes memory-mode gating;
+> - no Hermes model/tool filtering;
+> - no Hermes deployment/canary rollout;
+> - no payload-level namespace delegation in `AgentMemory`; privileged namespace delegation remains an `OpenBrainClient(delegate_namespace=True)` / server-authorized header path.
+>
+> ## Controller Fixes
+>
+> The implementation worker initially introduced repo-fact enum values that did not match the server's canonical `src/tools/repo-facts.ts` values. I corrected the package facade constants/tests to match the server source of truth:
+>
+> - `FACT_TYPES`: `ownership`, `gotcha`, `api_contract`, `workflow`, `dependency`, `migration`, `validation`, `source_pointer`
+> - `STALENESS_POLICIES`: `stable_fact_verify_source`, `commit_pinned`, `refresh_required`, `volatile_pointer_only`
+>
+> After review, I also removed payload-level namespace forwarding from `AgentMemory`, made the default live canary read-only, added read-helper coverage, fixed `session_context` response assertions, proved appended event recovery, and added ruff/mypy to package CI.
+>
+> ## Validation
+>
+> Run from `python/openbrain-memory`:
+>
+> - `uv run ruff check src tests` -> pass
+> - `uv run ruff format --check src tests` -> pass
+> - `uv run mypy src/openbrain_memory` -> pass
+> - `uv run pytest -q` -> `153 passed, 5 skipped`
+> - `uv build` -> built sdist and wheel
+> - `git diff --check` -> pass
+>
+> Live canary tests remain env-gated. The default live canary is read-only. Lane/session writes require `OPENBRAIN_LIVE_CANARY_WRITE=1`; repo-fact writes require `OPENBRAIN_LIVE_CANARY_REPO_FACT_WRITE=1` plus an explicit source commit.
+>
+> ## Downstream Rollout
+>
+> Applies because this changes `python/openbrain-memory` package exports and helper behavior.
+>
+> - Open Brain local verification: complete, see validation above.
+> - Hosted Open Brain runtime deploy: not required for package-only client helper changes; server behavior is unchanged.
+> - rtech-mcps / mcp2cli generated skill refresh: not applicable; no MCP tool schema/name/output changed.
+> - rtech-hermes runtime/plugin check: applicable next in Run C Phase 2. Hermes must consume these helpers in a separate `rtech-hermes` PR before agent readiness can be claimed.
+> - Hermes live rollout: deferred to Run C Phase 4 after Hermes consumption PRs merge.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: this PR changes package helper code and env-gated canary coverage only; hosted server behavior is unchanged and live Hermes rollout is deferred to Run C Phase 4 after Hermes consumption PRs merge.
+> - [x] Required SME review swarm posted, including gotcha-agent lane for `python/openbrain-memory`.
+> - [x] Findings fixed or explicitly deferred with owner approval.
+> - [ ] Fix verification posted after any fixes.
+> - [x] GitHub checks pass or non-code external check failures are explicitly classified
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: New package facade helpers could drift from server contracts or bypass namespace authority. I checked repo-fact enums against `src/tools/repo-facts.ts` and removed payload-level namespace forwarding from `AgentMemory`.
+> - Assumptions that could be wrong: Pinning `validate_required_memory_contract()` to `CURRENT_CONTRACT_VERSION` may be too strict for future compatible versions; for now it matches the package snapshot semantics and Hermes fail-closed needs.
+> - Missing/weak tests: Live canary coverage is env-gated and not run in normal CI; fake-transport tests cover helper call shapes, while hosted behavior remains a rollout-time canary.
+> - Security/permission risk: Package helpers must not bypass token/header namespace authority. The high-level facade no longer accepts `namespace=` and tests reject metadata namespace smuggling.
+> - Migration/deploy risk: Hermes still needs a separate consumption PR; this PR alone does not make agents package-backed.
+> - Downstream client/runtime risk: New exports are additive. Hermes must adapt through a thin policy wrapper rather than directly exposing all package helpers to model tools.
+> - Rollback/cleanup concern: Rollback is reverting this package PR; no server migration or hosted deploy is included.
+> - Fixes made before PR: Corrected repo-fact type/staleness enums to match canonical server values; after swarm, removed payload namespace forwarding, made default canary read-only, added read helper coverage, fixed session_context assertions, proved append recovery, and added ruff/mypy CI gates.
+> - Known residual risk: Optional write canaries are not default because they write durable state; host rollout still needs explicit live evidence later in Run C.
+> - SME review-memory update: [ ] `docs/sme/` updated [x] not applicable because: findings were recurrences already represented in SME files or direct PR-body/checklist hygiene; no new durable review pattern was introduced.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-20T16:00:01Z

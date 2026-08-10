@@ -32,6 +32,17 @@ Fix direction is open — the isolation the mitigation missed has to hold across
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-05T05:45:38Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-05T05:45:37Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-05T05:45:37Z

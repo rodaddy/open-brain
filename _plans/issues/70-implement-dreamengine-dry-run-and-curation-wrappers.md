@@ -50,3 +50,37 @@ Depends on #67 and should follow the safety constraints from #69. Start with dry
 - First implementation can ship with dry-run only; mutation mode must be explicit and separately tested before use.
 
 Parent: #66
+
+---
+
+## Resolution
+
+Closed by **PR #75** — feat: add DreamEngine dry-run facade
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5d76830a73c232b8b15e368a6647cce54b84b5c6`
+- Merged at: 2026-06-11T00:38:02Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T00:38:03Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #75 body
+
+> ## Summary
+> - Add openbrain_memory.DreamEngine with dry-run-first curation planning over list_stale, tier_recommendations, find_duplicates, scan_namespace, set_tier, and promote_entry wrappers.
+> - Keep dream_once dry-run-only for the first release; explicit single-action mutations remain opt-in through set_tier(..., dry_run=False) and promote_entry(..., dry_run=False).
+> - Export DreamEngine public types and document role/dry-run behavior in python/openbrain-memory README.
+>
+> ## Review swarm
+> - Round 1 fixed HIGH partial-apply risk by refusing dream_once(dry_run=False) in this release.
+> - Round 1 fixed MEDIUM limit/schema drift by bounding dream orchestration limits to the strict MCP max of 100.
+> - Round 1 fixed MEDIUM table scoping by filtering planned tier actions locally when tier_recommendations cannot accept table filters.
+> - Round 2 fixed MEDIUM bool validation in DreamPolicy constructor.
+> - Round 2 fixed MEDIUM namespace scoping drift by suppressing unscoped tier actions when namespace is supplied; namespace dreams only plan promotion actions.
+>
+> ## Validation
+> - cd python/openbrain-memory && uv run pytest tests/test_dream.py: 8 passed
+> - cd python/openbrain-memory && uv run pytest: 53 passed, 1 skipped
+> - bun test: 579 passed, 16 skipped
+> - git diff --check: passed
+>
+> Closes #70

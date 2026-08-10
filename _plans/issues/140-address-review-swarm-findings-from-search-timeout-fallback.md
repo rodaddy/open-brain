@@ -13,3 +13,19 @@ Closed: 2026-06-18T13:19:50Z
 ---
 
 Post-merge review swarm on PR #139 found two material follow-up issues in the search timeout fallback:\n\n- Timed-out embedding work returned control to the MCP caller but did not abort the underlying embedding request.\n- Timeout/fallback warnings could log raw search query text.\n\nExpected fix:\n- Thread an optional AbortSignal through the embedding dependency and abort it when search timeout fires.\n- Keep degraded-search logs free of raw query text; use stable metadata such as query length.\n- Prefer the OpenBrain-prefixed search timeout env var over the generic compatibility alias.\n- Add/adjust regression tests proving abort fires for hung embeddings.
+
+---
+
+## Resolution
+
+Closed by **PR #141** — Fix search timeout review findings
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a3c059235bb1fa3a6e2776589c860279504fbe03`
+- Merged at: 2026-06-18T13:19:48Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T13:19:50Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #141 body
+
+> Closes #140\n\n## Summary\n- thread optional AbortSignal support through embedding generation\n- abort timed-out search embedding calls instead of only returning around them\n- remove raw query text from timeout/fallback warning logs\n- prefer OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS over the generic alias\n- update hung-embedding tests to assert the abort path fires\n\n## Validation\n- rg -n "query\.slice|query:" src/tools/search-brain.ts src/tools/search-all.ts\n- bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts src/embedding.test.ts\n- bunx tsc --noEmit\n- bun test

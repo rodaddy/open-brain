@@ -45,3 +45,152 @@ Preferred end-state: **add `ob-admin` as the canonical role name, keep `n8n` as 
 
 ## Provenance
 Surfaced 2026-06-19 while building #159; Rico asked what the n8n role was. Confirmed unused + admin-equivalent.
+
+---
+
+## Resolution
+
+Closed by **PR #235** — fix: rename n8n role -> ob-admin break-glass admin identity (#168)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2a8fd986154d7b5dc11fb0c2d690288d35530a50`
+- Merged at: 2026-07-05T21:34:57Z
+- PR state: MERGED
+- Issue closed: 2026-07-05T21:34:58Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #235 body
+
+> Rename the `n8n` auth role to `ob-admin` and repurpose it as the explicit,
+> honestly-named break-glass server-side admin identity (full RWD, admin-equivalent)
+> for human server-side surgery -- manual user promotions and deletions.
+>
+> Closes #168.
+>
+> ## Why
+>
+> The `n8n` role had `RWD` on every table (identical to `admin`) and was paired
+> with `admin` in every privileged gate, but it was **100% unused**: zero rows
+> `created_by = 'n8n'`, no client authenticates as it, no n8n.io workflow calls
+> Open Brain, and `AUTH_TOKEN_N8N` is not used as a client anywhere. It was
+> full-power dead weight with a name implying it served n8n.io automations.
+>
+> Because usage is verified zero, this PR does a **clean break** (no deprecated
+> `n8n` alias). The issue floated keeping an alias for safety, but with no live
+> exposure an alias would only preserve a misleading name and a redundant gate
+> branch. After this change the old `n8n` role name is unknown everywhere it used
+> to be honored.
+>
+> ## What changed
+>
+> Rename `n8n` -> `ob-admin` role and `AUTH_TOKEN_N8N` -> `AUTH_TOKEN_OB_ADMIN`
+> across permissions, every privileged gate, token/env config, scripts, and docs.
+>
+> Gates updated (all now key on `ob-admin` where they keyed on `n8n`):
+> `PERMISSIONS` matrix, shared-kb write authority, promote (MCP + REST),
+> scan-namespace (MCP + REST), curate-with-delete, cross-namespace read,
+> the `"all"` keyword read, legacy-shared read/write, `X-Namespace` delegation,
+> `isPromoterIdentity` backward-compat path, and the shared-kb write-exclusion
+> predicate.
+>
+> Additionally (from the cross-model review P2): three gates that hard-coded
+> `role === "admin"` alone -- and therefore excluded `ob-admin` from admin parity --
+> were extended to accept `ob-admin`: REST `/api/v1/demote`, MCP `demote_entry`,
+> and the MCP `promote_shared` entry gate. A full audit of every remaining
+> `=== "admin"` / `!== "admin"` literal in `src/` confirmed all others are part
+> of admin/ob-admin(/promoter) compound predicates; no admin-only gate remains.
+>
+> Files:
+> - `src/types.ts` -- `Role` union: `n8n` -> `ob-admin`.
+> - `src/permissions.ts` -- `PERMISSIONS` key renamed; full-RWD entry documented as break-glass identity.
+> - `src/auth.ts` -- `VALID_ROLES`, `ROLE_ENV_KEYS` (`AUTH_TOKEN_OB_ADMIN`), and the `X-Namespace` delegation gate.
+> - `src/namespace-policy.ts` -- write authority, `writableNamespaces`, shared-kb exclusion predicate, promoter backward-compat.
+> - `src/read-policy.ts` -- `readableNamespaces`, `"all"` keyword, legacy-shared read.
+> - `src/shared-namespace.ts` -- `shouldRejectLegacySharedWrite` admin-like check.
+> - `src/rest-promotion.ts` -- REST promote/scan role gates + the previously admin-only demote gate + error text.
+> - `src/tools/{scan-namespace,promote-entry,curate-entries,archive-entry,hydrate-entities}.ts` -- MCP tool role gates + descriptions.
+> - `src/tools/demote-entry.ts` -- previously admin-only MCP demote gate now accepts ob-admin (review P2).
+> - `src/tools/promote-shared.ts` -- entry gate extended from promoter/admin to promoter/admin/ob-admin (review P2 follow-on audit).
+> - `docs/sme/security.md` -- new lane entry: role parity changes must audit lone admin literals and reversal gates.
+> - `scripts/promote-legacy-shared.ts` -- in-process promoter CLI auth role.
+> - `src/ob-admin-role.test.ts` (new) -- security-boundary regression suite (see below).
+> - `src/*.test.ts` + `src/tools/__tests__/*.test.ts` -- fixtures renamed to `ob-admin`.
+> - `.env.schema`, `.env.example`, `fetch-secrets.sh`, `scripts/generate-tokens.sh` -- env key rename (+ deploy note).
+> - `README.md`, `GLOSSARY.md`, `AGENTS.md`, `docs/identity-boundary.md`, `python/openbrain-memory/README.md` -- role docs.
+>
+> Genuine n8n.io tool references (stateless-mode consumers, external channel/source
+> labels, n8n-spawned agents) are intentionally left as-is; only the OB role was renamed.
+>
+> ## Regression test coverage (`src/ob-admin-role.test.ts`)
+>
+> Enumerated, not spot-checked. `ob-admin` proven equal to `admin` on every gate:
+> PERMISSIONS matrix (full RWD, `toEqual(PERMISSIONS.admin)`), `canWriteNamespace`,
+> `writableNamespaces` (undefined), `readableNamespaces` (undefined), `"all"` keyword
+> read + `namespaceFilterFor`, legacy-shared read, legacy-shared write non-rejection,
+> shared-kb write-exclusion predicate parity, `X-Namespace` delegation permitted (and
+> rejected for a non-admin-like agent), and legacy promoter-clientId-on-`ob-admin`
+> still resolving as a promoter identity.
+>
+> Old-name rejection (fails on the pre-rename behavior): `AUTH_TOKEN_N8N` is no
+> longer a recognized role-env key (token dropped), a per-user `n8n:` role prefix is
+> rejected as an invalid role, and `AUTH_TOKEN_OB_ADMIN` loads as role `ob-admin`.
+>
+> Non-admin roles unaffected: agent/discord/readonly still lack `"all"` read, agent
+> writes stay scoped to its own clientId, readonly still cannot write.
+>
+> Demote/promote_shared gate parity (added after the cross-model review P2):
+> REST `/api/v1/demote` returns 200/demoted for both admin and ob-admin and 403
+> for agent/discord/readonly/promoter before any DB access; MCP `demote_entry`
+> demotes for both admin and ob-admin and rejects agent/discord/readonly/promoter
+> before any DB access; MCP `promote_shared` lets admin and ob-admin through the
+> auth gate identically (both reach the source lookup) while agent/discord/readonly
+> are stopped at the gate. These tests fail on the pre-fix admin-only gates.
+>
+> ## Deploy-time steps (NOT executed here -- deploy-gated)
+>
+> These touch the live core01 host / vaultwarden and are intentionally left for a
+> gated deploy; nothing in this PR touched the live host or database:
+>
+> 1. In vaultwarden item "Open Brain - Auth Tokens", rename the field `AUTH_TOKEN_N8N`
+>    to `AUTH_TOKEN_OB_ADMIN` (keep the same value or rotate it).
+> 2. In the server `.env` (running app at `/Volumes/ThunderBolt/open-brain/app`), set
+>    `AUTH_TOKEN_OB_ADMIN` and remove `AUTH_TOKEN_N8N`.
+> 3. Restart the service (`launchctl kickstart -k gui/$(id -u)/com.rico.open-brain`
+>    or the standard restart path).
+> 4. Confirm startup logs show no "Missing auth token for role: ob-admin" warning
+>    and no lingering `AUTH_TOKEN_N8N` reference.
+>
+> Until step 2 lands, `buildTokenMap` logs a benign "Missing auth token for role:
+> ob-admin" warning and simply does not load that break-glass token -- no other role
+> is affected.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` -- clean.
+> - `bun test` -- 984 pass, 38 skip, 0 fail (full suite, after the demote-gate fix).
+> - `git grep -niI n8n` -- residue is only: n8n.io tool references (stateless mode,
+>   channel/source labels, n8n-spawned agents), `#168` historical-provenance comments,
+>   the deploy-step note, and the regression test that intentionally names the old
+>   role to prove it is now rejected.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: A missed gate silently dropping admin-equivalent authority on one code path. This risk MATERIALIZED: cross-model review found the demote gates (REST + MCP) and, on follow-up audit, the `promote_shared` entry gate still hard-coded admin-only. All three are now extended, every remaining `=== "admin"` literal in `src/` was audited (all are compound admin/ob-admin predicates), and the parity suite now covers demote and promote_shared explicitly.
+> - Assumptions that could be wrong: That `n8n` is truly unused (per issue evidence, verified 2026-06-19: zero rows, no client auth). If a hidden consumer still sends `AUTH_TOKEN_N8N`, it will now 401 -- acceptable and intended for a clean break, and it is deploy-gated so it can be caught before the env swap.
+> - Missing/weak tests: The original suite asserted the auth/policy layer but not the demote gates -- exactly where the review found the P2. Now the suite exercises REST `/api/v1/demote` end-to-end (express + router) and MCP `demote_entry`/`promote_shared` via the in-memory MCP transport for admin, ob-admin, and all rejected roles. REST promote/scan gates remain covered by the pre-existing `rest-promotion.test.ts`.
+> - Security/permission risk: This is a security primitive rename. Risk is widening or narrowing authority. Test asserts `PERMISSIONS["ob-admin"]` deep-equals `PERMISSIONS.admin` and that non-admin roles are unchanged, closing both directions.
+> - Migration/deploy risk: The vaultwarden field + server `.env` must be renamed at deploy or the break-glass token stops loading (benign warning, no other role affected). Documented as explicit deploy-gated steps above; not executed here.
+> - Downstream client/runtime risk: `role` in the Python client is a free-form `X-Role` label with no enum validation, so the doc example update is cosmetic. No MCP tool schema, transport shape, or wire contract changed -- only an internal role identifier and an env-var name; no rtech-mcps/mcp2cli/Hermes contract surface is affected.
+> - Rollback/cleanup concern: Pure rename with no data migration; revert is a straight git revert. The only external state is the vaultwarden field name, which is only changed at the (separate, gated) deploy step.
+> - Fixes made before PR: Corrected an initial regression assertion that wrongly expected `promoter` to be denied the `"all"` read (`promoter` is intentionally broad-read per #147); fixed a stale GLOSSARY "five roles" count. Post-open, from the cross-model review P2: extended the admin-only REST demote, MCP demote_entry, and MCP promote_shared gates to ob-admin, added gate parity + rejection tests for all three, and captured the missed pattern in `docs/sme/security.md`.
+> - Known residual risk: A truly hidden `n8n` consumer not visible in rows/logs/config would break at the env swap; this is deploy-gated and reversible, and the issue's usage audit found none.
+> - SME review-memory update: [x] `docs/sme/` updated -- new `security.md` entry (2026-07-05): role rename/parity changes must audit lone `=== "admin"` literals and reversal gates (promote vs demote), sourced from the PR #235 cross-model review P2.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: no live host or database access is permitted for this change; it is code + tests + docs only, and the live token rotation is documented as deploy-gated, not executed.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+>

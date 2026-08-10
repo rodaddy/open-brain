@@ -51,3 +51,31 @@ CREATE TABLE ob_links (
 - Search results can include explicit links plus pgvector neighbors.
 - Existing `relationships`/`projects` tables remain compatible.
 - Obsidian sync can render links without losing OB source IDs.
+
+---
+
+## Resolution
+
+Closed by **PR #42** — feat: add entity link graph schema
+
+- Linkage: Closed by commit `99a9a192605f913c024fbf791a55982bf1cbdce2`, which is the merge commit of this pull request.
+- Merge commit: `99a9a192605f913c024fbf791a55982bf1cbdce2`
+- Merged at: 2026-06-08T04:15:34Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T04:15:35Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #42 body
+
+> ## Summary
+> - Add ob_entities and ob_links tables for explicit Open Brain adjacency
+> - Enforce namespace/type/name canonical entities, relation vocabulary, nonnegative weights, and no self-links
+> - Enrich search_brain/search_all results with explicit incoming/outgoing links when available
+>
+> ## Test Plan
+> - bun x tsc --noEmit
+> - bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts src/db/migrations/001_init.test.ts
+> - bun test
+>
+> Notes: local pgvector migration integration tests skipped because no reachable test DB is configured. CI workflow inspection found no references to 10.71.20.15, deploy, or ssh in .github/workflows.
+>
+> Contributes to #38

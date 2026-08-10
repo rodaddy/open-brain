@@ -46,3 +46,82 @@ rtech-hermes PR #188 is merged and collab is pulled. It is forward-compatible on
 - Hosted `mcp2cli open-brain get_contract --params "{}"` returns `tool_contracts.get_entry`.
 - Nagatha provider cache refresh sees `get_entry`.
 - Nagatha source-type canary can use `get_entry(table=sessions, id=...)` as a contract-native fetch path.
+
+---
+
+## Resolution
+
+Closed by **PR #202** — Expose get_entry in public Open Brain contract
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `3bbf4a18e923ada879c605b47162805bc6714eb9`
+- Merged at: 2026-06-25T20:10:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-25T20:10:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #202 body
+
+> ## Summary
+>
+> - Expose `get_entry` in the public `get_contract` capabilities and `tool_contracts` manifest.
+> - Pin the `get_entry` input contract to `table` plus UUID `id`, with namespace authority kept server-side.
+> - Bump the contract to `2026-06-25.memory-tools.v6` and sync Python required-tool validation/help.
+>
+> Closes #201
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+>   - `bun test src/contract.test.ts src/tools/__tests__/get-contract.test.ts src/tools/__tests__/get-entry.test.ts`
+>   - `bunx tsc --noEmit`
+>   - `bun test` (927 pass, 33 skip)
+> - [x] Python package checks passed or are not applicable
+>   - `uv run ruff check src tests`
+>   - `uv run mypy src/openbrain_memory`
+>   - `uv run pytest -q` (161 pass, 5 skip)
+> - [ ] Live Open Brain smoke passed or is not applicable
+>   - Pending merge/deploy to core01; required smoke is hosted `mcp2cli open-brain get_contract --params "{}"` showing `tool_contracts.get_entry`.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: public contract drift could still hide `get_entry` from Hermes if TS and Python pins diverge.
+> - Assumptions that could be wrong: contract-driven clients accept this existing DSL shape with `format: "uuid"`; existing schema conversion tests cover representative shapes but not this exact field format conversion.
+> - Missing/weak tests: no live hosted smoke until the deploy job runs on core01 after merge.
+> - Security/permission risk: `get_entry` is an ID read surface, but the manifest exposes no namespace override and the existing server tool keeps auth-derived namespace predicates as the boundary.
+> - Migration/deploy risk: no database migration; deploy risk is limited to replacing the core01 launchd runtime and restarting `com.rico.open-brain`.
+> - Downstream client/runtime risk: Hermes/Nagatha must refresh provider contract cache or restart before seeing the new tool.
+> - Rollback/cleanup concern: rollback is previous core01 runtime or revert this contract bump if clients unexpectedly reject v6.
+> - Fixes made before PR: added contract capability/schema, Python pin/tool list/help, tests, and docs.
+> - Known residual risk: live acceptance remains pending until core01 deploy and Nagatha canary run.
+> - SME review-memory update: [ ] `docs/sme/` updated [x] not applicable because: no new missed-review pattern was discovered; issue was a known contract-manifest omission.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: cannot complete until this PR is merged and the main-branch core01 deploy job runs.
+>
+> Review-swarm: PASS
+> Pinned diff: origin/main..1a953f1
+> Fresh-context lanes: correctness, adversarial, security, quality, Open Brain/Hermes domain; five subagent reviewers.
+> Findings: correctness, quality, and security reported no findings on the fixed diff. Adversarial/domain lanes inspected the unfixed original checkout and reported the expected blocker that `main` still lacks this change; treated as deployment guard, not a defect in this PR diff.
+>
+> Fix-verification: PASS
+> Zero known unresolved issues: yes
+> Validation: `bun test`, `bunx tsc --noEmit`, `uv run ruff check src tests`, `uv run mypy src/openbrain_memory`, `uv run pytest -q`.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+>   - rtech-hermes PR #188 is already merged per issue #201.
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - After merge/deploy, verify hosted `get_contract` returns `tool_contracts.get_entry`.
+> - Then refresh/warm mcp2cli Open Brain cache and restart/refresh Nagatha provider contract cache.
+> - Rerun Nagatha source-type canary using `get_entry(table=sessions, id=...)` as the contract-native fetch path.
+>

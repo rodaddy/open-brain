@@ -82,6 +82,17 @@ distillation schema will beat generic pruning — but only after measurement.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-05T02:41:54Z by rodaddy
+- State reason: NOT_PLANNED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-05T02:41:50Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-05T02:41:50Z

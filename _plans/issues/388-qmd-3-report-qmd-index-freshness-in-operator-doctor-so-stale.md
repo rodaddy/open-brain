@@ -47,6 +47,119 @@ empty — which is worse than being unavailable, because nothing signals doubt.
 
 ---
 
+## Resolution
+
+Closed by **PR #576** — fix(doctor): report qmd index freshness so a stale index alarms instead of passing silently (#388)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5a8ba49c30e746afb3f622b9bb1767b48d0b6917`
+- Merged at: 2026-08-05T09:02:35Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T09:02:37Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #576 body
+
+> Closes #388.
+>
+> ## What changed
+>
+> `operator_doctor` reported qmd as `available` whenever the qmd entrypoint file
+> existed on disk — its own comment scoped it to "binary presence only, NOT qmd
+> search health". A stale index still answers queries, just with old content, so
+> the failure mode was silent by construction: the index once went 39 days stale
+> with the most active repo absent entirely and nothing surfaced it.
+>
+> The `qmd` section of `OperatorDoctorStatus` gains an `index` sub-object:
+>
+> | field | meaning |
+> |---|---|
+> | `status` | `available` / `unavailable` — could the index be read at all |
+> | `last_updated_at` | mtime of the repo-local `.qmd/index.sqlite`, ISO |
+> | `age_hours` | age at report time, 2dp |
+> | `freshness` | `current` / `stale` / `unknown` |
+> | `stale_after_hours` | the threshold in force (default 48) |
+> | `document_count` | active documents in the index |
+> | `collection_count` | registered collections |
+>
+> `DOCTOR_CONTRACT_VERSION` bumps to `2026-08-05.operator-doctor.v3`, as the
+> repo's own lock test requires for any field addition.
+>
+> ### Rescoped against the current qmd architecture
+>
+> The issue was written for the single shared 53-repo index, which was retired
+> 2026-07-29/30. Per `docs/standards/QMD_INDEXES.md` the model is now one
+> project-local `.qmd/` per repo plus a `global_docs_instructions` index. Two
+> consequences, matching the maintainer's 2026-08-04 rescope comment:
+>
+> - "last index update timestamp" is **per-repo**, read from the repo-local
+>   `.qmd/index.sqlite`, not one global number.
+> - The issue's "flag a Development directory that is not a registered
+>   collection" bullet has **no target** under the new model and is deliberately
+>   **not implemented**. Building it would have meant coding against an
+>   architecture that no longer exists.
+>
+> ### Fails safe, but visibly
+>
+> A missing or unreadable index returns `status: "unavailable"` /
+> `freshness: "unknown"` and logs `doctor_qmd_index_unreadable`. It never throws:
+> qmd is an optional dependency, so index state never moves the overall health
+> tier (the #270 optional-dep rule). Reported, not silently passed.
+>
+> ## Commits
+>
+> - `74833d4` — the freshness surface and its tests.
+> - `076fd58` — carrying the v3 bump to the two other suites that assert the
+>   contract literal independently, plus `.gitignore` for the test fixture dir.
+>
+> ## Testing
+>
+> - `bunx tsc --noEmit` — clean.
+> - `bun test` — 3187 pass, 506 skip, 0 fail across 231 files.
+> - **The staleness test was proven able to fail.** Reverting only
+>   `src/operator-doctor.ts` to its pre-change state and re-running the suite
+>   fails 4/18, including `reports a stale repo-local qmd index with counts`.
+>   A test that cannot fail proves nothing, so this was executed rather than
+>   assumed.
+>
+> New test: `operator doctor status > reports a stale repo-local qmd index with
+> counts` — builds a sqlite fixture with an mtime 49h before an injected clock
+> and asserts `freshness: "stale"`, `age_hours: 49`, the document/collection
+> counts, and that overall status stays `healthy`.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: reading an arbitrary sqlite file at doctor time. `readQmdIndexStatus` opens the index `{ readonly: true }`, wraps it in try/finally with an explicit `database.close()`, and returns the neutral payload on every failure path, so a corrupt or locked index degrades the report and never the service.
+> - Assumptions that could be wrong: that `documents.active` and `store_collections` are the right tables to count, and that file mtime is a faithful proxy for "last indexed" — mtime moves on any write including a no-op re-index, so it can read fresher than the content truly is, erring toward under-alarming rather than false-alarming. A schema mismatch throws into the neutral branch rather than reporting a wrong number.
+> - Missing/weak tests: no test covers a corrupt (non-sqlite) file or an index whose schema lacks those tables, though both take the same catch path as the covered missing-file case; and no test asserts the `current` (fresh) verdict directly, since the two existing qmd tests cover `unknown` and the new one covers `stale`.
+> - Security/permission risk: low, and the existing constraint is preserved — the doctor payload must never disclose raw paths, so the index path is not emitted, only a timestamp, an age, counts, and a verdict. The pre-existing `expect(serialized).not.toContain(...)` secret and host assertions still pass.
+> - Migration/deploy risk: none — no schema change and no migration, purely additive to a JSON payload.
+> - Downstream client/runtime risk: this is a contract-version bump on a client-facing MCP payload, so it is the real risk here; the change is strictly additive with no field removed or retyped, so a client reading existing keys is unaffected, but a client pinning the literal `2026-07-08.operator-doctor.v2` needs the new value — which is exactly what the bump signals, and all three in-repo assertions of that literal were found with `rg` and updated together.
+> - Rollback/cleanup concern: revert both commits together, because reverting only `74833d4` would leave three suites asserting a v3 literal against v2 source; separately the test fixture writes under `src/../_scratch` (the repo bans `/tmp` and `$TMPDIR`), `afterEach` removes it, and `_scratch/` is now gitignored so a crashed run cannot leak it into a commit.
+> - Fixes made before PR: found via `rg` that two other suites hard-code the contract literal so `bun test` was failing 2/39 as handed over and now passes 3693/3693; corrected the stale version reference in the `server/tools/operator-doctor.ts` doc comment that points at the lock it would have misdescribed; and added the `_scratch/` gitignore entry.
+> - Known residual risk: the 48h threshold is a default constant, overridable per-call via `qmdIndexStaleAfterHours` but not by environment, so if 48h proves wrong operationally it is a one-line change rather than a redesign; and the doctor now reports staleness but does not alert on it, as routing that signal is out of scope here.
+> - SME review-memory update: [x] not applicable because: the reusable lesson is repo-specific and already encoded in `src/operator-doctor.test.ts`'s own comment — a `DOCTOR_CONTRACT_VERSION` bump must be `rg`-swept across every suite asserting the literal, not only the one beside the change.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this change adds a field to the operator_doctor status payload and touches no Open Brain read, write, namespace, or embedding path, so there is no live surface to canary.
+> - Blast radius: one status payload plus its lock tests — no schema, no migration, no auth path, no namespace predicate.
+> - Contract parity: the `server/` tree deliberately delegates to the `src/` builder rather than rebuilding the payload, so there is no second implementation to keep in step; only its doc comment named the version, and that is updated.
+> - What a reviewer should focus on: whether `documents.active` and `store_collections` are the correct tables for the current qmd schema, and whether 48h is the right default threshold.
+> - Not merged, issue not closed. No auto-merge.
+>
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+> - The operator-doctor payload gains `qmd.index` under a DISTINCT contract version `2026-08-05.operator-doctor.v4` at all 7 version sites (rg-verified, zero v3 stragglers) — resolving the review swarm's cross-PR HIGH where this PR and #574 both claimed a byte-identical v3 for different shapes. Rebased onto #574 (now merged), the three shape-lock hunks resolved keeping both `distillation_lag` and `qmd.index`. Parity suite executed against the real test DB after the shared in-flight-probe fix (95096a6): three consecutive runs 69 pass / 7 fail, byte-identical to the origin/main baseline — the 7 are pre-existing server-rewrite-scaffold failures, zero current-src failures.
+>
+> <!-- body-gate re-trigger 2026-08-05T09:0x -->
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-04T23:27:35Z

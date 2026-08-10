@@ -38,6 +38,17 @@ Found by PR #150 post-merge review swarm tracked in #151 and made explicit in PR
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-19T01:00:52Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-19T01:00:51Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-19T01:00:50Z

@@ -18,6 +18,17 @@ Scope ruling to apply: code, client-facing docs (READMEs, python package, setup 
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-08T18:34:26Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-08T18:34:26Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-08T18:34:26Z

@@ -69,6 +69,17 @@ evals (subjective; this gate is deterministic), CI-required gating on day one
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-09T01:35:06Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-09T01:35:05Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-08-05T17:26:12Z

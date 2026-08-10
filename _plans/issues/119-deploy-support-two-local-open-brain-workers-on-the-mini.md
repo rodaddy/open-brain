@@ -13,3 +13,23 @@ Closed: 2026-06-15T23:47:33Z
 ---
 
 ## Goal\nAdd a supported deployment mode for running two local Open Brain Bun workers on the Mini behind a stable local entrypoint, then smoke/stress test it for Codex realtime memory use.\n\n## Why\nStress testing showed Open Brain is correct under high concurrency, but tail latency starts queueing at 100+ concurrent mixed memory calls. Rico expects 3-5 active sessions, with 25 as the 5x target. Two workers should provide comfortable headroom without overcomplicating the deployment.\n\n## Scope\n- Add a two-worker local deployment option for the Mini.\n- Keep the public/stable Open Brain endpoint unchanged.\n- Avoid running migrations/background singleton work more than once per deployment.\n- Keep DB pool sizing explicit so two workers do not overrun Postgres.\n- Add docs and smoke/stress validation commands.\n\n## Acceptance\n- Two Open Brain workers can be started locally.\n- Health checks verify both workers and the stable entrypoint.\n- mcp2cli Open Brain tools still route successfully.\n- Smoke test covers session_start, append_session_event, session_context, search_all, and brain_answer.\n- 25-concurrent mixed stress passes with zero failures.\n- PR merged after tests and smoke validation.
+
+---
+
+## Resolution
+
+Closed by **PR #120** — feat: add Mini two-worker launch mode
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `dc2fd5719ba585c84d422a60c14b31ac1abbb2c2`
+- Merged at: 2026-06-15T23:47:32Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T23:47:33Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #120 body
+
+> Closes #119.\n\n## Summary\n- Add open-brain-worker-1 starting on :3101 migrations=true
+> open-brain-worker-2 starting on :3102 migrations=false
+> open-brain proxy listening on :3100 for workers :3101, :3102 for two local Open Brain workers behind one stable Bun proxy entrypoint.\n- Add aggregate public  for both workers and round-robin proxying for MCP/REST traffic.\n- Add  support so only worker 1 runs migrations.\n- Add  so two-worker deployments can cap per-worker Postgres pool size.\n- Document Mini two-worker startup and smoke commands.\n\n## Verification\n- \n- bun test v1.3.13 (bf2e2cec) -> 654 pass, 16 skip, 0 fail\n\n## Smoke plan after merge\n- Update Mini checkout to merged main.\n- Switch  from  to open-brain-worker-1 starting on :3101 migrations=true
+> open-brain-worker-2 starting on :3102 migrations=false
+> open-brain proxy listening on :3100 for workers :3101, :3102.\n- Verify aggregate , No schema drift detected for "open-brain". Cache is current., Codex memory smoke, and 25-concurrent mixed stress.

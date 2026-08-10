@@ -54,6 +54,17 @@ Ingest files placed in a registered approved folder through the shared metadata 
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-23T18:46:37Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-23T18:46:37Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-23T16:42:29Z

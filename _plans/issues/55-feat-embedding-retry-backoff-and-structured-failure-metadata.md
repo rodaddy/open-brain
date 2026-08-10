@@ -38,3 +38,37 @@ Nothing — independent of #54
 
 ## Blocks
 #55 (REST API wants robust embeddings)
+
+---
+
+## Resolution
+
+Closed by **PR #59** — feat: embedding retry/backoff and structured failure metadata
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `39db3c86eabdb016ef5c0a957bfd57f600acb384`
+- Merged at: 2026-06-10T10:35:44Z
+- PR state: MERGED
+- Issue closed: 2026-06-10T10:35:45Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #59 body
+
+> Closes #55
+>
+> ## Summary
+> - Retry with exponential backoff (200ms, 800ms) on transient errors (5xx, timeout, network)
+> - No retry on 4xx (bad config, auth, wrong model)
+> - Default timeout bumped from 5s to 8s, configurable via `EMBEDDING_TIMEOUT_MS` env var
+> - New `generateEmbeddingWithMetadata()` returning structured `EmbeddingResult` with error code, message, attempts, and last HTTP status
+> - Existing `generateEmbedding()` preserved as thin wrapper — no caller changes needed
+> - Operational logging: info with latency on success, warn per retry, error on final failure
+>
+> ## Test plan
+> - [x] 22 embedding tests pass (13 new)
+> - [x] Retry on 500 succeeds on second attempt
+> - [x] Retry on timeout fails after all attempts with structured error
+> - [x] No retry on 400 or 401
+> - [x] Configurable timeout verified
+> - [x] `generateEmbeddingWithMetadata` structured errors for all failure modes
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

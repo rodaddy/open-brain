@@ -33,6 +33,17 @@ CRITICAL -- pre-existing, not introduced by recent PRs
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-10T15:34:58Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-10T09:21:49Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-10T09:21:49Z

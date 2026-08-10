@@ -52,6 +52,17 @@ Open Brain already has the right foundation: sessions, thoughts, decisions, rela
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-15T20:34:55Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-15T20:34:54Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-15T17:34:17Z

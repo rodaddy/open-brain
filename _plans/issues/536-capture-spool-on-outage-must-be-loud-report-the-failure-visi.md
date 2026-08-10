@@ -34,6 +34,102 @@ This ruling amends the promoted canon rule derived from #431/#413 (fail-open spl
 
 ---
 
+## Resolution
+
+Closed by **PR #542** — feat(capture): say it out loud when a turn cannot be written (#536)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `f705fc9011baf60c28ef3acd4132d00ff8afc004`
+- Merged at: 2026-08-04T04:32:45Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T04:32:46Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #542 body
+
+> ## Summary
+>
+> - Closes #536. The operator's ruling on the fail-open split is **"both are fail"**: when Open Brain is unreachable the session KEEPS WORKING, but the failure is *reported* rather than swallowed. The two error kinds differ only in whether the session survives, never in whether anyone hears about it. Session survival is unchanged here — only the silence goes.
+> - The capture `Stop`/`SubagentStop` hook now writes **one line to stderr** the first time a session's delivery fails (`open-brain unreachable - turn held for replay (spool: N)`), and **one more when deliveries land again** (`open-brain reachable again - held turns replayed`). Nothing on the Stops in between.
+> - **Surface chosen: stderr.** Read the stop-hook contract first, as instructed. For this hook stdout is contractually the *verdict* channel and **empty stdout with exit 0 is the verdict** (`stop.py` module docstring; `openbrain_provider/hook_io.py`: "STDOUT IS THE RETURN CHANNEL", "AN ALLOW IS SILENCE"). A `systemMessage` there would be a corrupted response, not a message. Stderr is shown to the operator and cannot change the verdict. Note the sibling `openbrain-context-budget-gate --event stop` runs in the *same* Stop chain and already owns a stdout banner — adding a second writer to that channel is exactly what was avoided.
+> - **State-change only, never per-event.** `apps/capture/outage.py` holds a two-state latch per session in the watermark's own SQLite file (separate table, no new config knob). It has to be on disk: a Stop hook is a fresh **process** every turn, so an in-memory flag would re-announce the same outage on every single Stop — the per-call nagging the operator explicitly forbade. `SubagentStop` latches under the **parent** session id, because one dead service is one condition, not one per lane.
+> - **Honest wording.** The capture lane is built with **no `openbrain_memory` spool** (`session._started_memory` passes no `spool=`), so a failed capture write does not land in the JSONL spool at all — it survives because the watermark is not advanced. Hence "held for replay", not "spooled": saying "spooled" would send an operator to a file with no row for that turn. The JSONL spool depth *is* still appended when readable, because the sibling provider writes (checkpoint, event) do spool and a nonzero depth is the other half of the same outage.
+> - The notice is content-free (condition + spool depth; no transcript text, no endpoint, no exception message) and can never break a turn: an unwritable latch degrades to silence, never to a raise.
+> - `docs/GOTCHAS.md` "The local Open Brain service dies and no one notices for days" is updated — this closes the "no one notices" half of that entry.
+>
+> **Files:** `python/openbrain/src/openbrain/apps/capture/outage.py` (new), `apps/hooks/stop.py`, `apps/hooks/subagent_stop.py`, `tests/test_capture_outage_notice.py` (new), `tests/test_capture_hooks.py`, `docs/GOTCHAS.md`. `python/openbrain-memory/` is untouched.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> Gates run in `python/openbrain` (the only package touched):
+>
+> ```
+> uv run pytest -q      519 passed, 1 skipped, 19 deselected
+> uv run mypy src/openbrain   Success: no issues found in 49 source files
+> uv run ruff check src tests All checks passed!
+> ```
+>
+> `python/openbrain-memory` has no source change; `uv run ruff check src tests` there is clean.
+>
+> **Two pre-existing `bun test` failures, NOT from this PR** — `runPgRestore stderr sanitization > a mid-COPY failure...` and `runPgDump failure handling > removes the partial dump file on failure...`. Verified by checking out clean `origin/main` (`71f604b`) into a separate worktree and running the same two files there: both fail identically with zero changes present. This PR's diff is Python-only and touches no TypeScript, so the pre-push hook was bypassed with `--no-verify` for these two and only these two. They deserve their own issue.
+>
+> **Every behavioural assertion was red-proven before being trusted**, per the repo's "prove a new test can fail" rule:
+>
+> - Disabling the notice emission (early `return` in `announce_outage_state`) fails 5 tests: the degraded notice, the anti-nag dedup, the recovery notice, the stdout/stderr split, and the SubagentStop notice.
+> - Reverting the no-op guard (`if delivery is not None` → `if True`) fails the regression test below, and only that one.
+>
+> Test coverage, at the entrypoint boundary through the real `capture_stop_with`:
+>
+> - notice **fires** on the unreachable path — two failure shapes: an unconfigured capture (instant, deterministic, no socket, used for the state-machine assertions so they never depend on network timing) and the **real** environment outage, a socket that accepts and never answers, asserted in the existing `TestStopSurvivesAStalledEndpointWithinTheDeadline` which already owns that fixture.
+> - notice does **not** fire on success.
+> - notice does **not** fire twice in one outage, including across a simulated process boundary (settings rebuilt between calls, so nothing is carried in Python except the file).
+> - recovery fires once and is not repeated; a first healthy Stop never claims recovery.
+> - capture still never drops a turn: watermark stays at 0, stdout stays empty, `main()` still returns 0, and an unwritable latch does not raise.
+>
+> **Live proof deliberately NOT run.** The issue's acceptance names killing the local service and observing drain. This task was scoped no-service-touch / no-reinstall, so that step is left for the operator; the stalled-endpoint test is the closest in-repo equivalent and it drives the real production factory against a real unresponsive socket.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the notice writing to a stream the harness treats as significant. Mitigated by choosing stderr after reading the contract, and by an explicit test asserting stdout stays empty while the notice is written; the Stop verdict path is byte-identical to before.
+> - Assumptions that could be wrong: (1) that Claude Code surfaces hook stderr to the operator — I did not verify this against a live harness run, and if it does not, the notice is written but unseen and the surface choice needs revisiting (the stdout alternative remains contractually closed, so the fallback would be the gate's own line, not this hook's stdout); (2) that stderr on this hook is not parsed by anything downstream — nothing in the repo reads it, but I did not audit the Supacode wrapper in the same Stop chain.
+> - Missing/weak tests: no test drives two concurrent processes against one latch file, so the `BEGIN IMMEDIATE` cross-process "announce once" claim is reasoned from the watermark's own measured behaviour rather than independently proven here. No test covers the notice appearing on a genuinely live outage end to end (see live-proof note above).
+> - Security/permission risk: low and actively bounded. The notice is content-free by construction — condition string plus an integer — so no transcript text, endpoint, or token can reach it; a test asserts a sentinel from the transcript never appears in the notice. No new network call, no new credential read, no namespace surface touched.
+> - Migration/deploy risk: one new SQLite table (`capture_outage`) created with `CREATE TABLE IF NOT EXISTS` in the existing watermark database on first use. No migration, no schema version, and an old binary reading that file is unaffected because it never queries the new table. No server-side change.
+> - Downstream client/runtime risk: none identified. Per `docs/downstream-rollout.md` this is not an MCP tool/schema/protocol/client-facing change — no contract, no tool version, no wire shape. `python/openbrain-memory` is untouched, so mcp2cli, rtech-mcps, and the Hermes runtime see no difference. The change is confined to one hook process's own stderr.
+> - Rollback/cleanup concern: revert the commit; the leftover `capture_outage` table is inert and harmless. No data migration to undo, no state to clean, no deployed artifact reinstalled by this PR.
+> - Fixes made before PR: self-review found a real defect and it is fixed with a red-proven regression test — a `Stop` naming no transcript returns without dialing anything, and latching that as a successful delivery printed a **false all-clear in the middle of a live outage** *and* cleared the latch, so the next genuine failure would announce the same outage a second time. Only a delivery that RETURNED now counts as evidence of reachability. Also corrected the notice wording from "spooled" to "held" after reading `_started_memory` and finding the capture lane carries no spool.
+> - Known residual risk: the notice reports reachability **from the capture hook only**. A provider `/checkpoint` failing while capture succeeds is a different fault and still surfaces only as the `spool N` gate count, not as this line — recorded in the `docs/GOTCHAS.md` update so the next person does not read silence here as "everything is fine". The issue's scope names checkpoint and event writes too; this PR covers the Stop/SubagentStop capture lane, which is where the outage is first observed each turn.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no review finding from a swarm yet; the one defect found was author-side and is captured in this PR body, in the commit message, and in `docs/GOTCHAS.md`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this task was scoped no-service-touch and no reinstall of the live package, so the kill/restart/drain proof is left to the operator.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract, tool version, or wire shape changes — this is one Python hook process's own stderr line and a local SQLite latch, with no TypeScript counterpart to keep in parity.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board: no MCP tool, schema, protocol, or client-facing surface changes. `python/openbrain-memory/` — the package every downstream consumer actually imports — has zero source changes in this PR. The diff is confined to `python/openbrain` capture hooks plus one doc.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-04T04:33:20Z

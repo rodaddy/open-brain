@@ -46,3 +46,73 @@ returns `repo_facts=7` and the content is open-brain's ("run `bun _ob/scripts/sy
 The `repo_facts` section resolution in the session-start(-remaining) path either hardcodes/falls back to the open-brain binding or never threads `cwd` into the entity query. Needs: resolve repo from cwd (git root → binding key), serve that repo's facts, and emit `repo_facts=0` honestly when the repo has none — an empty section is a truthful signal to go seed facts, not a failure.
 
 Found investigating the operator report that fresh sessions don't know repo basics at startup. Related: #443 (canon loads itself), #445 (how facts get in).
+
+---
+
+## Resolution
+
+Closed by **PR #518** — fix(canon): bind repo_facts to the repo the session is in, not a literal (#517)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `554f0e89a7bab2f52c02c3febe0e0f3d524278cc`
+- Merged at: 2026-08-03T06:07:25Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T06:07:26Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #518 body
+
+> Closes #517.
+>
+> ## Summary
+>
+> - `CanonSettings.repo` defaulted to `"open-brain"` and the session-start hook never read the payload's `cwd` — every session on the machine got open-brain's repo facts at startup. Proven live: a controlled `openbrain-session-start-remaining` probe with `cwd=/Volumes/ThunderBolt/Development` returned `repo_facts=7`, all open-brain content, while Development has exactly 1 bound fact. The server was already correct (no cross-repo fallback, `agent-context-pack-repo-facts.ts:3-10`); the client never told it where the session was.
+> - Fix at the client boundary: when `OPENBRAIN_CANON_REPO` is not explicitly set, derive the binding from `payload.cwd` (walk to nearest `.git` dir-or-file, root basename lowercased — the slug convention 15/16 existing rows use). Underivable → `None` → the server's defined empty state, never another repo's facts. Explicit env always wins. Matching all-or-nothing guard in the reconciler's provenance builder.
+> - 5 regression tests (CanonPackReader pattern). **Red-proven: 4/5 fail on pre-fix code** (precedence passes both, correctly — it predates this).
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> pytest 463 pass / mypy clean / ruff clean (`python/openbrain`). Live probe evidence in #517. Post-merge: uv tool reinstall + live cwd probe before RUNNING is claimed.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: repos with nonconforming slug bindings (Development's fact under `rodaddy/development`) now show `repo_facts=0` honestly until rebound — deliberate; it is the visible signal for the seeding pass that follows.
+> - Assumptions that could be wrong: basename-lowercase is the canonical slug (15/16 rows agree; the outlier gets rebound in seeding).
+> - Missing/weak tests: no symlinked-cwd test; `Path.resolve()` handles it and the failure mode is the empty state, not wrong facts.
+> - Security/permission risk: none — read path; namespace handling untouched.
+> - Migration/deploy risk: none server-side; client requires `uv tool install --force` to take effect.
+> - Downstream client/runtime risk: dogfood-scoped; Hermes/mcp2cli do not use this hook stack.
+> - Rollback/cleanup concern: single-commit revert; `OPENBRAIN_CANON_REPO` env is the immediate escape hatch.
+> - Fixes made before PR: mypy caught the reconciler provenance site; guarded.
+> - Known residual risk: `session_key` still defaults to `dev:open-brain` for all repos — lane scoping is tracked as the startup-lane-resume work item.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: single-lane operator-directed fix, no swarm findings to promote; the port-drops-arguments pattern is already queued for `gotcha-agent.md` under the #515/#516 follow-up.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because:
+>
+> Live checks: #517 carries the controlled probe + DB binding counts (RUNNING-verified 2026-08-03).
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: client-side scope resolution only; the `agent_context_pack` wire contract and section shapes are unchanged.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Dogfood-only client hook change; no MCP tool/schema/protocol surface moved, so downstream steps are not applicable. Operator-directed run ("go", 2026-08-03); merge on operator direction per the merge gate's operator arm.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

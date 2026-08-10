@@ -55,3 +55,39 @@ This works but is a hack.
 
 - `find_person` tool already exists (read-only)
 - People table presumably already has schema -- just needs write access exposed
+
+---
+
+## Resolution
+
+Closed by **PR #10** — feat: add upsert_person tool for structured contact management
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `0d8125320101ae57fd2d732843beaafb23146454`
+- Merged at: 2026-03-20T01:06:38Z
+- PR state: MERGED
+- Issue closed: 2026-03-20T01:06:40Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #10 body
+
+> ## Summary
+>
+> Closes #9
+>
+> - **New `upsert_person` tool** -- creates or updates people by name using `INSERT ... ON CONFLICT (person_name) DO UPDATE`. Omitted fields preserve existing values via COALESCE. Embeds `name + context + notes` on every write.
+> - **Migration 004** -- extends `relationships` table with `email`, `phone`, `relationship_type`, and `metadata JSONB` for extensible contact info (apple_id, imessage, social handles).
+> - **Agent role upgraded** from read-only to read-write on relationships, so agents can manage contacts.
+> - **`find_person` and `update_entry` updated** to support the new columns.
+>
+> No separate `update_person` or `archive_person` tools -- `update_entry` (by ID) and `archive_entry` (soft-delete) already cover those cases for all tables including relationships.
+>
+> ## Test plan
+>
+> - [x] 8 new tests for upsert_person (insert, update, minimal fields, metadata, embedding failure, 3 permission scenarios)
+> - [x] Permissions test updated for agent RW on relationships
+> - [x] Full suite: 312 pass, 0 fail
+> - [x] TypeScript typecheck clean
+> - [ ] Run migration 004 on staging DB
+> - [ ] Manually verify `upsert_person` via mcp2cli against live server
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

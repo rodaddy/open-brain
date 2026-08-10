@@ -77,6 +77,120 @@ Every `cc-*` box and every LXC inherits this until the installer ships the varia
 
 ---
 
+## Resolution
+
+Closed by **PR #557** — fix(installer): ship OPENBRAIN_DEVELOPMENT_ROOT so a non-mini install resolves its own lane (#555)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `764d9fc5a111ff7ad79ef2881bada0f3dea5bb30`
+- Merged at: 2026-08-05T00:30:18Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T00:30:20Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #557 body
+
+> Closes #555.
+>
+> ## What broke
+>
+> `openbrain-provider` resolves the Development lane by asking the filesystem, and `DEFAULT_DEVELOPMENT_ROOT` (`development_scope.py:36`) is the build machine's volume. On a client whose tree lives elsewhere — the Air, at `/Users/rico/Development` — that path is absent, `resolve_development_scope()` answers `None` for every cwd, and the context-budget gate blocks every tool call while composing its own recovery command out of the same missing root (`context_budget_gate.py:286-306`). The escape hatch names a directory the box does not have, so the session cannot be recovered from inside itself.
+>
+> The `OPENBRAIN_DEVELOPMENT_ROOT` seam already existed and already worked — `development_root()` reads it per call and its docstring explains why it is a function. **Nothing ever shipped it.** Neither installer script mentioned the variable, and the wrapper's `exec env -i` allowlist did not pass it, so even hand-setting it in the env file was stripped before any hook child saw it. Both halves are required; either alone changes nothing.
+>
+> ## What the existing design already says
+>
+> This is a delta on a solved problem, not a new mechanism. `python/openbrain-provider/tests/conftest.py:_install_development_root` names it outright — *"Depending on a machine-specific absolute path is the defect"* — and fixes it by pointing `OPENBRAIN_DEVELOPMENT_ROOT` at a real directory before import, after 11 tests failed on a Linux CI runner where the volume does not exist while passing locally "by accident of where the work happens".
+>
+> The test suite has therefore been provisioning this variable all along. The installer never did. This PR makes the install path do at install time what `conftest` does at test time, through the same sanctioned seam.
+>
+> ## What ships
+>
+> - `scripts/setup-client.sh` — resolves the root per box (exported value wins, then `DEV_ROOT`, then probing `/Volumes/ThunderBolt/Development` and `$HOME/Development`), writes it into the installed env file with an explanatory comment, and adds the wrapper pass-through. Refuses to install when it can resolve none, matching the loopback guard from #553 in shape and override-flag style; `OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1` is the deliberate opt-out. An explicitly given root that does not exist is refused too — that is a typo, and it fails exactly like the defect this closes.
+> - `scripts/client-bundle.sh` — stages the allowlist entry so a bundle is correct even when the build machine's own wrapper predates this fix, and stages the build machine's value **commented** with an edit-me note. Live, it would look authoritative on a client where it is wrong; commented, it reads as the example it is. `setup-client.sh` overwrites it per box either way.
+> - `docs/client-install-runbook.md` — new §3b, plus proof-ladder rung 0b.
+> - `docs/GOTCHAS.md` — the gotcha with symptom, cause, and proof commands.
+>
+> `OPENBRAIN_DEVELOPMENT_ROOT` is a **string**, so it takes the plain pass-through spelling; the wrapper header reserves the conditional block for non-string values where `""` and absent differ.
+>
+> **The package is unchanged.** This is installer, bundle, and env work.
+>
+> ## Red proof
+>
+> Isolated `HOME` under the scratch workspace, synthetic Development root, stubbed `uv`/`curl` so the run reaches the env logic under test.
+>
+> Old script (`origin/main`), both files installed:
+>
+> ```
+>   installed env file: 0 occurrence(s) of OPENBRAIN_DEVELOPMENT_ROOT
+>   installed wrapper: 0 occurrence(s) of OPENBRAIN_DEVELOPMENT_ROOT
+> ```
+>
+> New script:
+>
+> ```
+> ==> resolving this machine's Development root
+>     Development root: .../redprove/fakedev/Development [OPENBRAIN_DEVELOPMENT_ROOT in the environment]
+>     OPENBRAIN_DEVELOPMENT_ROOT=.../redprove/fakedev/Development written to the installed env file
+>     OPENBRAIN_DEVELOPMENT_ROOT pass-through added to the wrapper
+> ```
+>
+> Installed env file line 9, and the allowlist line inside `exec env -i`:
+>
+> ```
+>   9: OPENBRAIN_DEVELOPMENT_ROOT=/Volumes/.../redprove/fakedev/Development
+>
+> 105:   OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}" \
+> 106:   OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \   <== ADDED
+> ```
+>
+> Idempotent across a re-run (exactly 1 env assignment, 1 pass-through). Refusal fires with a named remediation when no root resolves, and on an explicit root that does not exist. Underlying behavior, clean subprocess per case:
+>
+> ```
+> BEFORE  root: /Volumes/ThunderBolt/Development   scope: None
+> AFTER   root: .../devroot-probe/Development      scope: DevelopmentScope(..., project='open-brain')
+> ```
+>
+> **Reproducing on the Mini takes care:** `/Users/rico/Development` here is a symlink to the ThunderBolt volume and `_canonical_directory` calls `.resolve()`, so probing with that path returns a healthy scope in both the broken and fixed cases and hides the defect entirely.
+>
+> ## Gates
+>
+> - `sh -n` and `bash -n` clean on both scripts; `shellcheck -S warning` clean on both.
+> - `bun install --frozen-lockfile`, `bunx tsc --noEmit` clean.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: `setup-client.sh` now refuses to install on a box where no Development root resolves, which is a new way for an install to stop; the probe order and the `OPENBRAIN_ALLOW_NO_DEVELOPMENT_ROOT=1` opt-out were both exercised in the isolated-HOME run.
+> - Assumptions that could be wrong: that the two probed layouts cover the fleet — a box with its tree at a third location and neither variable exported will be refused rather than silently misconfigured, which is the intended trade but is a behavior change for that box.
+> - Missing/weak tests: these are shell installers with no unit-test harness in this repo, so the evidence is the isolated-HOME run above rather than a committed test; the wrapper-anchor rewrite would fail loudly if the wrapper's `env -i` shape changed, and it exits with an explicit hand-edit instruction rather than silently skipping.
+> - Security/permission risk: no change to token handling or file modes; the env file stays 0600 and the wrapper 0755, and the added variable is a filesystem path, not a credential.
+> - Migration/deploy risk: existing installs keep working unchanged because the shipped default is still correct on the Mini; re-running the installer is idempotent and rewrites rather than duplicating either edit.
+> - Downstream client/runtime risk: the Python package is untouched and no MCP tool, schema, or client call shape changes, so `docs/downstream-rollout.md` classification is installer-only with no rtech-mcps, mcp2cli, or Hermes step implied.
+> - Rollback/cleanup concern: reverting the commit restores the previous scripts, and an already-installed box keeps its env line and pass-through, both of which are inert on a machine where the default root is correct.
+> - Fixes made before PR: caught a `{BUILD_ROOT}` reference inside a non-f-string heredoc in `client-bundle.sh` that would have crashed the staging step, and corrected it to an argv-passed value; also corrected the GOTCHAS section header that claimed "these four".
+> - Known residual risk: the refusal path was proven with a harness that redirects the probe list, because this machine legitimately has `/Volumes/ThunderBolt/Development` and cannot reach the no-candidate branch naturally; the branch itself is a plain `if [ -z ... ]` and its message was printed verbatim by that run. A round-2 verifier also suggested an automated fixture-HOME test covering the installer's branches (resolve, refuse, write, re-run) so this class of defect is caught by CI rather than by a reviewer running the harness by hand; deferred, and tracked as a checklist item on #555.
+> - SME review-memory update: [x] not applicable because: this is installer and env-plumbing work with no new reviewable code pattern; the operational trap is recorded in `docs/GOTCHAS.md`, which is where client-install traps already live.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: no server, schema, or MCP surface changes; the fix is entirely in client installer scripts and docs, and the behavior it restores was proven directly against `openbrain-provider`'s scope resolver.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no contract, schema, or tool surface changes — the change is shell installer and bundle staging plus docs, and the Python package is untouched, so there are no fixtures to update.
+>
+>
+>
+> ## Round 2 (verifier findings, fixed and re-verified)
+>
+> - Whitespace defect (CONFIRMED by execution): a Development root containing a space was written unquoted; the wrapper's POSIX `set -a; . env-file` sourced it to empty and — because the wrapper runs `set -eu` — aborted the wrapper entirely, so the hook never ran. Both env writers now quote via `shlex.quote` (shell-safe paths stay byte-identical, upgrades over an older unquoted install rewrite to exactly one quoted assignment), red-proven with a space-containing fixture root end-to-end through `exec env -i` to the child.
+> - Ordering: the pure resolution guard hoisted to section 0 — a refusal now fires with zero side effects (0 wheel installs, no env dir), measured on both orderings.
+> - Round 3 (docs): the runbook's hand-edit table now teaches the quoted spelling with the why.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-05T00:14:55Z

@@ -48,6 +48,76 @@ Runs after the graph retrieval/eval pair, because retrieval quality should be pr
 
 ---
 
+## Resolution
+
+Closed by **PR #276** — docs: record hot-memory boundary decision for agent_context_pack (#271)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c0ec058d6cdd8084ea7d0988e5dd6f4431e6c552`
+- Merged at: 2026-07-08T02:47:47Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T02:47:48Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #276 body
+
+> ## Summary
+>
+> - record the #271 hot-memory boundary decision in `docs/agent-context-pack-contract.md`: `agent_context_pack` owns hot memory as a client-pulled, exact-scope `working_set`/`recovery` path; gbrain-style MCP `_meta.brain_hot_memory` response injection is rejected; any new hot-memory runtime behavior is deferred behind documented preconditions
+> - document rejected alternatives with concrete reasons (privacy blast radius, exact-scope-before-ranking, citations/source refs, fail-open, `get_contract` advertisement, downstream client impact) and preconditions for future implementation (per-scope-key denial tests for all seven scope keys, budget bounding, citations, fail-open)
+> - add a Non-Goals bullet rejecting `_meta` hot-memory injection
+> - add a contract-level test in `src/tools/__tests__/get-contract.test.ts` locking in that `get_contract` does not advertise any hot-memory injection capability and keeps the exact-scope pull envelope
+>
+> Refs #271.
+>
+> **Decision in two sentences:** `agent_context_pack` is the owning boundary for hot memory; the already-runtime-available exact-scope `working_set`/`recovery` pull path (#221/#222) is the lightweight hot-memory path, and no server-side `_meta` injection or new prompt-placement behavior ships under #271. Graph retrieval merging (#266/#267, PR #274) strengthens future `durable_memory` evidence quality but creates no need for response-level injection; graph-expanded answer/search evidence stays owned by #268.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` - PASS
+> - `git diff --check` / `git diff --cached --check` - PASS
+> - `bun test src/tools/__tests__/get-contract.test.ts` - PASS, 4 tests / 20 expect calls
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: the new contract test asserts the serialized contract never contains `hot_memory`; a future legitimate capability named `*hot_memory*` would need to consciously update this test — that friction is intentional per the boundary decision.
+> - Assumptions that could be wrong: assumes #268 will not need `_meta`-style injection for graph evidence; if it does, the decision section must be revisited with Rico before any such change.
+> - Missing/weak tests: no new runtime behavior exists to test; denial coverage for the seven scope keys already lives in the existing working-set/recovery/pack tests and is referenced, not duplicated.
+> - Security/permission risk: none added; the change documents and test-locks the existing exact-scope boundary, and rejects the higher-blast-radius injection design.
+> - Migration/deploy risk: none; docs plus one test file, no migrations, no runtime code.
+> - Downstream client/runtime risk: none; nothing new is advertised in `get_contract`, no schema/tool/envelope change.
+> - Rollback/cleanup concern: revert is a clean two-file revert; no state, env, or DB artifacts.
+> - Fixes made before PR: avoided a false-positive `_meta` substring assertion (existing contract legitimately contains `resubmit_metadata`); scoped the string checks to `hot_memory`/`brain_hot_memory`/`meta_injection`.
+> - Known residual risk: the decision defers implementation, so hot-memory expansion pressure may recur; the preconditions section exists to gate that.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no MEDIUM+ review finding has been produced yet; PR remains draft until review swarm completes.
+>
+> ## Downstream rollout classification
+>
+> Checked `docs/downstream-rollout.md`.
+>
+> - Not applicable: docs plus contract-level tests only. No MCP tool names, tool schemas, output envelopes, streamable HTTP behavior, transport, Python client behavior, generated skills, or Hermes call shapes change.
+> - mcp2cli, rtech-mcps, rtech-hermes, and Hermes canary steps are not required for this PR.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured: no review swarm has run yet; PR remains draft until standard review completes.
+> - [ ] Initial review swarm complete
+> - [ ] Material findings fixed or explicitly deferred
+> - [ ] Fix verification complete
+> - [ ] CI passed for this PR head
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: docs/test-only decision record; no core01 deploy or live DB mutation is approved for this PR.
+>
+> ## No deploy / release note
+>
+> No core01 deploy is performed by this PR. Docs and contract tests only; nothing changes in hosted behavior until a later approved release.
+>
+> Closure requires Rico approval of the defer/boundary decision. This PR intentionally uses "Refs #271", not "Closes #271".
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-08T02:48:28Z

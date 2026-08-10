@@ -291,3 +291,35 @@ These are complementary systems:
 - **OB dreaming**: Database-based (entries table). Promotes/demotes/consolidates semantic knowledge entries.
 
 They don't overlap. OpenClaw dreaming handles Skippy's local workspace files. OB dreaming handles the shared knowledge graph.
+
+---
+
+## Resolution
+
+Closed by **PR #14** — feat: Cognitive Tiering (OB Dreaming) -- tier boost, access logging, session tracking
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `73d20776daec7027d706bd8e8841139030e65c6c`
+- Merged at: 2026-04-06T18:08:20Z
+- PR state: MERGED
+- Issue closed: 2026-04-06T18:08:22Z by Skippy-the-Magnificent-one (COMPLETED)
+
+### Direction taken and why — PR #14 body
+
+> Implements the code side of cognitive tiering (issue #12).
+>
+> **Schema migration** (006, already applied to prod):
+> - `tier` column on all 5 tables (hot/warm/cold)
+> - `consolidated_into`/`consolidated_from` columns
+> - `entry_access_log` table for detailed access tracking
+> - `discarded_entries` staging table
+>
+> **Search changes** (search-brain.ts, search-all.ts):
+> - Tier included in CTE SELECT + search results
+> - RRF score boost: hot +0.3, cold -0.2, warm unchanged
+> - Access log: every search result logged to `entry_access_log` with query text
+>
+> **Session tracking** (session-load.ts):
+> - Session loads logged to `entry_access_log` with context=session_load
+>
+> Type check clean. Closes #12.

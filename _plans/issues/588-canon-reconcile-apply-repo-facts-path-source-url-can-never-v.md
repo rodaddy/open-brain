@@ -40,3 +40,61 @@ So the client's namespace parameter does not delegate on this path; the write na
 **Cleanup needed (operator decision):** 27 stray `decision` events in namespace `admin`, created 2026-08-05 ~22:00Z by this apply. They are the process pack verbatim, in a namespace no agent reads canon from. Relegate-by-key or operator SQL — flagging rather than touching.
 
 **Net state:** canon packs are live for `rico` only. skippy/nagatha/bilby remain empty pending this fix. #522 stays open — apply receipts are partial.
+
+---
+
+## Resolution
+
+Closed by **PR #594** — fix(canon): verify reconcile apply provenance and namespace
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `e55b3b922c697c97cad86a615162db2e774d317c`
+- Merged at: 2026-08-06T00:56:41Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T00:56:42Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #594 body
+
+> Fixes #588
+>
+> ## Summary
+> - Carry the canon pack's repo-relative file path in `FactProvenance` and use it as repo-fact `metadata.path`, while preserving entry source prose in `refresh_hint`.
+> - Verify every apply receipt against `settings.agent`; token and delegated-header receipts resolve through trusted writer provenance, and repo-fact receipts use their returned namespace.
+> - Fall back to one scoped `agent_context_pack` read when a receipt has no namespace signal, checking the returned scope plus the expected keys and texts.
+> - Add the post-merge failure pattern to `docs/sme/gotcha-agent.md`.
+>
+> ## Validation
+> - `bunx tsc --noEmit` — PASS.
+> - `bun test src/tools/__tests__/repo-facts.test.ts` — PASS, 20 tests.
+> - `uv run mypy src/openbrain` — PASS, 49 source files.
+> - `uv run ruff check src tests` — PASS.
+> - `uv run pytest -q` — PASS, 597 passed and 19 deselected.
+> - `git diff --check` — PASS.
+>
+> ## New-Test Failure Proof
+> - Changed repo-fact planning back to `path = entry.source or entry.key`; `test_a_repo_fact_uses_the_pack_path_not_its_prose_source` failed because the prose source differed from `docs/canon/repo-facts.toml`. Restored the pack path; PASS.
+> - Changed pack-path derivation to return only the filename; `test_repo_fact_provenance_derives_the_pack_repo_relative_path` failed with `facts.toml` instead of `docs/canon/facts.toml`. Restored repo-relative derivation; PASS.
+> - Changed token receipt resolution to read `delegated_agent_id`; `test_apply_rejects_a_receipt_from_the_token_namespace` failed because the sparse result incorrectly reached read-back instead of rejecting namespace `admin`. Restored `token_identity`; PASS.
+> - Disabled sparse-receipt read-back; `test_apply_reads_back_when_the_receipt_has_no_namespace_signal` failed with `DID NOT RAISE NamespaceMismatchError`. Restored read-back; PASS.
+> - Final focused receipt: all four new tests passed.
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: Receipt provenance must map `namespace_source=token` to `token_identity` and `namespace_source=header` to `delegated_agent_id`, or a false success could return.
+> - Assumptions that could be wrong: The trusted append receipt fields continue to reflect the same namespace authority used by the server, and repo-fact receipts continue returning their persisted namespace.
+> - Missing/weak tests: No live fan-out apply was run because it would mutate canon; coverage uses the real planned-write boundary with fake client receipts plus existing server receipt tests.
+> - Security/permission risk: The change grants no delegation and adds no write authority; it fails closed when the authorized destination differs from the intended agent.
+> - Migration/deploy risk: No database migration, server schema, transport, or deployment configuration changes.
+> - Downstream client/runtime risk: Not applicable because no MCP contract, `python/openbrain-memory` behavior, generated skill, or Hermes-facing surface changed.
+> - Rollback/cleanup concern: Reverting the commit restores the old false-success behavior; the 27 pre-existing stray `admin` events remain an operator cleanup item and are not touched here.
+> - Fixes made before PR: Split machine path from prose provenance, added receipt and read-back verification, simplified error construction after lint feedback, and captured the pattern in SME memory.
+> - Known residual risk: Fan-out still requires a token or delegated session that the server authorizes for the target agent; this PR detects missing authority but does not provision it.
+> - SME review-memory update: [x] docs/sme/ updated — added the #588 source-identity and destination-scope receipt pattern to `gotcha-agent.md`.
+>
+> ## Review Gate
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: the #588 false-receipt pattern was added to `docs/sme/gotcha-agent.md`; no additional material finding remained after self-review.
+> - Live Open Brain checks: [x] not applicable because: this PR changes the local Python operator reconciler, and a live apply would mutate canon while target-agent authorization remains an operator provisioning concern.
+>
+> ## Downstream Rollout
+> Not applicable: this change does not alter MCP tool names, schemas, output contracts, transport behavior, migrations, `python/openbrain-memory`, generated skills, or Hermes-facing behavior.
+>

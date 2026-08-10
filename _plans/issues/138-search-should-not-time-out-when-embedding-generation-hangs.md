@@ -13,3 +13,19 @@ Closed: 2026-06-18T13:11:16Z
 ---
 
 Default search_brain/search_all can hang until the mcp2cli/client timeout when the embedding generation path stalls. Metadata and non-embedding reads continue to work, and keyword-constrained search returns, so the tool should degrade quickly instead of forcing callers to know special flags.\n\nObserved examples:\n- search_all with a normal namespace-renaming query timed out with CONNECTION_ERROR.\n- search_brain with the same query shape also timed out.\n- list_recent/get_stats/list_namespaces returned normally.\n- search_brain with search_mode=keyword returned normally.\n\nExpected behavior:\n- hybrid search should fall back to keyword search if query embedding generation does not return inside a bounded search timeout.\n- vector-only search may still error, but it should fail quickly with a structured error rather than hanging the whole MCP request.\n- search_all should return available source results instead of waiting on the stalled OB embedding branch.\n\nValidation target:\n- add regression tests where the embedding function never resolves.\n- verify search_brain hybrid returns keyword results.\n- verify search_all vector returns qmd-only results when the brain vector branch times out.
+
+---
+
+## Resolution
+
+Closed by **PR #139** — Fix search timeout fallback when embeddings hang
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `b7bc37abe2f6f8f1269b8ad46a8240be6a66b6d2`
+- Merged at: 2026-06-18T13:11:15Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T13:11:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #139 body
+
+> Closes #138\n\n## Summary\n- add a search-specific timeout around query embedding generation\n- let hybrid search fall back to keyword results when embedding generation stalls\n- keep vector-only search failing quickly so search_all can return other available sources\n- add hung-embedding regression tests for search_brain and search_all\n\n## Validation\n- bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts\n- bunx tsc --noEmit\n- bun test

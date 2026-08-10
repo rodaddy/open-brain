@@ -32,3 +32,68 @@ Provide a safe, idempotent migration system that preserves lane history without 
 
 ## Security
 Namespace and all seven scope coordinates remain server-enforced security boundaries.
+
+---
+
+## Resolution
+
+Closed by **PR #301** — fix(migration): normalize recognized legacy lanes
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `8061fc429d5e0cea3090b7f59199e2c142224918`
+- Merged at: 2026-07-19T03:43:37Z
+- PR state: MERGED
+- Issue closed: 2026-07-19T03:43:38Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #301 body
+
+> ## Summary
+>
+> - add versioned migration 025 for the explicitly recognized pre-v22 local Development lane shape
+> - derive canonical project/channel from each row's unchanged `dev:<repo>` session key and normalize only legacy/partially canonical agent-source markers
+> - accept absent or already-canonical server/channel/project values, JSON null metadata, and case-distinct legacy project spelling
+> - leave unknown agent/source, server/channel/thread/project, and scalar-metadata conflicts untouched for operator review
+> - preserve lane IDs, namespaces, and event history; keep the published `session_start` v2 behavior and v22 schema hash unchanged
+> - add real-PostgreSQL migration, conflict, idempotence, namespace, JSONB, and history tests plus SME guidance
+>
+> Closes #295
+> Related: #297, #293
+>
+> ## Validation
+>
+> - `bun test` — 1342 passed, 64 skipped, 0 failed
+> - live PostgreSQL migration 025 suite — 2 passed, 0 failed, 27 assertions
+> - `tsc --noEmit` — passed
+> - `git diff --check` — passed
+> - gitleaks commit scan — no leaks
+>
+> ## Initial review findings and fixes
+>
+> The five-lane GPT-5.6-Sol review found six material findings on the original lazy `session_start` rewrite: public v22 contract drift, partial-coordinate rejection, JSON-null failure, a weak cross-namespace test, case-distinct project rejection, and failure to populate null project for Python validation. The fix replaced the runtime rewrite entirely with versioned migration 025. The migration handles the safe partial/JSON-null/case/null-project states, tests multiple namespaces through the real database, and leaves public tool/schema behavior unchanged.
+>
+> ## Downstream rollout
+>
+> No MCP tool schema, public contract hash/version, transport, or package API changed. rtech-mcps/mcp2cli schema regeneration is not applicable. Deployment must run migration 025 and then validate the direct Claude provider against the canonical Development lane.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a deploy migration rewrites non-null legacy lane coordinates; eligibility requires explicit legacy agent/source markers plus a `dev:<repo>` key, unthreaded scope, and only absent/already-canonical server/channel/project values.
+> - Assumptions that could be wrong: the recognized legacy family is local Development-only and canonical project/channel spelling is the session-key suffix; all other shapes intentionally remain unchanged.
+> - Missing/weak tests: the live suite covers full and partial legacy shapes, null project, JSON null, case normalization, multiple namespaces, repeat idempotence, every known conflict, preserved row IDs, and event history; it does not inventory unknown production shapes.
+> - Security/permission risk: no caller gains a relabeling surface and `session_start` remains fail-closed; the migration operates row-by-row without crossing IDs or namespaces.
+> - Migration/deploy risk: migration 025 is global and irreversible by automatic down-migration, but idempotent and narrowly allowlisted; rollback of code does not reintroduce legacy coordinates.
+> - Downstream client/runtime risk: the public v22 manifest, schema hash, tool version, and response shapes are unchanged, avoiding a forced package/client rollout.
+> - Rollback/cleanup concern: already-normalized rows intentionally remain canonical; unknown/conflicting rows remain available for explicit review rather than partial mutation.
+> - Fixes made before PR: replaced the reviewed lazy runtime rewrite after six P1/P2 findings, added JSONB/partial/case/null-project handling, strengthened namespace/history tests, and moved the rule into migration/SME docs.
+> - Known residual risk: any additional legitimate legacy marker family requires a separate explicit migration and live-Postgres proof.
+> - SME review-memory update: [x] `docs/sme/` updated [ ] not applicable because: -
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below [ ] not applicable because: -
+>
+> Live check: `OPENBRAIN_TEST_DATABASE_URL=<redacted> bun test src/db/migrations/025_normalize_legacy_development_lanes.test.ts` — 2 passed, 0 failed.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

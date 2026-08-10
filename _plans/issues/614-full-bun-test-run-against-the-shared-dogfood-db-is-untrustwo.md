@@ -26,3 +26,112 @@ Running the full \`bun test\` suite against the shared dogfood database produces
 Make the trustworthy path the default: test harness creates/points at an isolated database (as CI's \`db-integration\` job and the #609 lane's worktree runs already do) instead of the live dogfood DB. Documented in AGENTS.md once the mechanism lands.
 
 Related: #498 (chunk-write flake, same class), #613 (one concrete leakage mechanism).
+
+---
+
+## Resolution
+
+Closed by **PR #623** — feat(test): isolated-database test run as the trustworthy default (#614)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2e727dc076f282163b392a396b39da4dfa9ed6e3`
+- Merged at: 2026-08-08T04:35:30Z
+- PR state: MERGED
+- Issue closed: 2026-08-08T04:35:31Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #623 body
+
+> ## Summary
+>
+> - Adds `bun run test:isolated` (`scripts/test-isolated.ts`): creates a uniquely-named database, migrates it, points `OPENBRAIN_TEST_DATABASE_URL` at it, runs `bun test` with the caller's arguments, prints the database name, and drops the database on exit — including on SIGINT/SIGTERM/uncaught exception.
+> - Reuses the existing mechanism rather than inventing one: creation is CI's `createdb -E UTF8 -T template0` (`.github/workflows/ci.yml:68`, by way of `scripts/lane-bootstrap.ts:368` `--fresh-db`), migrations run through the existing `bun run migrate` path with `DB_NAME` overridden (`scripts/lane-bootstrap.ts:385`), and the tests' existing `OPENBRAIN_TEST_DATABASE_URL` convention is what is fed. **`bun test` itself is unchanged and the dogfood database is never touched.**
+> - `AGENTS.md` names it as the trustworthy default and records that full-suite counts from the dogfood database are not evidence (#614). Bare `bun test` stays documented for quick single-file iteration.
+> - Adds the acceptance gate `scripts/done-means/614-isolated-test-run.sh`.
+> - Closes #614.
+>
+> ### Headline evidence — the same tree, both ways
+>
+> Run on this branch, unmodified code, back to back:
+>
+> | path | run 1 | run 2 | run 3 | wall clock |
+> |---|---|---|---|---|
+> | `bun test` → dogfood `open_brain_local_20260724` | 3676 pass / **37 fail** | 3673 pass / **41 fail** | 3676 pass / **37 fail** | ~133–141s |
+> | `bun run test:isolated` → fresh DB | 3710 pass / **0 fail** | 3710 pass / **0 fail** | — | ~38s |
+>
+> The dogfood failure count moves on code that did not change, which is exactly #614's claim (49 → 43 → 40 observed 2026-08-06; 37 → 41 → 37 here). The isolated path is identical across runs and 3.5× faster. This does not fix the leakage — #613 is one concrete mechanism and is a separate lane — it makes the contaminated path stop being the default.
+>
+> ### RLVR transcripts
+>
+> RED, before `scripts/test-isolated.ts` existed (script exit 1):
+>
+> ```
+> === DONE-MEANS #614: isolated database is the default test path ===
+>
+> 1 entry-point: FAIL — no `test:isolated` entry point in package.json; there is no single command that runs the suite against an isolated database
+> 2 clean-teardown: FAIL — no database name from check 1 to verify
+> 3 interrupt: FAIL — no entry point to interrupt
+> 4 documented: FAIL — AGENTS.md does not name the entry point, so the trustworthy path is not discoverable
+>
+> VERDICT: FAIL
+> ```
+>
+> GREEN, after (script exit 0):
+>
+> ```
+> === DONE-MEANS #614: isolated database is the default test path ===
+>
+> 1 entry-point: PASS — src/maintenance-queue.pg.test.ts ran 4 tests against ob_isolated_21914_msjv40z3yw (not open_brain_local_20260724), exit 0
+> 2 clean-teardown: PASS — ob_isolated_21914_msjv40z3yw no longer exists
+> 3 interrupt: PASS — ob_isolated_22312_msjv42ru94 was dropped despite the interrupt
+> 4 documented: PASS — AGENTS.md names `test:isolated`
+>
+> VERDICT: PASS
+> ```
+>
+> Check 1 asserts the pg test **actually ran** (>0 passing tests in a file that `describe.skip`s itself without the env var), not merely that the run was green — the silent-skip trap makes "0 fail" otherwise indistinguishable from "nothing ran". Check 3 sends SIGINT to the running process group after the tool has printed its database name, then asserts the database is gone, accepting a *loud* orphan (name plus `dropdb` line printed) as an alternative pass but failing a silent one.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — `bunx tsc --noEmit` clean; full suite 3710 pass / 35 skip / 0 fail through the new entry point (twice); `scripts/done-means/614-isolated-test-run.sh` PASS.
+> - [x] Python package checks passed or are not applicable — not applicable: no file under `python/openbrain-memory/` is touched.
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable: no server, tool, schema, or transport code changes; this is a test-invocation script plus docs.
+>
+> Post-run check `select datname from pg_database where datname like 'ob_isolated_%'` returned zero rows — nothing leaked across every run in this lane.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the `dropdb` call. It is the only destructive operation, so it is constrained three ways — the name comes from one variable set by `makeDbName()` seconds earlier in the same process, every generated name carries a fixed `ob_isolated_` prefix, and `teardown()` refuses outright to drop a name lacking that prefix. There is no code path by which it can name the dogfood database or any database this process did not create, and no recursive or forced filesystem delete anywhere in the file.
+> - Assumptions that could be wrong: (a) that the `.env`/environment Postgres role can `createdb` — if it cannot, the run fails loudly at `db-create` and creates nothing; (b) that migrations are the complete schema setup — verified by the pg tests actually passing, which they would not against an unmigrated database; (c) that no test hard-codes the dogfood database name and thereby escapes the isolation — not exhaustively audited, but the 0-fail result argues against any material case.
+> - Missing/weak tests: no unit test of `scripts/test-isolated.ts` itself; the done-means script is the behavioural test and covers creation, execution, clean teardown, and interrupt teardown end to end against real Postgres. Not covered: SIGKILL (uncatchable by construction — such a run leaves an orphan whose name was printed *before* creation, which is why the name is printed first), and a teardown failure while the cluster is unreachable (the loud-orphan branch is reasoned, not exercised).
+> - Security/permission risk: none new. No auth, namespace, or SQL predicate is touched; no credential is printed — the database URL is built in-process and only the bare database *name* reaches stdout.
+> - Migration/deploy risk: none. No migration is added or altered; nothing in `src/` changes; nothing ships to core01.
+> - Downstream client/runtime risk: none. `docs/downstream-rollout.md` applies to MCP tool/schema/protocol/client-facing changes; this is a developer test-invocation script, a `package.json` script entry, and documentation. No consumer of Open Brain can observe it.
+> - Rollback/cleanup concern: revert is a single commit with no state to unwind. Each run drops its own database; a killed run leaves one whose name and drop command were printed. All databases created during this lane were verified gone.
+> - Fixes made before PR: `bunx tsc --noEmit` caught TS5076 (`??` mixed with `||` without parentheses) in the orphan-message construction; fixed before commit. The RED transcript above was captured before the entry point existed, so the gate is proven to discriminate rather than to pass vacuously.
+> - Known residual risk: this changes the *default path*, not the underlying leakage — the suites that leave `parity-source-registry-*` fixtures behind (#613) are untouched and remain that lane's scope, as instructed. A SIGKILLed run still orphans a database (loudly). The dogfood failures are now routed around rather than diagnosed; the ~37–41 failing tests on that database are not individually explained here.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no new review finding — this implements an already-filed, already-diagnosed issue (#614) whose pattern is recorded in that issue and in #613's `docs/sme/correctness.md` entry.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: no server, MCP tool, transport, or schema surface is touched; the change is a test-invocation script and documentation.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract, tool schema, or client-facing surface changes — `scripts/test-isolated.ts` is a local developer entry point with no runtime counterpart to keep in parity.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable, no MCP surface change
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable, no tool list or schema change
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable, no Python or protocol change
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable, nothing deploys
+>
+> Notes/evidence:
+>
+> - Existing mechanism reused, with file:line: `.github/workflows/ci.yml:68` (`createdb -E UTF8 -T template0`), `scripts/lane-bootstrap.ts:368` (same call, already borrowed for `--fresh-db`), `scripts/lane-bootstrap.ts:385` (`bun run migrate` with `DB_NAME` overridden).
+> - Claim states: the entry point, the done-means gate, and the AGENTS.md text are **WRITTEN** and, in this lane, **RUNNING** — every transcript above is from an execution in this worktree this session. Merge state is **PROPOSED** until this PR lands.
+>

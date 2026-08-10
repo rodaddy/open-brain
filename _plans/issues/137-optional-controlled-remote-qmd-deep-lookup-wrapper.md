@@ -37,6 +37,17 @@ Build a controlled remote qmd wrapper only as a best-effort deep lookup escape h
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-06T23:06:58Z by rodaddy
+- State reason: NOT_PLANNED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-06T23:06:58Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-06T23:06:58Z

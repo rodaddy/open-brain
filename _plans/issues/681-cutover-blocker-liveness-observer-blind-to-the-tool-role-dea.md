@@ -39,3 +39,106 @@ The liveness observer IS the cutover's evidence that capture works (#647/#648/#6
 3. Investigate WHY tool capture stopped 2026-08-01 (may be related to the quarantine drops in #680 — 5 of the 15 quarantined turns were role:tool).
 
 Truth grammar: RUNNING — confirmed against live DB and live /health this session.
+
+---
+
+## Resolution
+
+Closed by **PR #687** — fix(capture): derive the liveness seed from the ingest role set (#681)
+
+- Linkage: Closed by commit `31589d1d31230c1af80d5d7044fcef21cff96269`, which is the merge commit of this pull request.
+- Merge commit: `31589d1d31230c1af80d5d7044fcef21cff96269`
+- Merged at: 2026-08-09T17:48:26Z
+- PR state: MERGED
+- Issue closed: 2026-08-09T17:48:28Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #687 body
+
+> ## Summary
+>
+> - **Cutover blocker B3 (#681).** The liveness observer seeded `EXPECTED_ROLES` as a literal `["user","assistant"]` while the server accepts three roles. The failure is silent by construction: a role with no arrivals produces no `GROUP BY` group, so a role neither seeded nor present is never a key in `turnsByRole` and `readCaptureLiveness` cannot name it. Dead role -> no rows -> no group -> no key -> not silent -> `stale:false`.
+> - **Confirmed live before the fix** (read-only query, dogfood, this session): `tool` frozen at 14,006 rows since `2026-08-01 00:42:47` while `assistant` (58,140) and `user` (3,780) were seconds old, and `/health` read `stale:false silent_roles:[]` concurrently. This is the #447 failure the module's own docstring cites as its reason to exist, one role wider, on the very evidence the core01 cutover was to rely on.
+> - **DERIVED, not extended.** New `server/domain/raw-turn-roles.ts` declares the set once; the ingest boundary builds its Zod enum from it and the observer seeds from it. Adding `"tool"` to the literal would have fixed the instance and kept the mechanism, leaving role four to escape liveness exactly as role three did.
+> - **Two copies cannot be folded in and are pinned by a drift test instead**: the legacy tree's schema (the trees are deliberately separate) and the column's applied `CHECK` (a shipped migration is immutable history). Copies that agree because something asserts they agree is a different world from copies that agree because nobody has touched one yet.
+> - **Root cause of the 2026-08-01 stop, investigated as asked and filed as #685 rather than resolved here.** It is NOT #680's quarantine. `scripts/backfill-transcripts.ts:206` typed a `type:"user"` record with a `tool_result` block as `role:"tool"`; commit `eb84b02` (2026-08-01 04:55:44, the Python port) replaced it, and `records.py::raw_turn_from_line` has only USER and ASSISTANT branches plus `else: return None`. That omission is DELIBERATE and documented (`records.py:95-108` parking `tool_use` on the open question at `docs/decisions/capture-never-drops-a-turn.md:305-310`). Resolving a parked decision as a side effect of a health-check lane is exactly what that decision forbids at :213.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/681-tool-role-liveness.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> **RED (pre-change tree, subject untouched, only the check files present) — 5/9, and it discriminates:**
+>
+> ```
+> FAIL  (a) dead tool role -> stale=false silent_roles=[] (want stale=true ["tool"])
+> FAIL  (b) reason names the silent role: "capture lane delivering"
+> FAIL  (c) observation seeds every accepted role: ["assistant","user"]
+> FAIL  (d) expected roles derive from one exported source — server/domain/raw-turn-roles.ts not importable
+> PASS  (e) other role-set copies still agree: legacy_ingest=true migration_check=true
+> PASS  (f) three delivering roles stay green: stale=false silent_roles=[]
+> PASS  (g) empty window publishes no verdict: reading=undefined
+> PASS  (h) #447 shape unregressed: stale=true silent_roles=["assistant"]
+> SUMMARY  clauses=9 passed=5 failed=4
+> DONE-MEANS #681: FAIL
+> ```
+>
+> Clause (a) reproduced the live symptom byte for byte. Four controls passing pre-fix is the round-13 signal the check measures the defect rather than failing everywhere.
+>
+> **GREEN (this branch):**
+>
+> ```
+> PASS  (a) dead tool role -> stale=true silent_roles=["tool"]
+> PASS  (b) reason names the silent role: "role(s) delivered nothing: tool"
+> PASS  (c) observation seeds every accepted role: ["assistant","tool","user"]
+> PASS  (d) exported=["assistant","tool","user"] seeded=["assistant","tool","user"] identical=true
+> PASS  (e) other role-set copies still agree
+> PASS  (f) three delivering roles stay green
+> PASS  (g) empty window publishes no verdict
+> PASS  (h) #447 shape unregressed
+> SUMMARY  clauses=9 passed=9 failed=0
+> DONE-MEANS #681: PASS
+> ```
+>
+> Other evidence: `bunx tsc --noEmit` exit 0 (read directly, not through a pipe). `bun run test:isolated` 3767 pass / 0 fail / 3802 tests on database `ob_isolated_89189_msm08fl74v` — the pre-flight recorded 3761 on main, and +6 matches the new tests, proving they execute rather than trusting a green suite. Sibling capture gates re-run green unchanged: `652-capture-health-composed`, `656-capture-observer-wired`, `647-capture-liveness`, all exit 0. Observer tests 11 -> 14; `rg -n "tool" server/capture/liveness-observer.test.ts` returned nothing before this PR.
+>
+> No live smoke: the change is a seed derivation proven through the shipped gatherer with no network or database, and the lane is barred from contacting core01.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: `/health` will now report `stale=true silent_roles=[tool]` on any deployment running the current Python capture lane, because that lane structurally cannot emit tool turns (#685). This is the observer telling the truth it was blind to for eight days, not a regression — but it is an operator-visible state change and it is why #685 needs a ruling before or alongside cutover. Flagged, not absorbed.
+> - Assumptions that could be wrong: that `tool` SHOULD be an expected role. If the answer to #685 is "the live lane will never emit tool turns," the honest fix is narrowing the accepted set at the ingest boundary and the column, not narrowing the seed — narrowing the seed silently rebuilds #681. I did not decide this; #685 lays out both options and recommends without ruling.
+> - Missing/weak tests: the derivation is proven by comparing the seeded keys to the exported set, not by adding a fourth role at runtime and re-importing — Bun's module cache made a mutation clause unreliable, so clause (d) asserts set identity instead. That catches a hardcoded triple (extra or missing role both fail) but would not catch a copy that happens to be spelled identically by hand. The drift test in `server/domain/raw-turn-roles.test.ts` is what covers that second case, and it is the weaker of the two proofs — stated plainly.
+> - Security/permission risk: none. No auth, namespace, or predicate path touched; the observer's query is unchanged and still namespace-scoped by `$1`.
+> - Migration/deploy risk: no migration. `032_raw_turns.sql` is read as text by a test and not modified — an applied migration is immutable history.
+> - Downstream client/runtime risk: none applicable. The ingest wire contract is unchanged — `z.enum(RAW_TURN_ROLES)` accepts the identical three strings the literal did, verified by the contract-parity suite and 89 passing ingest-tool tests. The `TransportCaptureHealth` shape is untouched; only the VALUES in `silent_roles` change, and only when a role is genuinely dead.
+> - Rollback/cleanup concern: revert is a single commit; nothing persists. The lane worktree is removed at teardown.
+> - Fixes made before PR: two existing observer tests encoded the two-role world and failed on the corrected behaviour. I read them before changing them (round 10's lesson about fixtures encoding a world-assumption) and updated the fixtures to represent a healthy three-role lane rather than narrowing the seed to make them pass — the latter would have been the fix undoing itself.
+> - Known residual risk: #685 is unresolved, so the capture block reads degraded on the live lane until it is. `docs/core01-cutover-preflight.md` step 3 should be read together with #685 rather than as closed by this PR alone.
+> - SME review-memory update: [x] `docs/sme/` updated — `docs/sme/entries/2026-08-09-a-mirrored-closed-set-goes-stale-the-moment-the-original-grows.md` (lane: correctness, order 68), lane index regenerated.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] not applicable because: the change is proven through the shipped gatherer with no network or database, and this lane is barred from contacting core01; the live DB was read ONLY to confirm the defect, never written.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: the accepted role strings are byte-identical before and after — `z.enum(RAW_TURN_ROLES)` where `RAW_TURN_ROLES = ["user","assistant","tool"]` is the same enum the literal declared. No contract surface moved; the parity suite passes unchanged.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable on all four: no MCP tool, schema, protocol, or client-facing surface changed. The ingest tool accepts the identical role set, the health block's shape is unchanged, and no Python client call shape moved. The only observable difference is the VALUE of `silent_roles` when a role is genuinely dead — which is the defect being fixed, and is a server-side verdict no client parses structurally.
+> - The SME gate's clause 1 remains RED and is MAIN-OWNED, not introduced here: one entry file from 2026-08-08 carries no finding heading. Proven identical on a detached worktree at `78b740b`. Clause 4 now passes; the pin was raised 227 -> 232 and the comment announces that 4 of those 5 were other lanes' un-pinned additions rather than letting it read as a one-entry bump.
+>

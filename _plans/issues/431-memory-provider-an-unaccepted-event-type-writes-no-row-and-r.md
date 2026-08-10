@@ -57,6 +57,153 @@ TypeScript adapter.
 
 ---
 
+## Resolution
+
+Closed by **PR #532** — fix(memory): name the accepted set when an event_type is rejected (#431)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c7805baa7a97359c554d6815a376eee5d8d4da45`
+- Merged at: 2026-08-04T01:41:27Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T01:41:29Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #532 body
+
+> ## Summary
+>
+> Closes #431 (second half).
+>
+> A rejected `event_type` returned `Unsupported event_type: finding` and stopped
+> there. True, and useless to the caller it is addressed to: an agent reaches for
+> `finding`, `note`, or `blocker` precisely because it does not know the
+> vocabulary, so a bare negative leaves it guessing at a closed nine-member set
+> and the second guess fails identically.
+>
+> The failure receipt now names the rejected value **and** every accepted type —
+> the shape `_dispatch` has always used for an unknown OPERATION
+> (`valid operations: ...`). Same class of caller error, same answer.
+>
+> ```
+> Unsupported event_type: finding; accepted event types: action, artifact,
+> blocker, correction, decision, fact, handoff, question, receipt
+> ```
+>
+> **What was already fixed, and what was not.** The original #431 defect — an
+> unaccepted type wrote no row and returned *no receipt at all* — is already
+> sealed by `test_module_entry_point_rejects_finding_event_type_loudly`
+> (FAILED/non-durable receipt, exit 1, no network attempted). Verified live this
+> session before touching anything. That test asserted the bare literal, so it now
+> asserts the shared helper. What remained was that the loud rejection still did
+> not tell the caller what to send instead.
+>
+> **Shape of the change.** One helper, `unsupported_event_type`, declared next to
+> `EVENT_TYPES` in `agent.py` and used by all three raise sites, so the message
+> cannot drift from the vocabulary it quotes and widening the set widens the
+> message for free. Sorted output — `EVENT_TYPES` is a `set` with no guaranteed
+> iteration order, and an error string that reorders between processes cannot be
+> asserted on or diffed in a log. The TypeScript client carried the byte-identical
+> bare string at the same boundary (`clients/ts/src/runtime.ts:620`) and gets the
+> same helper, so the two runtime surfaces keep answering the same caller error
+> the same way.
+>
+> Scope is message text only: no change to what is accepted, to the vocabulary, or
+> to any write path. The check is client-side, before any send.
+>
+> `openbrain_memory.EVENT_TYPES` remains the single authority — no new copy of the
+> vocabulary was declared, and `test_event_vocabulary.py` (9 passed) confirms the
+> one-definition rule still holds across all seven surfaces.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> **Red proof** — reverted `unsupported_event_type` to the old bare message,
+> new test failed, then restored:
+>
+> ```
+> E   AssertionError: accepted event type 'action' missing from the rejection
+>     reason: 'Unsupported event_type: finding'
+> E   assert 'action' in 'Unsupported event_type: finding'
+> tests/test_runtime.py:2077: AssertionError
+> FAILED tests/test_runtime.py::test_rejected_event_type_receipt_names_the_accepted_vocabulary
+> 1 failed, 81 deselected in 0.07s
+> ```
+>
+> Gates that actually ran:
+>
+> | Gate | Result |
+> |---|---|
+> | `uv run mypy src/openbrain_memory` | Success, 17 source files |
+> | `uv run ruff check src tests` | All checks passed |
+> | `uv run pytest -q` (openbrain-memory) | **551 passed, 9 skipped** |
+> | `uv run pytest -q` (openbrain-provider) | 584 passed |
+> | `uv run pytest -q` (openbrain) | 492 passed, 1 skipped, 19 deselected |
+> | `uv run mypy` (provider, openbrain) | Success, 19 + 48 source files |
+> | `bunx tsc --noEmit` | clean, no output |
+> | `bun test` | **3060 pass, 506 skip, 0 fail** |
+>
+> **Stated plainly: `OPENBRAIN_TEST_DATABASE_URL` was NOT set** (verified with
+> `printenv`), so the 506 `bun test` skips are the Postgres-backed suites and they
+> tested nothing. That is acceptable coverage for *this* change and not a general
+> claim: the rejection is client-side vocabulary validation that returns before
+> any transport call, so no database participates in the path being changed. The
+> receipt assertion `direct_attempted is False` is what proves that, and it passes.
+>
+> Live behavior confirmed through the real `execute_json` boundary against an
+> unreachable transport, which isolates the client-side refusal from any network
+> outcome:
+>
+> ```
+> finding -> failed | Unsupported event_type: finding; accepted event types: action, artifact, blocker, correction, decision, fact, handoff, question, receipt
+> note    -> failed | Unsupported event_type: note; accepted event types: action, artifact, blocker, correction, decision, fact, handoff, question, receipt
+> blocker -> lost   | Open Brain request failed: [Errno 61] Connection refused context=transport
+> ```
+>
+> `blocker` reaching the transport is the control: an accepted type is untouched by
+> this change and still attempts its write.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the rejection message is now built from `EVENT_TYPES` at call time instead of being a fixed string, so the error text is no longer a compile-time constant and would follow that set if it were ever mutated at runtime. That coupling is intended — the message must never be able to lie about the accepted set — and it is safe here because `EVENT_TYPES` is a module-level `set` never written to after definition; I checked every `EVENT_TYPES` reference in the repo and none mutates it.
+> - Assumptions that could be wrong: (1) that nothing string-matches the exact old error. `rg "Unsupported event_type"` across `.py`, `.ts`, `.js`, `contracts/`, and `tests/fixtures/` found only the two source sites and the one test, all updated — but an out-of-repo consumer doing an equality match would break, while a `startswith`/`in` match still works since the old text is a strict prefix of the new. (2) that the receipt error allowance fits the longer text: measured at ~105 characters of vocabulary against `MAX_ERROR_CHARS = 500`, and asserted in the test rather than assumed.
+> - Missing/weak tests: the new test calls `_failed_write` directly, so it proves the receipt shape but not the exit code — that is covered by the pre-existing end-to-end subprocess test immediately above it, which now asserts the same helper. The TypeScript `unsupportedEventType` has no dedicated unit test; it is exercised through `captureDistilled` and typechecked, but its output text is not asserted on the TS side.
+> - Security/permission risk: none identified. The message carries only the caller's own rejected value plus nine hardcoded generic type names — no namespace, token, scope, or content. The rejected value is caller-influenced, so it flows through the same `redact_text` and `MAX_ERROR_CHARS` handling every receipt error already gets, and that path is unchanged.
+> - Migration/deploy risk: none. No schema, migration, or CHECK constraint touched; the SQL `event_type` constraint and all seven vocabulary surfaces are byte-unchanged, confirmed by `test_event_vocabulary.py` (9 passed).
+> - Downstream client/runtime risk: the error string is client-visible on both the Python and TypeScript runtime surfaces, but no schema field changed and the `openbrain.runtime_receipt.v1` shape is untouched — `status`, `durable`, and `direct_attempted` all report exactly as before, and only the free-text `error` value is longer and more specific. No contract fixture pins that text (verified), which is why this is classified runtime-specific below.
+> - Rollback/cleanup concern: one commit, five files, revertible with no data or state implications; nothing was written to any database.
+> - Fixes made before PR: found and fixed the byte-identical bare message in the TypeScript client at `clients/ts/src/runtime.ts:620`, which was outside the original scope — leaving it would have produced exactly the cross-language drift `test_event_vocabulary.py` exists to prevent, with two runtimes answering the same caller error differently.
+> - Known residual risk: an out-of-repo consumer doing exact-equality matching on `Unsupported event_type: <value>` would stop matching, and I could not rule that out beyond this repo; prefix and substring matches are unaffected. Separately, the Postgres-backed `bun test` suites did not run because `OPENBRAIN_TEST_DATABASE_URL` was unset — irrelevant to this client-side code path as argued in Verification, but recorded rather than glossed.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: this adds no new missed-review pattern — the governing rule that a memory write must never fail silently and a rejection must be actionable is already recorded in `docs/decisions/capture-never-drops-a-turn.md` (which names #431 at lines 76-83) and enforced by `test_event_vocabulary.py`, so this change satisfies existing guidance rather than revealing a gap in it.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the rejection is client-side and returns before any transport call (`direct_attempted: false`, asserted), so no live service participates in the changed path and no row is written or read by it.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract fixture or schema pins the rejection text — verified with `rg "Unsupported" contracts/ python/openbrain-memory/tests/fixtures/`, which returned nothing. The `openbrain.runtime_receipt.v1` schema and every field in it are unchanged; only the free-text `error` value differs, and both runtime surfaces (Python and TypeScript) were updated together in this PR so they cannot drift.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across all four: no MCP tool, schema, protocol, or client-facing contract changed — no tool signature, no input schema, no advertised vocabulary, no receipt field. Downstream consumers see the same tools with the same shapes; the only difference is that one free-text error string is now more informative, which is strictly additive information for any consumer that surfaces it to a human or an agent.
+> - The one downstream-visible effect is the longer `error` string, addressed under Contract Parity and in the residual risk above.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-27T04:44:44Z

@@ -27,3 +27,145 @@ Silent-drop-on-success is the exact defect class the rewrite exists to kill (see
 Either the CLI accepts the full promotion vocabulary and forwards it, or it rejects unknown keys loudly (named error, non-zero exit) — never accept-and-ignore. Regression test: pipe a capture with \`candidate_scope\` through the console path and assert either the metadata lands or the call fails loud.
 
 Refs: seeding receipts on #444/#438; OB gotcha event fac56442; #445 mechanism.
+
+---
+
+## Resolution
+
+Closed by **PR #533** — fix(capture): honor the lifecycle keys the provider CLI was dropping (#464)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `525e5fdd0cff6f3455ba302580789e57f81a2fc2`
+- Merged at: 2026-08-04T01:52:44Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T01:52:45Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #533 body
+
+> ## Summary
+>
+> - Closes #464. The provider JSON-stdin `capture` operation allowed only
+>   `content`/`distilled`/`event_type` (+`config`/`scope`). The #445 promotion
+>   vocabulary — `candidate_type`, `memory_lifecycle_action`, `candidate_scope` —
+>   fell outside that allowlist, so `_project_request` dropped it: the write
+>   returned `status:saved` and the row landed with none of the metadata that
+>   makes it promotable. A promotion scripted through the advertised durable-write
+>   path got a receipt saying it worked and seeded nothing.
+> - **Honored, not rejected**, per the issue's stated preference and because canon
+>   seeding through this lane is imminent. The chain had three gaps, each fixed at
+>   its owning boundary:
+>   - `cli.py` — the three keys are in the `capture` allowlist and are forwarded.
+>   - `runtime.capture_distilled` — validates them against the SAME
+>     `CANDIDATE_TYPES` and `MEMORY_LIFECYCLE_ACTIONS` sets `AgentMemory` uses,
+>     imported rather than re-listed (two copies drift; a value this side accepts
+>     but the server's CHECK constraint refuses is a silent no-row write). A value
+>     outside the vocabulary now fails BY NAME:
+>     `Unsupported candidate_type: not_a_candidate_type`.
+>   - `agent.append_scoped_event` — merged caller metadata into the written event
+>     instead of hardcoding `{"idempotency_key": key}`. This was the actual drop
+>     point: `append_event` (the client-library path the canon seeder used as its
+>     workaround) already merged metadata; its scoped sibling did not. Same
+>     `_reject_reserved_metadata` screening as `append_event`.
+> - **Receipt now names the keys.** `ignored_optional_request_keys` is added
+>   alongside the existing `compatibility_note` and `ignored_optional_key_count`.
+>   A bare count told a caller that something was ignored without saying what,
+>   which is unactionable at exactly the moment it matters. Forward tolerance for
+>   genuinely unknown future keys is unchanged.
+> - Drive-by: `cli.py` declared `MAX_IGNORED_OPTIONAL_KEY_COUNT` and
+>   `IGNORED_OPTIONAL_REQUEST_KEYS_NOTE` twice, identically (lines 24-25 and
+>   42-43). Removed the first pair.
+> - `docs/sme/gotcha-agent.md` gains the defect family entry (same family as #447
+>   / #515): an allowlist that drops unrecognized keys is accept-and-ignore, not
+>   tolerance.
+>
+> ### Red-proof (fix reverted via `git stash`, tests kept)
+>
+> ```
+> FAILED tests/test_runtime.py::test_json_capture_forwards_lifecycle_keys_to_event_metadata
+> FAILED tests/test_runtime.py::test_json_capture_rejects_lifecycle_value_outside_the_vocabulary
+> FAILED tests/test_runtime.py::test_json_receipt_names_the_ignored_request_keys
+> 3 failed, 81 deselected in 0.09s
+> ```
+>
+> The first failure reproduces the reported defect exactly — a `saved` receipt
+> with the keys silently discarded:
+>
+> ```
+> >       assert "compatibility_note" not in output["receipt"]
+> E       AssertionError: assert 'compatibility_note' not in {'schema': 'openbrain.runtime_receipt.v1',
+>         'operation': 'capture', 'status': 'saved', 'durable': True, ...}
+> ```
+>
+> Fix restored (`git stash pop`) → `3 passed`.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> **Which suites actually ran:**
+>
+> - `bunx tsc --noEmit` — clean, no output.
+> - `bun test` — 3060 pass, 0 fail, 506 skip, 3566 tests across 227 files.
+>   `OPENBRAIN_TEST_DATABASE_URL` was **unset**, so the Postgres-backed suites
+>   SKIPPED SILENTLY and did not run. Stating that plainly per the repo warning.
+>   This change is Python-only and touches no SQL, migration, or server code, so
+>   that gap does not cover this fix — but it is a gap, not a pass.
+> - `uv run mypy src/openbrain_memory` — `Success: no issues found in 17 source files`.
+> - `uv run ruff check src tests` — `All checks passed!`.
+> - `uv run pytest -q` — `553 passed, 9 skipped`. The 9 skips are pre-existing and
+>   env-gated: 4 × `OPENBRAIN_RUN_0_1_17_CLI_COMPAT` wheel-compat proof, 5 ×
+>   `OPENBRAIN_LIVE_CANARY` live canaries. None relate to this change.
+> - No live Open Brain smoke was run: the task scope forbids touching the running
+>   service or any deployed artifact.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: `append_scoped_event` now merges arbitrary caller metadata into the written event where it previously wrote a fixed dict, widening what can reach the durable row from this path. Mitigated by routing it through the identical `_reject_reserved_metadata` screening `append_event` already applies (protected keys, nested authority keys, JSON-serializability), and by the runtime layer admitting only three named, vocabulary-checked keys — the CLI cannot pass anything else through, because `_project_request` still drops unrecognized keys before dispatch.
+> - Assumptions that could be wrong: (1) That the server accepts these three metadata keys on `append_session_event` — verified from the client-library path, which already sends exactly this shape via `append_event`, and from `_plans/issues/445-*.md` / #443 which specify the row as `metadata.candidate_type` + `memory_lifecycle_action='promote'`. NOT verified against a live server in this change. (2) That honoring is preferred over rejecting — stated in the issue and in the task, but it is a contract widening and reviewers should confirm it is wanted now rather than after #445 lands.
+> - Missing/weak tests: No live/Postgres test proves the row actually persists with this metadata; the transport is the in-repo `LaneAwareTransport` fake, so what is proven is the outbound call shape, not the stored row. Given #464's own history — a write that reported success and stored nothing — that is the meaningful residual gap, and it is exactly what a live canary or an `OPENBRAIN_TEST_DATABASE_URL` run would close. `candidate_scope` nesting depth and secret-in-scope rejection ride on the existing `_reject_secret_payload` recursion and are not separately asserted here.
+> - Security/permission risk: Low but non-zero, and it is the reason the screening was reused rather than skipped. `candidate_scope` is a caller-supplied nested object that now reaches durable metadata; it is passed through `_reject_secret_payload` (which recurses mappings and sequences) and `_reject_reserved_metadata` (which refuses `PROTECTED_KEYS` including `namespace`, `token`, `authorization`, `role`). No namespace or authority field can be smuggled in through it. No SQL is constructed anywhere in this change.
+> - Migration/deploy risk: None. No schema, migration, or server change. The values written are drawn from vocabularies the existing `ob_session_events` CHECK constraint and the client library already use.
+> - Downstream client/runtime risk: Additive change to the `openbrain-memory` console contract — previously-valid requests behave identically and the new keys are optional. The one observable change for an existing caller is the extra `ignored_optional_request_keys` field on receipts that already carried `compatibility_note`; a consumer asserting on the exact receipt key set would see it. `ignored_optional_key_count` and `compatibility_note` are unchanged in name, type, and value.
+> - Rollback/cleanup concern: Single commit, no state to unwind, revert is clean. Nothing was written to a deployed artifact, the running service, or `local-clone.env`.
+> - Fixes made before PR: Reworded two docstrings that described reusing the existing metadata screening in cap/limit language; removed the duplicated constant pair rather than leaving a second copy to drift.
+> - Known residual risk: The end-to-end claim rests on a fake transport. Status is MERGED-pending, not RUNNING — nobody has driven a promotion through the installed console against a real database on this branch. The canon seeder should be re-pointed at the CLI path and its row read back before this is treated as the working promotion route.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the task
+>   scope explicitly forbids touching the running service or any deployed artifact;
+>   this change is client-package-only with no server or schema component.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: the change is confined to the
+>   Python provider's JSON-stdin request projection and its own call into
+>   `append_session_event`. No MCP tool schema, server contract, or wire shape
+>   changes — the outbound `append_session_event` arguments use metadata keys the
+>   client library already sends today via `AgentMemory.append_event`.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across all four: no MCP tool, schema, protocol, or server-facing
+>   contract changed. The `openbrain-memory` console gains three OPTIONAL request
+>   keys and one additional receipt field; every existing request and every
+>   existing receipt field keeps its current shape and meaning, so no downstream
+>   consumer must change to keep working.
+> - A downstream consumer that WANTS to script promotions through the console does
+>   need the newly-published package version — that is a capability rollout, not a
+>   compatibility break, and it belongs with whatever ships #445.
+>

@@ -30,3 +30,31 @@ The package can corrupt legitimate memories and make the JSONL spool lossy while
 - Spool replay contract is explicit: either exact replay with protected/encrypted payloads, or documented audit-only/non-replayable behavior.
 - Tests prove memory content is not silently redacted on successful live writes.
 - Tests prove failed-write spool behavior is either replay-faithful or clearly marked non-replayable.
+
+---
+
+## Resolution
+
+Closed by **PR #85** — fix: preserve replayable memory spool payloads
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d5280136d6b21fe7275aab38a9b5a28ae9335db1`
+- Merged at: 2026-06-11T01:42:38Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T01:42:39Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #85 body
+
+> ## Summary
+> - Preserve original caller payloads for live AgentMemory writes instead of applying diagnostic redaction before client calls.
+> - Store exact failed-write payloads in JsonlSpool so replay can reconstruct the original Open Brain call, while adding redacted diagnostic views for safe display.
+> - Prevent fake spool success for oversized records, preserve the original live-write exception if local spooling fails, and replay records without holding the append lock during dispatcher calls.
+> - Document the safety/spooling contract in openbrain-memory README.
+>
+> ## Validation
+> - uv run pytest tests/test_safety.py
+> - uv run pytest
+> - bun test
+> - git diff --check
+>
+> Closes #77

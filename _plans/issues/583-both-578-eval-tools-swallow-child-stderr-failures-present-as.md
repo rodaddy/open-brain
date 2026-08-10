@@ -13,3 +13,101 @@ Closed: 2026-08-05T18:14:16Z
 ---
 
 From the #578 live run: scenario-transport.ts:109 reads then discards provider stderr; scripts/eval-langfuse-egress.ts:581-585 captures child stdout/stderr and never surfaces them. Both actionable root causes this run (scope-key rejection; zero-emit) had to be recovered by hand-replaying commands. A gate trusted as the acceptance instrument must carry the child's error text (redacted per the content-free rule: error CLASS + first line, never bodies/secrets) into its receipt. Also from the run: --drive/--verify are mutually exclusive but the settle receipt is only attached to verify — fine — and secret_scan PASSED VACUOUSLY at observed=0 traces; it should report skipped-no-data rather than pass when the scanned set is empty.
+
+---
+
+## Resolution
+
+Closed by **PR #584** — fix(eval): carry child stderr into eval receipts and stop the vacuous secret_scan green (#583)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `3f3940d12f86b33a6e26938a399da329d605ed0d`
+- Merged at: 2026-08-05T18:14:15Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T18:14:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #584 body
+
+> Fixes #583.
+>
+> Both #578 eval tools read their child process's stderr and discarded it, so
+> every actionable failure in the first live run presented as a bare exit code
+> and had to be recovered by hand-replaying the command. A gate trusted as the
+> acceptance instrument has to carry the child's error text.
+>
+> ## What changed
+>
+> - **`src/child-stderr.ts` (new)** reduces raw stderr to an error class plus one
+>   redacted line. Built on the import-free `secret-patterns.ts` leaf rather than
+>   `sharing.redactText`, so the eval transport does not pull the server logger
+>   into a child-process code path. The class is read from the *last* class-shaped
+>   line, because that is where a Python traceback puts the useful one.
+> - **`eval/open-brain/live/scenario-transport.ts:109`** now passes the stderr it
+>   was already capturing into `parseProviderOutput`. `LiveTransportError` and
+>   `ScenarioVerdict` carry `error_class` / `stderr_first_line` through to the
+>   scenario receipt, on both the throwing path and the nonzero-exit-with-receipt
+>   path. The transport catch also names which label threw instead of a flat
+>   `scenario_transport_error`.
+> - **`scripts/eval-langfuse-egress.ts:581-585`** surfaces the same two fields in
+>   the drive receipt, only on failure, and the serializer prints them.
+> - **`secret_scan`** reports `status: skipped-no-data` when it scanned zero
+>   traces. That is a different claim than `pass`, and it cannot be the reason a
+>   run is green either way: `arrival_count` is fatal and already fails at zero
+>   traces. Non-empty scans report an explicit `pass`/`fail` status.
+>
+> Receipts stay content-free: only an error class and one redacted line, never
+> bodies or secrets. Detection reuses `SECRET_PATTERNS` unchanged, which is
+> label-gated by design (`src/secret-patterns.ts:60-65`).
+>
+> ## Verification
+>
+> - `bunx tsc --noEmit` — clean.
+> - `bun test scripts/ eval/ src/__tests__/child-stderr.test.ts` — 535 pass, 29
+>   skip, 0 fail.
+> - **Each new test was proven to fail before the fix.** Source files were
+>   reverted while the tests stayed, and all six new cases failed for the right
+>   reasons (missing `status`, `error_class` undefined, module absent).
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: writing child-process stderr into a receipt that is
+>   contractually content-free — a redaction miss here would leak a secret into
+>   an artifact that gets pasted into issues.
+> - Assumptions that could be wrong: that the last class-shaped stderr line is
+>   the most useful one. True for Python tracebacks, which is what both children
+>   are; a non-Python child falls back to the first line.
+> - Missing/weak tests: no test drives a real `uv run` child, so the wiring from
+>   an actual spawned process is covered only through `parseProviderOutput`. The
+>   redaction assertions use one labeled-secret shape rather than the full
+>   detector matrix, which `src/secret-patterns.ts` tests already cover.
+> - Security/permission risk: reduced. Stderr previously reached nothing; it now
+>   reaches a receipt, so redaction is the load-bearing control and is applied
+>   before the line is stored. Only one line survives, never the body.
+> - Migration/deploy risk: none. No schema, no migration, no runtime service
+>   path — eval tooling only, and all added receipt fields are optional.
+> - Downstream client/runtime risk: none identified. The changed files are eval
+>   scripts and their types; no MCP tool, transport schema, or Python client
+>   surface is touched, so `docs/downstream-rollout.md` does not apply.
+> - Rollback/cleanup concern: revert is a clean single commit; the new module is
+>   additive and imported by exactly two call sites.
+> - Fixes made before PR: moved `child-stderr.ts` out of `eval/` into `src/` once
+>   the egress script needed it, so the two consumers share one implementation
+>   instead of forking a second redactor.
+> - Known residual risk: the fallback path surfaces the first stderr line from a
+>   non-Python child unclassified. It is redacted the same way, but a child that
+>   prints an unlabeled credential on its first line would be carried — the same
+>   exposure the existing label-gated detector design already accepts.
+> - SME review-memory update: [x] not applicable because: this is a first
+>   instance of the swallowed-child-stderr pattern rather than a repeat of a
+>   finding already in `docs/sme/`; if review flags it as recurring it belongs in
+>   `gotcha-agent.md`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: the changes are eval
+>   tooling with no server, schema, or tool-surface impact, and both gates are
+>   opt-in scripts that were exercised through their own unit tests rather than a
+>   live run.
+>
