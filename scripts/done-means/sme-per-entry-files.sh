@@ -105,7 +105,19 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # filed as #707 (one entry uses a level-1 undated heading); verified by running
 # this script in the untouched primary checkout, where clause 1 fails and
 # clause 4 passes.
-EXPECTED_ENTRY_COUNT=233
+#
+# 2026-08-10, the #712 lane: 233 -> 234. Exactly ONE entry added, and it is this
+# lane's own --
+# `2026-08-10-a-gate-must-not-let-its-own-reporting-channel-decide-its-verdict.md`
+# (lane: gotcha-agent, order 70), the review-facing half of the #712 harvest.
+# Nothing else was adopted. Clause 1 is STILL RED here for the same reason it was
+# red for the #709 lane and for the same file
+# (`2026-08-08-guards-must-judge-the-operation-not-the-vocabulary.md`, a level-1
+# undated heading) -- already filed as #707, present unchanged at this lane's
+# base `origin/wip/2026-08-07`, and untouched by this lane's diff (verified:
+# `git diff origin/wip/2026-08-07..HEAD` names that file zero times). It is left
+# failing rather than absorbed into a gate-fixing PR, per lane-contract round 28.
+EXPECTED_ENTRY_COUNT=234
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
