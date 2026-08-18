@@ -447,6 +447,35 @@ write_runner
 git_f add -A >/dev/null && git_f commit -q -m "restore runner"
 
 # --- (d) the redirect is announced -----------------------------------------
+# WHY THIS ASSERTS ON THE LOG'S SHAPE AND NOT ON "$SCRATCH/ws" (issue #722).
+# This clause used to require the announced log path to sit under the fixture's
+# own `OPENBRAIN_TEMP_WORKSPACE` ("$SCRATCH/ws"), which `run_hook_through_pipe`
+# sets on the hook invocation. THE FIXTURE CANNOT WIN THAT ASSERTION, and the
+# reason is the same defect this issue is about -- the ambient environment
+# deciding a verdict:
+#
+#   $ env OPENBRAIN_TEMP_WORKSPACE=/probe/ws zsh  -c 'echo $OPENBRAIN_TEMP_WORKSPACE'
+#   /Volumes/ThunderBolt/_tmp          <- the caller's value is GONE
+#   $ env OPENBRAIN_TEMP_WORKSPACE=/probe/ws bash -c 'echo $OPENBRAIN_TEMP_WORKSPACE'
+#   /probe/ws                          <- bash honours it
+#
+# The hook's shebang is `#!/usr/bin/env zsh`, and `~/.zshenv` is read by EVERY
+# zsh -- including a non-interactive script -- which sources
+# `~/Library/Application Support/rtech-infra/env-roots.zsh`, whose line 6 is an
+# unconditional `export OPENBRAIN_TEMP_WORKSPACE=/Volumes/ThunderBolt/_tmp`.
+# An unconditional export in a startup file OVERWRITES what the caller passed,
+# so the hook always logs to the operator's real temp workspace. Measured live
+# with a probe copy of this check: the announcement WAS present
+# (`has_buntest=1`) and the "$SCRATCH/ws" match was not (`has_ws=0`), with the
+# announced path reading `.../open-brain/_scratch/pre-push/bun-test-*.log`.
+#
+# So the old assertion tested the OPERATOR'S SHELL PROFILE, not the hook. The
+# clause's actual subject -- stated in its own label -- is that the redirect is
+# ANNOUNCED and the log is NAMED. That is what it now checks: the announcement
+# line, and a concrete `bun-test-<pid>-<epoch>.log` filename in it. Pinning the
+# DIRECTORY is not this check's business and is not something the fixture is
+# able to pin; pinning the SHAPE is, and it still fails if the hook stops
+# naming the log or goes back to a bare `bun test`.
 run_hook_through_pipe "writefail-stderr"
 D_OUT="$HOOK_OUT"
 D_BLIND="$(blinded_by "$D_OUT")"
@@ -455,7 +484,7 @@ if [ -n "$D_BLIND" ]; then
   # A refused hook did not GET to a redirect to announce.
   record d BLIND "$D_BLIND"
 elif printf '%s' "$D_OUT" | grep -qF "bun test ..." \
-  && printf '%s' "$D_OUT" | grep -qF "$SCRATCH/ws"; then
+  && printf '%s\n' "$D_OUT" | grep -qE 'stdout\+stderr -> [^ ]+/bun-test-[0-9]+-[0-9]+\.log'; then
   record d PASS "the hook announces that it redirected the runner's output, and names the log path"
 else
   record d FAIL "the redirect was silent — no announcement naming the log: $(printf '%s' "$D_OUT" | tr '\n' ' ' | tail -c 300)"
