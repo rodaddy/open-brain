@@ -108,7 +108,10 @@ caller genuinely owns. The namespace refusals (#654/#662) are enforced
 unchanged on this path. Adoption never re-points the lane, and it is scoped to
 the wrap/checkpoint verbs: `append_session_event` (capture) and
 `agent_context_pack` still prove full exact scope, and no other validation is
-widened.
+widened. Adoption is therefore NAMESPACE-SCOPED by design: a same-namespace lane
+is the same tenant, the client cannot observe which same-namespace session owns
+a lane, and the boundary that matters is the server's namespace predicate — not
+a client-side check (operator ruling, 2026-08-17).
 
 ### Resuming After Compaction
 1. Call `session_start` → lane + events are immediately available
