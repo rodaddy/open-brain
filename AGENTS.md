@@ -52,17 +52,17 @@
 >   and the missing-index fix are in `_DOCS/STANDARDS-repo-search.md`.
 >
 > Refresh these copies with:
-> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts open-brain`
+> `/Volumes/ThunderBolt/Development/_ob/bin/sync-repo-standards open-brain`
 >
 > **When this repo is up to standard, close this work item by running:**
-> `bun /Volumes/ThunderBolt/Development/_ob/scripts/sync-repo-standards.ts --ack open-brain`
+> `/Volumes/ThunderBolt/Development/_ob/bin/sync-repo-standards --ack open-brain`
 >
 > That removes this block and leaves the one-line marker below it in place. Do
 > not hand-delete it: dropping the marker makes this banner return on the next
 > sync, and deleting past the end marker eats the top of this file. The marker
 > is what stops the banner coming back; a later rule change raises a new one.
 <!-- /STANDARDS-SYNC-BANNER -->
-<!-- standards-acknowledged: 8dbb71a098de -->
+<!-- standards-acknowledged: 0f777779a478 -->
 
 # Open Brain
 
