@@ -8,7 +8,8 @@ Purpose:
 
 Architecture:
     Pure functions over a tool name and its arguments. No state, no I/O except
-    one `git` call to read the current branch. Split out of the entrypoint
+    bounded `git` calls to read each mutating command's current branch. Split out
+    of the entrypoint
     because a safety refusal and a staleness refusal are different mechanisms
     with different triggers, and mixing them in one function is how one hides
     the other (`_plans/python-port-sequence.md`, the two-mechanisms-in-one-file
@@ -28,7 +29,9 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
+from pathlib import Path
 from typing import Any, Final
 
 __all__ = [
@@ -128,13 +131,52 @@ _GH_MERGE_AUTOMATIC: Final[re.Pattern[str]] = re.compile(
     r"(?:^|\s)--(?:admin|auto)(?:\s|$)"
 )
 _GIT_MUTATES_HISTORY: Final[re.Pattern[str]] = re.compile(
-    r"(^|[\s;&|()])git\s+(?:commit|push)(?:\s|$)", re.IGNORECASE
+    r"(^|[\s;&|()])git(?:\s+-\S+(?:\s+\S+)?)*\s+(?:commit|push)(?:\s|$)",
+    re.IGNORECASE,
 )
-_PROTECTED_REF: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:origin\s+)?(?:main|master)(?::|(?:\s|$))", re.IGNORECASE
+_GIT_LEADING_VALUE_OPTIONS: Final[frozenset[str]] = frozenset(
+    {"-C", "--git-dir", "--work-tree", "--namespace", "-c"}
 )
-_DOUBLE_QUOTED: Final[re.Pattern[str]] = re.compile(r'"(?:[^"\\]|\\.)*"')
-_SINGLE_QUOTED: Final[re.Pattern[str]] = re.compile(r"'[^']*'")
+_PUSH_VALUE_OPTIONS: Final[frozenset[str]] = frozenset(
+    {
+        "--repo",
+        "--receive-pack",
+        "--exec",
+        "-o",
+        "--push-option",
+    }
+)
+_SHELL_SEPARATORS: Final[frozenset[str]] = frozenset(
+    {";", "|", "|&", "&", "&&", "||", "\n"}
+)
+_CWD_PRESERVING_SEPARATORS: Final[frozenset[str | None]] = frozenset(
+    {None, ";", "&&", "\n"}
+)
+_PASS_THROUGH_PREFIXES: Final[frozenset[str]] = frozenset({"command", "exec", "nohup"})
+_ENV_VALUE_OPTIONS: Final[frozenset[str]] = frozenset(
+    {"-u", "--unset", "-C", "--chdir"}
+)
+_SUDO_VALUE_OPTIONS: Final[frozenset[str]] = frozenset(
+    {
+        "-C",
+        "-D",
+        "-g",
+        "-h",
+        "-p",
+        "-R",
+        "-T",
+        "-u",
+        "--chdir",
+        "--close-from",
+        "--group",
+        "--host",
+        "--other-user",
+        "--prompt",
+        "--role",
+        "--type",
+        "--user",
+    }
+)
 
 #: policy-refresh-gate.ts:466-473 — the transient image-output directory.
 _GENERATED_DIR: Final[str] = (
@@ -255,31 +297,197 @@ def _agent_tool_block_reason(env: dict[str, str]) -> str | None:
     )
 
 
-def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
-    """Refuse a commit or push that would land on a protected branch.
+def _shell_words(text: str, *, posix: bool = True) -> list[str]:
+    """Split shell text while retaining command separators and quoted words."""
+    lexer = shlex.shlex(text, posix=posix, punctuation_chars=";&|<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    return list(lexer)
 
-    Args:
-        command: The shell command.
-        command_cwd: Directory the command would run in.
 
-    Returns:
-        The refusal text, or None.
-    """
-    if not _GIT_MUTATES_HISTORY.search(command):
+def _heredoc_specs(line: str) -> list[tuple[str, bool]]:
+    """Return heredoc delimiters declared by one shell command line."""
+    words = _shell_words(line, posix=False)
+    specs: list[tuple[str, bool]] = []
+    for index, word in enumerate(words[:-1]):
+        if word != "<<":
+            continue
+        raw_delimiter = words[index + 1]
+        strips_tabs = raw_delimiter.startswith("-")
+        if strips_tabs:
+            raw_delimiter = raw_delimiter[1:]
+        delimiter = shlex.split(raw_delimiter, posix=True)[0]
+        specs.append((delimiter, strips_tabs))
+    return specs
+
+
+def _without_heredoc_bodies(command: str) -> str:
+    """Remove heredoc data while retaining the command lines that consume it."""
+    kept: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    for line in command.splitlines():
+        if pending:
+            delimiter, strips_tabs = pending[0]
+            candidate = line.lstrip("\t") if strips_tabs else line
+            if candidate == delimiter:
+                pending.pop(0)
+            continue
+        kept.append(line)
+        pending.extend(_heredoc_specs(line))
+    return "\n".join(kept)
+
+
+def _shell_commands(command: str) -> list[tuple[list[str], str | None]]:
+    """Return argv and following separator for each non-heredoc command."""
+    words = _shell_words(_without_heredoc_bodies(command))
+    commands: list[tuple[list[str], str | None]] = []
+    current: list[str] = []
+    for word in words:
+        if word not in _SHELL_SEPARATORS:
+            current.append(word)
+            continue
+        if current:
+            commands.append((current, word))
+            current = []
+    if current:
+        commands.append((current, None))
+    return commands
+
+
+def _unwrapped_argv(argv: list[str]) -> list[str]:
+    """Expose a command behind assignments and pass-through wrappers."""
+    index = 0
+    while index < len(argv):
+        word = argv[index]
+        if "=" in word and not word.startswith("="):
+            index += 1
+            continue
+        if word == "env":
+            index += 1
+            while index < len(argv):
+                option = argv[index]
+                if "=" in option and not option.startswith("="):
+                    index += 1
+                    continue
+                if option in _ENV_VALUE_OPTIONS:
+                    index += 2
+                    continue
+                if option.startswith("-"):
+                    index += 1
+                    continue
+                break
+            continue
+        if word in _PASS_THROUGH_PREFIXES:
+            index += 1
+            if index < len(argv) and argv[index] == "--":
+                index += 1
+            continue
+        if word == "sudo":
+            index += 1
+            while index < len(argv) and argv[index].startswith("-"):
+                option = argv[index]
+                if option == "--":
+                    index += 1
+                    break
+                index += 2 if option in _SUDO_VALUE_OPTIONS else 1
+            continue
+        break
+    return argv[index:]
+
+
+def _resolve_directory(base: Path, value: str) -> Path:
+    """Resolve a shell directory operand against the active compound cwd."""
+    expanded = Path(value).expanduser()
+    return expanded if expanded.is_absolute() else base / expanded
+
+
+def _cd_target(argv: list[str], cwd: Path) -> Path | None:
+    """Resolve a simple ``cd`` command, or None for another command shape."""
+    words = _unwrapped_argv(argv)
+    if not words or words[0] != "cd":
         return None
-    # Test the ref pattern only OUTSIDE quoted strings: a commit message
-    # containing the English word "main" is not a push to main. Refspecs
-    # (`git push origin main`) are unquoted and still match.
-    outside_quotes = _SINGLE_QUOTED.sub("''", _DOUBLE_QUOTED.sub('""', command))
-    if _PROTECTED_REF.search(outside_quotes):
-        return (
-            "Codex git guard: do not commit or push directly to main/master "
-            "without explicit approval."
-        )
+    operands = [word for word in words[1:] if word != "--"]
+    if len(operands) != 1 or operands[0] == "-":
+        return None
+    return _resolve_directory(cwd, operands[0])
+
+
+def _git_operands(argv: list[str], cwd: Path) -> tuple[list[str], Path] | None:
+    """Return git's subcommand operands and its effective ``-C`` directory."""
+    words = _unwrapped_argv(argv)
+    if not words or words[0] != "git":
+        return None
+    effective_cwd = cwd
+    index = 1
+    while index < len(words):
+        word = words[index]
+        if not word.startswith("-"):
+            return words[index:], effective_cwd
+        if word == "-C" and index + 1 < len(words):
+            effective_cwd = _resolve_directory(effective_cwd, words[index + 1])
+        if word in _GIT_LEADING_VALUE_OPTIONS and "=" not in word:
+            index += 2
+            continue
+        index += 1
+    return [], effective_cwd
+
+
+def _pushes_to_protected_ref(arguments: list[str]) -> bool:
+    """Return whether push arguments contain a main/master destination refspec."""
+    refs: list[str] = []
+    seen_remote = False
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == "--":
+            index += 1
+            continue
+        if word.startswith("-"):
+            if word == "--repo" or word.startswith("--repo="):
+                seen_remote = True
+            index += 2 if word in _PUSH_VALUE_OPTIONS and "=" not in word else 1
+            continue
+        if not seen_remote:
+            seen_remote = True
+            index += 1
+            continue
+        refs.append(word)
+        index += 1
+    for refspec in refs:
+        destination = refspec.rsplit(":", maxsplit=1)[-1].lstrip("+")
+        destination = destination.removeprefix("refs/heads/")
+        if destination in ("main", "master"):
+            return True
+    return False
+
+
+def _history_mutators(
+    command: str, command_cwd: str
+) -> list[tuple[str, list[str], Path]]:
+    """Parse history-mutating git commands with each command's effective cwd."""
+    cwd = Path(command_cwd or os.getcwd())
+    mutators: list[tuple[str, list[str], Path]] = []
+    for argv, separator in _shell_commands(command):
+        target = _cd_target(argv, cwd)
+        if target is not None and separator in _CWD_PRESERVING_SEPARATORS:
+            cwd = target
+            continue
+        parsed = _git_operands(argv, cwd)
+        if parsed is None or not parsed[0]:
+            continue
+        operands, git_cwd = parsed
+        if operands[0] in ("commit", "push"):
+            mutators.append((operands[0], operands[1:], git_cwd))
+    return mutators
+
+
+def _branch_block_reason(cwd: Path) -> str | None:
+    """Return the protected-branch or unreadable-branch refusal for ``cwd``."""
     try:
         completed = subprocess.run(
             ["git", "branch", "--show-current"],
-            cwd=command_cwd or None,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
@@ -296,6 +504,32 @@ def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
             f"Codex git guard: current branch is {branch}; do not commit or push "
             "from a protected branch."
         )
+    return None
+
+
+def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
+    """Refuse a commit or push that would land on a protected branch."""
+    try:
+        mutators = _history_mutators(command, command_cwd)
+    except ValueError:
+        if not _GIT_MUTATES_HISTORY.search(command):
+            return None
+        return (
+            "Codex git guard: unable to verify the current branch; commit/push is "
+            "blocked until branch state is readable."
+        )
+    if any(
+        mutator[0] == "push" and _pushes_to_protected_ref(mutator[1])
+        for mutator in mutators
+    ):
+        return (
+            "Codex git guard: do not commit or push directly to main/master "
+            "without explicit approval."
+        )
+    for mutator in mutators:
+        reason = _branch_block_reason(mutator[2])
+        if reason is not None:
+            return reason
     return None
 
 
