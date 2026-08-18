@@ -87,6 +87,58 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-17 (round 31) — harvest of the #724 wave (PRs #727-#732, forensics lane, Development-repo lane E)
+
+- **THE PR-BODY GATE RESOLVES RELATIVE PATHS AGAINST THE PRIMARY CHECKOUT —
+  PASS `--body-file` AN ABSOLUTE PATH.** Three independent lanes (#727, #730,
+  #732) hit the same PreToolUse refusal: `gh pr create --body-file pr-body.md`
+  resolved against `/Volumes/ThunderBolt/Development/open-brain`, not the lane
+  clone. Every lane recovered by reading the refusal and using the absolute
+  scratch path. Standing rule for every lane working out of a clone.
+- **`aqmd` HAS NO INDEX IN A FRESH CLONE — it hangs, it does not error.** Two
+  lanes had `aqmd search` exceed 120-180s in a new clone (no `.qmd/` there).
+  Satisfy the design-lookup gate by querying the PRIMARY checkout read-only, or
+  accept the backgrounded call. A hang here is missing-index, not load.
+- **A CLONE DOES NOT CARRY `.env`.** Lane A lost time to it; the recipe is
+  read-only sourcing from the primary checkout (`set -a; . <primary>/.env`).
+- **A WORKER CORRECTLY IDLE IS NOT A WORKER BROKEN: enqueue can be a
+  deliberately caller-scoped boundary.** Lane A's premise ("the restored worker
+  should drain the backlog") was KILLED by docs/embedding-repair.md — the
+  bootstrap "invents no namespace and enqueues no job." The 549-lane backlog
+  had no caller, not a dead pipeline. Check the enqueue boundary's design DOC
+  before diagnosing the runner.
+- **FOR BULK CONVERGENCE, SELECT ONLY WHAT THE LOOP CAN REPAIR.**
+  `buildSelection` ORs all reasons into one unordered LIMIT query; including
+  already-embedded drift rows means repeated batches can spin without
+  converging and `repaired === 0` stops meaning done. Lane A's caller selects
+  reason `missing` alone; drift stays the queue handler's job.
+- **CLIENT-SIDE SCOPE CANNOT DISTINGUISH "the capture hook's lane" FROM
+  "another same-namespace session's lane" — the wire requests are identical.**
+  Lane B proved it by printing both call sequences. Any adoption/refusal split
+  between those two cases must live server-side; a client test asserting the
+  split is asserting the impossible (the #732 held decision).
+- **A LANE RESUMING A BRANCH THAT ALREADY CARRIES THE RED TEST HAS NO
+  INDEPENDENT RED** — say so in the report (lane C did) instead of quoting the
+  author's transcript as your own observation.
+- **FORENSICS: READ THE APP-OWNED LOG FIRST; launchd's redirect files are
+  expendable and get truncated on reinstall.** Then tie the log line to its
+  emitter in source (run-nats-worker.ts:243-247 turned "Shutting down" into
+  proof of SIGTERM/bootout) and treat SURVIVORS as evidence (30 intact sibling
+  plists converted "a cleaner ran" into "one item was picked"). Use
+  `/usr/bin/log`, not the `log` zsh function.
+- **A HAND-CREATED LAUNCHD SERVICE WITH NO INSTALLER AND NO LIVENESS ASSERTION
+  IS THE DEFECT**, not the deleter. The pattern already exists in
+  scripts/install-qmd-sync-launchagent.sh and was not applied to the NATS
+  worker; that gap, not the removal, bought the three silent days.
+- **WHEN THE HOOK IS THE SUBJECT UNDER TEST, THE FIXTURE PINS THE REAL VALUE**
+  (`core.hooksPath=_githooks`), and simulating the operator's global config is
+  done via `GIT_CONFIG_GLOBAL` in the harness env — never by writing the real
+  global. Lane #722's re-blind negative control (pin removed → both checks
+  fail naming core.hooksPath) is the shape to copy.
+- **A SALVAGED "UNTESTED" LABEL IS A CLAIM LIKE ANY OTHER: re-verify, then
+  amend the message if verification flips it** (lane #721 did; content
+  untouched, message corrected — announced, not silent).
+
 ### 2026-08-10 (round 30) — harvest of the #716 issue-artifacts landing lane
 
 - **`--` BEFORE ANY PATTERN THAT CAME FROM DATA, AND `-F` DOES NOT IMPLY IT.**
