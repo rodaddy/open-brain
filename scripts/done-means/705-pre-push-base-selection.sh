@@ -144,6 +144,18 @@ git_f() { git -C "$FIXTURE" -c user.name="done-means-705" -c user.email="done-me
 
 setup_fixture() {
   git -C "$FIXTURE" init -q -b main 2>/dev/null || return 1
+
+  # PIN THE FIXTURE'S HOOKS DIRECTORY (issue #722). A bare `git init` sets no
+  # `core.hooksPath`, so the fixture INHERITS the operator's global value --
+  # this fixture is not hermetic without this line. #711 added an assertion to
+  # the shipped hook that refuses any value other than `_githooks`, and it runs
+  # BEFORE the `--explain` early exit, so an inherited value made every
+  # invocation below die at that assertion and every clause parse a refusal
+  # instead of a base decision. The hook IS this check's subject, so the pin is
+  # the real value (contrast 709/714, which neutralise hooks entirely because
+  # the hook is not their subject).
+  git -C "$FIXTURE" config core.hooksPath _githooks || return 1  # DM722-PIN
+
   mkdir -p "$FIXTURE/python/openbrain/src" \
            "$FIXTURE/python/openbrain-memory/src" \
            "$FIXTURE/contracts" \
@@ -211,6 +223,34 @@ SPEC
 
 setup_fixture || fail_hard "could not build the fixture repository (see $FIXTURE)"
 
+# ---------------------------------------------------------------------------
+# FIXTURE-ENVIRONMENT GUARD (issue #722)
+# ---------------------------------------------------------------------------
+# Assert the pin actually took EFFECT before any clause runs. `git config
+# --get` here reads exactly what the hook's own assertion reads, so this guard
+# and the subject agree on the value by construction.
+#
+# WHY THIS IS EXIT 3 AND NOT A CLAUSE FAILURE. A blinded fixture says NOTHING
+# about base selection: the hook refuses before reaching a single line of its
+# subject code. Reporting that as FAIL would be a verdict about #705 that the
+# run did not earn -- and that is precisely the defect #722 filed, where five
+# clauses reported confident, specific, FALSE regressions ("the packages are no
+# longer separately gated") about a hook they never reached. A harness error is
+# not a failure of the thing under test.
+FIXTURE_HOOKS_PATH="$(git -C "$FIXTURE" config --get core.hooksPath 2>/dev/null || true)"
+if [ "$FIXTURE_HOOKS_PATH" != "_githooks" ]; then
+  fail_hard "$(printf '%s' "\
+BLIND FIXTURE -- this run cannot say anything about #705.
+    fixture core.hooksPath: '${FIXTURE_HOOKS_PATH:-<unset>}'
+    required:               '_githooks'
+  The fixture is inheriting an ambient core.hooksPath instead of pinning its
+  own, so the shipped hook will refuse at its #711 assertion before reaching
+  any base-selection code. Every clause below would then be parsing a REFUSAL,
+  not a decision. This is a defect in this CHECK's fixture (#722), not in the
+  hook. Fix: restore the 'git -C \"\$FIXTURE\" config core.hooksPath _githooks'
+  line in setup_fixture.")"
+fi
+
 # A lane off wip, tracking wip — the exact shape every lane in this flow has.
 new_lane_branch() {
   local name="$1"
@@ -223,6 +263,42 @@ new_lane_branch() {
 explain() {
   EXPLAIN_OUT="$(cd "$FIXTURE" && "$FIXTURE/_githooks/pre-push" --explain 2>&1 </dev/null)"
   EXPLAIN_EXIT=$?
+}
+
+# ---------------------------------------------------------------------------
+# REFUSAL DETECTION (issue #722) -- "I could not reach the subject" is not "the
+# subject regressed".
+# ---------------------------------------------------------------------------
+# The fixture guard above catches the ONE blind that has actually happened. This
+# is the general form, and it is the part that survives the next unrelated
+# invariant someone adds to the hook: the hook has a growing set of preconditions
+# that refuse BEFORE any base-selection code runs, and each one turns the
+# clauses' parse into a refusal.
+#
+# `blinded_by` returns the refusal's first meaningful line when the output
+# carries no base-selection decision at all, and empty otherwise. Clauses use
+# it to say WHAT BLINDED THEM instead of reporting empty decision fields as a
+# classification defect -- a parse failure and a wrong answer are different
+# defects with different owners (lane-contract round 29).
+#
+# It is deliberately anchored on the ABSENCE of every marker the hook owns for a
+# successful decision, not on a list of known refusal texts: a refusal added
+# tomorrow is unknown to this file, but "produced no decision" is checkable
+# today and stays true.
+blinded_by() {
+  local out="$1"
+  # Any of these means the hook REACHED its subject and produced a decision.
+  printf '%s\n' "$out" | rg -q '^[[:space:]]*base_ref=' && return 0
+  printf '%s\n' "$out" | rg -q '^[[:space:]]*changed_' && return 0
+  printf '%s\n' "$out" | rg -qF 'Python package changed' && return 0
+  printf '%s\n' "$out" | rg -qF 'Python package unchanged' && return 0
+  printf '%s\n' "$out" | rg -qF 'openbrain package changed' && return 0
+  printf '%s\n' "$out" | rg -qF 'openbrain package unchanged' && return 0
+  # No decision anywhere -> blinded. Report the first non-blank line, which is
+  # the refusal's own headline.
+  local first
+  first="$(printf '%s\n' "$out" | rg -v '^[[:space:]]*$' | head -1)"
+  printf 'the hook REFUSED before reaching its base-selection subject; first line: %s' "${first:-<no output at all>}"
 }
 
 # Read one decision field out of the hook's explain output.
@@ -270,8 +346,13 @@ explain
 A_OUT="$EXPLAIN_OUT"
 A_MEM="$(field changed_openbrain_memory)"
 A_OB="$(field changed_openbrain)"
-if [ -z "$A_MEM" ] || [ -z "$A_OB" ]; then
-  record a FAIL "decision fields missing from the explain output (memory='$A_MEM' openbrain='$A_OB'): $(printf '%s' "$A_OUT" | tr '\n' ' ')"
+A_BLIND="$(blinded_by "$A_OUT")"
+if [ -n "$A_BLIND" ]; then
+  # #722: NOT "the fields are missing" and NOT a #705 regression -- the hook
+  # never got to the code this clause is about.
+  record a BLIND "$A_BLIND"
+elif [ -z "$A_MEM" ] || [ -z "$A_OB" ]; then
+  record a FAIL "the hook produced a decision but this clause could not read it (memory='$A_MEM' openbrain='$A_OB'): $(printf '%s' "$A_OUT" | tr '\n' ' ')"
 elif [ "$A_MEM" = no ] && [ "$A_OB" = no ]; then
   record a PASS "zero-python lane on a wip base reports both packages unchanged"
 else
@@ -279,24 +360,38 @@ else
 fi
 
 # --- (b) the gate still discriminates --------------------------------------
+# #722: each sub-assertion is guarded by `blinded_by` FIRST. This clause is
+# where the false text was worst -- blinded, it announced "a real
+# python/openbrain edit was NOT detected" and "the packages are no longer
+# separately gated" about a hook that had refused before running any of it.
 B_FAILS=()
+B_BLIND=""
 new_lane_branch "lane-python-ob" || fail_hard "could not create lane-python-ob"
 printf 'lane-change\n' >> "$FIXTURE/python/openbrain/src/mod.py"
 git_f add -A >/dev/null && git_f commit -q -m "lane: real python/openbrain change"
 explain
-[ "$(field changed_openbrain)" = yes ] || B_FAILS+=("a real python/openbrain edit was NOT detected (changed_openbrain='$(field changed_openbrain)')")
+B_BLIND="$(blinded_by "$EXPLAIN_OUT")"
+if [ -z "$B_BLIND" ]; then
+  [ "$(field changed_openbrain)" = yes ] || B_FAILS+=("a real python/openbrain edit was NOT detected (changed_openbrain='$(field changed_openbrain)')")
 
-new_lane_branch "lane-python-mem" || fail_hard "could not create lane-python-mem"
-printf 'lane-change\n' >> "$FIXTURE/python/openbrain-memory/src/mod.py"
-git_f add -A >/dev/null && git_f commit -q -m "lane: real python/openbrain-memory change"
-explain
-[ "$(field changed_openbrain_memory)" = yes ] || B_FAILS+=("a real python/openbrain-memory edit was NOT detected (changed_openbrain_memory='$(field changed_openbrain_memory)')")
+  new_lane_branch "lane-python-mem" || fail_hard "could not create lane-python-mem"
+  printf 'lane-change\n' >> "$FIXTURE/python/openbrain-memory/src/mod.py"
+  git_f add -A >/dev/null && git_f commit -q -m "lane: real python/openbrain-memory change"
+  explain
+  B_BLIND="$(blinded_by "$EXPLAIN_OUT")"
+fi
 
-# The sibling-package separation the hook's own comment calls out: a
-# python/openbrain-memory edit must NOT light up python/openbrain.
-[ "$(field changed_openbrain)" = no ] || B_FAILS+=("a python/openbrain-memory edit lit up python/openbrain (changed_openbrain='$(field changed_openbrain)') — the packages are no longer separately gated")
+if [ -z "$B_BLIND" ]; then
+  [ "$(field changed_openbrain_memory)" = yes ] || B_FAILS+=("a real python/openbrain-memory edit was NOT detected (changed_openbrain_memory='$(field changed_openbrain_memory)')")
 
-if [ "${#B_FAILS[@]}" -eq 0 ]; then
+  # The sibling-package separation the hook's own comment calls out: a
+  # python/openbrain-memory edit must NOT light up python/openbrain.
+  [ "$(field changed_openbrain)" = no ] || B_FAILS+=("a python/openbrain-memory edit lit up python/openbrain (changed_openbrain='$(field changed_openbrain)') — the packages are no longer separately gated")
+fi
+
+if [ -n "$B_BLIND" ]; then
+  record b BLIND "$B_BLIND"
+elif [ "${#B_FAILS[@]}" -eq 0 ]; then
   record b PASS "real edits to each package are still detected, and the two packages stay separately gated"
 else
   record b FAIL "$(printf '%s; ' "${B_FAILS[@]}")"
@@ -308,8 +403,13 @@ printf 'announce note\n' >> "$FIXTURE/docs/readme.md"
 git_f add -A >/dev/null && git_f commit -q -m "lane: announce clause"
 explain
 C_BASE_REF="$(field base_ref)"
-if [ -z "$C_BASE_REF" ]; then
-  record c FAIL "the hook did not name the base ref it compared against: $(printf '%s' "$EXPLAIN_OUT" | tr '\n' ' ')"
+C_BLIND="$(blinded_by "$EXPLAIN_OUT")"
+if [ -n "$C_BLIND" ]; then
+  # #722: "the hook did not name its base ref" is a claim about the
+  # announcement. A refused hook did not GET to an announcement.
+  record c BLIND "$C_BLIND"
+elif [ -z "$C_BASE_REF" ]; then
+  record c FAIL "the hook produced a decision but did not name the base ref it compared against: $(printf '%s' "$EXPLAIN_OUT" | tr '\n' ' ')"
 elif printf '%s' "$C_BASE_REF" | rg -qF "origin/wip"; then
   record c PASS "the base ref is named in the hook's own output: base_ref=$C_BASE_REF"
 else
@@ -323,7 +423,15 @@ git_f add -A >/dev/null && git_f commit -q -m "lane: branch with no configured u
 explain
 D_BASE_REF="$(field base_ref)"
 D_SOURCE="$(field base_source)"
-if [ "$EXPLAIN_EXIT" -ne 0 ]; then
+D_BLIND="$(blinded_by "$EXPLAIN_OUT")"
+# #722: THE BLIND CHECK MUST COME BEFORE THE EXIT-CODE CHECK. A refusal is
+# ALSO a non-zero exit, so the exit-code test alone cannot tell "an
+# upstreamless branch made the hook fail rather than fall back" -- a real #705
+# regression -- from "the hook refused a precondition and never saw the
+# branch". Blinded, this clause reported the former and meant the latter.
+if [ -n "$D_BLIND" ]; then
+  record d BLIND "$D_BLIND"
+elif [ "$EXPLAIN_EXIT" -ne 0 ]; then
   record d FAIL "an upstreamless branch made the hook fail rather than fall back (exit=$EXPLAIN_EXIT): $(printf '%s' "$EXPLAIN_OUT" | tr '\n' ' ')"
 elif [ -z "$D_BASE_REF" ] || [ -z "$D_SOURCE" ]; then
   record d FAIL "the fallback did not announce itself (base_ref='$D_BASE_REF' base_source='$D_SOURCE')"
@@ -374,7 +482,13 @@ F_OUT="$(
 )"
 
 F_BASE="$(printf '%s\n' "$F_OUT" | sed -n 's/^[[:space:]]*base:[[:space:]]*\(.*\)$/\1/p' | tail -1)"
-if printf '%s' "$F_OUT" | rg -qF "openbrain package changed" \
+F_BLIND="$(blinded_by "$F_OUT")"
+if [ -n "$F_BLIND" ]; then
+  # #722: blinded, this clause said "the real push path produced no readable
+  # package decision" -- which reads as a #705 regression on the very path the
+  # issue is about, when the truth is the hook refused a precondition first.
+  record f BLIND "$F_BLIND"
+elif printf '%s' "$F_OUT" | rg -qF "openbrain package changed" \
   || printf '%s' "$F_OUT" | rg -qF "Python package changed"; then
   record f FAIL "a REAL push of a zero-python lane still ran a Python gate — base line was '${F_BASE:-<none>}'"
 elif printf '%s' "$F_OUT" | rg -qF "openbrain package unchanged" \
@@ -411,6 +525,7 @@ label_for() {
 }
 
 ALL_PASS=1
+ANY_BLIND=0
 for entry in "${CLAUSES[@]}"; do
   id="${entry%%|*}"
   rest="${entry#*|}"
@@ -418,7 +533,20 @@ for entry in "${CLAUSES[@]}"; do
   evidence="${rest#*|}"
   printf 'CLAUSE %s (%s): %s — %s\n' "$id" "$(label_for "$id")" "$status" "$evidence"
   [ "$status" = PASS ] || ALL_PASS=0
+  [ "$status" = BLIND ] && ANY_BLIND=1
 done
+
+# #722: A BLIND RUN IS A HARNESS ERROR, NOT A VERDICT.
+# Exit 1 from this script is read by controllers, verify-lane, and PR bodies as
+# "#705 is broken". A run that could not reach the hook's base-selection code
+# has not earned that claim in either direction, so it exits 3 -- this repo's
+# harness-error code, which fail_hard already uses and which the surrounding
+# process treats as "the check could not run", not "the subject failed".
+if [ "$ANY_BLIND" -eq 1 ]; then
+  printf '\nHARNESS-ERROR: %s\n' \
+    "one or more clauses were BLIND -- the hook refused before reaching its base-selection subject, so this run says NOTHING about #705 in either direction. Exiting 3 (harness error), deliberately NOT 1: a blinded run must never be recorded as a #705 regression (issue #722)." >&2
+  exit 3
+fi
 
 [ "$ALL_PASS" -eq 1 ] && exit 0
 exit 1

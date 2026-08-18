@@ -170,6 +170,17 @@ RUNNER
 
 setup_fixture() {
   git -C "$FIXTURE" init -q -b main 2>/dev/null || return 1
+
+  # PIN THE FIXTURE'S HOOKS DIRECTORY (issue #722). A bare `git init` sets no
+  # `core.hooksPath`, so the fixture INHERITS the operator's global value --
+  # this fixture is not hermetic without this line. #711 added an assertion to
+  # the shipped hook that refuses any value other than `_githooks`, and it runs
+  # BEFORE anything this check is about, so an inherited value made all six
+  # clauses below parse a refusal instead of the hook's pipe handling. The hook
+  # IS this check's subject, so the pin is the real value (contrast 709/714,
+  # which neutralise hooks entirely because the hook is not their subject).
+  git -C "$FIXTURE" config core.hooksPath _githooks || return 1  # DM722-PIN
+
   mkdir -p "$FIXTURE/contracts" "$FIXTURE/_githooks" "$FIXTURE/docs" || return 1
 
   printf 'contracts/schema.json\n' > "$FIXTURE/contracts/parity-paths.txt" || return 1
@@ -230,6 +241,33 @@ SHIM
 }
 
 setup_fixture || fail_hard "could not build the fixture repository (see $FIXTURE)"
+
+# ---------------------------------------------------------------------------
+# FIXTURE-ENVIRONMENT GUARD (issue #722)
+# ---------------------------------------------------------------------------
+# Assert the pin actually took EFFECT before any clause runs. `git config
+# --get` here reads exactly what the hook's own assertion reads, so this guard
+# and the subject agree on the value by construction.
+#
+# WHY THIS IS EXIT 3 AND NOT A CLAUSE FAILURE. A blinded fixture says NOTHING
+# about pipe safety: the hook refuses before running its test phase at all.
+# Reporting that as FAIL would be a verdict about #712 the run did not earn --
+# and that is exactly the defect #722 filed, where clause (f) announced
+# "redirecting stdout alone does not fix #712" about a hook whose redirect code
+# never executed. A harness error is not a failure of the thing under test.
+FIXTURE_HOOKS_PATH="$(git -C "$FIXTURE" config --get core.hooksPath 2>/dev/null || true)"
+if [ "$FIXTURE_HOOKS_PATH" != "_githooks" ]; then
+  fail_hard "$(printf '%s' "\
+BLIND FIXTURE -- this run cannot say anything about #712.
+    fixture core.hooksPath: '${FIXTURE_HOOKS_PATH:-<unset>}'
+    required:               '_githooks'
+  The fixture is inheriting an ambient core.hooksPath instead of pinning its
+  own, so the shipped hook will refuse at its #711 assertion before running the
+  test phase. Every clause below would then be parsing a REFUSAL, not the
+  hook's pipe handling. This is a defect in this CHECK's fixture (#722), not in
+  the hook. Fix: restore the 'git -C \"\$FIXTURE\" config core.hooksPath
+  _githooks' line in setup_fixture.")"
+fi
 
 ZERO_SHA_FIXTURE=0000000000000000000000000000000000000000
 
@@ -297,12 +335,50 @@ precheck_pipe_is_hostile() {
 CLAUSES=()
 record() { CLAUSES+=("$1|$2|$3"); }
 
+# ---------------------------------------------------------------------------
+# REFUSAL DETECTION (issue #722) -- "I could not reach the subject" is not "the
+# subject regressed".
+# ---------------------------------------------------------------------------
+# The fixture guard above catches the ONE blind that has actually happened
+# (#711's hooksPath assertion). This is the general form, and it is the part
+# that survives the next unrelated precondition someone adds to the hook: every
+# such precondition refuses BEFORE the test phase, and each one turns all six
+# clauses below into parses of a refusal.
+#
+# `blinded_by` returns a description when the hook produced NO evidence of
+# having reached its test phase, and empty otherwise. It is anchored on the
+# ABSENCE of the markers the hook owns for having got there, not on a list of
+# known refusal texts: a refusal added tomorrow is unknown to this file, but
+# "never reached the test phase" is checkable today and stays true.
+#
+# The runner's own `DM712-RUNNER-RAN` marker is deliberately NOT one of these
+# markers. It proves the SUITE ran, which is a stronger claim than this
+# function makes and is precisely what clauses (a) and (f) assert on -- folding
+# it in here would let a hook that reached the test phase and then failed
+# legitimately be excused as "blind".
+blinded_by() {
+  local out="$1"
+  # Any of these means the hook REACHED the phase this check is about.
+  printf '%s\n' "$out" | rg -qF 'bun test ...' && return 0
+  printf '%s\n' "$out" | rg -qiF 'TESTS FAILED' && return 0
+  printf '%s\n' "$out" | rg -qiF 'could not write its output' && return 0
+  printf '%s\n' "$out" | rg -qF 'pre-push: all checks passed' && return 0
+  local first
+  first="$(printf '%s\n' "$out" | rg -v '^[[:space:]]*$|^DM712_HOOK_EXIT=' | head -1)"
+  printf 'the hook REFUSED before reaching its test phase; first line: %s' "${first:-<no output at all>}"
+}
+
 # --- (a) the defect --------------------------------------------------------
 if precheck_pipe_is_hostile "writefail-stderr"; then
   run_hook_through_pipe "writefail-stderr"
   A_OUT="$HOOK_OUT"
   A_EXIT="$HOOK_EXIT"
-  if [ "$A_EXIT" = "0" ] \
+  A_BLIND="$(blinded_by "$A_OUT")"
+  if [ -n "$A_BLIND" ]; then
+    # #722: NOT "a GREEN suite through a pipe still failed the hook" -- the
+    # hook never ran a suite at all.
+    record a BLIND "$A_BLIND"
+  elif [ "$A_EXIT" = "0" ] \
     && printf '%s' "$A_OUT" | grep -qF "pre-push: all checks passed" \
     && printf '%s' "$A_OUT" | grep -qF "DM712-RUNNER-RAN"; then
     record a PASS "the real hook, through a genuine pipe, with a runner that cannot write to a pipe (proven hostile: piped exit=$PRECHECK_EXIT): exit 0, suite genuinely ran"
@@ -317,6 +393,7 @@ fi
 run_hook_through_pipe "testfail"
 B_OUT="$HOOK_OUT"
 B_EXIT="$HOOK_EXIT"
+B_BLIND="$(blinded_by "$B_OUT")"
 B_FAILS=()
 [ "$B_EXIT" != "0" ] || B_FAILS+=("a genuinely failing suite PASSED the hook (exit=$B_EXIT) — the exit code is not being gated on")
 printf '%s' "$B_OUT" | grep -qiF "TESTS FAILED" \
@@ -324,7 +401,13 @@ printf '%s' "$B_OUT" | grep -qiF "TESTS FAILED" \
 if printf '%s' "$B_OUT" | grep -qiF "could not write its output"; then
   B_FAILS+=("a genuine test failure was MASKED as a write/runner error — the two worlds are crossed")
 fi
-if [ "${#B_FAILS[@]}" -eq 0 ]; then
+# #722: THE BLIND CHECK MUST OUTRANK THE EXIT-CODE CHECK HERE. A refusal is
+# also non-zero, so this clause's "a genuinely failing suite still fails"
+# assertion is trivially satisfied by a hook that refused and never ran a
+# suite -- the clause would go half-green for the wrong reason.
+if [ -n "$B_BLIND" ]; then
+  record b BLIND "$B_BLIND"
+elif [ "${#B_FAILS[@]}" -eq 0 ]; then
   record b PASS "a genuinely failing suite still fails the hook (exit=$B_EXIT) and is named a TEST failure, not a write error"
 else
   record b FAIL "$(printf '%s; ' "${B_FAILS[@]}")"
@@ -343,6 +426,7 @@ git_f add -A >/dev/null && git_f commit -q -m "clause c runner"
 run_hook_through_pipe "writefail-stderr"
 C_OUT="$HOOK_OUT"
 C_EXIT="$HOOK_EXIT"
+C_BLIND="$(blinded_by "$C_OUT")"
 C_FAILS=()
 [ "$C_EXIT" != "0" ] || C_FAILS+=("a runner that could not write its output was reported as a PASS (exit=$C_EXIT)")
 printf '%s' "$C_OUT" | grep -qiF "could not write its output" \
@@ -352,7 +436,9 @@ printf '%s' "$C_OUT" | grep -qiF "NOT a test failure" \
 if printf '%s' "$C_OUT" | grep -qiF "TESTS FAILED"; then
   C_FAILS+=("a write/runner failure was blamed on the tests")
 fi
-if [ "${#C_FAILS[@]}" -eq 0 ]; then
+if [ -n "$C_BLIND" ]; then
+  record c BLIND "$C_BLIND"
+elif [ "${#C_FAILS[@]}" -eq 0 ]; then
   record c PASS "a runner that cannot write its output fails the hook and is named a WRITE/RUNNER problem, explicitly not a test failure"
 else
   record c FAIL "$(printf '%s; ' "${C_FAILS[@]}")"
@@ -363,7 +449,12 @@ git_f add -A >/dev/null && git_f commit -q -m "restore runner"
 # --- (d) the redirect is announced -----------------------------------------
 run_hook_through_pipe "writefail-stderr"
 D_OUT="$HOOK_OUT"
-if printf '%s' "$D_OUT" | grep -qF "bun test ..." \
+D_BLIND="$(blinded_by "$D_OUT")"
+if [ -n "$D_BLIND" ]; then
+  # #722: "the redirect was silent" is a claim about the hook's announcement.
+  # A refused hook did not GET to a redirect to announce.
+  record d BLIND "$D_BLIND"
+elif printf '%s' "$D_OUT" | grep -qF "bun test ..." \
   && printf '%s' "$D_OUT" | grep -qF "$SCRATCH/ws"; then
   record d PASS "the hook announces that it redirected the runner's output, and names the log path"
 else
@@ -373,7 +464,11 @@ fi
 # --- (e) the output is still replayed --------------------------------------
 # Read from the same run as (d). The runner's own coverage-shaped lines must
 # reach the caller, or the hook bought its verdict by swallowing the output.
-if printf '%s' "$D_OUT" | grep -qF "DM712-RUNNER-RAN" \
+if [ -n "$D_BLIND" ]; then
+  # #722: read from the same run as (d). "the redirect swallowed the run" is a
+  # claim about a redirect that never executed.
+  record e BLIND "$D_BLIND"
+elif printf '%s' "$D_OUT" | grep -qF "DM712-RUNNER-RAN" \
   && printf '%s' "$D_OUT" | grep -qF "src/mod100.ts"; then
   record e PASS "the runner's output still reaches the caller — the redirect did not cost the operator the transcript"
 else
@@ -386,7 +481,14 @@ if precheck_pipe_is_hostile "writefail-stderr"; then
   run_hook_through_pipe "writefail-stderr"
   F_EXIT="$HOOK_EXIT"
   F_OUT="$HOOK_OUT"
-  if [ "$F_EXIT" = "0" ] && printf '%s' "$F_OUT" | grep -qF "DM712-RUNNER-RAN"; then
+  F_BLIND="$(blinded_by "$F_OUT")"
+  if [ -n "$F_BLIND" ]; then
+    # #722: this clause's failure text is the sharpest false claim of the whole
+    # family -- "redirecting stdout alone does not fix #712" is a specific
+    # verdict on the FIX's shape, emitted about a hook whose redirect code
+    # never executed. It must never be printed by a blinded run.
+    record f BLIND "$F_BLIND"
+  elif [ "$F_EXIT" = "0" ] && printf '%s' "$F_OUT" | grep -qF "DM712-RUNNER-RAN"; then
     record f PASS "a runner hostile to STDERR ONLY (the measured bun shape) survives — stderr is genuinely off the pipe, not just stdout"
   else
     record f FAIL "the runner's STDERR is still attached to a pipe (exit=$F_EXIT) — redirecting stdout alone does not fix #712"
@@ -422,6 +524,7 @@ label_for() {
 }
 
 ALL_PASS=1
+ANY_BLIND=0
 for entry in "${CLAUSES[@]}"; do
   id="${entry%%|*}"
   rest="${entry#*|}"
@@ -429,7 +532,20 @@ for entry in "${CLAUSES[@]}"; do
   evidence="${rest#*|}"
   printf 'CLAUSE %s (%s): %s — %s\n' "$id" "$(label_for "$id")" "$status" "$evidence"
   [ "$status" = PASS ] || ALL_PASS=0
+  [ "$status" = BLIND ] && ANY_BLIND=1
 done
+
+# #722: A BLIND RUN IS A HARNESS ERROR, NOT A VERDICT.
+# Exit 1 from this script is read by controllers, verify-lane, and PR bodies as
+# "#712 is broken". A run that could not reach the hook's test phase has not
+# earned that claim in either direction, so it exits 3 -- this repo's
+# harness-error code, which fail_hard already uses and which the surrounding
+# process treats as "the check could not run", not "the subject failed".
+if [ "$ANY_BLIND" -eq 1 ]; then
+  printf '\nHARNESS-ERROR: %s\n' \
+    "one or more clauses were BLIND -- the hook refused before reaching its test phase, so this run says NOTHING about #712 in either direction. Exiting 3 (harness error), deliberately NOT 1: a blinded run must never be recorded as a #712 regression (issue #722)." >&2
+  exit 3
+fi
 
 [ "$ALL_PASS" -eq 1 ] && exit 0
 exit 1
