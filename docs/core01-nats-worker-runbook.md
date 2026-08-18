@@ -334,6 +334,64 @@ Do not "fix" 3100 by setting `OPENBRAIN_TRANSPORT=nats` in the clone env — tha
 would put the HTTP service back into the bridge business, which is exactly the
 boundary this runbook exists to keep.
 
+### `embed_watermark` on 3110 (#724 item 3)
+
+`/health` on 3110 carries an OPTIONAL `embed_watermark` block beside `nats`:
+
+```json
+{
+  "status": "healthy",
+  "nats": { "availability": "available", "...": "..." },
+  "embed_watermark": {
+    "stale": false,
+    "newest_raw_age_seconds": 45,
+    "newest_embedded_age_seconds": 60,
+    "lag_seconds": 15,
+    "lag_threshold_seconds": 3600,
+    "raw_rows_recent": 128,
+    "reason": "embed watermark within threshold"
+  },
+  "timestamp": "..."
+}
+```
+
+**Why it exists.** The maintenance producer ticked for three days with no
+consumer draining the embed queue. Raw rows kept arriving, embedded rows
+stopped, and nothing anywhere COMPARED the two — so every liveness surface
+stayed green while the corpus quietly stopped being searchable. This is the
+same argument `maintenance_producer` (#625) and `capture` (#647) make on the
+HTTP payload, applied to the third background lane, and the block deliberately
+matches their shape (`server/transport/health.ts:14-33`, `:35-79`).
+
+**Reading it.**
+
+- `stale: true` is THE verdict and flips `status` to `degraded` with HTTP 503,
+  even when `nats.availability` is `available`. A healthy bridge must not be
+  able to hold this endpoint green while the embed lane is days behind — that
+  combination is exactly the shape of the outage.
+- `stale` requires `raw_rows_recent > 0`. A quiet week produces an old embedded
+  row too; alarming on an idle corpus is how a check stops being read. An idle
+  corpus reports the lag numbers and stays `healthy`.
+- **Absence is not staleness.** A worker that composes no embed observer emits
+  NO `embed_watermark` key and cannot be degraded by one. Missing block means
+  "not my job"; `stale: true` means "my job and I am not doing it". Do not read
+  an absent block as a failure.
+- `lag_threshold_seconds` reports the bound the verdict was actually taken
+  against, so a reading is interpretable without knowing the deployed config.
+
+**Threshold.** `OPENBRAIN_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS`, default
+`3600` (one hour — the outage ran three days; the goal is catching it in about
+an hour). Nothing is adjusted silently: the worker's startup log line carries
+`embed_watermark_lag_threshold_seconds` and
+`embed_watermark_lag_threshold_source` (`default`, `env`, or
+`invalid_env_default`), plus `embed_watermark_observed`, so an unset key is
+visible as a default rather than looking configured, and an unusable value
+announces the original it replaced.
+
+```zsh
+curl -fsS http://127.0.0.1:3110/health | jq .embed_watermark
+```
+
 ### Verify
 
 ```zsh
