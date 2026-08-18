@@ -1472,7 +1472,7 @@ Checks for the next swarm:
   so. It was reintroduced-safe only because the constraint is now written down.
 
 
-# A guard that matches vocabulary taxes every lane; judge the operation
+## [2026-08-08] A guard that matches vocabulary taxes every lane; judge the operation
 
 **Pattern.** A guard is written to stop a behavior, and the fastest way to
 write it is a word list: if the text contains one of these words, refuse. That

@@ -214,7 +214,13 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # ...->237 — both provenance trails kept above/below). Per round 28/29's own
 # instruction the pin is RE-MEASURED on the merged tree, not summed; the value
 # set here is that measurement, announced in PR #738.
-EXPECTED_ENTRY_COUNT=237
+# 237 -> 241 (2026-08-18 rotation merge, PR #738): measured on the merged tree
+# after the union — main's four parallel-line entries plus wip's additions all
+# now count once. Announced here and in the PR body.
+# 241 -> 242 (#707 fix, same commit): the guards-judge-the-operation entry's
+# level-1 undated heading becomes a dated `##` finding heading, so it now
+# COUNTS — the whole point of #707.
+EXPECTED_ENTRY_COUNT=242
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"
