@@ -80,8 +80,20 @@
 # Verdict convention matches pr-body-gate.ts: exit 2 = blocked with the reason
 # on stderr, exit 0 = allowed.
 #
-# Exit 0 only when every clause passes. Exit 3 is a harness error (missing
-# tool, unreachable gh), which is NOT a fail of the thing under test.
+# Exit 0 only when every clause passes AND nothing was skipped.
+#   0  every clause passed; the live clause ran
+#   1  at least one clause FAILED
+#   3  HARNESS-ERROR — missing tool, unreachable gh, or a POLLUTED ENVIRONMENT
+#      (an MGVL_IN_VERIFY_LANE / MGVL_LIVE_PR value that no real verify-lane run
+#      produces). Not a fail of the thing under test; the inputs are untrusted.
+#   4  every clause passed BUT the live clause was legitimately SKIPPED because
+#      this run is nested inside verify-lane. Skipped is not passed: verify-lane
+#      is UNPROVEN by this transcript. Distinct from 1 so a nested run is never
+#      misread as a regression, and non-zero so it is never misread as proof.
+#
+# Before #721 the nested/polluted paths both returned 0 with clause 9 recorded
+# PASS, so `MGVL_IN_VERIFY_LANE=anything` produced a full green in which the
+# only live proof never executed.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -419,7 +431,13 @@ else
   # Clearing it is correct rather than a workaround: this clause spawns a
   # SYNTHETIC verify-lane against a stubbed PR #999 that runs no check and
   # cannot recurse, so the guard has nothing to protect here. Clause 9 is where
-  # nesting actually matters, and it still honours MGVL_IN_VERIFY_LANE.
+  # nesting actually matters, and it still honours MGVL_IN_VERIFY_LANE — but
+  # since #721 only when the marker is CORROBORATED by MGVL_VERIFY_LANE_PRS,
+  # never on its mere presence.
+  #
+  # Note this clearing is the DEFENSIVE use of the same variables: it BREAKS
+  # inheritance rather than trusting it, and says why in the paragraph above.
+  # That is the opposite of the #721 defect and is left as it is.
   V_OUT="$(
     PATH="$STUB_DIR:$PATH" MG_FIXTURE_DIR="$FIXTURES/no-receipt" MG_GH_BROKEN=0 \
       MGVL_VERIFY_LANE_PRS="" MGVL_IN_VERIFY_LANE="" \
@@ -451,12 +469,97 @@ else
   # exercise, and report that honestly instead of recursing. The outer run is
   # the one that proves clause 9; a nested run skipping it is not a silent pass,
   # because the reason is printed and the clause is marked SKIP-BY-GUARD.
-  if [ -n "${MGVL_IN_VERIFY_LANE:-}" ]; then
-    record 9 PASS "SKIP-BY-GUARD: already running inside verify-lane (MGVL_IN_VERIFY_LANE=${MGVL_IN_VERIFY_LANE}); re-entering would recurse without bound. The outer verify-lane run is the live proof."
+  #
+  # THE GUARD MUST BE EARNED, NOT ASSERTED (#721; family B of the 2026-08-10
+  # gate-layer audit — a gate letting its ENVIRONMENT decide the verdict).
+  # Until this fix the condition tested the variable's PRESENCE, so
+  #
+  #     MGVL_IN_VERIFY_LANE=fabricated-value bash <this file>
+  #
+  # recorded clause 9 as PASS and exited 0: a full-green transcript in which the
+  # only live proof never ran. A stale export, a CI env leak, or a hand-set
+  # value silently disabled the one clause that exercises verify-lane end to
+  # end, and the output was indistinguishable from a genuine run.
+  #
+  # This does NOT weaken the guard, and the recursion it prevents is real (331
+  # worktrees, measured above). The authoritative guard remains verify-lane's
+  # own depth counter (verify-lane.ts:287-330) — deliberately in the spawning
+  # process because a guard living in the repo cannot protect a run that checks
+  # out an older commit of that repo. THIS clause is the POLITE layer
+  # (verify-lane.ts:283-286): it exists so a genuinely nested run reports
+  # legibly instead of being refused. A polite layer that any string can
+  # trigger is not politeness, it is an off switch.
+  #
+  # verify-lane.ts:479-480 sets BOTH markers together, and both are STRUCTURED:
+  # MGVL_IN_VERIFY_LANE=`pr-<n>` and MGVL_VERIFY_LANE_PRS=<ancestry including n>.
+  # Only the real path produces that pair in agreement, so the claim is
+  # RE-DERIVED from the values instead of inferred from their presence: the
+  # marker must parse as pr-<n> AND <n> must appear in the ancestry list.
+  #
+  # Corroboration is the whole point. Validating the SHAPE alone would only
+  # replace one magic word with another — anyone reading this source could type
+  # `pr-1` and get the free pass `fabricated-value` used to get. The ancestry is
+  # maintained by the spawning process, so a fabricated marker cannot satisfy it
+  # without already knowing which PR is genuinely being verified.
+  #
+  # A marker failing either test is a POLLUTED ENVIRONMENT: exit 3
+  # (HARNESS-ERROR via fail_hard), never a pass and never an ordinary clause
+  # failure. The operator's shell is lying to their gates and needs to be told,
+  # not accommodated. #722's lesson: "I cannot trust my inputs" and "the subject
+  # regressed" are different defects with different owners.
+  MGVL_MARKER="${MGVL_IN_VERIFY_LANE:-}"
+  MGVL_SKIPPED=0
+  if [ -n "$MGVL_MARKER" ]; then
+    MGVL_PR_N="${MGVL_MARKER#pr-}"
+    if [ "$MGVL_PR_N" = "$MGVL_MARKER" ] || ! printf '%s' "$MGVL_PR_N" | rg -q '^[0-9]+$'; then
+      fail_hard "MGVL_IN_VERIFY_LANE is set to \"$MGVL_MARKER\", which is not the pr-<n> shape verify-lane produces (scripts/verify-lane.ts:479 sets MGVL_IN_VERIFY_LANE=pr-<number>).
+  This is a POLLUTED ENVIRONMENT, not a free pass. A non-empty value here used to
+  skip the ONE clause that exercises verify-lane end to end and record that skip as
+  PASS, so the run reported full green with nothing live proven (#721).
+  Clear it and re-run:  MGVL_IN_VERIFY_LANE= MGVL_VERIFY_LANE_PRS= bash $0"
+    fi
+    MGVL_ANCESTRY=",$(printf '%s' "${MGVL_VERIFY_LANE_PRS:-}" | tr -d '[:space:]'),"
+    case "$MGVL_ANCESTRY" in
+      *",$MGVL_PR_N,"*) MGVL_SKIPPED=1 ;;
+      *)
+        fail_hard "MGVL_IN_VERIFY_LANE=\"$MGVL_MARKER\" has the right shape but is NOT corroborated by MGVL_VERIFY_LANE_PRS=\"${MGVL_VERIFY_LANE_PRS:-}\" — PR $MGVL_PR_N is absent from that ancestry.
+  verify-lane sets both together (scripts/verify-lane.ts:479-480), so a marker
+  without its ancestry did not come from a real verify-lane run. Accepting the
+  shape alone would make \"pr-<n>\" the new magic word that turns the live clause
+  off, which is #721 with one extra step.
+  Clear both and re-run:  MGVL_IN_VERIFY_LANE= MGVL_VERIFY_LANE_PRS= bash $0"
+        ;;
+    esac
+  fi
+
+  if [ "$MGVL_SKIPPED" -eq 1 ]; then
+    record 9 SKIP "SKIP-BY-GUARD: genuinely nested inside verify-lane (MGVL_IN_VERIFY_LANE=${MGVL_MARKER}, corroborated by MGVL_VERIFY_LANE_PRS=${MGVL_VERIFY_LANE_PRS:-}); re-entering would recurse without bound. The OUTER verify-lane run is the live proof — THIS run proves nothing about verify-lane."
   elif [ "$CONTROL_OK" -ne 1 ]; then
     record 9 FAIL "CONTROL clause failed — refusing to bank a live verdict against a dead gh"
   else
+    # SIBLING SWEEP (#721 fixes the PATTERN, not only the reported instance).
+    # MGVL_LIVE_PR is this file's OTHER inherited variable that steers the live
+    # clause: it chooses the clause's SUBJECT. It was announced (below) but
+    # never validated, which is the same family in a quieter form — an
+    # announcement describes an input, it does not check one. An inherited or
+    # stale value silently re-aimed the live proof at an arbitrary PR, and a
+    # non-numeric value would have been handed straight to `gh`.
+    #
+    # Two validations, both refusing rather than adjusting:
+    #   (a) numeric, because everything downstream treats it as a PR number;
+    #   (b) NOT the PR that contains this check — that self-targeting is the
+    #       measured 331-worktree recursion this whole guard exists to stop,
+    #       and the operator override is precisely the route back into it.
     LIVE_PR="${MGVL_LIVE_PR:-}"
+    if [ -n "$LIVE_PR" ]; then
+      printf '%s' "$LIVE_PR" | rg -q '^[0-9]+$' \
+        || fail_hard "MGVL_LIVE_PR=\"$LIVE_PR\" is not a PR number. It selects the SUBJECT of the live clause, so an inherited or mistyped value silently re-aims the only live proof in this check. Clear it to use the purpose-made throwaway PR:  MGVL_LIVE_PR= bash $0"
+      SELF_PR="$(gh pr list --state open --json number,headRefName -q \
+        ".[] | select(.headRefName == \"$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)\") | .number" 2>/dev/null | head -1)"
+      if [ -n "$SELF_PR" ] && [ "$SELF_PR" = "$LIVE_PR" ]; then
+        fail_hard "MGVL_LIVE_PR=$LIVE_PR is the PR that CONTAINS this check (branch $(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)). Verifying it makes verify-lane run this file, whose live clause verifies the same PR again — the unbounded recursion measured at 331 worktrees on 2026-08-08. Refusing rather than self-targeting; clear MGVL_LIVE_PR to use the purpose-made throwaway PR."
+      fi
+    fi
     CREATED_PR=""
     CREATED_BRANCH=""
 
@@ -621,15 +724,32 @@ label_for() {
   esac
 }
 
+# SKIP IS A THIRD VERDICT, NOT A FLAVOUR OF PASS (#721). A skipped clause
+# proves nothing about its subject, so it may not count toward "every clause
+# passed" and may not produce exit 0. `issue-resolution-artifacts.sh` in this
+# same directory established the convention — it counts skips and prints
+# "skipped is not passed; what they cover is unproven this run" — and this file
+# now follows it rather than laundering a skip into a green summary.
 ALL_PASS=1
+SKIPS=0
 for entry in "${CLAUSES[@]}"; do
   id="${entry%%|*}"
   rest="${entry#*|}"
   status="${rest%%|*}"
   evidence="${rest#*|}"
   printf 'CLAUSE %s (%s): %s — %s\n' "$id" "$(label_for "$id")" "$status" "$evidence"
-  [ "$status" = PASS ] || ALL_PASS=0
+  case "$status" in
+    PASS) ;;
+    SKIP) SKIPS=$((SKIPS + 1)) ;;
+    *) ALL_PASS=0 ;;
+  esac
 done
+
+if [ "$SKIPS" -gt 0 ]; then
+  printf '\nNOTE  %d clause(s) SKIPPED — skipped is not passed; what they cover is unproven this run.\n' "$SKIPS"
+  printf '      The LIVE verify-lane clause is the one that skips, so this transcript is NOT\n'
+  printf '      evidence that verify-lane works. Only an OUTER (non-nested) run proves it.\n'
+fi
 
 # Scratch fixtures are this script's own; retire them into the temp workspace
 # archive rather than deleting (AGENTS.md: the agent's cleanup verb is mv).
@@ -638,5 +758,15 @@ if mkdir -p "$ARCHIVE_DIR" 2>/dev/null; then
   mv "$SCRATCH" "$ARCHIVE_DIR/$(basename "$SCRATCH").$(date +%s)" 2>/dev/null
 fi
 
-[ "$ALL_PASS" -eq 1 ] && exit 0
+# Exit 0 means EVERY clause passed, with nothing skipped. A run whose live
+# clause was skipped exits 4 — non-zero, so no caller can mistake it for proof,
+# and distinct from 1 so a nested run is not misread as a genuine regression.
+# Before #721 this path returned 0 and the transcript was indistinguishable
+# from a run that had actually exercised verify-lane.
+if [ "$ALL_PASS" -eq 1 ] && [ "$SKIPS" -eq 0 ]; then
+  exit 0
+fi
+if [ "$ALL_PASS" -eq 1 ]; then
+  exit 4
+fi
 exit 1
