@@ -64,32 +64,24 @@ def distilled_content(
     return value
 
 
-def validate_started_lane(
-    result: Any,
-    namespace: str,
-    scope: RuntimeScopeCoordinates,
-) -> None:
-    """Require a session-start result to prove the requested exact scope."""
+def _started_lane(result: Any) -> Mapping[str, Any]:
+    """Return the lane object from a session-start result, or refuse."""
     if not isinstance(result, Mapping):
         raise ValueError("session_start result missing lane object")
     lane = result.get("lane")
     if not isinstance(lane, Mapping):
         raise ValueError("session_start result missing lane object")
-    metadata = lane.get("metadata")
-    candidate = {
-        name: lane[name]
-        for name in (
-            "namespace",
-            "session_key",
-            "agent",
-            "source",
-            "channel_id",
-            "thread_id",
-        )
-        if name in lane
-    }
-    if isinstance(metadata, Mapping) and "server_id" in metadata:
-        candidate["server_id"] = metadata["server_id"]
+    return lane
+
+
+def _require_proven_namespace(lane: Mapping[str, Any], namespace: str) -> None:
+    """Refuse a lane whose namespace is absent or is not the configured one.
+
+    Extracted verbatim from ``validate_started_lane`` so the adopted-lane
+    validator (#724 item 4) enforces the SAME refusals rather than a second
+    copy that could drift. The two branches and their reasoning below are
+    #654 and #662 unchanged.
+    """
     # A namespace mismatch is diagnosed separately, BEFORE the generic
     # comparison, because it is the one scope key an operator cannot fix by
     # editing the request (#654). `namespace` is env-carried and never a
@@ -144,6 +136,62 @@ def validate_started_lane(
             "request sends the X-Namespace header. Nothing was written to "
             f"'{namespace}'."
         )
+
+
+def validate_adopted_lane(
+    result: Any,
+    namespace: str,
+    session_key: str,
+) -> None:
+    """Require an ADOPTED lane to prove the coordinates the caller owns.
+
+    A manual wrap/checkpoint claims no exact scope (#724 item 4), so there is
+    no requested exact scope for the response to prove. What the caller does
+    own is its ``session_key`` and, through its token or the delegation header,
+    its ``namespace`` — so those, and only those, bind here.
+
+    This is deliberately NOT a general relaxation. ``validate_started_lane``
+    remains the validator for every other session_start, the context-pack proof
+    is untouched, and the namespace branches below are the same refusals
+    (#654/#662) enforced on the exact-scope path: an unproven namespace is
+    still a refusal, because writing into a lane whose namespace was never
+    established is the silent mis-scope those issues exist to prevent
+    (``server/auth/middleware.ts:9-13``).
+    """
+    lane = _started_lane(result)
+    _require_proven_namespace(lane, namespace)
+    served_key = lane.get("session_key")
+    if served_key != session_key:
+        raise ValueError(
+            "session_start returned a lane for session_key "
+            f"'{served_key}', not the requested '{session_key}'. Nothing was "
+            "written."
+        )
+
+
+def validate_started_lane(
+    result: Any,
+    namespace: str,
+    scope: RuntimeScopeCoordinates,
+) -> None:
+    """Require a session-start result to prove the requested exact scope."""
+    lane = _started_lane(result)
+    metadata = lane.get("metadata")
+    candidate = {
+        name: lane[name]
+        for name in (
+            "namespace",
+            "session_key",
+            "agent",
+            "source",
+            "channel_id",
+            "thread_id",
+        )
+        if name in lane
+    }
+    if isinstance(metadata, Mapping) and "server_id" in metadata:
+        candidate["server_id"] = metadata["server_id"]
+    _require_proven_namespace(lane, namespace)
     expected = exact_scope_fields(namespace, scope)
     expected["source"] = expected.pop("platform")
     # The server stores/returns `platform` under the lane column `source`

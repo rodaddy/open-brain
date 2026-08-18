@@ -77,6 +77,39 @@ through another authorized durable path.
 3. Call `session_wrap` to checkpoint the summary to durable storage
 4. Context compacts. Lane persists.
 
+#### Wrap/checkpoint against a lane the session does not own
+
+Status: WRITTEN 2026-08-17 (#724 item 4), client-side only — the server's
+exact-scope predicate is unchanged.
+
+A manual `wrap`/`checkpoint` is frequently issued against a lane some OTHER
+process opened. The capture hook is the common case: it creates the base lane
+with `agent` set and every other exact-scope coordinate NULL, so a session that
+claims its own full scope trips the server's one-way fill (#646) and the write
+is refused with `Existing lane exact scope does not match session_start
+request`. Two Development sessions lost their wraps to exactly this.
+
+The `openbrain-memory` client now **claims first and adopts on refusal**:
+
+1. `session_start` claims the caller's own exact scope, exactly as before. On
+   success nothing else happens — the ordinary path is unchanged, same single
+   call with the same arguments.
+2. **Only** on that specific scope refusal, the client re-issues
+   `session_start` claiming nothing but `session_key`. That is the server's
+   `!hasCompleteExactScope` branch, which returns the existing lane verbatim
+   instead of attempting a fill.
+3. `session_wrap` then carries the coordinates that came back ON THAT LANE, not
+   the requester's, because the write verb must still satisfy the server's
+   lane-scope predicate.
+
+The adopting `session_start` has no requested exact scope for the response to
+prove, so it is validated on `session_key` + `namespace` — the coordinates the
+caller genuinely owns. The namespace refusals (#654/#662) are enforced
+unchanged on this path. Adoption never re-points the lane, and it is scoped to
+the wrap/checkpoint verbs: `append_session_event` (capture) and
+`agent_context_pack` still prove full exact scope, and no other validation is
+widened.
+
 ### Resuming After Compaction
 1. Call `session_start` → lane + events are immediately available
 2. Search OB for related past work if needed
