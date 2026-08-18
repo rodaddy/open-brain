@@ -1618,70 +1618,242 @@ Review checks:
 
 A done-means check exists to be the one thing that cannot be talked out of a verdict. A verdict channel that converts "crashed" into "passed" inverts exactly that guarantee, and it does so most reliably under the conditions the check was written for — a broken subject. Every clause downstream of the throw is silently skipped, so the more the subject is broken, the earlier the crash and the fewer clauses run.
 
-## [2026-08-09] A gate that judges from a tree other than the one being merged makes a false receipt the cheapest escape
+## [2026-08-09] A hardcoded 0 standing in for an unmeasured quantity is a silent data loss
 
 **Severity:** HIGH
-**Source:** Issues #705 and #706, fixed as one lane (PR for `lane/fix-gates-705-706`); a third instance found live during that lane's own push
-**Scope:** any gate, hook, or check whose verdict depends on a base ref, a working tree, or a checkout it did not derive from the change under review
+**Source:** #680 (cutover blocker B2) — 15 raw turns and ~44 lifecycle records permanently abandoned while `/health` read `spool_pending:0, reason:"capture lane delivering"`
+**Scope:** any health block, metric, counter, or status field a vantage point cannot actually measure
 **Status:** active
 
 ### Pattern
 
-A gate's job is to judge THIS change. The moment its base ref or its tree is
-resolved from something other than the change — a hardcoded branch, the file's
-own directory, an absolute `core.hooksPath` — the gate is answering a question
-about a different artifact and reporting it as a verdict about this one.
+A reporting surface needs a number it cannot observe, so it passes `0` — or
+`?? 0`, or omits the field so a reader defaults it. The value is not wrong in a
+way anyone notices, because zero is exactly what a HEALTHY system reports. The
+two states collapse into one:
 
-Three instances, same family, all live in this repo:
+- **nothing is wrong** — measured, and the count really is zero.
+- **nobody looked** — unmeasured, rendered as if measured.
 
-1. **#706** — `scripts/validate-pr-body.ts` resolved the `Done-means` path
-   against `resolve(import.meta.dir, "..")`, and `.claude/hooks/pr-body-gate.ts`
-   spawns it from `$CLAUDE_PROJECT_DIR` (the primary checkout, on the base
-   branch). A lane's done-means check is a NEW file on the lane branch, so every
-   PR that introduced its own check was structurally refused.
-2. **#705** — `_githooks/pre-push` hardcoded `origin/main`. Lanes branch from a
-   wip branch 80 commits ahead, so every lane inherited that span's Python
-   changes and ran a package gate on a zero-Python diff.
-3. **Found during the fix** — `core.hooksPath` is an ABSOLUTE path to the
-   primary checkout, so every lane worktree runs the primary's hooks, not its
-   own. A lane fixing a hook structurally cannot exercise its own fix on push.
+Every alert, dashboard, and reviewer downstream now reads the second as the
+first. The failure is not that the surface is silent; it is that the surface is
+CONFIDENTLY GREEN over the exact condition it exists to report.
 
-### Why it is worse than an ordinary false positive
+Measured instance: `liveness-observer.ts` hardcoded `spoolPending: 0` because a
+server genuinely cannot enumerate client-side spool files. That reasoning was
+CORRECT for spool depth and was silently inherited by quarantine — a different
+quantity a client already computes (`SpoolStatus.quarantined_count`) and can
+simply report. Fifteen turns were confirmed absent from `ob_raw_turns` and
+present on disk in a sidecar, while the same session kept delivering 1,819
+further turns, so the lane looked healthy by every available signal. The count
+that would have revealed it had existed for weeks with zero consumers anywhere
+outside the module that computed it.
 
-Each of these had a legitimate-looking escape that was a lie: name a different,
-pre-existing check that never judged this lane (#706); answer "not mine" to a
-failure the push did not cause (#705). Both are false receipts, and a gate whose
-cheapest escape is a false receipt trains that reflex — which is how a forced
-gate decays into noise routed around with `--no-verify`.
+### What to check in review
+
+1. **For every 0 in a status/health/metric construction, ask "measured, or
+   assumed?"** A literal `0`, a `?? 0`, or a default parameter on a field the
+   producer cannot see is the smell. The fix is ABSENT (`undefined`, field
+   omitted), never a neutral-looking number.
+2. **A computed value with no consumer is a defect, not dead code.** Grep the
+   count's name across the tree. If the only references are the module that
+   computes it and its own tests, the observability it represents does not
+   exist — someone built the measurement and never connected it.
+3. **When a module documents WHY it cannot observe something, check that the
+   reasoning still holds for every field it covers.** "A server cannot read
+   client files" is true of a spool's live depth and false of a count the
+   client already reports. Inherited justifications are how a correct argument
+   ends up defending an incorrect case.
+4. **Ask whether the fault is gated on liveness quorum, and whether it should
+   be.** "Is it working right now?" is meaningless on a quiet night and
+   correctly suppressed below quorum. "Is data already lost?" is equally true
+   at 3am — gating it hides precisely the deployment that stopped working
+   BECAUSE its records were being dropped.
+5. **A latch or dedupe that suppresses repeats must be checked against the
+   fact's LIFETIME.** State-change suppression is right for a transient
+   condition that resolves itself and wrong for a standing one that never
+   does: the recovery is exactly when a healthy-looking report buries the
+   permanent loss.
+
+### Test that proves it
+
+Assert the ABSENT case separately from the zero case, and mutation-test it —
+this class is invisible in a fully-green run:
+
+```ts
+it("omits the count entirely when nothing reported one", () => {
+  const reading = readCaptureLiveness(deliveringObservation()); // no input
+  expect(reading).not.toHaveProperty("quarantined_count");
+});
+```
+
+Replacing the conditional spread with `quarantined_count: quarantined ?? 0`
+(the defect's own shape) must turn the suite red. In #680 that mutant was
+killed by 2 tests; without the absent-case clause it would have survived, and
+the check would have certified the defect.
+
+## [2026-08-09] `bun -e` shifts argv, so an inline mutation step can silently mutate nothing
+
+**Severity:** MEDIUM
+**Source:** #678 lane, self-caught by the check's own prove-the-prover clause
+**Scope key:** done-means checks, mutation testing, any inline `bun -e` / `node -e` script taking arguments
+**Status:** active
+
+### Pattern
+
+Under `bun -e '<script>' ARG`, the first user argument is `process.argv[1]`, not `process.argv[2]` — there is no script path occupying slot 1 the way there is for `bun script.ts ARG`. An inline mutation step written with the familiar `process.argv[2]` therefore received `undefined`.
+
+What made it dangerous was the combination, not the indexing bug:
+
+- `readFileSync(undefined)` threw, so the mutation never happened;
+- the surrounding check ran under `set -uo pipefail` without `-e`, so execution continued;
+- the guard tested only the exit code, and the throw's own stderr was never asserted on;
+- the "mutated" run of the parity test then PASSED — correctly, because the file was untouched.
+
+So a mutation-testing clause whose entire purpose is to prove a test can fail reported "the test stayed green under a deleted key" when no key had been deleted. The clause's verdict was wrong in the direction that *looks* like a real finding, which is the good case; had the polarity been reversed it would have been a false GREEN certifying a decorative test.
+
+This is the round-8 measures-its-own-harness family with a new mechanism: not an optional-chained call on a missing method, but an argument that silently is not there.
 
 ### Review checks
 
-- For every gate, ask: **which tree answered, and which ref did it compare
-  against?** If the answer is not derived from the change under review, that is
-  the defect — not the refusal it produced.
-- `import.meta.dir`, `$CLAUDE_PROJECT_DIR`, `core.hooksPath`, and a hardcoded
-  `origin/main` are the four spellings seen so far. Grep for them in anything
-  that gates.
-- The base/tree a gate chose must be ANNOUNCED in its normal output
-  (`nothing is adjusted silently`). A verdict whose basis is invisible can only
-  be reverse-engineered from a failure, and #705 sat undiagnosed that way.
-- Widening WHERE a path may resolve must not widen WHAT may be named: keep the
-  containment guard (no absolute paths, no `..` escapes) applied per candidate
-  tree, and keep refusing a path that resolves nowhere.
+- Any `bun -e` / `node -e` taking arguments: verify the argv index against a one-line `console.log(process.argv)`, or move the script into a FILE where the ordinary contract applies. A file also gets syntax checking, types, and a diff that reviewers can read.
+- A mutation/setup step must be gated on **three** independent signals, because the exit code alone has now demonstrably failed: non-zero exit, an explicit `MUTATION-APPLIED`-style marker the script itself prints, and observable evidence the world changed (`cmp -s` against the pre-mutation backup).
+- Assert that a setup step ANNOUNCED success — never infer it from the absence of an error. Silence from a step that should be loud is the signal.
+- A verdict clause built on "I changed X, then observed Y" is only as strong as the proof that X changed. Prove the change, then read the observation.
 
-### The check-design lesson that came with it
+## [2026-08-09] A deploy check the OUTGOING process can satisfy is not a check
 
-`@{upstream}` is a property of a BRANCH NAME. A pre-push hook receives a raw
-SHA and a FULL ref; both `<sha>@{upstream}` and `refs/heads/x@{upstream}` fail —
-the second as a hard "fatal: no such branch" — and both failures look identical
-to "no upstream configured", so both fall through to the fallback silently.
+**Severity:** HIGH
+**Source:** Issue #675 (cutover-blocker B5); prior incident 2026-08-02 on the local clone
+**Scope:** `scripts/core01-deploy-local.sh`, `scripts/local-clone-deploy.sh`, any deploy/restart verification
+**Status:** active
 
-Clauses (a)-(e) of this lane's own done-means check all PASSED against that
-broken version, because every one of them exercised an `--explain` seam that
-resolves from the symbolic `HEAD`. **A seam added to make a gate testable is not
-the path that runs in production.** When a check drives a convenience entry
-point, at least one clause must drive the real invocation shape — for a pre-push
-hook, a genuine stdin range with a zero remote SHA.
+### Pattern
+
+A deploy that verifies itself by polling `/health` has no way to distinguish
+"the new revision is serving" from "the old process never stopped." Both answer
+200. The failure is not hypothetical — it happened on 2026-08-02 and the deploy
+exited 0:
+
+1. the restart is accepted,
+2. the new entrypoint throws on config and dies,
+3. launchd holds the service down for `ThrottleInterval` (30s) before retrying —
+   **longer than the health poll runs** (20s on core01, 30s on the clone),
+4. `curl /health` is answered by the process that never stopped,
+5. success.
+
+The stamp on disk said one revision; the running code was another. **A check
+that cannot fail proves nothing when it passes.** core01 carried this shape for
+seven more days than the clone did, with a *shorter* poll window, i.e. strictly
+more exposed — and `.deployed-revision` was being written the whole time and
+read by nothing.
+
+### What a real proof asserts
+
+Three assertions, before health, all required:
+
+1. a listener exists and its pid **differs** from the pre-restart pid,
+2. that listener's `cwd` **is** the runtime directory,
+3. the runtime's `.deployed-revision` **matches** the sha this run shipped.
+
+Reading the pre-restart pid is what makes the whole thing possible: without a
+"before," *something is answering* and *the new thing is answering* are the same
+observation.
+
+Use `lsof` on the port. `launchctl print | grep pid` reports the **supervised**
+pid — the launcher wrapper, not the process that binds the socket (measured:
+wrapper 2407, listener 2476) — and `pgrep -f 'bun run ...'` matches stray
+orphans holding no port. Only the socket knows who is serving `:PORT`.
+
+### Three siblings that look verified and are not
+
+- **An aggregate front hides a dead worker.** core01 fronts `:3101`/`:3102`
+  behind `:3100`, and the front aggregates. Poll each worker port directly.
+- **A revision proof is not a feature-live proof** (#659). The clone passed its
+  revision proof at the right SHA while the feature stayed dark behind an env
+  allowlist. Read the FEATURE's own key from `/health`, and parse the JSON —
+  a substring match on the body is satisfied by the key appearing inside an
+  error string that names it.
+- **A rollback needs the same standard of proof.** A rollback that "succeeded"
+  because the failed process still held the port leaves the broken revision
+  serving under a reassuring log line — and a rollback is exactly when the
+  operator stops looking. (Drop only the feature assertion: the previous
+  revision predates the feature by definition.)
+
+### Reviewer checklist
+
+- Does the deploy read a pre-restart pid? If not, its success is unfalsifiable.
+- Does the verification poll window **outlast** the supervisor's restart
+  throttle? If the throttle lives only on the box, that number cannot be
+  reasoned about at all — version the launch shape (this is why #675's B2 and
+  B3 were one fix surface).
+- Does it check each worker port, or only the aggregate front?
+- Does it assert the FEATURE, or only the revision?
+- Does packaging use `git archive` of a commit, or `tar` of the working tree?
+  A `tar $REPO_DIR` ships a dirty runner file to production; the ref gate does
+  NOT cover this — it asserts a git-*history* property and is a no-op outside
+  CI, which is every operator-run deploy.
+- On failure, is the failed runtime **moved aside** rather than deleted? It is
+  the evidence for why the deploy failed.
+
+### Companion trap: `set -euo pipefail` kills the proof's normal case
+
+`lsof` exits non-zero when it matches nothing, and "nothing is listening" is the
+NORMAL state of a first deploy. A bare `pid="$(lsof ... | head -1)"` therefore
+aborts the deploy at exactly that case — silently, mid-script, with no error.
+Caught in #675 only by the done-means **control** clause (a healthy deploy must
+still pass); every failure clause was green while the happy path was dying one
+line after the swap. Swallow the status explicitly (`|| true`) and let empty
+mean "nobody".
+
+## [2026-08-10] A verification command that takes untrusted text as a pattern needs an end-of-options guard
+
+**Severity:** MEDIUM
+**Source:** PR #716 (the #710 issue-artifacts landing lane), `_plans/worklog/land-artifacts-2026-08-10.md`
+**Scope:** verification and superset-check shell in `scripts/done-means/*.sh`, lane harness one-liners, any `rg`/`grep`/`sed` call whose pattern comes from a file's own lines
+**Status:** active
+
+### Pattern
+
+A pre-rebase superset check looped over the lane branch's added lines and asked
+whether each one was present in the root blob:
+
+```sh
+rg -qF "$line" root-copy.md      # WRONG
+rg -qF -- "$line" root-copy.md   # correct
+```
+
+Diff-derived lines routinely start with `-`. Without `--`, ripgrep parses that
+leading `-` as a flag rather than as the first character of the pattern, and the
+check reported **seven false MISSING lines** — content that was in fact present.
+The lane self-caught it, but the failure mode is what makes it review-worthy:
+not an error, not a crash, but a **plausible-looking wrong answer** in exactly
+the direction that invites a destructive decision. Believing those seven would
+have meant "root is not a superset, keep the branch side", i.e. reintroducing
+stale graph-file content over newer root content.
+
+This is the same family as round 19's `rg -r` (silently the REPLACE flag) and
+the two `rg -E` incidents (`--encoding`, not extended-regex) — a flag-shaped
+argument accepted as a flag and the command still exiting 0. Third distinct
+spelling; treat it as a standing class, not three coincidences.
+
+Reviewer checks:
+
+- Any `rg`, `grep`, or `sed` whose pattern is **interpolated from data** — file
+  lines, diff output, issue titles, branch names, `$line`/`$1` — must carry `--`
+  before the pattern. Ask where the pattern came from, not whether it looks safe
+  in the sample.
+- `-F` does NOT imply `--`. Fixed-string matching disables regex interpretation,
+  not option parsing; the two are separate stages and only `--` stops the second.
+- The same block bit again while harvesting this very entry:
+  `rg -h "^order:" docs/sme/entries/*.md` printed ripgrep's own help instead of
+  the matches, because `-h` is `--help`. Use `--no-filename`. Short flags whose
+  meaning you inferred from another tool are the recurring vector.
+- A superset/equality check that can only report "missing" is one-directional
+  and cannot distinguish "genuinely absent" from "the query was malformed". Where
+  the verdict authorizes a drop or an overwrite, require a positive control — a
+  line known to be present and one known to be absent — so a broken query fails
+  loudly instead of confirming the alarming direction.
 
 ## [2026-08-10] A check that supplies the input under test proves the consumer, never that anything feeds it
 
@@ -1856,51 +2028,67 @@ One false RED was caught doing this: the runner was first placed in
 the fixture wrong rather than the hook broken. **When a check goes red, read WHY
 before believing it.**
 
-## [2026-08-10] A verification command that takes untrusted text as a pattern needs an end-of-options guard
+## [2026-08-09] A gate that judges from a tree other than the one being merged makes a false receipt the cheapest escape
 
-**Severity:** MEDIUM
-**Source:** PR #716 (the #710 issue-artifacts landing lane), `_plans/worklog/land-artifacts-2026-08-10.md`
-**Scope:** verification and superset-check shell in `scripts/done-means/*.sh`, lane harness one-liners, any `rg`/`grep`/`sed` call whose pattern comes from a file's own lines
+**Severity:** HIGH
+**Source:** Issues #705 and #706, fixed as one lane (PR for `lane/fix-gates-705-706`); a third instance found live during that lane's own push
+**Scope:** any gate, hook, or check whose verdict depends on a base ref, a working tree, or a checkout it did not derive from the change under review
 **Status:** active
 
 ### Pattern
 
-A pre-rebase superset check looped over the lane branch's added lines and asked
-whether each one was present in the root blob:
+A gate's job is to judge THIS change. The moment its base ref or its tree is
+resolved from something other than the change — a hardcoded branch, the file's
+own directory, an absolute `core.hooksPath` — the gate is answering a question
+about a different artifact and reporting it as a verdict about this one.
 
-```sh
-rg -qF "$line" root-copy.md      # WRONG
-rg -qF -- "$line" root-copy.md   # correct
-```
+Three instances, same family, all live in this repo:
 
-Diff-derived lines routinely start with `-`. Without `--`, ripgrep parses that
-leading `-` as a flag rather than as the first character of the pattern, and the
-check reported **seven false MISSING lines** — content that was in fact present.
-The lane self-caught it, but the failure mode is what makes it review-worthy:
-not an error, not a crash, but a **plausible-looking wrong answer** in exactly
-the direction that invites a destructive decision. Believing those seven would
-have meant "root is not a superset, keep the branch side", i.e. reintroducing
-stale graph-file content over newer root content.
+1. **#706** — `scripts/validate-pr-body.ts` resolved the `Done-means` path
+   against `resolve(import.meta.dir, "..")`, and `.claude/hooks/pr-body-gate.ts`
+   spawns it from `$CLAUDE_PROJECT_DIR` (the primary checkout, on the base
+   branch). A lane's done-means check is a NEW file on the lane branch, so every
+   PR that introduced its own check was structurally refused.
+2. **#705** — `_githooks/pre-push` hardcoded `origin/main`. Lanes branch from a
+   wip branch 80 commits ahead, so every lane inherited that span's Python
+   changes and ran a package gate on a zero-Python diff.
+3. **Found during the fix** — `core.hooksPath` is an ABSOLUTE path to the
+   primary checkout, so every lane worktree runs the primary's hooks, not its
+   own. A lane fixing a hook structurally cannot exercise its own fix on push.
 
-This is the same family as round 19's `rg -r` (silently the REPLACE flag) and
-the two `rg -E` incidents (`--encoding`, not extended-regex) — a flag-shaped
-argument accepted as a flag and the command still exiting 0. Third distinct
-spelling; treat it as a standing class, not three coincidences.
+### Why it is worse than an ordinary false positive
 
-Reviewer checks:
+Each of these had a legitimate-looking escape that was a lie: name a different,
+pre-existing check that never judged this lane (#706); answer "not mine" to a
+failure the push did not cause (#705). Both are false receipts, and a gate whose
+cheapest escape is a false receipt trains that reflex — which is how a forced
+gate decays into noise routed around with `--no-verify`.
 
-- Any `rg`, `grep`, or `sed` whose pattern is **interpolated from data** — file
-  lines, diff output, issue titles, branch names, `$line`/`$1` — must carry `--`
-  before the pattern. Ask where the pattern came from, not whether it looks safe
-  in the sample.
-- `-F` does NOT imply `--`. Fixed-string matching disables regex interpretation,
-  not option parsing; the two are separate stages and only `--` stops the second.
-- The same block bit again while harvesting this very entry:
-  `rg -h "^order:" docs/sme/entries/*.md` printed ripgrep's own help instead of
-  the matches, because `-h` is `--help`. Use `--no-filename`. Short flags whose
-  meaning you inferred from another tool are the recurring vector.
-- A superset/equality check that can only report "missing" is one-directional
-  and cannot distinguish "genuinely absent" from "the query was malformed". Where
-  the verdict authorizes a drop or an overwrite, require a positive control — a
-  line known to be present and one known to be absent — so a broken query fails
-  loudly instead of confirming the alarming direction.
+### Review checks
+
+- For every gate, ask: **which tree answered, and which ref did it compare
+  against?** If the answer is not derived from the change under review, that is
+  the defect — not the refusal it produced.
+- `import.meta.dir`, `$CLAUDE_PROJECT_DIR`, `core.hooksPath`, and a hardcoded
+  `origin/main` are the four spellings seen so far. Grep for them in anything
+  that gates.
+- The base/tree a gate chose must be ANNOUNCED in its normal output
+  (`nothing is adjusted silently`). A verdict whose basis is invisible can only
+  be reverse-engineered from a failure, and #705 sat undiagnosed that way.
+- Widening WHERE a path may resolve must not widen WHAT may be named: keep the
+  containment guard (no absolute paths, no `..` escapes) applied per candidate
+  tree, and keep refusing a path that resolves nowhere.
+
+### The check-design lesson that came with it
+
+`@{upstream}` is a property of a BRANCH NAME. A pre-push hook receives a raw
+SHA and a FULL ref; both `<sha>@{upstream}` and `refs/heads/x@{upstream}` fail —
+the second as a hard "fatal: no such branch" — and both failures look identical
+to "no upstream configured", so both fall through to the fallback silently.
+
+Clauses (a)-(e) of this lane's own done-means check all PASSED against that
+broken version, because every one of them exercised an `--explain` seam that
+resolves from the symbolic `HEAD`. **A seam added to make a gate testable is not
+the path that runs in production.** When a check drives a convenience entry
+point, at least one clause must drive the real invocation shape — for a pre-push
+hook, a genuine stdin range with a zero remote SHA.

@@ -1,6 +1,6 @@
 ---
 lane: gotcha-agent
-order: 69
+order: 72
 ---
 ## [2026-08-10] A check that supplies the input under test proves the consumer, never that anything feeds it
 

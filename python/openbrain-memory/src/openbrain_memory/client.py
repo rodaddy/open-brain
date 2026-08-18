@@ -55,10 +55,14 @@ def _resolve_package_version(pyproject: Path | None = None) -> str:
 
 
 PACKAGE_VERSION = _resolve_package_version()
-CURRENT_CONTRACT_VERSION = "2026-07-23.memory-tools.v23"
+# Re-pinned for v24 (#678). These three literals are the client half of the
+# drift receipt and MUST move in the same change as the server's, never after
+# it: _runtime_router.py compares them for exact equality, so a stale pin turns
+# a blind receipt into a hard refusal the moment the server deploys.
+CURRENT_CONTRACT_VERSION = "2026-08-09.memory-tools.v24"
 CURRENT_CONTRACT_SCHEMA_VERSION = 1
 CURRENT_CONTRACT_SCHEMA_HASH = (
-    "4b69e9b437c96175531b049b6e3c2782f383334e9e1931e96e73835599e4a4a8"
+    "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
 )
 CURRENT_CONTRACT_HEADER = (
     f"{CURRENT_CONTRACT_VERSION};schema_hash={CURRENT_CONTRACT_SCHEMA_HASH}"
@@ -67,7 +71,11 @@ COMPATIBLE_CONTRACT_VERSIONS = (CURRENT_CONTRACT_VERSION,)
 FIRST_CLASS_RUNTIME_TOOL_VERSIONS: Mapping[str, int] = {
     "session_start": 2,
     "session_wrap": 2,
-    "agent_context_pack": 2,
+    # v3 as of #678: the published tool contract now advertises `repo`,
+    # `prior_context`, and `continue_from`. The floor moves with it, so a
+    # manifest still advertising v2 (a server that has not taken the mirror
+    # reconciliation) is refused rather than silently used.
+    "agent_context_pack": 3,
     # A reflex is a first-class direct-only runtime operation, so the live
     # contract proof that gates direct dispatch must require the reflex tool at
     # its published semantic version (agent_reflex_pointers.v1 in src/contract.ts

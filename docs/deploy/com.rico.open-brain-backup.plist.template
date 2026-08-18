@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Open Brain scheduled backup (issue #677, cutover blocker B4).
+
+  Rendered and installed by scripts/install-backup-launchagent.sh. Do NOT
+  hand-copy this file into ~/Library/LaunchAgents: the __TOKEN__ placeholders
+  below are substituted by the installer, which also validates every
+  interpolated value against XML metacharacters. A hand-rendered plist can
+  lint clean and still mean something other than what was intended.
+
+  Schedule rationale: 03:00 daily. docs/backup-restore.md:17 sets the RPO at
+  24 hours, which a daily job satisfies exactly, and records that sub-daily
+  backup "adds operational surface without a matching risk". 03:00 sits an
+  hour BEFORE the qmd-sync job at 04:00
+  (docs/deploy/com.rico.qmd-sync.plist.template) so the two scheduled jobs do
+  not contend for the same disk.
+
+  Overlap with a deploy is NOT handled here — a schedule cannot know about a
+  deploy. It is handled by the openbrain-deploy advisory lock that
+  scripts/backup.ts checks and scripts/core01-deploy-local.sh holds; a backup
+  that fires during a deploy refuses with exit 4 and writes nothing.
+
+  Retention stays OPERATOR-RUN, exactly as docs/backup-restore.md:19 already
+  specifies. This job only creates and verifies sets; it never removes one.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rico.open-brain-backup</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__OPENBRAIN_BACKUP_SCRIPT__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__OPENBRAIN_BACKUP_WORKING_DIRECTORY__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/Users/rico/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>OPENBRAIN_BACKUP_ROOT</key>
+    <string>__OPENBRAIN_BACKUP_ROOT__</string>
+    <key>OPENBRAIN_BACKUP_ENV_FILE</key>
+    <string>__OPENBRAIN_BACKUP_ENV_FILE__</string>
+    <key>OPENBRAIN_BACKUP_REPO_DIR</key>
+    <string>__OPENBRAIN_BACKUP_REPO_DIR__</string>
+    <key>LOG_DIR</key>
+    <string>__OPENBRAIN_BACKUP_LOG_DIR__</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!--
+    Low I/O priority: a pg_dump of the whole database competes with the
+    serving workers for the same disk. Nice it rather than racing them.
+  -->
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__OPENBRAIN_BACKUP_STDOUT__</string>
+  <key>StandardErrorPath</key>
+  <string>__OPENBRAIN_BACKUP_STDERR__</string>
+</dict>
+</plist>

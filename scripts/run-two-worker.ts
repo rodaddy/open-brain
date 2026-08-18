@@ -9,6 +9,26 @@ type WorkerConfig = {
   runMigrations: boolean;
 };
 
+/**
+ * Which entrypoint each worker runs.
+ *
+ * B1 operator ruling (Rico, 2026-08-09, issue #674 comment): core01 cuts over
+ * to `server/main.ts` — the entrypoint dogfood has served since 2026-08-02 —
+ * because the capture-health chain exists only in the rewrite entrypoint, and
+ * the standing directive is to keep dogfood as close to what we push to core01
+ * as humanly possible. `src/index.ts` stays in the tree as the rollback path,
+ * which is why this is a SELECTION and not a replacement.
+ *
+ * The default is deliberately the legacy tree: this launcher is also what runs
+ * anywhere the variable is unset, and a silent entrypoint change on an
+ * unrelated host is exactly the kind of unannounced adjustment the repo bans.
+ * The plist that ships to core01
+ * (docs/deploy/com.rico.open-brain.plist.template) sets it explicitly, so the
+ * cutover is a visible, versioned opt-in.
+ */
+const workerEntrypoint =
+  process.env.OPEN_BRAIN_WORKER_ENTRYPOINT?.trim() || "src/index.ts";
+
 const publicPort = parseInt(process.env.OPEN_BRAIN_PUBLIC_PORT ?? "3100", 10);
 const workerPorts = (process.env.OPEN_BRAIN_WORKER_PORTS ?? "3101,3102")
   .split(",")
@@ -48,8 +68,10 @@ const workers: WorkerConfig[] = Array.from({ length: workerCount }, (_, index) =
   };
 });
 
+console.log(`open-brain workers will run entrypoint ${workerEntrypoint}`);
+
 const children = workers.map((worker) => {
-  const child = Bun.spawn(["bun", "run", "src/index.ts"], {
+  const child = Bun.spawn(["bun", "run", workerEntrypoint], {
     env: buildHttpWorkerEnv({
       baseEnv: process.env,
       port: worker.port,

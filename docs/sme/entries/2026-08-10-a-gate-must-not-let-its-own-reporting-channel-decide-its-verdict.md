@@ -1,6 +1,6 @@
 ---
 lane: gotcha-agent
-order: 70
+order: 73
 ---
 ## [2026-08-10] A gate must not let its own reporting channel decide its verdict
 

@@ -1,6 +1,6 @@
 ---
 lane: gotcha-agent
-order: 68
+order: 74
 ---
 ## [2026-08-09] A gate that judges from a tree other than the one being merged makes a false receipt the cheapest escape
 

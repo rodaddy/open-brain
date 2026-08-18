@@ -38,6 +38,11 @@ import {
   sha256File,
   summarizeChildStderr,
 } from "./backup-lib.ts";
+import {
+  DeployInProgressError,
+  EXIT_DEPLOY_IN_PROGRESS,
+  assertNoDeployInProgress,
+} from "./deploy-lock.ts";
 
 export interface BackupArgs {
   out: string;
@@ -155,6 +160,40 @@ async function main(): Promise<void> {
 
   const dumpPath = join(args.out, DUMP_FILENAME);
   const manifestPath = join(args.out, MANIFEST_FILENAME);
+
+  // Overlap guard (#677). Checked BEFORE the output directory is created and
+  // before any dump work, so a refusal leaves nothing behind that could be
+  // mistaken for a backup set.
+  const guardPool = createPool({
+    max: 1,
+    application_name: "openbrain-backup-deploy-guard",
+  });
+  try {
+    const guardClient = await guardPool.connect();
+    try {
+      await assertNoDeployInProgress(guardClient);
+    } finally {
+      guardClient.release();
+    }
+  } catch (err) {
+    if (err instanceof DeployInProgressError) {
+      console.error(err.message);
+      console.log(
+        JSON.stringify({
+          schema: BACKUP_RECEIPT_SCHEMA,
+          operation: "backup",
+          status: "refused",
+          reason: "deploy_in_progress",
+          backup_dir: args.out,
+        }),
+      );
+      await guardPool.end();
+      process.exit(EXIT_DEPLOY_IN_PROGRESS);
+    }
+    throw err;
+  } finally {
+    await guardPool.end();
+  }
 
   const existingDump = await Bun.file(dumpPath).exists();
   const existingManifest = await Bun.file(manifestPath).exists();

@@ -2,8 +2,67 @@
   "env": {
     "TMPDIR": "/mnt/ThunderBolt/_tmp/open-brain/_scratch"
   },
+  "permissions": {
+    "deny": [
+      "Bash(grep:*)",
+      "Bash(egrep:*)",
+      "Bash(fgrep:*)",
+      "Bash(find:*)",
+      "Bash(mktemp:*)",
+      "Bash(/usr/bin/python:*)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(/bin/bash:*)",
+      "Bash(/bin/zsh:*)",
+      "Edit(/tmp/**)",
+      "Read(/tmp/**)",
+      "Write(/tmp/**)",
+      "Bash(rm:*)",
+      "Bash(/bin/rm:*)",
+      "Bash(shred:*)",
+      "Bash(sudo rm:*)",
+      "Bash(mkfs:*)",
+      "Bash(mkfs.ext4:*)",
+      "Bash(mkfs.xfs:*)",
+      "Bash(mkfs.vfat:*)",
+      "Bash(newfs:*)",
+      "Bash(newfs_hfs:*)",
+      "Bash(newfs_apfs:*)",
+      "Bash(diskutil:*)",
+      "Bash(sudo diskutil:*)",
+      "Bash(sudo mkfs:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh secret delete:*)",
+      "Bash(gh ssh-key delete:*)",
+      "Bash(gh gpg-key delete:*)",
+      "Bash(gh auth token:*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/ob-gate fast-tools"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/ob-gate destructive-delete"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/ob-gate irreversible-command"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/ob-gate worktree-hygiene"
+          }
+        ]
+      },
       {
         "matcher": "Write|Edit|NotebookEdit|Bash|Grep|Glob|AskUserQuestion",
         "hooks": [
