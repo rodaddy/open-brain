@@ -87,6 +87,26 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-18 (round 32) — harvest of the live-observer completion lane (PR #737)
+
+- **A SURFACE PROVEN ONLY BY INJECTION IS NOT LIVE — assert the DEFAULT
+  composition.** #728 built and tested the embed_watermark surface entirely
+  through injected observers; the live entrypoint composed none, so the
+  deployed worker logged `embed_watermark_observed:false` and could never
+  alarm. Third paid instance of the #674 class (in tree, absent from the
+  serving process; #656 was the second). The closing gate's shape to copy:
+  a test that calls the REAL entrypoint composition with no override and
+  asserts the observer exists and the block appears.
+- **Re-prove a red is load-bearing by NEUTERING the fix (`if (false)`), not by
+  trusting the author's transcript** — the #737 implementer did, same runner,
+  0 pass / 4 fail, file restored and diffed clean.
+- **Harness gotcha: `startNatsWorkerProcess.shutdown()` closes the pool it was
+  handed** — suite-shared pools go in behind a Proxy with a no-op `end()`, or
+  cases 2-N die on 'Cannot use a pool after calling end' as a fake red.
+- **Anti-stub assertions are RANGES derived from seeded offsets**, not
+  equality constants — a hard-coded health block cannot satisfy stale +
+  healthy + idle simultaneously.
+
 ### 2026-08-17 (round 31) — harvest of the #724 wave (PRs #727-#732, forensics lane, Development-repo lane E)
 
 - **THE PR-BODY GATE RESOLVES RELATIVE PATHS AGAINST THE PRIMARY CHECKOUT —
