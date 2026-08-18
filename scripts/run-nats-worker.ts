@@ -3,6 +3,10 @@
 import type pg from "pg";
 import { buildTokenMap } from "../src/auth.ts";
 import { createPool } from "../src/db/pool.ts";
+import {
+  createEmbedWatermarkObserver,
+  EMBED_WATERMARK_CACHE_TTL_MS,
+} from "../src/embed-watermark-observer.ts";
 import { logger } from "../src/logger.ts";
 import {
   natsWorkerLogSummary,
@@ -320,6 +324,28 @@ export async function startNatsWorkerProcess(
 
     pool = createDbPool();
     tracing = createTracing();
+    // NOTHING IS ADJUSTED SILENTLY: read the threshold before composing the
+    // observer, so the bound the observer takes its verdict against is the
+    // same one announced in the startup summary below.
+    const embedThreshold = readEmbedWatermarkThresholdSeconds(env);
+    // #724 item 3: the DEPLOYED worker must construct its own observer. The
+    // option stays an override (PR #728's fixture test injects one), but its
+    // ABSENCE no longer means "no observer" — that is what left the surface in
+    // the tree and out of the serving process. The live entrypoint passes only
+    // `{ env: process.env }` and needs no change: it lands here.
+    let embedWatermarkHealth = options.embedWatermarkHealth;
+    if (!embedWatermarkHealth) {
+      const observer = createEmbedWatermarkObserver({
+        pool,
+        lagThresholdSeconds: embedThreshold.thresholdSeconds,
+        log,
+      });
+      // Prime it once so the first probe answers with numbers rather than the
+      // "not measured yet" absence. A failure here composes the read-failure
+      // reading inside the observer and never throws into startup.
+      await observer.refresh();
+      embedWatermarkHealth = observer.read;
+    }
     runtime = await startWorker({
       env,
       pool,
@@ -330,19 +356,23 @@ export async function startNatsWorkerProcess(
       env,
       runtime,
       serve,
-      ...(options.embedWatermarkHealth
-        ? { embedWatermarkHealth: options.embedWatermarkHealth }
-        : {}),
+      embedWatermarkHealth,
     });
     // NOTHING IS ADJUSTED SILENTLY: the threshold in force is announced at
     // startup along with WHERE it came from, so an unset env key is visible as
-    // a default rather than looking like a configured value.
-    const embedThreshold = readEmbedWatermarkThresholdSeconds(env);
+    // a default rather than looking like a configured value; the cache TTL is
+    // announced beside it because a cached reading is what /health actually
+    // serves, and a reader cannot interpret the block without knowing how old
+    // it may be.
     log.info("Open Brain NATS worker started", {
       ...natsWorkerLogSummary(runtime.boundary),
       availability: runtime.health.availability,
       health_port: healthPortFromEnv(env),
-      embed_watermark_observed: Boolean(options.embedWatermarkHealth),
+      embed_watermark_observed: Boolean(embedWatermarkHealth),
+      embed_watermark_observer_source: options.embedWatermarkHealth
+        ? "injected"
+        : "default_pool_observer",
+      embed_watermark_cache_ttl_seconds: EMBED_WATERMARK_CACHE_TTL_MS / 1000,
       embed_watermark_lag_threshold_seconds: embedThreshold.thresholdSeconds,
       embed_watermark_lag_threshold_source: embedThreshold.source,
       ...(embedThreshold.source === "invalid_env_default"
