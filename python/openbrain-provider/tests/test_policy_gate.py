@@ -375,9 +375,8 @@ def test_reading_from_system_temp_is_allowed(tmp_path: Path, command: str) -> No
 def test_a_commit_message_mentioning_main_is_not_a_push_to_main(
     tmp_path: Path,
 ) -> None:
-    # The protected-ref test runs OUTSIDE quoted strings, so the English word
-    # "main" in a message is not a refspec. Getting this wrong would refuse a
-    # correct commit for its prose.
+    # A commit has no refspec operands, so the parser never reads its message as
+    # a push target. Getting this wrong would refuse a correct commit for prose.
     result = run_policy_gate(
         tmp_path / "state.json",
         "pre-tool-use",
