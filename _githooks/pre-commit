@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Open Brain pre-commit gate (issue #719).
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE EXISTS AT ALL
+# ---------------------------------------------------------------------------
+# `core.hooksPath` selects EXACTLY ONE hooks directory. Git does not chain it
+# and does not overlay it: the value REPLACES whatever was configured before.
+# This repo sets it to `_githooks` (per `_githooks/install.sh`), which displaces
+# the operator's global `~/.config/git/hooks`. That global directory carried a
+# pre-commit hook enforcing two controls, and `_githooks/` shipped no
+# pre-commit at all — so for every commit made in this repo, both were OFF:
+#
+#   1. `gitleaks` staged secret scanning
+#   2. LAW #8 — no commits on a protected branch
+#
+# Measured on the pre-fix tree (issue #719, reproduced again in this lane's
+# worktree before this file was written):
+#
+#     $ git hook run pre-commit
+#     error: cannot find a hook named pre-commit
+#
+#     # positive control — the SAME command, the SAME tree, the displaced path:
+#     $ git -c core.hooksPath=~/.config/git/hooks hook run pre-commit
+#     INF no leaks found
+#
+# The control is the finding: gitleaks was installed and working the whole
+# time, and this repo's own config was the only thing stopping it. AGENTS.md
+# requires "No secrets in git, logs, reports, fixtures, PRs, issues, or
+# screenshots"; the mechanism enforcing that requirement was not running.
+#
+# There was a `.git/hooks/pre-commit` whose own docstring said it existed to
+# restore "the user's global gitleaks pre-commit, which this repo's local
+# core.hooksPath override was silently bypassing". It was UNREACHABLE — git
+# ignores `.git/hooks` entirely once `core.hooksPath` is set — so that repair
+# was written and never once ran. A fix that is not on the path git executes is
+# not a fix, which is why this file lives in the TRACKED directory that git is
+# actually pointed at.
+#
+# ---------------------------------------------------------------------------
+# WHY THE CONTROLS ARE REIMPLEMENTED HERE RATHER THAN DELEGATED
+# ---------------------------------------------------------------------------
+# `docs/CI_CD_REQUIREMENTS.md` ("Gate 1 — pre-commit", Required state) says the
+# secrets check should "chain the global gitleaks hook". That is the one point
+# where this file departs from the existing design, deliberately:
+#
+#   - the global hook's path is an ABSOLUTE, machine-specific string, and #711
+#     is the entire finding that an absolute path in this repo's hook layer
+#     silently makes the gate about something other than the tree in hand;
+#   - it is untracked, so it is unreviewable and undiffable — exactly what that
+#     same design document says a hook must not be ("An unversioned hook in
+#     `.git/hooks/` is invisible to review and absent on a fresh checkout");
+#   - it does not exist in CI, on a fresh clone, or on any other machine, so a
+#     delegating hook would silently degrade to no gate in precisely the
+#     environments with the least oversight.
+#
+# So the CONTROLS are preserved, not the delegation. Everything else follows
+# the design as written: every check below BLOCKS the commit, none warns, and
+# none exits 0 on a skip.
+#
+# ---------------------------------------------------------------------------
+# SCOPE, AND WHY IT IS NARROW
+# ---------------------------------------------------------------------------
+# This restores what the override DISPLACED. It is deliberately not the full
+# seven-check gate `docs/CI_CD_REQUIREMENTS.md` specifies as the eventual
+# required state (lint, typecheck, package docs, bare-except, debug leftovers);
+# those are a separate, larger piece of work with their own cost budget, and
+# folding them in here would mean a security fix that also changes what every
+# commit in the repo costs. The two controls below are the ones that were
+# silently switched off and are the ones #719 is about.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 1
+cd "$ROOT" || exit 1
+
+# EVERY STAGE ANNOUNCES ITSELF (AGENTS.md, "nothing is adjusted silently").
+# #719's failure mode was that an ABSENT gate and a PASSED gate look identical
+# from the outside — a silent commit. Naming each control as it runs is what
+# makes those two states distinguishable in a transcript, so the announcement
+# is part of the fix rather than decoration.
+echo "pre-commit: Open Brain gate (_githooks/pre-commit)"
+
+# ---------------------------------------------------------------------------
+# CONTROL 1 — LAW #8: no commits on a protected branch.
+# ---------------------------------------------------------------------------
+# First, because it is free and because a commit on `main` is a mistake worth
+# stopping before spending seconds on a scan.
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+case "$BRANCH" in
+  main|master|develop|production|staging)
+    echo "  ✗ BLOCKED: commits to '$BRANCH' are not allowed (LAW #8)." >&2
+    echo "    Create a focused branch first:" >&2
+    echo "        git checkout -b feat/your-feature" >&2
+    exit 1
+    ;;
+esac
+echo "  ✓ branch '$BRANCH' is not protected (LAW #8)"
+
+# ---------------------------------------------------------------------------
+# CONTROL 2 — gitleaks staged secret scan.
+# ---------------------------------------------------------------------------
+# FAILS CLOSED when the scanner is missing (_DOCS/STANDARDS-git.md: the local
+# secret gate "must fail closed when Gitleaks is unavailable and use full
+# redaction"). A secret gate that exits 0 because it could not find its scanner
+# is indistinguishable from one that ran and found nothing — the same
+# absent-looks-like-passed confusion that made #719 survive.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "  ✗ BLOCKED: gitleaks is required for secret scanning but is not installed." >&2
+  echo "    This gate fails CLOSED: it will not pass a commit it could not scan." >&2
+  echo "        brew install gitleaks" >&2
+  exit 1
+fi
+
+echo "  gitleaks: scanning STAGED changes ..."
+# `--staged` scans the index only, not history — pre-commit's job per
+# _DOCS/STANDARDS-git.md ("Pre-commit scans staged changes only"), with
+# `--redact=100` so a detected secret is never echoed into the terminal, the
+# transcript, or a CI log by the gate that caught it.
+if ! gitleaks git --pre-commit --staged --redact=100 --no-banner .; then
+  echo "" >&2
+  echo "  ✗ BLOCKED: gitleaks found a secret in the STAGED changes." >&2
+  echo "    The finding above is redacted; the file and rule are named." >&2
+  echo "    Remove the credential and re-stage. Do NOT use --no-verify:" >&2
+  echo "    a secret committed locally is in the object store even if the" >&2
+  echo "    commit is later amended." >&2
+  exit 1
+fi
+echo "  ✓ gitleaks found no secrets in the staged changes"
+
+echo "pre-commit: all checks passed ✓"
