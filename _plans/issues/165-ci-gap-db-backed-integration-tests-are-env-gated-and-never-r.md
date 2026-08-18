@@ -37,3 +37,59 @@ Wire a Postgres service into `.github/workflows/` so the DB-backed tests run on 
 
 ## Provenance
 - Coverage gap surfaced by #162 / PRs #163-#164. Lesson recorded in `docs/sme/correctness.md` and OB (namespace open-brain, thought 8780a217).
+
+---
+
+## Resolution
+
+Closed by **PR #234** — ci(#165): ephemeral pgvector DB-integration job with anti-skip guard
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `a16398c4d344f2c57ea0d508f998fcd05cbe8e07`
+- Merged at: 2026-07-06T00:46:59Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T00:47:00Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #234 body
+
+> Closes #165
+>
+> ## Problem
+>
+> The DB-backed integration suites (`dbDescribe` / `describe.skipIf`) that exercise the real Postgres SQL write paths — `lane_upsert`, `promote_shared`, `tier_lane`, `append_session_event`, `runSharedPromoter` — are env-gated on `OPENBRAIN_TEST_DATABASE_URL`. If the CI Postgres is missing or misconfigured they **silently skip** and the job still goes green with zero coverage of the exact SQL paths that shipped the #162 `lane_upsert` bugs.
+>
+> ## Change
+>
+> New `db-integration` job in `.github/workflows/ci.yml`:
+>
+> - **Ephemeral, isolated pgvector Postgres** via explicit `docker run --network host` on a dynamically-chosen free loopback port, **digest-pinned** to `pgvector/pgvector:pg18@sha256:212765b6...` (bump procedure documented inline). Mechanism note: GitHub `services:` containers depend on bridge-network forwarding, which is **empirically broken on runners ct106/ct107** (host cannot reach bridge containers by published port or container IP; only ct108 forwards) — a service container was a 1-in-3 runner lottery. Host networking bypasses the bridge and was verified working on the previously-failing runners. Isolation holds: unique container name + unique port per run, `listen_addresses=127.0.0.1` only, `if: always()` teardown (no leftover containers verified on the runner).
+> - Host-side readiness poll (the pg image's transient initdb server defeats naive health checks), then `bun run migrate` and the full suite with the **JUnit reporter**.
+> - **Anti-skip guard** (`scripts/assert-db-tests-ran.ts`) parses the JUnit XML and **fails the job** unless every required live-Postgres suite actually executed: present, non-zero count, zero skipped, zero failed, **zero errored** (`errors` testsuite attribute and `<error>` testcase children both checked, per cross-model review). Guard core is an exported `evaluateJunit()` covered by synthetic-fixture tests (`scripts/assert-db-tests-ran.test.ts`) including the `errors="1"` false-pass case.
+> - **Trusted-source gate** on all self-hosted jobs (`check`, `db-integration`, `python-package`): `if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository` — fork PRs never execute on the Docker-capable self-hosted runners; pushes (incl. main) still run everything `deploy` needs.
+> - The destructive migration test (`001_init.test.ts`, `DROP TABLE`) runs on a **separate `DB_NAME_TEST` database** so it cannot clobber the live-Postgres suites sharing `DB_NAME`.
+> - `deploy` now `needs: db-integration`; the existing `check` job's steps are unchanged.
+>
+> ## CI proof
+>
+> Latest push AND pull_request runs are green with `db-integration` executing on **ct107** (a runner where the old `services:` approach failed), guard logging: **17 live-Postgres testcases executed across 5 required suites (0 skipped, 0 failed, 0 errored)** — lane_upsert=2, promote_shared=1, tier_lane=2, append_session_event=4, runSharedPromoter=8.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the trusted-source `if:` gate — if mis-written it could silently skip `db-integration` on same-repo PRs or on main push (breaking `deploy`); verified live that both the pull_request run (same-repo) and the push run execute and pass the job.
+> - Assumptions that could be wrong: that `head.repo.full_name == github.repository` is the right fork discriminator for this repo's event mix (push + pull_request only; no pull_request_target/workflow_dispatch in ci.yml); that host-network port selection (shuf 20000-60000 + ss check + 5 retries) is collision-safe enough for realistic runner parallelism; that the pinned index digest stays valid until an intentional bump.
+> - Missing/weak tests: guard has synthetic-fixture unit tests (pass, missing suite, skipped, failures, errors="1", <error> children, executed floor); the workflow `if:` expression and port-selection shell are exercised only by live CI runs, not unit tests.
+> - Security/permission risk: fork PRs can no longer execute code on the Docker-capable self-hosted runners; the ephemeral Postgres listens on 127.0.0.1 only with a throwaway CI-only credential (`ci`/`ci`) and is destroyed at job end; test URL secret-masked in logs; no secrets committed.
+> - Migration/deploy risk: `deploy` now also needs `db-integration`; a flaky DB job would block deploy — mitigated by cross-runner verification (mechanism now works on ct106/ct107/ct108, not just ct108), readiness poll, and the digest pin removing tag drift.
+> - Downstream client/runtime risk: none — CI-only change, no MCP tool/schema/transport/Python-client surface touched.
+> - Rollback/cleanup concern: `if: always()` teardown removes the container even on failure (verified zero leftover `obci-pg-*` containers on ct107 after the green run); a hard runner crash could orphan one container, bounded to loopback and killable by name pattern; revert = delete the job, the `if:` gates, and the two guard files.
+> - Fixes made before PR: isolated destructive `001_init.test.ts` onto `DB_NAME_TEST`; fixed fixed-port bind collision, IPv6 resolution, and the initdb readiness race; post-review hardening: fork gate, digest pin, guard errors="1" false-pass with regression fixtures; replaced `services:` with host-network `docker run` after proving bridge forwarding is broken on 2 of 3 runners.
+> - Known residual risk: `001_init.test.ts` still self-skips in CI (its re-migration hits a `trigger already exists` collision on the already-migrated DB) — pre-existing migration-schema coverage gap, follow-up issue recommended. Bridge networking on ct106/ct107 remains broken for anything else that assumes GitHub `services:` — worth an infra ticket. Fork contributors' PRs show skipped CI until a maintainer re-pushes — accepted trade-off.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: CI-only wiring; the cross-model findings are encoded directly as workflow gates and guard regression tests rather than a reviewer-lane pattern.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in \`docs/sme/\` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: CI/test-harness change only, no live Open Brain server behavior affected
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)

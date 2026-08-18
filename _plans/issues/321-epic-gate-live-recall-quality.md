@@ -60,6 +60,17 @@ Turn the existing offline synthetic evaluation and contract-only live canary int
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-22T17:30:57Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-22T17:30:56Z.
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-22T17:30:56Z

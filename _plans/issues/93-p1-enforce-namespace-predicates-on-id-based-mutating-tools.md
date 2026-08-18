@@ -38,3 +38,36 @@ Delegated header sessions are also affected: an admin or n8n token scoped with `
 - Add tests proving an agent cannot mutate another namespace by UUID.
 - Add tests proving delegated admin/n8n cannot mutate outside the delegated namespace.
 - Keep token-sourced admin/n8n behavior broad where that is the intended operational model.
+
+---
+
+## Resolution
+
+Closed by **PR #95** — fix: harden backend namespace isolation follow-ups
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bf93092bef220708ccaf999d1a1066ae55a4302a`
+- Merged at: 2026-06-11T03:39:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T03:39:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #95 body
+
+> ## Summary
+> - Enforce write-scope namespace predicates on ID-based mutating MCP tools, including delegated namespace callers.
+> - Bind MCP HTTP sessions to the effective namespace and agent identity, not just the bearer token role.
+> - Make the Python client close server-side MCP sessions with best-effort DELETE.
+> - Bound exported redact_value() recursion for deeply nested values.
+> - Let promotion scans check duplicates against a configurable target_namespace.
+> - Add AGENTS.md as the canonical agent instruction file with CLAUDE.md symlinked to it, including coding standards and SME swarm rules.
+>
+> Closes #90
+> Closes #91
+> Closes #92
+> Closes #93
+> Closes #94
+>
+> ## Validation
+> - bun test
+> - bun run typecheck
+> - uv run pytest from python/openbrain-memory

@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-27T06:12:53Z
-Updated: 2026-07-27T06:16:43Z
+Updated: 2026-08-08T03:07:31Z
 
 ---
 
@@ -112,7 +112,7 @@ them.
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-07-27T06:16:43Z
 
@@ -229,3 +229,15 @@ graduatable.
    rescan 9,331 rows every run. Needs a column before any producer lands.
 
 Item 5 is a prerequisite for item 1, not a follow-up.
+
+---
+
+### rodaddy — 2026-08-08T03:07:31Z
+
+Defect 1 merged (PR #610, squash → 90ef4c2). Done-means check `scripts/done-means/433-recall-sees-session-events.sh` controller-verified pre-merge (marker surfaces, zero cross-namespace rows). Downstream rollout classified with evidence: https://github.com/rodaddy/open-brain/pull/610#issuecomment-5224186274 — all client steps N/A; `search_all` (the tool Hermes calls) is untouched.
+
+Remaining on this issue:
+- Defect 2: nothing promotes events (classifyLaneEvent → tierLaneEvent → graduateLaneEvent has no producer) — unowned.
+- Post-merge rollout steps: deploy core01, re-run the read-only canary expecting `session_events` accepted, one `brain_answer` returning `source_type: "session_event"`.
+
+Flagged during rollout (pre-existing, not from this PR): rtech-hermes `openbrain/contract.py:50` pins schema v20 / `4df9c742…` while live serves v23 / `4b69e9b4…` — needs its own ticket in that repo.

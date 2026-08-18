@@ -55,3 +55,75 @@ Add a bounded, namespace-safe relational retrieval arm over existing `ob_entitie
 - No LLM parser.
 - No UI graph view.
 - No NATS/fleet-bus work.
+
+---
+
+## Resolution
+
+Closed by **PR #274** — feat: add graph relational search arm
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `076c3f167130170cfa44f98426964bb2f08e28a1`
+- Merged at: 2026-07-08T01:06:52Z
+- PR state: MERGED
+- Issue closed: 2026-07-08T01:06:53Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #274 body
+
+> Closes #267.
+> Links #265.
+>
+> ## Summary
+>
+> - Adds a bounded relational query parser for Open Brain-native relation phrases such as `depends on`, `blocked by`, `implemented by`, `decided by`, `mentions`, and `relates to`.
+> - Adds a namespace-scoped graph retrieval arm to default `search_brain` hybrid mode: resolve active seed entities, traverse active `ob_links`, hydrate linked rows into normal search rows with source refs, and merge through RRF.
+> - Keeps keyword mode, vector mode, source-scoped searches, `search_all`, and `brain_answer` unchanged.
+> - Extends the #266 relational fixture through the real MCP tool path, direction-aware graph fixtures, embedding-failure graph fallback coverage, and shared-helper graph-off regression coverage.
+> - Updates Plan 3F markdown and shared-site HTML; Project #8 #267 is In Review / Zero Known Issues / CI Passed.
+>
+> ## Validation
+>
+> - `bun test src/tools/__tests__/search-brain-relational-retrieval.test.ts scripts/assert-db-tests-ran.test.ts` - PASS, 20 pass / 3 local live-Postgres skips
+> - `bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts src/tools/__tests__/brain-answer.test.ts src/tools/__tests__/search-brain-relational-retrieval.test.ts` - PASS, 102 pass / 3 local live-Postgres skips
+> - `bunx tsc --noEmit` - PASS
+> - `git diff --check` - PASS
+> - `specs/plan-3f-gbrain-sprint.verify.sh --artifact-only` - PASS
+> - `cmp -s specs/plan-3f-gbrain-sprint.html /Volumes/collab/sites/open-brain/plans/plan-3f-gbrain-sprint.html` - PASS
+> - `bun test` - PASS, 1205 pass / 54 skip
+> - Current PR head `22f4819`: PR Body validate, CI `check`, CI `db-integration`, CI `python-package`, and GitGuardian passed; PR deploy jobs skipped as expected.
+>
+> Local note: live-Postgres relational tests are skipped without `OPENBRAIN_TEST_DATABASE_URL`; this PR updates `scripts/assert-db-tests-ran.ts` so CI must execute two `search_brain relational retrieval eval fixture (live Postgres)` testcases.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: graph rows could leak or over-rank relation-derived evidence if namespace/lifecycle predicates are wrong.
+> - Assumptions that could be wrong: exact phrase parsing is enough for v1; richer natural-language variants are intentionally deferred.
+> - Missing/weak tests: local live-Postgres tests are env-gated here; CI anti-skip guard proves the required live-Postgres fixture count.
+> - Security/permission risk: seed resolution, link traversal, and target hydration all use namespace equality and active-row filters; source-scoped searches disable the graph arm.
+> - Migration/deploy risk: no migration; no core01 deploy in this PR.
+> - Downstream client/runtime risk: `search_brain` default hybrid ranking can now include graph-hydrated rows for recognized relational queries, but schemas/output shape do not change.
+> - Rollback/cleanup concern: rollback is reverting this PR; no data mutation or persistent runtime side effect is introduced.
+> - Fixes made before PR: added real MCP tool-path graph tests, non-relational/source-scope no-graph guards, live-Postgres tool-path coverage, anti-skip count update, direction-aware relational semantics, embedding-failure graph fallback, shared-helper graph opt-in gating, SME entries, and local plan/HTML sync.
+> - Known residual risk: hosted proof and live downstream behavior are not run until an approved deploy/release phase.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because: initial swarm produced reusable MEDIUM+ patterns for relational edge direction, deterministic retrieval during embedding outages, and shared search helper consumer gating.
+>
+> ## Downstream Rollout
+>
+> - Checked `docs/downstream-rollout.md`.
+> - Public schema/tool shape: not changed.
+> - Runtime behavior: `search_brain` hybrid retrieval behavior changes for recognized relational queries.
+> - Local Open Brain verification: complete.
+> - Hosted Open Brain deploy/live smoke: not run; requires separate Rico approval.
+> - rtech-mcps handoff: not applicable for schema/registry because no tool schema changed.
+> - mcp2cli generated skill refresh: not applicable for schema because no tool schema changed.
+> - rtech-hermes/runtime rollout and live agent canaries: deferred until an approved deploy/release phase.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - [x] Initial review swarm found direction, embedding fallback, and shared-helper gating issues; fixes are included.
+> - [x] Fix verification found no known P0/P1/P2 issues remain.
+> - [x] CI passed for current PR head `22f4819`.
+> - Live Open Brain checks: [x] not applicable because: no core01 deploy or live Open Brain runtime change is run in this no-deploy PR.
+>

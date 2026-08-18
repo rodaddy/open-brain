@@ -57,6 +57,84 @@ Run idempotent metadata/entity extraction over newly ingested approved content a
 
 ---
 
+## Resolution
+
+Closed by **PR #358** — feat(346): derive namespace-scoped graph knowledge
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `40804b707f93e8b94e7392d7886e0b07be911e15`
+- Merged at: 2026-07-23T04:02:33Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T04:02:34Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #358 body
+
+> ## Summary
+>
+> Adds idempotent, namespace-scoped graph derivation for approved source records and registers it with the existing durable maintenance queue.
+>
+> - reuses the existing metadata extraction boundary rather than reimplementing SOURCE-1
+> - derives deterministic anchor/topic/person entities and `mentions` links
+> - skips unchanged derivation hashes and converges changed content without duplicate nodes or links
+> - archives obsolete anchor-to-term links while preserving shared term entities
+> - guards writes with exact namespace and source snapshot predicates
+> - registers `graph.derive` beside `embedding.repair` in the existing production bootstrap
+> - adds queue-owned immediate terminal dead-letter handling for permanent job failures
+> - upgrades fresh and existing maintenance-queue constraints to accept the content-free `terminal` category
+> - keeps sweep production explicit: operators or #347 enqueue bounded graph jobs; this PR does not invent recurrence
+>
+> Closes #346
+> Part of #342
+>
+> ## Verification
+>
+> - focused exact-head suite: 91 passed, 5 env-gated skips, 0 failed
+> - real PostgreSQL exact-head suites: 15 passed, 0 failed — including rollback/retry convergence, locked old/new snapshot serialization, duplicate-title/pure-rename behavior, and multi-window lease renewal against a competing claimer
+> - `bunx tsc --noEmit`: passed
+> - `git diff --check origin/main...HEAD`: passed
+> - correctness/domain review: ZERO FINDINGS
+> - security/adversarial review: ZERO FINDINGS
+> - opposite-runtime terminal audit and targeted fix verification: zero surviving P0-P2 findings on `269db79061e91b55747e060e5ce434501dac76f0`
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a global maintenance identity could be mistaken for namespace authority, stale source content could be committed after extraction, or changed derivations could leave obsolete graph edges live.
+> - Assumptions that could be wrong: approved source rows retain stable source identity and revision/content-hash snapshots; the existing graph consumer continues to interpret `entity` + `mentions` as documented.
+> - Missing/weak tests: no production-size corpus soak; bounded unit and real-PostgreSQL tests cover new/changed/unchanged, pruning, replay, snapshot drift, namespace negatives, and queue dispatch.
+> - Security/permission risk: the server-owned `ob-admin` identity grants maintenance capability only; the persisted job namespace remains authoritative and is checked at selection, handler, primitive, snapshot, and write boundaries.
+> - Migration/deploy risk: migration 029 re-derives the queue error-category CHECK for upgraded databases, while migrations 026/028 include `terminal` for fresh installs; startup now registers an additional inert handler but enqueues no graph work.
+> - Downstream client/runtime risk: no MCP tool/schema, transport, Python client, TypeScript client, prompt-placement, search-ranking, or Hermes integration contract changes.
+> - Rollback/cleanup concern: revert the bootstrap/queue integration and graph modules; graph entities/links already derived remain namespace-scoped and can be archived by a separate explicit maintenance action if required.
+> - Fixes made before PR: content-bearing log fields were removed; changed derivations now prune stale anchor links; queue terminal markers are honored immediately rather than merely classified; migration upgrade compatibility and production bootstrap dispatch were added; snapshot validation, metadata resolution, all graph writes, pruning, and hash stamping now share one locked transaction so partial failures roll back and stale jobs cannot overwrite newer graphs; source-anchor names are collision-safe while exact display labels survive pure renames; unsupported job versions terminal-stop before parsing; active handlers renew immutable-token leases across long runs.
+> - Known residual risk: graph derivation is not continuously scheduled. `enqueueGraphDerivationJobs` must be called by an operator or future #347 scheduling work.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: hosted activation and maintenance dispatch canary occur only after merge, before issue closure.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: this is internal maintenance execution with no MCP/client schema or wrapper change.
+>
+> ## Downstream Rollout
+>
+> - [x] Checked `docs/downstream-rollout.md`
+> - rtech-mcps / mcp2cli regeneration: not applicable — no public tool/schema/protocol change
+> - Python and TypeScript standalone clients: unaffected
+> - Direct Hermes integration and Hermes canaries: outside approved scope
+> - Hosted Open Brain deploy and a safe maintenance dispatch canary remain post-merge closure gates
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+>
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-23T04:08:40Z

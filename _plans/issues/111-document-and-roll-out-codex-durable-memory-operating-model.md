@@ -38,3 +38,44 @@ Document and roll out the Codex durable-memory operating model for Open Brain.
 
 - Documentation review against implemented commands/tool names.
 - `bun run typecheck` if docs include generated examples/scripts.
+
+---
+
+## Resolution
+
+Closed by **PR #116** — docs: complete Codex memory rollout guidance
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `26188c48a68551bd869a886b5b34cd4305cbeec9`
+- Merged at: 2026-06-15T20:34:04Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T20:34:05Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #116 body
+
+> ## What
+>
+> Closes #111 by completing the Codex durable-memory rollout docs.
+>
+> ## Scope
+>
+> - Add an AGENTS.md pointer to docs/memory-contract.md for Codex memory protocol changes
+> - Add quickstart heading and eval command guidance
+> - Document short-term versus long-term memory behavior
+> - Document citation and answer behavior
+> - Document how Codex differs from Hermes long-running agents
+> - Add failure-mode checklist for unavailable memory, stale/conflicting evidence, namespace denial, secrets, and eval regressions
+>
+> ## Review
+>
+> Two-lane docs review swarm completed:
+> - SME/contract lane: pass, no required fixes
+> - Antagonist/maintenance lane: pass, no required fixes
+>
+> ## Validation
+>
+> - rg acceptance-term check over AGENTS.md and docs/memory-contract.md
+> - git diff --check
+> - bun run typecheck
+> - bun run eval:memory
+> - bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json

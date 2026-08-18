@@ -1472,7 +1472,7 @@ Checks for the next swarm:
   so. It was reintroduced-safe only because the constraint is now written down.
 
 
-# A guard that matches vocabulary taxes every lane; judge the operation
+## [2026-08-08] A guard that matches vocabulary taxes every lane; judge the operation
 
 **Pattern.** A guard is written to stop a behavior, and the fastest way to
 write it is a word list: if the text contains one of these words, refuse. That
@@ -1805,3 +1805,290 @@ Caught in #675 only by the done-means **control** clause (a healthy deploy must
 still pass); every failure clause was green while the happy path was dying one
 line after the swap. Swallow the status explicitly (`|| true`) and let empty
 mean "nobody".
+
+## [2026-08-10] A verification command that takes untrusted text as a pattern needs an end-of-options guard
+
+**Severity:** MEDIUM
+**Source:** PR #716 (the #710 issue-artifacts landing lane), `_plans/worklog/land-artifacts-2026-08-10.md`
+**Scope:** verification and superset-check shell in `scripts/done-means/*.sh`, lane harness one-liners, any `rg`/`grep`/`sed` call whose pattern comes from a file's own lines
+**Status:** active
+
+### Pattern
+
+A pre-rebase superset check looped over the lane branch's added lines and asked
+whether each one was present in the root blob:
+
+```sh
+rg -qF "$line" root-copy.md      # WRONG
+rg -qF -- "$line" root-copy.md   # correct
+```
+
+Diff-derived lines routinely start with `-`. Without `--`, ripgrep parses that
+leading `-` as a flag rather than as the first character of the pattern, and the
+check reported **seven false MISSING lines** — content that was in fact present.
+The lane self-caught it, but the failure mode is what makes it review-worthy:
+not an error, not a crash, but a **plausible-looking wrong answer** in exactly
+the direction that invites a destructive decision. Believing those seven would
+have meant "root is not a superset, keep the branch side", i.e. reintroducing
+stale graph-file content over newer root content.
+
+This is the same family as round 19's `rg -r` (silently the REPLACE flag) and
+the two `rg -E` incidents (`--encoding`, not extended-regex) — a flag-shaped
+argument accepted as a flag and the command still exiting 0. Third distinct
+spelling; treat it as a standing class, not three coincidences.
+
+Reviewer checks:
+
+- Any `rg`, `grep`, or `sed` whose pattern is **interpolated from data** — file
+  lines, diff output, issue titles, branch names, `$line`/`$1` — must carry `--`
+  before the pattern. Ask where the pattern came from, not whether it looks safe
+  in the sample.
+- `-F` does NOT imply `--`. Fixed-string matching disables regex interpretation,
+  not option parsing; the two are separate stages and only `--` stops the second.
+- The same block bit again while harvesting this very entry:
+  `rg -h "^order:" docs/sme/entries/*.md` printed ripgrep's own help instead of
+  the matches, because `-h` is `--help`. Use `--no-filename`. Short flags whose
+  meaning you inferred from another tool are the recurring vector.
+- A superset/equality check that can only report "missing" is one-directional
+  and cannot distinguish "genuinely absent" from "the query was malformed". Where
+  the verdict authorizes a drop or an overwrite, require a positive control — a
+  line known to be present and one known to be absent — so a broken query fails
+  loudly instead of confirming the alarming direction.
+
+## [2026-08-10] A check that supplies the input under test proves the consumer, never that anything feeds it
+
+**Severity:** HIGH
+**Source:** Issue #709 (the unreachable half of #706); lane `lane/709-pr-head-ref`
+**Scope:** any done-means check, unit test, or acceptance gate for a fix that spans a PRODUCER and a CONSUMER — hooks feeding validators, callers feeding resolvers, CI feeding scripts
+**Status:** active
+
+### Pattern
+
+#706 fixed `scripts/validate-pr-body.ts` to resolve a `Done-means` path in
+three tiers, the third being `git cat-file -e <PR_HEAD_REF>:<path>` — the tier
+the issue asked for BY NAME, so a lane could cite a check existing only on its
+own branch. That half was correct and is still correct.
+
+The other half never shipped. `.claude/hooks/pr-body-gate.ts` is the only
+caller that runs at the boundary, and it set `PR_REPO_DIR` from the payload's
+`cwd` and **never set `PR_HEAD_REF`**, nor parsed `--head` from the intercepted
+`gh pr create`. The tier was dead code from the only live caller.
+
+`scripts/done-means/706-done-means-resolves-pr-head.sh` was **5/5 GREEN before,
+during, and after** the defect. It calls the validator DIRECTLY and sets
+`PR_HEAD_REF` itself. It therefore proved the consumer works WHEN FED, and
+never that anything feeds it. The sibling check that DOES drive the hook
+(`pr-body-gate-fires.sh`) asserted on neither `cwd` nor `PR_HEAD_REF`.
+
+This is `docs/lane-contract.md` round 28's own first bullet — *a seam added to
+make a gate testable is not the path that runs* — recurring in the very next
+lane. Writing the rule did not prevent the recurrence; only a clause driving
+the real entry point did.
+
+### The second, sharper trap
+
+Even a check that drives the real entry point can prove only half. Here TWO
+independent things were wrong and either alone explains the observed refusal:
+
+1. the payload `cwd` is the SESSION's directory (a `cd <worktree> && gh pr
+   create` in one Bash call does not move it), and
+2. `PR_HEAD_REF` was never supplied.
+
+A fix for (1) alone passes the obvious clause — "the cd-into-worktree call is
+accepted" — while the branch tier stays as dead as it ever was. The clause that
+forces (2) has to remove the file from every reachable working tree while
+leaving it committed on the branch, so that ONLY a supplied head ref can answer.
+
+### Review checks
+
+- For any fix spanning a producer and a consumer, ask: **does any clause fail
+  if the producer's wiring is reverted?** If every clause sets the disputed
+  input itself, the check covers the consumer only. Name the untested side.
+- Grep a done-means check for the environment variable or argument the fix is
+  about. If the check EXPORTS it, the check is downstream of the defect.
+- A hook payload's `cwd` is the session's, not the command's. Any gate reading
+  `input.cwd` as "where this command runs" is wrong whenever the command `cd`s.
+  Prose in the source asserting otherwise (#706's comment said exactly that) is
+  not evidence.
+- Gate inputs must be printed on the REFUSAL path, not only on the allow path.
+  #709 was diagnosed from a refusal naming the tree it searched but not where
+  that tree came from, so it read as "your path does not exist" when the truth
+  was "the gate looked in the wrong place".
+- A widened resolution must keep a MUTANT CONTROL clause: a path in no tree and
+  on no ref stays refused. Otherwise "fix the false refusal" and "turn the gate
+  off" are the same diff.
+
+### Related
+
+Same family as the round-28 entry
+(`2026-08-09-a-gate-that-judges-from-a-tree-other-than-the-one-under-review.md`):
+a gate resolving its tree or base from something other than the change under
+review. #709 is that family's producer-side spelling — the tree was resolvable,
+and nobody handed it over.
+
+## [2026-08-10] A gate must not let its own reporting channel decide its verdict
+
+**Severity:** HIGH
+**Source:** Issue #712 (`lane/712-pre-push-writefailed`); second confirmed instance of the family opened by CLOSED #483
+**Scope:** any gate, hook, or CI step that runs a child process and reads its success from anything other than the child's exit code — and any child whose behavior changes with the KIND of fd it inherits (pipe vs file vs tty)
+**Status:** active
+
+### Pattern
+
+`_githooks/pre-push` ran `bun test` bare, letting it inherit git's stdout and
+stderr. When the CALLER captures git's output (`git push ... | tail`, or any
+wrapper that reads it), those fds are pipes, and bun 1.3.14 aborts partway
+through writing the full-suite coverage table:
+
+```
+ src/validation-errors.ts       |  100.00 |   90.
+error: An internal error occurred (WriteFailed)
+```
+
+It exits 1 having run a GREEN suite. Every piped push failed, with text
+identical to a genuinely broken branch.
+
+The generalisable defect is not bun's bug. It is that **the gate's verdict was
+carried by its reporting channel.** The suite's real result (3372 pass, 0 fail)
+existed and was discarded, because the process that produced it died trying to
+print it.
+
+### The measurement that mattered, and the fix that would have looked right
+
+Redirecting each fd independently on the untouched primary:
+
+| stdout | stderr | bun exit |
+|---|---|---|
+| PIPE | PIPE | 1 (WriteFailed) |
+| FILE | FILE | 0 (3372 pass, 0 fail) |
+| FILE | **PIPE** | **1 (WriteFailed)** |
+| PIPE | FILE | 0 |
+
+The failing writer is **stderr** — where bun's coverage table and pass/fail
+summary go. The obvious fix (`bun test > log`) redirects only stdout, leaves the
+defect 100% live, and looks correct in review. Any check for this class must pin
+the fd that was actually measured, not the one that is conventional to redirect.
+
+Also measured: a fully-draining `cat` consumer does NOT help, and the output
+truncates mid-line — so this is the child's own write path against a pipe fd,
+not a consumer that stopped reading. "Something downstream stopped reading" is
+the wrong first hypothesis here.
+
+### Why it is worse than an ordinary flaky gate
+
+The failure depended on **how the caller captured output**, so from the
+operator's seat the push failed "randomly" and then "randomly" worked. A gate
+that fails identically for a green push and a broken one has stopped carrying
+information, and intermittent-plus-indistinguishable is the exact profile that
+makes `--no-verify` habitual — the decay this repo's gate work keeps fighting.
+
+### Second instance of #483's family
+
+CLOSED #483: the pre-push hook's inherited `GIT_DIR` changed the outcome of
+`bun test`, and the difference was invisible in the verdict. Here the inherited
+thing is stdout/stderr. **The rule both share: a gate must not let anything it
+inherited from its caller decide its verdict.** Two instances make this a
+family, not an incident — audit what else a hook passes down untouched.
+
+### Review checks
+
+- **Read the verdict from the exit code, never from the presence, shape, or
+  survival of output.** If a step's success is inferred from parsed text, ask
+  what happens when the writer dies mid-write.
+- **A child process's output destination is part of its environment.** When a
+  gate runs a child, send that child's stdout AND stderr somewhere the caller
+  cannot make hostile (a log file), then replay for the human. A truncated
+  replay must not be able to change the verdict.
+- **Announce the redirect and name the log** (`nothing is adjusted silently`).
+  Moving output is a self-made decision; a reader of the transcript should not
+  have to wonder why the suite went quiet.
+- **"The tests failed" and "the runner could not report" are different defects
+  with different owners — the gate must say WHICH.** Collapsing them is what
+  made #712 undiagnosable for two lanes: both presented as one bare
+  `WriteFailed` plus a refused push.
+- When a gate is fixed this way, keep a **mutant control**: a genuinely failing
+  suite must still fail AND still be named a test failure. A fix that stops
+  reading the exit code passes the happy-path clause and destroys the gate.
+
+### Check-design lesson that came with it
+
+The done-means check must drive **the real hook through a genuine pipe**
+(round 28). But it should NOT couple itself to bun's internal ~214 KB stderr
+threshold: a synthetic 4 MB stderr writer exits 0, and fixture suites of 300 and
+1200 modules both exit 0 through a pipe, so the trigger is internal to bun's
+reporter at real-suite scale. A check that depended on it **would go green the
+day bun fixes the bug** — silently un-testing the hook's classification logic,
+which is the part the repo actually owns. Reproduce the child's *observable
+contract* (fd 2 is a FIFO → `WriteFailed`, exit 1) via a PATH shim, and keep the
+HOOK, the pipe, and the stdin range real.
+
+One false RED was caught doing this: the runner was first placed in
+`package.json` `scripts.test`, but the hook invokes `bun test` DIRECTLY, not
+`bun run test`, so the clause went red with "0 test files matching" — proving
+the fixture wrong rather than the hook broken. **When a check goes red, read WHY
+before believing it.**
+
+## [2026-08-09] A gate that judges from a tree other than the one being merged makes a false receipt the cheapest escape
+
+**Severity:** HIGH
+**Source:** Issues #705 and #706, fixed as one lane (PR for `lane/fix-gates-705-706`); a third instance found live during that lane's own push
+**Scope:** any gate, hook, or check whose verdict depends on a base ref, a working tree, or a checkout it did not derive from the change under review
+**Status:** active
+
+### Pattern
+
+A gate's job is to judge THIS change. The moment its base ref or its tree is
+resolved from something other than the change — a hardcoded branch, the file's
+own directory, an absolute `core.hooksPath` — the gate is answering a question
+about a different artifact and reporting it as a verdict about this one.
+
+Three instances, same family, all live in this repo:
+
+1. **#706** — `scripts/validate-pr-body.ts` resolved the `Done-means` path
+   against `resolve(import.meta.dir, "..")`, and `.claude/hooks/pr-body-gate.ts`
+   spawns it from `$CLAUDE_PROJECT_DIR` (the primary checkout, on the base
+   branch). A lane's done-means check is a NEW file on the lane branch, so every
+   PR that introduced its own check was structurally refused.
+2. **#705** — `_githooks/pre-push` hardcoded `origin/main`. Lanes branch from a
+   wip branch 80 commits ahead, so every lane inherited that span's Python
+   changes and ran a package gate on a zero-Python diff.
+3. **Found during the fix** — `core.hooksPath` is an ABSOLUTE path to the
+   primary checkout, so every lane worktree runs the primary's hooks, not its
+   own. A lane fixing a hook structurally cannot exercise its own fix on push.
+
+### Why it is worse than an ordinary false positive
+
+Each of these had a legitimate-looking escape that was a lie: name a different,
+pre-existing check that never judged this lane (#706); answer "not mine" to a
+failure the push did not cause (#705). Both are false receipts, and a gate whose
+cheapest escape is a false receipt trains that reflex — which is how a forced
+gate decays into noise routed around with `--no-verify`.
+
+### Review checks
+
+- For every gate, ask: **which tree answered, and which ref did it compare
+  against?** If the answer is not derived from the change under review, that is
+  the defect — not the refusal it produced.
+- `import.meta.dir`, `$CLAUDE_PROJECT_DIR`, `core.hooksPath`, and a hardcoded
+  `origin/main` are the four spellings seen so far. Grep for them in anything
+  that gates.
+- The base/tree a gate chose must be ANNOUNCED in its normal output
+  (`nothing is adjusted silently`). A verdict whose basis is invisible can only
+  be reverse-engineered from a failure, and #705 sat undiagnosed that way.
+- Widening WHERE a path may resolve must not widen WHAT may be named: keep the
+  containment guard (no absolute paths, no `..` escapes) applied per candidate
+  tree, and keep refusing a path that resolves nowhere.
+
+### The check-design lesson that came with it
+
+`@{upstream}` is a property of a BRANCH NAME. A pre-push hook receives a raw
+SHA and a FULL ref; both `<sha>@{upstream}` and `refs/heads/x@{upstream}` fail —
+the second as a hard "fatal: no such branch" — and both failures look identical
+to "no upstream configured", so both fall through to the fallback silently.
+
+Clauses (a)-(e) of this lane's own done-means check all PASSED against that
+broken version, because every one of them exercised an `--explain` seam that
+resolves from the symbolic `HEAD`. **A seam added to make a gate testable is not
+the path that runs in production.** When a check drives a convenience entry
+point, at least one clause must drive the real invocation shape — for a pre-push
+hook, a genuine stdin range with a zero remote SHA.

@@ -72,6 +72,48 @@ The hardware constraint decides the architecture:
 
 ---
 
+## Resolution
+
+Closed by **PR #135** — Add qmd repo fact promotion command
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `2c8fea33ba22ea4c329d7b75c173b3e70fe97135`
+- Merged at: 2026-06-18T10:04:52Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T10:04:54Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #135 body
+
+> ## Summary
+>
+> - add `scripts/promote-qmd-repo-facts.ts`, a manifest-driven local promotion command for curated qmd-derived repo facts
+> - add the King Capital pilot manifest with 12 source-pointer facts from the local qmd `king` collection
+> - document the promotion workflow and add `bun run promote:qmd-facts`
+>
+> Closes #132.
+>
+> ## Validation
+>
+> - `bun test scripts/__tests__/promote-qmd-repo-facts.test.ts src/tools/__tests__/repo-facts.test.ts` -> 22 passed
+> - `bunx tsc --noEmit` -> passed
+> - `bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace collab --dry-run --timeout-ms 1000` -> 12 would_promote, 0 failed
+> - `bun run promote:qmd-facts -- --file docs/repo-facts/king-capital.qmd-facts.json --namespace collab --timeout-ms 15000` -> 12 unchanged, 0 stale, 0 failed
+> - `bun test` -> 697 passed, 16 skipped
+>
+> ## Live Pilot Evidence
+>
+> - Hosted OB `list_repo_facts(namespace=collab, collection=king)` returns 12 King facts
+> - Bilby (`10.71.1.71`) retrieved the `king-core` `ApiResponse` repo fact from OB without qmd
+> - Bilby followed the fact source pointer with `gh api` to `https://github.com/King-Capital/king-core/blob/a85bf4ff1662c56147cafbe31f2feeeb97c0dce6/src/types/api.ts`
+>
+> ## Notes
+>
+> - This command promotes curated facts and source pointers only. It does not mirror raw qmd/code chunks into Open Brain.
+> - Hosted `upsert_repo_fact` can outlive the client request while embeddings are generated. The script verifies timeout cases with `list_repo_facts` before counting a failure.
+>
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-18T06:20:52Z

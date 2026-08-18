@@ -77,3 +77,69 @@ recovery content as unreviewed/quarantined.
 
 Design recovery WAL/index contract for premature session death; keep recovery
 evidence out of normal durable recall.
+
+---
+
+## Resolution
+
+Closed by **PR #253** — feat(#221): add recovery WAL quarantine
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `7f34dcc48be79fe4de8cd9deba4d0b2719218047`
+- Merged at: 2026-07-06T19:00:09Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T19:00:11Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #253 body
+
+> ## Summary
+>
+> Closes #221.
+>
+> Adds a local quarantined recovery WAL boundary for interrupted realtime agent sessions:
+>
+> - new `RecoveryWalStore` with exact-scope append, mark, purge, TTL, bounded preview, and JSONL replay when `OPENBRAIN_RECOVERY_WAL_PATH` is configured
+> - new MCP tools `recovery_wal_append` and `recovery_wal_mark`
+> - `agent_context_pack` can include a `recovery` section only with `include_unreviewed_recovery=true`
+> - contract manifest bumped to `2026-07-06.memory-tools.v17`
+> - Python client wrappers and contract pins updated
+> - docs updated for recovery quarantine semantics and tool reference
+>
+> Recovery evidence is labeled `quarantined_recovery`, not durable memory, not searchable recall, and not surfaced through normal context packs unless explicitly requested for the exact scope.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit`
+> - `bun test` (`1120 pass`, `51 skip`, `0 fail`)
+> - `bun test src/realtime/recovery-wal.test.ts src/tools/__tests__/agent-context-pack.test.ts src/contract.test.ts` (`28 pass`, `0 fail`)
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run pytest -q` (`197 passed`, `5 skipped`)
+> - `cd python/openbrain-memory && uv run pytest tests/test_client.py -q` (`50 passed`)
+> - `git diff --check`
+>
+> ## Deploy / Rollout
+>
+> Local-only slice. No core01 deploy was authorized or performed.
+>
+> This is a public MCP/Python/contract change, so downstream rollout applies later. Hosted Open Brain deploy, mcp2cli cache/schema refresh, generated skills refresh, rtech-mcps handoff, rtech-hermes checks, and live Hermes canaries remain deferred until an explicit release/deploy phase.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: recovery evidence leaking into normal durable recall or context surfaces. Mitigation: recovery is a separate store, exact-scope only, `include_unreviewed_recovery=true` gated, and not wired into `search_all`, `brain_answer`, `session_context`, or durable tables.
+> - Assumptions that could be wrong: file-backed JSONL via `OPENBRAIN_RECOVERY_WAL_PATH` is enough for the local server-side WAL slice before the later release/deploy phase. If hosted recovery durability needs DB-backed retention, that should be a follow-up release design, not hidden in this local slice.
+> - Missing/weak tests: tests cover restart replay, exact-scope denial, reviewed/purge transitions, MCP opt-in behavior, contract pins, and Python wrapper drift. They do not run a live hosted server or live mcp2cli/Hermes canary because deploy is deferred.
+> - Security/permission risk: recovery append/mark require session write permission and namespace write authority; context-pack recovery read requires session read permission and namespace read authority plus explicit opt-in.
+> - Migration/deploy risk: no DB migration. Runtime persistence requires setting `OPENBRAIN_RECOVERY_WAL_PATH`; leaving it unset keeps in-memory behavior and avoids hidden repo state.
+> - Downstream client/runtime risk: contract version changed to v17 and Python required tools changed; downstream consumers must refresh during the release phase before claiming live readiness.
+> - Rollback/cleanup concern: disabling/unsetting `OPENBRAIN_RECOVERY_WAL_PATH` prevents file WAL persistence; PR can be reverted without DB rollback.
+> - Fixes made before PR: corrected Python wrapper test call shape to match exact-scope schema, updated stale docs that still described recovery as a non-goal, fixed strict TS nullable test access, addressed initial swarm findings for read-side WAL mutation, replay-stable trims, malformed JSONL validation, and stale tool wording, then addressed Claude cross-review findings for WAL compaction, replay size caps, and read-only recovery context behavior.
+> - Known residual risk: `src/realtime/recovery-wal.ts` is 739 lines, over the split-review threshold but under the 750-line hard warning; kept cohesive for this review because store/replay/scope logic is tightly coupled and splitting mid-gauntlet would add risk.
+> - SME review-memory update: [x] `docs/sme/` updated [ ] not applicable because: -
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: local-only slice; no core01 deploy authorized or performed
+>

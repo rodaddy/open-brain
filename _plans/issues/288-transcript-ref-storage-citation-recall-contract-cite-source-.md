@@ -33,6 +33,73 @@ OB currently returns the fact but can't answer "who decided this, when, in which
 
 ---
 
+## Resolution
+
+Closed by **PR #289** — feat(memory): add transcript citation recall contract
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `98e5e3c2e0dadd1e93e285c16e719a916d1301d5`
+- Merged at: 2026-07-13T18:45:58Z
+- PR state: MERGED
+- Issue closed: 2026-07-13T18:46:00Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #289 body
+
+> Closes #288.
+>
+> ## Summary
+>
+> - extends `append_session_event` with host-neutral transcript citations
+> - adds migration 023 and namespace-scoped `citation_recall`
+> - returns explicit `source_not_stored` for legacy events
+> - adds bounded source-ordered neighboring context
+> - bumps contract to v21 and `openbrain-memory` to 0.1.7
+> - updates Python wrapper, contract docs, and review SME knowledge
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> Evidence: `bunx tsc --noEmit`; `bun test` (1327 pass, 54 skip, 0 fail); `uv run pytest -q tests/test_contract.py tests/test_client.py` (108 pass); `uv run mypy src/openbrain_memory`; `uv run ruff check src tests`; `git diff --check`.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: namespace-scoped citation reads and migration correctness
+> - Assumptions that could be wrong: PostgreSQL timestamp/order semantics and duplicate-content behavior
+> - Missing/weak tests: live PostgreSQL migration tests remain env-gated; focused SQL-shape and MCP-dispatch regressions cover the new paths
+> - Security/permission risk: transcript storage can leak credentials; synchronous secret rejection and auth-derived namespace predicates are enforced
+> - Migration/deploy risk: migration 023 changes a live table; constraint creation is retry-idempotent
+> - Downstream client/runtime risk: public contract changes to v21; Python minimum is 0.1.7
+> - Rollback/cleanup concern: deploy must take normal DB/runtime backups before migration
+> - Fixes made before PR: all five-lane findings plus focused fix-verifier findings were fixed
+> - Known residual risk: hosted deploy and downstream cache/client refresh are required after merge
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: PR validation does not deploy; hosted proof is a post-merge rollout gate.
+>
+> Full tier receipt: one five-lane initial swarm, one coupled fixer, two focused fix-verification lanes, one final targeted verifier, and a CLEAN Claude Opus-high whole-PR audit on exact head `309ef69`.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [ ] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - After merge: deploy Open Brain, prove contract v21 and citation calls live, refresh mcp2cli schema caches/generated skill, and complete applicable Hermes/client canaries.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-13T19:01:30Z

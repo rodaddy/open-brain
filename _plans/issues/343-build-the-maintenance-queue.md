@@ -53,3 +53,64 @@ Add a durable server-owned queue and scheduler with persisted jobs, bounded conc
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Resolution
+
+Closed by **PR #350** — feat(343): add durable maintenance queue substrate
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `49788c66539db517d2b163b23f3edda3292e1c88`
+- Merged at: 2026-07-22T18:39:43Z
+- PR state: MERGED
+- Issue closed: 2026-07-22T18:39:44Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #350 body
+
+> ## Summary
+>
+> Adds a durable, server-owned maintenance queue substrate for issue #343.
+>
+> - migration `026_maintenance_queue.sql` adds the `maintenance_jobs` state machine, lease/terminal/dead-letter constraints, idempotency uniqueness, due/expired-lease indexes, and updated-at trigger
+> - `MaintenanceQueue` provides content-free divergent-idempotency rejection, atomic `FOR UPDATE SKIP LOCKED` claims, lease-bound complete/fail, deterministic capped backoff, and dead-lettering
+> - `MaintenanceQueueRunner` provides bounded concurrency, no overlapping ticks, drain-on-stop, and content-free logs
+> - the substrate is intentionally dormant: no bootstrap start, no registered handlers, no MCP or client export
+>
+> Closes #343
+>
+> ## Validation
+>
+> - focused fake queue tests — 9 pass, 0 fail
+> - real PostgreSQL 18.4 + pgvector proof — 27 migrations applied; 9 DB-gated maintenance queue tests pass, 0 fail, 0 skip
+> - `bunx tsc --noEmit` — passed
+> - `git diff --check` — passed
+> - working tree clean at `4af5e632b3d883e85c7684958b99334292b8cc70`
+>
+> ## Review Gate
+>
+> Full tier: schema migration, idempotency, concurrent claiming, leases, retry/backoff, dead-letter transitions, and dormant-runner lifecycle require the five specialist lanes plus opposite-runtime terminal audit.
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: the queue is dormant and unexported; real PostgreSQL migration/behavior tests provide the applicable live proof.
+>
+> ## Downstream rollout
+>
+> Not applicable. No MCP tool/schema/transport, Python client, package export, generated skill, Hermes runtime, or live agent behavior changes. The table and runner are internal and unreachable until a future handler/bootstrap PR.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: atomic claim/reclaim under `FOR UPDATE SKIP LOCKED`, lease-token ownership, and attempts-to-dead-letter transitions could double-run or lose work. Real PG18 tests cover single claim, non-steal, expiry reclaim, stale completion rejection, retry, dead-letter, and restart recovery.
+> - Assumptions that could be wrong: claim-time attempt increment aligns with fail-time terminal comparison; `update_updated_at()` exists before migration 026; future handlers will supply their own authorization and exact namespace contracts.
+> - Missing/weak tests: direct hand-written invalid rows are not tested against every CHECK constraint; no real bootstrap/handler exists by design, so runner integration remains future work.
+> - Security/permission risk: no exposed auth surface. Namespace is explicit and validated; the queue never infers it. SQL is parameterized and direct claim/concurrency limits are bounded.
+> - Migration/deploy risk: additive table only, migration is idempotent and applied successfully in a fresh PG18 chain. No server startup behavior changes.
+> - Downstream client/runtime risk: none; the substrate is dormant, unexported, and not contract-visible.
+> - Rollback/cleanup concern: revert and drop `maintenance_jobs`; no existing table or data is modified and no runner can hold a live lease because bootstrap is absent.
+> - Fixes made before PR: divergent idempotency semantics, unsupported-handler error category, claim bounds, namespace validation, ambiguous SQL qualification, timestamp parameter casts, and real PostgreSQL verification.
+> - Known residual risk: future handler/bootstrap integration must re-review auth, namespace scope, shutdown, and operational backpressure; deterministic backoff has no jitter.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no new review pattern has surfaced yet; MEDIUM+ findings will be captured after the review cycle.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

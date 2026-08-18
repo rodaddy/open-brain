@@ -36,6 +36,24 @@ else
   git -C "$repo_root" config --local core.hooksPath "$target"
   if [[ -n "$current" ]]; then
     printf 'core.hooksPath changed: %s -> %s\n' "$current" "$target"
+    # Name the specific damage when the value we just corrected was ABSOLUTE
+    # (issue #711). This clone held /Volumes/.../open-brain/_githooks for long
+    # enough that a family of lane failures (#705-#714) traced back to it, and
+    # the reason it survived is that a corrected value looks the same in the
+    # output whether it was a harmless typo or this. .git/config is SHARED by
+    # every linked worktree, so an absolute value silently makes every lane
+    # worktree run the primary checkout's hooks -- a lane fixing a hook cannot
+    # exercise its own fix, and a lane breaking one pushes green.
+    if [[ "$current" == /* ]]; then
+      printf '\n'
+      printf 'NOTE: the previous value was an ABSOLUTE path.\n'
+      printf '  .git/config is shared by every linked worktree, so that value made\n'
+      printf '  EVERY worktree run the hooks in:\n'
+      printf '      %s\n' "$current"
+      printf '  instead of its own. If lanes in worktrees have been passing or failing\n'
+      printf '  pre-push for reasons that did not match their own diff, that is why.\n'
+      printf '  (issue #711)\n'
+    fi
   else
     printf 'core.hooksPath set to %s\n' "$target"
   fi
@@ -45,6 +63,11 @@ printf '\nHooks git will now run from %s/:\n' "$target"
 for hook in "$repo_root/$target"/*; do
   name="${hook##*/}"
   [[ "$name" == "install.sh" ]] && continue
+  # Not hooks: the installer itself, and the #719 allowlist that records which
+  # displaced hooks are deliberately not provided. Skipped explicitly, because
+  # the "NOT executable" branch below would otherwise report a data file as a
+  # broken hook and send the reader chmod'ing something git never runs.
+  [[ "$name" == "displaced-hooks-allowlist.txt" ]] && continue
   if [[ -x "$hook" ]]; then
     printf '  %s\n' "$name"
   else

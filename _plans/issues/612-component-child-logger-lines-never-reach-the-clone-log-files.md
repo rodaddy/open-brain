@@ -3,11 +3,12 @@
 
 # #612 — Component child-logger lines never reach the clone log files
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-07T23:03:08Z
-Updated: 2026-08-07T23:03:08Z
+Updated: 2026-08-08T04:48:43Z
+Closed: 2026-08-08T04:48:43Z
 
 ---
 
@@ -30,3 +31,184 @@ No \`"component":"..."\` line from a pino child logger reaches the local clone's
 An executable check (scripts/done-means/) that greps the clone log file for a child-logger line with a \`component\` field emitted during the run, red on current behavior.
 
 Blocks: #384 (final logging criterion).
+
+---
+
+## Resolution
+
+Closed by **PR #624** — fix(logging): route the server logger through in-process multistream (#612)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `9daf96d0b87a4831d6d4a991112196bb858f534f`
+- Merged at: 2026-08-08T04:48:42Z
+- PR state: MERGED
+- Issue closed: 2026-08-08T04:48:43Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #624 body
+
+> ## Summary
+>
+> Closes #612.
+>
+> `server/logging/logger.ts` composed its destination with a multi-target `pino.transport` (stdout + `pino-roll`). That composition silently discarded **every line the server logger ever emitted** — not just child-logger lines.
+>
+> `loggerOptions` (`server/logging/logger.ts:51`) sets `formatters.level` to render the level as the string `"info"` rather than pino's numeric `30`, which the shared envelope requires (`_DOCS/STANDARDS-observability.md`, "Structured output and required fields"). Multi-target transports route on that serialized value:
+>
+> - `pino/lib/worker.js:126` — a **single** target returns its stream directly with no level routing. Two or more targets go through `pino.multistream` in the transport worker instead.
+> - `pino-abstract-transport/index.js:49` — `stream.lastLevel = value.level`, read straight off the parsed JSON with no label-to-number mapping.
+> - `pino/lib/multistream.js:61` — selects destinations with `dest.level <= level`.
+>
+> So the comparison performed for every line was `30 <= "info"` — false for every destination — and multistream wrote the line nowhere. No error, no warning, no dropped-line counter.
+>
+> **The fix** (`server/logging/logger.ts:59-101`) replaces the multi-target fan-out with in-process `pino.multistream`, which takes its routing level from pino's own numeric level via the metadata symbol, *before* `formatters.level` rewrites the serialized field. The envelope is unchanged — string `level`, `timestamp`, `service`, `worker`, `correlation_id`, `message` all emit exactly as before — and both required destinations receive every line. The file half keeps a **single-target** `pino.transport` so `pino-roll`'s rotation stays off the main thread and stays on the safe path above.
+>
+> This is a routing change only. No logger interface, envelope field, call site, or level semantics changed.
+>
+> ### Why it looked like a child-logger defect
+>
+> The issue reports `component` lines missing while module lines land. Measured on the live clone before the fix:
+>
+> | Line class | Count in `open-brain.log` |
+> |---|---|
+> | `"component":"..."` (any) | **0** |
+> | pino server lines (`mcp_tracing_configured`, `migrations_complete`, `server_shutdown_*`) | **0** |
+> | `graph_derivation_enqueue_sweep` | **3,465** |
+>
+> The 3,465 surviving lines do not come from pino at all. `graph_derivation_enqueue_sweep` is emitted by the **legacy** `src/logger.ts` module logger (`src/graph-derivation-handler.ts:297`), which writes `LOG_FILE` itself through its own rotating sink. Two logging systems in one process made total loss look like partial loss.
+>
+> ### Both serving trees, checked
+>
+> Only one tree has the defect.
+>
+> | Tree | Logger | State |
+> |---|---|---|
+> | `server/main.ts` (**serving** since the Phase 6 cutover, `scripts/local-clone.ts:31` `SERVING_ENTRYPOINT`) | pino via `server/logging/logger.ts:60` | **was broken**, fixed here |
+> | `src/index.ts` (legacy) | custom `src/logger.ts` | unaffected — writes `LOG_FILE` directly, never used `pino.transport` |
+>
+> `createLogger`/`createLogTransport` have exactly one non-test caller (`server/main.ts:210`); the other `rg` hits are `docs/standards/typescript-exemplar/`, which is documentation and has its own unrelated logging module.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable — **not applicable**: no file under `python/openbrain-memory/` is touched.
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> `bunx tsc --noEmit` — exit 0, no output.
+>
+> `bun test` — **3711 pass, 35 skip, 0 fail** across 242 files. `OPENBRAIN_TEST_DATABASE_URL` **was set** to a freshly created and migrated `ob_test_612_*` database (47 migrations, 25 tables verified present), so the Postgres suites genuinely ran rather than skipping silently. Database dropped afterward.
+>
+> ### RLVR check — RED then GREEN on the live clone
+>
+> `scripts/done-means/612-component-lines-reach-logs.sh` drives the **live local dogfood clone**. It seeds one real derivable `ob_sources` row, **enqueues nothing**, and waits for the server's own maintenance sweep to emit `maintenance_sweep_complete` through `logger.child({component:"maintenance"})` (`server/main.ts:310` → `src/maintenance-sweep.ts:257`) — the documented child-logger instance from the issue. It observes production rather than simulating it: a check that constructs a logger and asserts it wrote proves the library works, which is exactly what could not distinguish this bug.
+>
+> **RED (revision `e6562d5` deployed — check present, fix absent):**
+>
+> ```
+> PASS  (pre1) local clone serving, status=healthy
+> PASS  (pre2) serving pid 95620
+> INFO  watching 13 log file(s) under /Volumes/ThunderBolt/open-brain-local/log
+> INFO  seeded 1 approved/active source in namespace done-means-612; enqueued nothing
+> INFO  waiting up to 90s for the server's own sweep to log...
+> PASS  (z) observation window live: 19 legacy module-logger line(s) appeared during the run
+> FAIL  (a) no "component":"..." line reached any clone log file during the run
+> FAIL  (b) maintenance_sweep_complete never reached any clone log file
+>
+> === RESULT: FAIL (2 failing clause(s)) ===
+> ```
+>
+> **GREEN (revision `552cf48` deployed):**
+>
+> ```
+> PASS  (pre1) local clone serving, status=healthy
+> PASS  (pre2) serving pid 55955
+> INFO  watching 13 log file(s) under /Volumes/ThunderBolt/open-brain-local/log
+> INFO  seeded 1 approved/active source in namespace done-means-612; enqueued nothing
+> INFO  waiting up to 90s for the server's own sweep to log...
+> PASS  (z) observation window live: 1 legacy module-logger line(s) appeared during the run
+> PASS  (a) 1 line(s) carrying "component":"maintenance" reached the clone log
+> PASS  (b) 1 maintenance_sweep_complete line(s) reached the clone log
+>
+> === RESULT: PASS — component child-logger lines reach the clone logs ===
+> ```
+>
+> The line now on disk, from the pino file that had been 0 bytes since Aug 2:
+>
+> ```json
+> {"level":"info","timestamp":"2026-08-08T04:31:55.441Z","service":"open-brain-server",
+>  "worker":"worker","component":"maintenance","correlation_id":"system",
+>  "distill_batches_selected":0,"distill_jobs_enqueued":0,"distill_batches_deferred":0,
+>  "distill_turns_deferred":0,"graph_jobs_enqueued":1,"graph_limit_reached":0,
+>  "message":"maintenance_sweep_complete"}
+> ```
+>
+> **The check fails loudly rather than vacuously.** Per the no-silent rule (`AGENTS.md` Coding Standards, 2026-08-08), a grep over a log nobody is writing to succeeds at examining nothing. Preconditions exit **3** with an explicit `ABORT — PRECONDITION NOT MET, NOTHING WAS EXAMINED` banner, never a pass, when the clone is not serving, is unhealthy, has no log files, or has no `.env`. Verified live:
+>
+> ```
+> $ OPEN_BRAIN_HEALTH_URL=http://127.0.0.1:7199/health bash scripts/done-means/612-...sh
+> ABORT (exit 3) — PRECONDITION NOT MET, NOTHING WAS EXAMINED
+>   no response from http://127.0.0.1:7199/health; the local clone is not serving
+> not-running exit code = 3
+> green exit code = 0
+> ```
+>
+> There is also a **control clause (z)**: it asserts that *legacy* module-logger lines appeared during the window. Without it, "no component line appeared" is ambiguous between the defect and a run where the server logged nothing at all. This fired for real on the first RED attempt — the clone had stopped sweeping — and the check refused to report a result rather than banking a free red.
+>
+> ### Unit regression
+>
+> `server/logging/logging.test.ts` gains a test that takes the **production default** (`createLogger(config)` with no injected destination) and reads the file back off disk. Verified to fail against the pre-fix wiring:
+>
+> ```
+> (fail) structured logging boundary > delivers module and child lines to the real rotating file destination [5000.23ms]
+>   ^ this test timed out after 5000ms.
+>  4 pass, 1 fail
+> ```
+>
+> and to pass after: `5 pass, 0 fail, 18 expect() calls`.
+>
+> ### Live clone state after this PR
+>
+> Deployed to the **local dogfood clone only** via `scripts/local-clone-deploy.sh`. No core01/hosted config touched (two-host rule).
+>
+> - Revision proof: `pid 95620 -> 55955, cwd /Volumes/ThunderBolt/open-brain-local/app, revision 552cf48`
+> - Post-deploy health check passed on port 3100
+> - Left **healthy and serving**; `/health` reports `"status":"healthy"`, `"revision":"552cf48"`, database connected, embedding connected.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: stdout now receives lines from the main thread via `process.stdout` rather than through a transport worker. A slow or blocked stdout consumer therefore applies backpressure in-process instead of in a worker thread. Accepted: this is how pino's own documented `multistream` usage works, the file half (the volume-heavy destination with rotation) stays on a worker, and the alternative shipped a logger that wrote nothing at all. `pino.multistream` is pino's own API for exactly this composition, not a hand-rolled fan-out.
+> - Assumptions that could be wrong: that `formatters.level` was the sole cause. Not assumed — bisected field by field across all nine `loggerOptions` settings (`bare`, `level_only`, `base`, `messageKey`, `timestamp`, `formatters.level`, `formatters.log`, `mixin`, `redact`) against a live two-target transport; only `formatters.level` produced `stdout_lines=0 file_bytes=0` and every other variant wrote both destinations. Confirmed positively as well: keeping the level numeric while adding the label under a different key restored output through the identical two targets. Also assumed `server/main.ts` is the only serving entrypoint — verified from `scripts/local-clone.ts:31` `SERVING_ENTRYPOINT` and `scripts/local-clone-autostart.sh:66-70`, not from memory.
+> - Missing/weak tests: the done-means check needs the live service and is not CI-runnable, so CI proves the composition and the live loop is proven by hand. The new unit test covers the `pino-roll` file destination; it does not assert the stdout half of the multistream, because capturing `process.stdout` inside a Bun test process is exactly the global-state swap the existing suite deliberately avoids — stdout delivery is instead evidenced by the transcript above. No test pins the *reason* `formatters.level` is dangerous; that is carried by a comment at the composition site and the SME entry.
+> - Security/permission risk: none added. Redaction is unchanged — `redact` paths and `formatters.log`/`sanitizeValue` are untouched, and both run before the destination. The fix changes only which stream object receives an already-serialized, already-redacted line. Worth noting the fix *increases* what reaches disk: lines that were silently discarded now land, so redaction correctness matters more in practice than it did yesterday. It was verified unchanged, and the existing redaction tests still pass.
+> - Migration/deploy risk: no schema change, no config change, no new env var. `LOG_FILE` semantics and `workerLogPath` per-worker derivation are unchanged. Restart-only deploy; rollback is `scripts/local-clone-deploy.sh --rollback`.
+> - Downstream client/runtime risk: none. `docs/downstream-rollout.md` classifies this as not applicable — no MCP tool, schema, transport, or Python-client contract is touched. One caveat stated plainly: any host log tooling tailing the clone's pino file will begin seeing lines where it previously saw an empty file. That is the fix working, but it is a real change in log volume for anything downstream of that file.
+> - Rollback/cleanup concern: all probe rows removed by the check's own trap (namespace `done-means-612` verified 0 rows in `ob_sources`); the temp test database `ob_test_612_41956` was dropped; scratch probe files live under the shared temp scratch bucket and the lane worktree is removed at teardown.
+> - Fixes made before PR: removed a `mktemp`/`$TMPDIR` call from the first draft of the done-means check and replaced it with the shared `_scratch` bucket (sandbox-local temp is a hard rule); added the control clause (z) after the first RED attempt aborted on a dead observation window, which showed a red could otherwise be banked without proving anything was live.
+> - Known residual risk: the local clone stopped emitting sweep lines for ~18 minutes before the first RED attempt (last line 04:07:06 while `/health` still reported healthy). It resumed on restart and is unrelated to this change — it reproduced on the pre-fix revision — but it is unexplained and is **not** investigated here. If a sweep can go quiet while health stays green, that is its own defect and deserves its own issue; flagging rather than folding it into this PR.
+> - SME review-memory update: [x] `docs/sme/` updated — new `gotcha-agent` entry: injecting a test destination can bypass the very composition that is broken (all five logging tests passed against an in-memory stream while the production default discarded every line, at 100% reported coverage for `logger.ts`).
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/`
+> - Live Open Brain checks: [x] linked below
+>
+> Live checks are the RED/GREEN done-means runs above, executed against the local dogfood clone (revision `552cf48`, pid 55955) and its database, plus the on-disk log line and the exit-code verification.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: this changes only how the TypeScript server fans log lines out to its own destinations. No wire contract, tool schema, or cross-runtime fixture is involved, and no contract fixture references logging composition.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable, no MCP tool or schema change
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable, no tool surface change
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable, no client-facing change
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable, server-internal logging only
+>
+> Notes/evidence:
+>
+> - **#384 remains open and gains its unblock from this.** The native blocked-by edge already exists (#612 blocking #384). #384's final acceptance criterion requires the maintenance sweep's warn-level bound-reached lines to be logged, and those ride this exact stream — the `graph_limit_reached` field is visible in the `maintenance_sweep_complete` line quoted above, now that the stream reaches disk. This PR does not close #384; it removes the routing defect that made that criterion unverifiable.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

@@ -46,6 +46,37 @@ Add REST API routes alongside MCP for direct HTTP access from Python clients (rT
 
 ---
 
+## Resolution
+
+Closed by **PR #61** — feat: REST API for Python client access
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `67f1d03eb44cd0c7a0df4762a33f0681ad66849c`
+- Merged at: 2026-06-10T16:55:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-10T16:55:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #61 body
+
+> Closes #56
+>
+> ## Summary
+> - New `/api/v1` REST routes alongside MCP endpoint — same Bearer auth, no MCP handshake needed
+> - Routes: `POST /thoughts`, `POST /decisions`, `POST /persons`, `POST /sessions`, `GET /search`, `GET /entries/:table/:id`, `GET /namespaces`
+> - All routes enforce `canWriteNamespace` policy and use parameterized SQL
+> - Wired into `index.ts` sharing the same `toolDeps` as MCP tools
+>
+> ## Test plan
+> - [x] 558 tests pass (13 new REST API tests)
+> - [x] Typecheck clean
+> - [x] Auth enforcement tested (403 for readonly, 403 for cross-namespace)
+> - [x] Input validation tested (400 for missing required fields)
+> - [ ] Smoke test with curl after deploy
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-10T16:04:39Z

@@ -50,3 +50,57 @@ So the OB contract ("don't store secrets + display-time redact") holds for the r
 - Test covers each `SECRET_PATTERNS` class through the backfill path.
 
 Context: this closes an audit tied to rtech-hermes #92 (the fork-retirement / redaction re-scope). The rtech-hermes side has no gap; this is the open-brain-side item.
+
+---
+
+## Resolution
+
+Closed by **PR #239** — fix: redact ob backfill transcript writes
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d6389962e5b2650d9e53dbdb7d75a30b004600fa`
+- Merged at: 2026-07-05T22:10:21Z
+- PR state: MERGED
+- Issue closed: 2026-07-05T22:10:22Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #239 body
+
+> ## Summary
+>
+> - Adds shared `redactText()` on top of the existing `SECRET_PATTERNS` detector.
+> - Runs `ob-backfill.ts` transcript-derived summaries, thoughts, decisions, and session payloads through shared redaction before Open Brain writes.
+> - Makes `ob-backfill.ts` import-safe for tests and covers the backfill sanitizer against every current shared secret pattern.
+>
+> Closes #236.
+>
+> ## Validation
+>
+> - `bun test src/sharing.test.ts scripts/ob-backfill.test.ts` — 37 pass, 0 fail, 117 expect() calls
+> - `bunx tsc --noEmit`
+> - `git diff --check`
+> - `bun test` — 964 pass, 38 skip, 0 fail, 2598 expect() calls
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: raw transcript-derived text could still reach `session_save`, `log_thought`, or `log_decision` if a write field bypassed `sanitize()`.
+> - Assumptions that could be wrong: `SECRET_PATTERNS` is the intended shared server-side secret surface for this repo, matching the existing promotion classifier.
+> - Missing/weak tests: no live DB assertion of persisted rows; covered at the importable sanitizer boundary used by every backfill write payload instead.
+> - Security/permission risk: redaction is conservative and may remove credential-shaped diagnostic text, but that is acceptable for automated transcript import.
+> - Migration/deploy risk: no migration and no hosted service deploy required; this changes a local script path and a shared pure helper.
+> - Downstream client/runtime risk: no MCP schema, transport, Python package, or client contract changes.
+> - Rollback/cleanup concern: rollback is a single commit revert; backfill imports run after rollback would lose the redaction guard.
+> - Fixes made before PR: Phase 1 critical pass found the backfill-path test did not cover every shared pattern; expanded it and reran focused plus full tests.
+> - Known residual risk: future secret shapes are only covered after they are added to `SECRET_PATTERNS`; the count-locked backfill test forces a case update then.
+> - SME review-memory update: [ ] `docs/sme/` updated [x] not applicable because: this fixes a new open issue with no new review-swarm pattern yet.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - MEDIUM+ findings: pre-PR critical pass found incomplete acceptance coverage for the backfill path; fixed before PR by testing every current shared secret pattern through `sanitize()`.
+> - Live Open Brain checks: [ ] linked below [x] not applicable because: this does not change a public MCP tool/schema, transport, hosted runtime behavior, Python package, generated skill, or downstream client contract.
+>
+> ## Downstream Rollout
+>
+> Not applicable. This PR does not change MCP tool names, schemas, output shapes, auth semantics, transport behavior, migrations, Python client behavior, generated skills, or any downstream client-facing contract.
+>

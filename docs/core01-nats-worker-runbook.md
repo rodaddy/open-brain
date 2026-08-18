@@ -334,6 +334,107 @@ Do not "fix" 3100 by setting `OPENBRAIN_TRANSPORT=nats` in the clone env — tha
 would put the HTTP service back into the bridge business, which is exactly the
 boundary this runbook exists to keep.
 
+### `embed_watermark` on 3110 (#724 item 3)
+
+`/health` on 3110 carries an OPTIONAL `embed_watermark` block beside `nats`:
+
+```json
+{
+  "status": "healthy",
+  "nats": { "availability": "available", "...": "..." },
+  "embed_watermark": {
+    "stale": false,
+    "newest_raw_age_seconds": 45,
+    "newest_embedded_age_seconds": 60,
+    "lag_seconds": 15,
+    "lag_threshold_seconds": 3600,
+    "raw_rows_recent": 128,
+    "reason": "embed watermark within threshold"
+  },
+  "timestamp": "..."
+}
+```
+
+**Why it exists.** The maintenance producer ticked for three days with no
+consumer draining the embed queue. Raw rows kept arriving, embedded rows
+stopped, and nothing anywhere COMPARED the two — so every liveness surface
+stayed green while the corpus quietly stopped being searchable. This is the
+same argument `maintenance_producer` (#625) and `capture` (#647) make on the
+HTTP payload, applied to the third background lane, and the block deliberately
+matches their shape (`server/transport/health.ts:14-33`, `:35-79`).
+
+**Reading it.**
+
+- `stale: true` is THE verdict and flips `status` to `degraded` with HTTP 503,
+  even when `nats.availability` is `available`. A healthy bridge must not be
+  able to hold this endpoint green while the embed lane is days behind — that
+  combination is exactly the shape of the outage.
+- `stale` requires `raw_rows_recent > 0`. A quiet week produces an old embedded
+  row too; alarming on an idle corpus is how a check stops being read. An idle
+  corpus reports the lag numbers and stays `healthy`.
+- **Absence is not staleness.** A worker that composes no embed observer emits
+  NO `embed_watermark` key and cannot be degraded by one. Missing block means
+  "not my job"; `stale: true` means "my job and I am not doing it". Do not read
+  an absent block as a failure. In the DEPLOYED worker the block is always
+  present (see "Who builds the observer" below), so an absent block there means
+  the process is older than #724 item 3 — not that the lane is idle.
+- `lag_threshold_seconds` reports the bound the verdict was actually taken
+  against, so a reading is interpretable without knowing the deployed config.
+
+**Threshold.** `OPENBRAIN_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS`, default
+`3600` (one hour — the outage ran three days; the goal is catching it in about
+an hour). Nothing is adjusted silently: the worker's startup log line carries
+`embed_watermark_lag_threshold_seconds` and
+`embed_watermark_lag_threshold_source` (`default`, `env`, or
+`invalid_env_default`), plus `embed_watermark_observed`, so an unset key is
+visible as a default rather than looking configured, and an unusable value
+announces the original it replaced.
+
+**Who builds the observer, and what it reads.** `startNatsWorkerProcess`
+constructs one by default against the worker's own pool
+(`src/embed-watermark-observer.ts`); the `embedWatermarkHealth` option remains
+an override for tests, but its absence no longer means "no observer". The live
+entrypoint passes only `{ env: process.env }` and gets a real one. The startup
+log line reports `embed_watermark_observer_source` as `default_pool_observer`
+or `injected`, so which one is in force is visible without reading code.
+
+The watermark is registry-driven, not a hard-coded table: it queries every
+`EMBEDDING_TARGETS` entry whose `provenance.hasEmbeddedAt` is true
+(`src/embedding-targets.ts`), which is the same registry the embedding repair
+path drives off. `ob_entities` is skipped because it declares
+`ENTITY_PROVENANCE` — it has an `embedding` column and no `embedded_at`. Adding
+a target to the registry extends the watermark with no change here.
+
+**It is cached, and `/health` never waits on Postgres.** The health handler is
+synchronous, so the accessor returns a cached reading and schedules a
+background refresh once that reading is older than
+`EMBED_WATERMARK_CACHE_TTL_MS` — **30 seconds**, announced at startup as
+`embed_watermark_cache_ttl_seconds` beside the threshold. A reading up to 30s
+old cannot move a verdict taken against a one-hour bound, and the cost of the
+endpoint is at most one aggregate query per 30s no matter how often it is
+scraped. The observer is primed once during startup so the first probe answers
+with numbers.
+
+**When the query itself fails.** The block is still published, with
+`stale: false` and a `reason` naming the read failure; the numeric fields carry
+the last successful reading, or `-1` (explicitly "not measured", never an age)
+if there has never been one. A database the observer cannot reach is evidence
+about the OBSERVER, not the embed lane — flipping to `degraded` on it would
+make a transient blip indistinguishable from the three-day outage, and a 503
+that fires for unrelated reasons is how a check stops being read. It equally
+does not go silently absent or hold a stale green: the reason says the read
+failed and every failure is logged as `Open Brain embed watermark read failed`.
+The refresh catches its own errors, so a failing query can never crash
+`/health`.
+
+**Empty corpus.** No rows in any target reports `-1` ages,
+`raw_rows_recent: 0`, and `stale: false`. An empty corpus is not a stalled lane;
+this is the same guard that keeps an idle week quiet.
+
+```zsh
+curl -fsS http://127.0.0.1:3110/health | jq .embed_watermark
+```
+
 ### Verify
 
 ```zsh

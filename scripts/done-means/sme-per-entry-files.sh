@@ -82,6 +82,55 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # 226 at migration (PR #617); +1 = the 2026-08-08 no-silent-adjustments entry
 # (operator ruling) — raised in the same commit that adds it, as the gate's
 # own failure text instructs.
+# Raised 227 -> 232 by lane/fix-gates-705-706 (#705/#706), per this check's own
+# instruction to raise it in the commit that adds entries and say so in the PR.
+#
+# ANNOUNCED, because only ONE of those five is this lane's. The base commit
+# a45e7d9 already carried 231 dated entries against a pinned 227 -- verified by
+# running this script in the untouched primary checkout, which reports
+# "dated entries: 231 / baseline: 227" and RED. Four entries were therefore
+# added by earlier lanes without raising the pin, and this lane's single
+# gotcha-agent entry takes it to 232. The pin is being reconciled here, not
+# silently absorbed: if the operator wants those four re-examined rather than
+# adopted, this is the line that records that they were never accounted for.
+#
+# 2026-08-10, the #709 lane: 232 -> 233. Exactly ONE entry added, and it is this
+# lane's own --
+# `2026-08-10-a-check-that-supplies-the-input-under-test-proves-only-half-the-wiring.md`
+# (lane: gotcha-agent, order 69), the review-facing half of the #709 harvest.
+# Nothing else was adopted: the count in the untouched primary checkout at
+# e3917ab is 232, matching this pin before the raise, so the four unaccounted
+# entries noted above are still exactly those four and no more have accumulated.
+# Clause 1 remains RED here for a reason that is NOT this lane's and is already
+# filed as #707 (one entry uses a level-1 undated heading); verified by running
+# this script in the untouched primary checkout, where clause 1 fails and
+# clause 4 passes.
+#
+# 2026-08-10, the #712 lane: 233 -> 234. Exactly ONE entry added, and it is this
+# lane's own --
+# `2026-08-10-a-gate-must-not-let-its-own-reporting-channel-decide-its-verdict.md`
+# (lane: gotcha-agent, order 70), the review-facing half of the #712 harvest.
+# Nothing else was adopted. Clause 1 is STILL RED here for the same reason it was
+# red for the #709 lane and for the same file
+# (`2026-08-08-guards-must-judge-the-operation-not-the-vocabulary.md`, a level-1
+# undated heading) -- already filed as #707, present unchanged at this lane's
+# base `origin/wip/2026-08-07`, and untouched by this lane's diff (verified:
+# `git diff origin/wip/2026-08-07..HEAD` names that file zero times). It is left
+# failing rather than absorbed into a gate-fixing PR, per lane-contract round 28.
+# 2026-08-10, the #716 harvest (tracking-scribe, not a code lane): 234 -> 235.
+# Exactly ONE entry added, and it is this harvest's own --
+# `2026-08-10-a-verification-command-that-takes-untrusted-text-as-a-pattern-needs-an-end-of-options-guard.md`
+# (lane: gotcha-agent, order 71), the review-facing half of the #716 harvest
+# (lane-contract round 30). Nothing else was adopted: the count in the untouched
+# tree at 5e6105e is 234, matching this pin before the raise, so no further
+# unaccounted entries have accumulated beyond the four recorded above.
+# Clause 1 is STILL RED here for the same reason and the same file as the #709
+# and #712 lanes (`2026-08-08-guards-must-judge-the-operation-not-the-vocabulary.md`,
+# a level-1 undated heading) -- already filed as #707, present unchanged at this
+# harvest's base, and untouched by this diff. Left failing rather than absorbed,
+# per lane-contract round 28.
+#
+# ---- main-line provenance (parallel integration line) ----
 # RECONCILED 2026-08-09 (#680 lane): origin/main carried 231 dated headings
 # against a pin of 227 — four entries landed across earlier merges without the
 # same-commit bump the rule requires, so this clause had been RED on main
@@ -159,7 +208,19 @@ BUILD_SCRIPT="scripts/build-sme-indexes.ts"
 # the pin AFTER integrating, and re-run the build even when the merge was
 # conflict-free, because the defect a merge introduces here is invisible to
 # a textual merge by construction.
-EXPECTED_ENTRY_COUNT=237
+#
+# RECONCILED 2026-08-18 (rotation merge of wip/2026-08-07 into main): the two
+# integration lines each raised this pin independently (wip: ...->235; main:
+# ...->237 — both provenance trails kept above/below). Per round 28/29's own
+# instruction the pin is RE-MEASURED on the merged tree, not summed; the value
+# set here is that measurement, announced in PR #738.
+# 237 -> 241 (2026-08-18 rotation merge, PR #738): measured on the merged tree
+# after the union — main's four parallel-line entries plus wip's additions all
+# now count once. Announced here and in the PR body.
+# 241 -> 242 (#707 fix, same commit): the guards-judge-the-operation entry's
+# level-1 undated heading becomes a dated `##` finding heading, so it now
+# COUNTS — the whole point of #707.
+EXPECTED_ENTRY_COUNT=242
 
 LANE_FILES=(
   "$SME_DIR/correctness.md"

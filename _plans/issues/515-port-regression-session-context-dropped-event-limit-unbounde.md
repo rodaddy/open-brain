@@ -42,3 +42,53 @@ Because the MCP schema silently ignores unknown arguments, a client sending `eve
 Restore `event_limit` to the inputSchema (default 50, cap as before), add `LIMIT` to the query, and a regression test that fails on the old behavior (request `event_limit: 3` against a lane with >3 events, assert 3 rows). Worth a quick parity sweep for other dropped schema fields — the PR #477 gap map catches missing *tools*, not missing *arguments*.
 
 Found during post-cutover dogfood soak, 2026-08-03. Evidence gathered read-only; no fix started.
+
+---
+
+## Resolution
+
+Closed by **PR #516** — fix(server): restore session_context event bounds dropped in the port (#515)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `304ac5affb235ba2bf20ad82ecfa8d91eadf545c`
+- Merged at: 2026-08-03T05:32:05Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T05:32:06Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #516 body
+
+> Closes #515.
+>
+> ## What
+>
+> The rewrite's `session_context` lost the `event_limit` argument the frozen contract declares (`src/tools/session-context.ts:49`, default 50, applied at `:200`), plus the `event_types`/`importance` filters, and `session_start` lost its `LIMIT 50` (`src/tools/session-start.ts:237`). Both returned every event in the lane. The MCP schema silently ignores unknown arguments, so clients passing `event_limit` got the whole lane anyway.
+>
+> Measured on the live dogfood clone: lane `dev:open-brain` returned 1,256 events / 3.2MB for a request asking for 3 — past what the Python client reads in one response (`client.py:29`) — so **every `resume.py` in every session died**. Post-reboot, no agent on the machine could recover its context; that is how it was found. #514 (capture both sides) makes lanes grow ~2x faster, so this was worsening hourly.
+>
+> ## Fix
+>
+> Contract parity restoration only, no new behavior: `event_limit` (default 50, 1..200), `event_types`, `importance` back on the schema and applied in the query as current-src does; `session_start`'s existing-lane read gets `LIMIT 50` back.
+>
+> ## Evidence
+>
+> - Regression tests (`server/tools/session-lifecycle.pg.test.ts`) against live Postgres (playground clone), seeded past both bounds. **Red-proven: 0 pass / 4 fail on pre-fix code, 4/4 with fix.**
+> - `bunx tsc --noEmit` clean; pre-push full suite 3060 pass / 0 fail.
+> - The 16 pre-existing `server/` pg failures on the playground (telemetry migration 046 postdates the 08-01 clone; known shared-kb fixture collision) are identical with and without this change.
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: the dynamic WHERE assembly for event_types/importance; parameter indices are derived from array length after push, and the LIMIT parameter is pinned at $2. Covered by the filter test.
+> - Assumptions that could be wrong: default 50 matches current-src exactly (cited); no client depended on the unbounded dump (the only affected clients are the ones currently broken by it).
+> - Missing/weak tests: importance filter has no dedicated assertion (event_types path covers the same code shape); channel_id-lookup path untouched and untested here.
+> - Security/permission risk: none new — auth/namespace predicate unchanged, all values parameterized.
+> - Migration/deploy risk: none — no schema change; local-clone redeploy per SOP with app.previous rollback.
+> - Downstream client/runtime risk: schema widens (adds optional args) — additive, no consumer sends what it removes. Downstream rollout classification: dogfood-only until core01 swap-back; hosted steps N/A today.
+> - Rollback/cleanup concern: none; revert is a clean single-commit revert.
+> - Fixes made before PR: strict-null test nits found by tsc.
+> - Known residual risk: session_start's 50 is a fixed contract constant, not caller-tunable — same as current-src; parity preserved deliberately.
+>
+> State: WRITTEN + tested against playground; deploy to the local dogfood clone follows as its own step.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+> ## Review Gate
+> Merge was operator-directed 2026-08-03 ("yes, redeploy, let's fucking go" — direct instruction to land and redeploy the #515 fix), satisfying the merge gate's operator arm. CI code checks green on both runs (check, db-integration, python-capture/package/provider); the validate failure was this body's missing section headers, corrected here post-merge for the record.

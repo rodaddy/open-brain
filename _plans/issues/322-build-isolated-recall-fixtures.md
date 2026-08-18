@@ -51,3 +51,75 @@ Create a versioned corpus of durable memories and labeled query-to-expected-poin
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Resolution
+
+Closed by **PR #348** — feat(eval): add isolated live recall gate
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `235130967295197f197f66e3d30dc934959400a6`
+- Merged at: 2026-07-22T17:29:33Z
+- PR state: MERGED
+- Issue closed: 2026-07-22T17:29:34Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #348 body
+
+> ## Summary
+>
+> - add a sealed, versioned synthetic live-recall corpus with graded relevance and negative-namespace fixtures
+> - add deterministic recall@k, precision@k, MRR, namespace-leak scoring, and versioned thresholds
+> - add one opt-in MCP command that seeds unique namespaces, queries live retrieval, proves explicit namespace denial, emits a content-free receipt, and archives only records proven to be created by that invocation
+> - fail closed on malformed or foreign retrieval results, merged seed receipts, ambiguous archive outcomes, setup failures, and partial teardown
+>
+> Closes #322
+> Closes #323
+> Closes #324
+>
+> ## Validation
+>
+> - `bun test ./eval/open-brain/live/__tests__ ./scripts/__tests__/eval-open-brain-live.test.ts` — 101 pass, 0 fail
+> - `bun test` — 1620 pass, 74 skip, 0 fail
+> - `bunx tsc --noEmit` — passed
+> - `git diff --check` — passed
+> - exact-head CI at `eb8cf9f320c146a4060f3b74c558db6f797c120d` — check, contract-parity, db-integration, python-package, PR-body validation, and GitGuardian passed
+> - hosted hybrid baseline — PASS: recall@5 1.0, precision@5 0.4, MRR 1.0, namespace leaks 0, explicit denial, teardown 10/10
+> - deliberately degraded keyword mode — expected FAIL: recall/precision/MRR 0, isolation still denied, teardown 10/10
+> - restored hybrid mode — PASS with baseline metrics and clean teardown
+> - direct post-run database verification — 0 active eval thoughts and 0 active eval decisions
+> - live receipt: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5048757369
+>
+> ## Review Gate
+>
+> Full tier completed. The five-lane initial swarm ran at pinned head `361bed5`; accepted findings were fixed at `044110a` and verified by two focused Opus lanes. The mandatory Terra-high opposite-runtime whole-PR audit then found one P1 and two P2 blockers; all were fixed at `eb8cf9f`, exact automation and CI passed, and two targeted Opus lanes returned TARGETED_ZERO_FINDINGS after the Terra companion failed to return a usable post-fix verdict at the adapter layer.
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because:
+> - Initial findings: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5048768361
+> - Initial fixes: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5048931975
+> - Initial fix verification: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5048970134
+> - Terra terminal findings: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5049044929
+> - Terminal fixes: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5049245075
+> - Live Open Brain receipt: https://github.com/rodaddy/open-brain/pull/348#issuecomment-5048757369
+>
+> ## Downstream rollout
+>
+> Not applicable. This PR adds repository-owned evaluation tooling and documentation; it does not change server MCP tool names, schemas, output shapes, auth/namespace semantics, Streamable HTTP server behavior, package exports, generated skills, or Hermes runtime behavior. The hosted evaluation run is issue validation, not a downstream contract rollout.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: teardown calls `archive_entry`; a namespace, ownership, or response mismatch could archive unrelated data or falsely report cleanup. The gate uses nonce-unique namespace pairs, accepts only fresh `merged:false` seeds under the exact requested namespace, validates every retrieval hit before scoring, archives only returned run-owned IDs through owning namespace-bound callers, and requires archive response identity to match the request.
+> - Assumptions that could be wrong: current hosted MCP response shapes and header-delegation semantics could drift. Every relevant success shape is now explicitly validated against current server source and unknown shapes fail closed rather than becoming PASS.
+> - Missing/weak tests: deterministic tests cover transport parsing, config uniqueness, seed ownership, scoring, isolation, setup cleanup, partial failures, and archive identity. Hosted baseline/degraded/restored runs prove current production behavior. The unavoidable response-loss-after-commit case cannot provide an ID for per-record teardown and remains documented.
+> - Security/permission risk: the command needs a global token capable of namespace delegation. It is opt-in, prints no token or memory body, binds `X-Namespace` on initialization and every call, sanitizes thrown/returned transport errors, and requires an actual permission denial rather than an empty successful read.
+> - Migration/deploy risk: no migration or runtime deployment change. The command writes sealed synthetic rows only during an explicit live run and attempts per-record teardown on every deferred failure path.
+> - Downstream client/runtime risk: no public contract or package behavior changes; mcp2cli/Hermes rollout is not applicable.
+> - Rollback/cleanup concern: remove the eval command/files to roll back. If a seed commits but its response is lost, the unknown server ID cannot be archived automatically; residue is bounded to the crypto-unique eval namespace and requires operator cleanup scoped to that namespace.
+> - Fixes made before PR: mandatory negative denial, exact header binding, nonce/hash-bounded run identities, malformed-hit fail-close, run-owned retrieval validation, fresh-seed proof, exact archive identity proof, denial precedence, partial setup cleanup, content-free teardown counts, SME updates, and hosted cleanup verification.
+> - Known residual risk: a seed request that commits server-side but loses its response can leave an untracked sealed synthetic record in the run's unique dead namespace. The run fails rather than reporting clean cleanup, and recovery deliberately avoids broad automatic deletion.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

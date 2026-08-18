@@ -30,3 +30,36 @@ One MCP transport/server session can be reused across effective tenants. Even if
 - Replace the existing "allows same token session reuse with a different delegated namespace" test with a denial test.
 - Cover POST, GET, and DELETE session reuse checks.
 - Return a clear 403 error when the same `Mcp-Session-Id` is presented with a different effective namespace or bound agent identity.
+
+---
+
+## Resolution
+
+Closed by **PR #95** — fix: harden backend namespace isolation follow-ups
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bf93092bef220708ccaf999d1a1066ae55a4302a`
+- Merged at: 2026-06-11T03:39:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T03:39:01Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #95 body
+
+> ## Summary
+> - Enforce write-scope namespace predicates on ID-based mutating MCP tools, including delegated namespace callers.
+> - Bind MCP HTTP sessions to the effective namespace and agent identity, not just the bearer token role.
+> - Make the Python client close server-side MCP sessions with best-effort DELETE.
+> - Bound exported redact_value() recursion for deeply nested values.
+> - Let promotion scans check duplicates against a configurable target_namespace.
+> - Add AGENTS.md as the canonical agent instruction file with CLAUDE.md symlinked to it, including coding standards and SME swarm rules.
+>
+> Closes #90
+> Closes #91
+> Closes #92
+> Closes #93
+> Closes #94
+>
+> ## Validation
+> - bun test
+> - bun run typecheck
+> - uv run pytest from python/openbrain-memory

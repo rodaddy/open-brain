@@ -70,3 +70,83 @@ Rules:
 
 ## Relationship
 - Consuming side: rtech-hermes#88 (contract-driven surface), rtech-hermes#90 (explicit-only nomination + rejection surfacing). This issue is the server capability those depend on for a smart resend loop.
+
+---
+
+## Resolution
+
+Closed by **PR #244** — feat(#176): structure share_candidate rejection detail
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `dcd5c6b743e8cf58395deacd17ec0a8f16184a26`
+- Merged at: 2026-07-06T03:15:02Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T03:15:03Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #244 body
+
+> ## Summary
+>
+> - Adds structured, non-leaking `reject_detail` for synchronous `share_candidate` rejections.
+> - Adds bounded sanitized resend metadata in the rejection response and contract.
+> - Enforces the resend bound server-side with observed same-lane rejection state, stable root validation, invalid-root diagnostics, and no retry metadata when a rejection is non-resubmittable.
+> - Bumps the public contract to `2026-07-06.memory-tools.v13`, `append_session_event` contract version to 6, and `openbrain-memory` to 0.1.3.
+> - Updates `goal-run.md`, the roadmap HTML, and `docs/sme/` with the current PR #244 gauntlet state and retry-bound review lessons.
+>
+> Closes #176.
+>
+> ## Validation
+>
+> - `bun test src/tools/__tests__/append-session-event.test.ts` - 47 pass, 5 skip, 0 fail
+> - `bun test src/sharing.test.ts src/tools/__tests__/append-session-event.test.ts src/contract.test.ts` - 94 pass, 5 skip, 0 fail
+> - `bunx tsc --noEmit` - passed
+> - `bun test` - 1059 pass, 46 skip, 0 fail
+> - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_contract.py` - 69 passed
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory` - passed
+> - `cd python/openbrain-memory && uv run ruff check src tests` - passed
+> - `git diff --check` - passed
+> - Scoped GitGuardian path scan on Phase 3 changed files - no secrets found
+> - Latest PR head `ad49c0b9b63782d3b5dbe0b9cae249c6600d1b66`: GitHub `check`, `db-integration`, `python-package`, PR-body `validate`, and GitGuardian passed; `deploy` skipped.
+> - Focused Claude/Opus fix-verification on the Phase 3 fix diff: CLEAN, all five findings fixed, no regressions found.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: the rejection detail could leak the offending secret/private content or allow unbounded resend loops.
+> - Assumptions that could be wrong: lane-level no-lineage rejection counts are the right minimal bound; a non-resubmittable response without `resubmit_metadata` is clearer for contract-driven agents than a capped retry instruction.
+> - Missing/weak tests: no live Postgres test for the resend count/root query; covered with focused mock-pool regressions, full Bun suite, and GitHub DB integration. Live canary remains release/deploy work.
+> - Security/permission risk: rejection logs and response fields expose only classifier label/count/resubmittable state, not matched content. SQL uses parameterized values and same-lane predicates.
+> - Migration/deploy risk: no DB migration. Runtime deploy to core01 is explicitly deferred by the current local-only workflow.
+> - Downstream client/runtime risk: this changes the public contract and Python snapshot. Downstream mcp2cli/Hermes/generated-skill rollout is deferred to the later release phase per current local-only instruction.
+> - Rollback/cleanup concern: rollback is reverting this PR and contract version bump; persisted events may contain safe `share_rejected_sync`/resubmit metadata only.
+> - Fixes made before PR: Phase 1 critical pass found the first implementation trusted client-supplied resend attempts too much; fixed by counting prior rejected resubmits server-side and adding a reset-attempt regression.
+> - Fixes made after Phase 2 swarm: initial swarm found root rotation could still reset the bound; fixed by preserving and validating a stable original rejected root and adding contract-following/rotated-root regressions.
+> - Fixes made after Phase 3 Claude cross-review: fixed omitted-lineage retry bypass, invalid-root diagnostics, clean-resubmit DB query cost, first-detector-only `span_count`, and retry metadata on blocked responses.
+> - Known residual risk: live client UX for presenting `reject_detail` still depends on downstream rollout during the release phase.
+> - SME review-memory update: [x] docs/sme/ updated with `docs/sme/adversarial.md` retry-root and omitted-lineage findings plus `docs/sme/quality.md` clean-path retry query finding from PR #244.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - [x] Phase 2 initial swarm findings were posted: https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888673813
+> - [x] Phase 2 fix-verification receipt posted: https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888701176
+> - [x] Phase 3 Claude cross-review findings were posted as PR comments
+> - [x] Phase 4 fixes receipt posted: https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888757382
+> - [x] Phase 4 fix-verification receipt posted: https://github.com/rodaddy/open-brain/pull/244#issuecomment-4888772907
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: current scope is local-only; hosted deploy, downstream rollout, and live canaries are deferred to the release phase.
+>
+> ## Downstream Rollout
+>
+> - Checked `docs/downstream-rollout.md`.
+> - Local Open Brain verification is complete.
+> - Hosted Open Brain deploy, mcp2cli cache/schema refresh, generated skills, rtech-mcps handoff, rtech-hermes runtime checks, Hermes rollout, and live canaries are deferred by Rico's current local-only instruction.
+> - No core01 deploy performed.
+>
+> ## Gauntlet Status
+>
+> - Phase 1 critical pass: complete; one issue found and fixed before PR.
+> - Phase 2 review-swarm: complete; one material root-rotation finding fixed and verified.
+> - Phase 3 opposite-runtime cross-review: complete; five findings posted.
+> - Phase 4 all findings addressed: complete; every posted finding has a fix commit and verification receipt.
+> - Phase 5 merge: pending deliberate merge; no auto-merge, no core01 deploy.
+>

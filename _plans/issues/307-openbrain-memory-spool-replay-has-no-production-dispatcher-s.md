@@ -36,6 +36,75 @@ The `spooled` receipt contract says durable — the implicit promise is eventual
 
 ---
 
+## Resolution
+
+Closed by **PR #309** — feat(python): auto-drain durable spool replay on healthy direct operations
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `64db1a32dc635af3dfac2b1fee3bd32ae49e573f`
+- Merged at: 2026-07-21T03:21:50Z
+- PR state: MERGED
+- Issue closed: 2026-07-21T03:21:51Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #309 body
+
+> ## Summary
+>
+> Fixes #307: `Spool.replay()` had no production caller, so records written as `spooled, durable` never drained. The runtime now opportunistically replays pending spool units after any successful direct operation — end of a successful direct write (`_write_locked`, receipt SAVED) and end of a successful direct recall (`_recall_context`, status DIRECT) — under the already-held operation lock.
+>
+> Mechanics:
+>
+> - Dispatcher validates each record against the exact spooled-operation allowlist (`session_start`, `lane_upsert`, `upsert_repo_fact`, `append_session_event`, `log_thought`, `log_decision`, `session_wrap`) and dispatches via the router's direct client path with `**record.payload`. Unknown operations raise inside the dispatcher so `JsonlSpool.replay` keeps that unit on disk.
+> - New `RuntimeClientRouter.direct_only()` context disables mcp2cli fallback during replay — durable records only ever replay over the verified direct path. Router also gains the four missing direct methods (`lane_upsert`, `upsert_repo_fact`, `log_thought`, `log_decision`) so every spooled operation is dispatchable.
+> - Drain never raises out of the outer operation: the whole drain is wrapped, unexpected errors log a warning and leave records on disk. Receipt shape is unchanged — no new fields.
+> - Replay does not re-enter `AgentMemory._call_write`, so a failing replay cannot re-spool or loop.
+> - Version bumped 0.1.9 → 0.1.10 (pyproject, uv.lock, contract-test assertions), giving the hash-pinned Claude provider install a distinct wheel to re-pin against.
+>
+> Built via a Claudex workflow lane (Sol-high codex companion, write-scoped, isolated worktree); controller independently diff-audited the lane and re-ran all gates.
+>
+> ## Gates
+>
+> - `uv run pytest -q`: 350 passed / 5 skipped (6 new drain tests: drain-after-write, drain-after-recall, unknown-operation retained, replay failure keeps unit + outer receipt unchanged, corrupt spool never raises, full allowlist dispatch)
+> - `uv run mypy src/openbrain_memory`: clean
+> - `uv run ruff check src tests`: clean
+> - No TS/server changes in this PR.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: replay dispatches previously-failed writes automatically on the next healthy operation — a burst of parked records lands on the server at once. Bounded by spool caps (max_lines/max_bytes) and unit ordering; SpoolFullError semantics from #300 unchanged.
+> - Assumptions that could be wrong: assumed every spooled record was produced by `_call_write` with kwargs-shaped payloads (enforced by allowlist + dispatcher raising on anything else); assumed replaying `session_start` prerequisites is idempotent server-side (it is the same lane-establishment call every session already makes).
+> - Missing/weak tests: no live-server replay test in this PR (covered in the rollout validation on core01, which has 5 real parked units); no concurrency test replaying while another process appends (file lock in `replay()` snapshots under flock, pre-existing behavior).
+> - Security/permission risk: replay goes only over the direct authenticated client with `direct_only()` explicitly disabling fallback; the operation allowlist prevents a tampered spool file from steering the client into arbitrary method calls.
+> - Migration/deploy risk: none server-side. Client-side, pre-0.1.9 spool files may contain unredacted payloads (known #304 residual); draining them transmits that content to the server over the normal authenticated path — delivery, not disclosure.
+> - Downstream client/runtime risk: additive behavior; receipt shape unchanged, so the pinned Claude adapter needs only the version/hash re-pin (Development-side, queued). Hermes/mcp2cli unaffected — no tool schema or transport change.
+> - Rollback/cleanup concern: reverting restores never-drains behavior; no persisted-state migration either way.
+> - Fixes made before PR: controller audit found no material rework; version-assertion updates were part of the lane.
+> - Known residual risk: drain is opportunistic — a client that only ever fails direct writes still never drains (needs a healthy moment); acceptable, matches #307's design intent.
+> - SME review-memory update: [x] not applicable because: this PR implements the previously-captured #300/#304 patterns' delivery path; no new MEDIUM+ review finding arose. The #307 never-drains gap itself is tracked as the issue this PR fixes.
+>
+> ## Downstream rollout classification (docs/downstream-rollout.md)
+>
+> Touched surfaces: `python/openbrain-memory` client behavior only (spool drain on healthy operations; router direct-method surface). Not touched: MCP tool names/schemas/annotations, auth, transport/SSE, DB migrations, generated skills, server code.
+>
+> - Step 1 (local verification): complete, gates above.
+> - Step 2 (hosted verification): N/A server-side; client rollout validation happens via the Development provider re-pin (0.1.10) with a live drain check on core01's parked spool units.
+> - Step 3 (rtech-mcps handoff): N/A — no registry/schema/secret-map change.
+> - Step 4 (mcp2cli cache/skill refresh): N/A — no tool schema change.
+> - Hermes/Python runtime: additive; next package refresh picks it up, no pinned-contract break.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured — none arose; existing `docs/sme/` patterns (#300 saturation, #304 redact-before-persist) already cover this family
+> - Live Open Brain checks: [x] not applicable because: no server-side change; the live check is the core01 drain validation in the Development-side 0.1.10 rollout that consumes this wheel.
+>
+> Refs #307, #300, #304.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-07-21T04:03:48Z

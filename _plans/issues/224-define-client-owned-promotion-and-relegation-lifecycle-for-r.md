@@ -74,3 +74,76 @@ durable write.
 
 Define explicit client-owned promote/relegate actions; no server-side
 auto-promotion from working trace or recovery evidence.
+
+---
+
+## Resolution
+
+Closed by **PR #251** — feat(#224): add memory promotion lifecycle
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d801419800b33a2227371fdb8792577e9afb50f2`
+- Merged at: 2026-07-06T16:48:24Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T16:48:25Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #251 body
+
+> Fixes #224.
+>
+> ## Summary
+>
+> - Adds a first-class client-owned memory lifecycle to the Open Brain contract: `candidate`, `promote`, `relegate`, `discard`, and `nominate_shared`.
+> - Adds TypeScript and Python client helpers for candidate memory actions, with explicit candidate type, reason, confidence, scope, evidence refs, and staleness policy metadata.
+> - Validates lifecycle metadata server-side before `append_session_event` persistence, including invalid action, malformed candidate fields, and invalid `share_candidate` usage.
+> - Prevents lifecycle candidate events from automatically tiering into durable thoughts, and restricts shared-kb scan/promoter candidates to explicit `nominate_shared` lifecycle nominations.
+> - Updates Plan 3F with live state: 0 open PRs, 8 open issues, #250 merged, #224 local validation passed, and deploy still separate.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` - pass.
+> - `bun test src/contract.test.ts src/__tests__/agent-memory.test.ts src/tools/__tests__/append-session-event.test.ts src/tiering.test.ts src/tools/__tests__/tier-lane.test.ts src/tools/__tests__/scan-namespace.test.ts scripts/promote-lane-shared.test.ts` - 210 pass, 20 skip, 0 fail.
+> - `bun test` - 1078 pass, 51 skip, 0 fail.
+> - `uv run pytest -q tests/test_agent.py tests/test_client.py tests/test_contract.py tests/test_dream.py` - 120 passed.
+> - `uv run pytest -q` - 197 passed, 5 skipped.
+> - `uv run mypy src/openbrain_memory` - pass.
+> - `uv run ruff check src tests` - pass.
+> - `git diff --check` - pass.
+>
+> Local DB-backed/live Postgres tests still skip without `OPENBRAIN_TEST_DATABASE_URL`; CI `db-integration` must supply that gate.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: lifecycle candidate metadata could accidentally become a durable memory or shared-kb nomination without an explicit client action. Mitigation: tiering keeps any `memory_lifecycle_action` event in-lane, scan/promoter logic only treats `nominate_shared` plus `share_candidate=true` as a shared nomination, and tests cover both paths.
+> - Assumptions that could be wrong: representing lifecycle actions as validated session-event metadata may be enough for this slice; future runtime work might want dedicated server tools for durable promotion/relegation rather than wrapper-only verbs.
+> - Missing/weak tests: local live Postgres tests are skipped without `OPENBRAIN_TEST_DATABASE_URL`; CI must prove DB-backed promoter/tier/session-event behavior. No hosted Open Brain smoke is included because deploy is out of scope.
+> - Security/permission risk: caller-supplied lifecycle metadata is untrusted and now validated server-side before persistence. Existing namespace/auth predicates remain the write boundary; no client-side-only permission check is relied on.
+> - Migration/deploy risk: no schema migration or core01 deploy is included. Contract version/hash changes require downstream cache/runtime rollout only in an approved release/deploy phase.
+> - Downstream client/runtime risk: this changes public contract and `openbrain-memory` behavior, so downstream rollout applies. mcp2cli/rtech-mcps/rtech-hermes/Hermes live rollout are deferred; this PR only lands the local contract/client/server behavior.
+> - Rollback/cleanup concern: reverting this PR removes v15 lifecycle contract fields, client helpers, metadata validation, and the tier/scan/promoter lifecycle guards. Any downstream client adopting v15 must not deploy before the release gate.
+> - Fixes made before PR: added server-side lifecycle validation, blocked candidate auto-tiering, tightened scan/promoter explicit nomination semantics, added Python lifecycle helper tests, aligned v15 contract/hash, and updated Plan 3F.
+> - Known residual risk: future #222/#221 runtime flows still need integration tests proving working/recovery/candidate sections do not blur once realtime context pack data exists.
+> - SME review-memory update: [x] not applicable because: the pre-PR blocker findings were fixed with regression coverage and do not add a new reusable review pattern beyond existing auth/namespace/downstream gates.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] Pre-PR antagonist blocker findings were fixed and locally verified.
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable.
+> - [ ] Initial swarm pending after PR creation.
+> - [ ] Opposite-runtime cross-review pending after initial swarm.
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this is a local-only PR with no core01 deploy or hosted runtime rollout.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`.
+> - [x] Open Brain local verification complete.
+> - [x] rtech-mcps handoff is deferred to approved release/deploy phase.
+> - [x] mcp2cli cache/skill refresh is deferred to approved release/deploy phase.
+> - [x] rtech-hermes Python runtime/plugin changes are deferred to approved release/deploy phase.
+> - [x] Hermes live rollout/canaries are deferred to approved release/deploy phase.
+>
+> ## No Deploy
+>
+> This PR must not deploy core01. Merge and deploy remain separate phases.
+>

@@ -127,3 +127,180 @@ default for it.
 - #529 — operator-invoked provider path failing where the hook path works.
 - #419 — the gate-deadlock acceptance whose "silence is a signal" rule this
   branch violates.
+
+---
+
+## Resolution
+
+Closed by **PR #558** — fix(provider): tell the operator when the configured Development root is absent
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `24e433f75f65681077d6d36e04f33e2f94b7a1db`
+- Merged at: 2026-08-05T00:28:36Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T00:28:37Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #558 body
+
+> Closes #556.
+>
+> ## What was wrong
+>
+> `resolve_development_scope` returned a bare `None` for two unrelated questions,
+> so every caller downstream read a misconfiguration as a correct silence:
+>
+> - the cwd is somebody else's repository — expected, and quiet on purpose;
+> - the configured Development root does not exist on this machine — a
+>   misconfiguration of the operator's own box, which was equally quiet.
+>
+> Field-proved on the Air, 2026-08-04:
+>
+> 1. `ob-memory-provider` exited CLEAN with no receipt and no output. Running the
+>    gate's own remediation command by hand also produced nothing, so "worked" and
+>    "did nothing" were indistinguishable from inside the session.
+> 2. The context-budget gate blocked tool calls and printed remediation text
+>    containing the shipped default path, presented where an operator reads a
+>    cwd — pointing at a directory that does not exist on that machine.
+>
+> ## What the existing design already said
+>
+> This is a delta against an explicit design, not a design gap.
+>
+> - `development_scope.py:1-13` — a `None` scope keeps the hook "silent in
+>   somebody else's repository". Silence is scoped to that case; an absent root is
+>   never claimed to be it.
+> - `development_scope.py:39-61` — the override exists because a machine without
+>   the macOS volume resolves every scope to `None` and "the gate correctly falls
+>   silent". The failure mode was already known; nothing told the operator.
+> - `context_budget_gate.py:19-28` — "THE GATE MUST NOT DEADLOCK ON WHAT IT
+>   GATES" (#419), and "EVERY BRANCH RECORDS A NAMED TRANSITION. Silence is a
+>   signal (#419 acceptance)."
+> - `src/openbrain_provider/README.md` — "A receipt always states durability.
+>   Returning nothing, or returning success without persisting, is the specific
+>   failure this package exists to prevent."
+> - `cli_guard.py:16-21`, `guard.py:29-31` — enforcement "ALWAYS EXIT 0, ALWAYS
+>   FAIL OPEN … rather than taking out unrelated tool use."
+> - `gate_presentation.py:1-10` — banner text must stay the command the gate
+>   accepts, or the banner prints an instruction the gate then refuses.
+>
+> Fail posture is therefore derived, not invented: loud and diagnostic, and
+> deliberately NOT newly blocking. The repair is an environment variable exported
+> in a shell, so a gate that blocked here would gate its own escape.
+>
+> ## The change
+>
+> - `development_scope.py` — `development_root_missing`,
+>   `describe_development_root`, `render_scope_diagnosis`, and a named
+>   `DEVELOPMENT_ROOT_ENV_VAR`. The rendered text names the configured root, its
+>   origin (env var vs shipped default), the measured cwd on a labelled `cwd:`
+>   line, and the one-line fix.
+> - `context_budget_gate.py` — reports the diagnosis on stderr (stdout is the
+>   verdict channel), and `_development_cwd` prefers the measured cwd over any
+>   path composed from a root that is not there.
+> - `openbrain/apps/hooks/receipts.py` — the guarded writer logs why no receipt
+>   was written instead of returning `None` in silence.
+> - `openbrain/receipts/scope.py` — gains the same override the gate already had,
+>   so the writer and the reader cannot end up in different scopes. Its previous
+>   literal-only comment warned about exactly that split.
+>
+> Out-of-scope cwds stay silent; that behavior is pinned by its own test.
+>
+> ## Red proof
+>
+> Both halves were proven to fail before the fix and pass after.
+>
+> Gate half, against real pre-fix code (`_development_cwd` composing from the
+> absent root):
+>
+> ```
+> E  AssertionError: assert '/Volumes/Thu...nt/open-brain' == '/Volumes/Thu...ing-directory'
+> E  - he_measu0/real-working-directory
+> E  + he_measu0/absent-volume/Development/open-brain
+> ```
+>
+> Receipt half, re-proven by reverting only the one-line call and restoring it:
+>
+> ```
+> E  AssertionError: assert 'OPENBRAIN_DEVELOPMENT_ROOT' in ''
+> 1 failed, 4 passed
+> ```
+>
+> The non-blocking assertion passed both before and after, confirming no new
+> blocking posture was introduced.
+>
+> Note on test mechanism: this package logs through loguru, which does not write
+> through the stdlib logging tree, so `caplog` sees nothing and its default sink
+> holds a stderr reference `capsys` cannot intercept. The tests add their own
+> loguru sink and assert the message rather than the transport.
+>
+> ## Validation
+>
+> - `uv run mypy src/openbrain_provider` — clean (19 files)
+> - `uv run mypy src/openbrain` — clean (49 files)
+> - `uv run ruff check src tests` — clean, both packages
+> - `uv run pytest -q` (openbrain-provider) — 592 passed, 1 skipped
+> - `uv run pytest -q` (openbrain) — 570 passed, 19 deselected
+> - `bun install --frozen-lockfile` + `bunx tsc --noEmit` — clean
+> - Cross-language parity (`test_receipts_gate_crosslang`, `test_receipts_scope`)
+>   — 18 passed
+>
+> The gotcha-agent SME lane (`docs/sme/gotcha-agent.md`) was read before writing
+> tests, per the mandatory lane for `python/` PRs. Its "contract tests over
+> wrapper name tests" rule is why the assertions are on rendered operator text and
+> on whether the write actually happened, not on function names.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the new stderr write in the gate's `main()` runs on
+>   every invocation; if it were noisy on a healthy machine it would pollute every
+>   hook. It is guarded by `development_root_missing()`, which is False whenever
+>   the root exists, and a test asserts total silence in that case.
+> - Assumptions that could be wrong: that stderr is safe for the gate's
+>   diagnosis. stdout is the verdict channel a JSON reader consumes, and the
+>   existing code already logs to stderr via loguru, so this follows the
+>   established split rather than inventing one.
+> - Missing/weak tests: no end-to-end test runs the real installed
+>   `openbrain-memory` console script against a machine with an absent root; the
+>   receipt-side proof is at the `_guarded` boundary that returned the silent
+>   `None`. A live canary on a machine without the volume would close that gap.
+> - Security/permission risk: none identified. No namespace, token, auth, or SQL
+>   path is touched. The diagnosis prints only a configured path, a measured cwd,
+>   and an environment variable NAME — never its value or any credential.
+> - Migration/deploy risk: no schema, no migration, no data change. Behavior on a
+>   machine where the root exists is unchanged, which is every current host.
+> - Downstream client/runtime risk: `main()` gained a keyword-only `stderr`
+>   parameter with a default, so existing callers are unaffected; no MCP tool,
+>   schema, transport, or client-facing contract changes, so per
+>   `docs/downstream-rollout.md` downstream rollout does not apply.
+> - Rollback/cleanup concern: a single revert restores prior behavior; no state is
+>   written or persisted by this change, so nothing needs cleaning up after one.
+> - Fixes made before PR: switched the receipt tests off `caplog`/`capsys` to a
+>   loguru sink after finding they asserted the transport rather than the message;
+>   routed the env-origin decision into `scope.py` instead of adding an `os`
+>   import to `receipts.py` for one lookup.
+> - Known residual risk: the two scope implementations remain separate modules
+>   that now share an override variable by convention rather than by import. They
+>   are pinned together by the cross-language parity tests, but a future edit to
+>   one could still drift from the other.
+> - SME review-memory update: [x] not applicable because: this is a first
+>   occurrence of the absent-root silent-diagnosis pattern rather than a
+>   recurrence of a lane finding; no MEDIUM+ review finding was produced by this
+>   cycle to promote.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: the change is confined to
+>   local scope resolution and operator-facing diagnostics and performs no Open
+>   Brain read or write; the affected path is a machine whose configured root is
+>   absent, which no live service exercises.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no wire contract, fixture, or
+>   cross-runtime shape changes — the added diagnosis is operator-facing text on
+>   stderr and a log line, and the existing cross-language parity tests
+>   (`test_receipts_gate_crosslang`, 18 passed) confirm the recorded shapes are
+>   untouched.
+>

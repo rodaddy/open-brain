@@ -158,6 +158,17 @@ live in light (#390), which is model-free by design.
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-04T23:25:30Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-04T23:25:28Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-25T01:08:42Z

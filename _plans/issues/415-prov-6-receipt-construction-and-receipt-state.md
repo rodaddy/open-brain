@@ -33,6 +33,67 @@ Changing receipt semantics that downstream consumers depend on.
 
 ---
 
+## Resolution
+
+Closed by **PR #510** — feat(receipts): the Python hooks write the gate state, breaking the circularity
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `f2e8b7ff2cff8dc9a727dbb39b3757984671959f`
+- Merged at: 2026-08-03T01:32:59Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T01:33:00Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #510 body
+
+> ## Summary
+> - **Breaks the receipts circularity.** The #420 cutover removed every hook registration that invoked the TypeScript writer of `receipts.json`, but left the READER — `context-budget-gate.ts` — registered on six live events. The gate could block a session and nothing in the running hook chain could unblock it; the only writer left was the agent manually running the command the gate's own banner prints. `openbrain.receipts` makes the Python hooks, which now own the lifecycle, write the state the TypeScript gate reads.
+> - **The deliverable is a cross-language proof.** `tests/test_receipts_gate_crosslang.py` runs the REAL gate under `bun` against a `receipts.json` only Python has ever touched, and asserts the gate's own decision — red and green — on **both** unblock paths (post-compaction read-back, and the capture block). Every existing test of this state writes the receipt from TypeScript, so none of them could catch a Python writer the gate silently skips.
+> - **Lifecycle wiring:** `PostCompact` opens the compaction cycle after the summary is stored; a `compact` `SessionStart` stamps the verified recall on that same cycle after canon is read; `Stop` files a capture receipt after the delivery returns. Each runs only where the work already succeeded, so a receipt is evidence rather than a claim.
+> - **Hygiene:** corrects the false `openbrain-provider/pyproject.toml` comment that promised a `cli_provider.py` — PROV-9 shipped in the sibling package and nobody retracted the note.
+>
+> Part of #409. Closes #415.
+>
+> ### Byte-compatibility is the whole design constraint
+> `_ob/scripts/ob-memory-provider/receipt-state.ts` is treated as the **specification**, not a reference implementation to improve on: the schema literal, camelCase field names, the contract triple, the `triggerReceipts` key format, the `O_CREAT|O_EXCL` advisory lock with its stale-reclaim protocol, and the fsync-then-rename atomic replace are all reproduced exactly. Both languages write this one file; a divergence is a receipt the gate skips, which fails CLOSED into a session that can no longer edit or commit.
+>
+> This is also why the package does **not** reach for a storage library the way `apps/capture/watermark.py` reaches for SQLite. Watermarks are ours end to end; receipts are shared, and the solved problem was solved by the TypeScript module.
+>
+> ### A defect the pre-push gate caught, and it was mine
+> The scope tests passed when run directly and failed inside the pre-push hook. Root cause: `git push` exports `GIT_DIR`/`GIT_WORK_TREE` to its hooks, and **`GIT_WORK_TREE` beats `git -C`** — `rev-parse --show-toplevel` answered `/Volumes/ThunderBolt/Development` for every directory asked about, so every project resolved to the slug `Development`.
+>
+> Had that shipped, every repo's receipts would be filed under one slug and the gate — which keys blocks per project — would match none of them. No raise, no log; indistinguishable from the bug this branch exists to fix. Since these hooks *run inside git hooks*, the polluted environment is the normal case. Fixed by running the git child with those variables stripped from a copy of the environment (`ee85c43`), with a regression test forged against the old behaviour.
+>
+> ## Critical Self-Review
+> - Highest-risk behavior: writing a shared file the live gate reads on six registrations. A malformed write blocks a session's ability to edit or commit. Mitigated by matching the TS lock and atomic-replace protocol exactly, by a tolerant reader that treats corrupt/foreign state as empty rather than raising, by preserving unmodelled sections (`reflexSuppression`) on write, and by the cross-language proof asserting the real gate's decision rather than the file's shape.
+> - Assumptions that could be wrong: two were, and both were checked against the real resolver rather than assumed. (1) I assumed a temp worktree of a nested repo resolves to that repo; `resolveDevelopmentScope` returns `null` for it in TypeScript too — the path shape passes, `--git-common-dir` identity is what refuses. The test was corrected to assert the real behaviour instead of bending the port to my belief. (2) I assumed both unblock paths validate the contract triple; only the capture path does — see residual risk.
+> - Missing/weak tests: the compaction-cycle *staleness* boundary is exercised at an hour, not at the exact window edge. The lock's stale-reclaim race between two real concurrent processes is proven only for the single-process abandoned-lock case; the exclusion itself is proven with a real timeout.
+> - Security/permission risk: receipts name sessions and projects, so the file is `0600` and its parent `0700`, both asserted; the staging file is created exclusively and chmod'd *before* being put in place, so the target is never briefly readable. No content, prompt, transcript text, or token is ever written — the receipt is coordinates and grades by construction. Every failure log passes the exception *class name* only, never the object, so nothing reaches a sink under loguru's diagnose.
+> - Migration/deploy risk: none. No settings change, no registration change, no schema version bump — the file format is unchanged because matching it is the point. Existing TypeScript-written receipts remain readable and are merged into, not replaced.
+> - Downstream client/runtime risk: none to the MCP contract, transport, or Python client. This adds a local state writer; no tool, schema, or client-facing surface changes.
+> - Rollback/cleanup concern: revert the branch. The receipt file is derived state the gate re-creates, and the pre-existing 15-minute self-release means a stale block clears itself even with no writer at all.
+> - Fixes made before PR: the `GIT_WORK_TREE` hijack (`ee85c43`), the same for the probe worktree's own git calls (`7ca2a0a`), the missing generated package README plus a docstring that claimed "two modules" for a four-module package (`9575e77`).
+> - Known residual risk: the two unblock paths do **not** validate equally. `findFreshReceipt` (`receipt-state.ts:337-339`, the capture path) rejects on any contract/version/hash mismatch; the recall path reads `verifiedRecallAt` off the cycle and never revalidates the triple. So a contract-drifted recall receipt still unblocks the read-back. That asymmetry exists in the TypeScript today; this port **reproduces it faithfully rather than correcting it**, because diverging would make the two writers behave differently against one reader. Flagged for a decision, not silently fixed. Separately, the TypeScript `projectSlug`/`gitPath` carries the same `GIT_WORK_TREE` flaw fixed here on the Python side — deliberately untouched, since the live gates must not be disturbed by this change.
+> - SME review-memory update: [x] not applicable because: the durable lessons here are cross-language file-protocol fidelity and git-env leakage inside hooks, both recorded in the session journal and in the module docstrings that are this repo's qmd retrieval surface; no existing reviewer-lane pattern changed.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this writes a local state file read by a local hook. No service, contract, or client surface is touched — the tests inject lanes and never reach a server, and the gate proof runs entirely against redirected paths.
+>
+> ## Contract Parity
+> - Disposition: not applicable because: no contract paths touched. This adds a local receipt writer and its hook wiring; no MCP tool, schema, transport, or client-facing surface changes.
+>
+> ## Testing
+> - `uv run pytest -q` → **433 passed**, 17 deselected (baseline before this branch: 424). Verified green **both with and without** `GIT_DIR`/`GIT_WORK_TREE` set, reproducing the pre-push hook's environment.
+> - `uv run mypy src/openbrain` → Success, no issues in 46 source files. `uv run ruff check src tests` → All checks passed.
+> - **Cross-language proof, 5 tests:** the real `context-budget-gate.ts` under `bun`, every path (`--state-path`, `--receipt-state-path`, `--settings-path`, `--policy-state-path`, `--spool-path`) redirected into `tmp_path`, so the live gate state is never touched. Red half asserted in every case, because a gate that never blocks would pass a green-only test.
+> - **Forged, both directions.** Flipping four bytes of the contract hash makes the capture proof fail (`assert 'block' != 'block'`); removing the git-env strip makes the hijack regression test fail. Restored, both pass.
+> - Full pre-push gauntlet green: bun 3060 pass / 0 fail across 226 files, plus mypy, ruff, pytest, and the docs `--check`.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-01T06:10:58Z

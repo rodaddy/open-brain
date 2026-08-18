@@ -64,6 +64,9 @@ from ._runtime_validation import (
     source_float as _source_float,
 )
 from ._runtime_validation import (
+    validate_adopted_lane as _validate_adopted_lane,
+)
+from ._runtime_validation import (
     validate_context_pack_scope as _validate_context_pack_scope,
 )
 from ._runtime_validation import (
@@ -293,6 +296,121 @@ class RuntimeScope:
     def wrap_metadata(self) -> dict[str, str]:
         """Return exact scope coordinates supported by ``session_wrap``."""
         return self.start_metadata()
+
+
+@dataclass(frozen=True)
+class AdoptedLaneScope:
+    """The exact scope an EXISTING lane already stores, read back from it.
+
+    A manual wrap/checkpoint does not own the lane it is writing into (#724
+    item 4). The capture hook opens the base lane with ``agent`` set and every
+    other coordinate NULL; a wrap issued from a differently-scoped session that
+    CLAIMS its own coordinates trips the server's #646 one-way fill and the
+    write is refused outright.
+
+    Operator ruling 2026-08-17: the wrap ADOPTS the lane's scope. The server's
+    refusal is an isolation boundary and does not move; the client stops
+    asserting a scope it does not own. Adoption is two halves, and only doing
+    the first half leaves the write still refused:
+
+    1. ``session_start`` claims no exact-scope coordinates, so the server takes
+       the ``!hasCompleteExactScope`` branch and returns the existing lane
+       verbatim (``server/tools/session-lifecycle.ts:67,155``);
+    2. the coordinates that come BACK on that lane are what ``session_wrap``
+       then sends, because the write verb must still satisfy the server's
+       lane-scope predicate and the lane's own scope is the only thing that
+       can.
+
+    The caller's own ``session_key`` (and, through its token, the namespace)
+    are the coordinates it genuinely owns; those still bind.
+    """
+
+    agent: str | None
+    platform: str | None
+    server_id: str | None
+    channel_id: str | None
+    thread_id: str | None
+
+    @classmethod
+    def from_lane(cls, lane: Mapping[str, Any]) -> AdoptedLaneScope:
+        """Read the stored scope off a ``session_start`` lane object.
+
+        The server stores ``platform`` in the lane column ``source`` and
+        ``server_id`` inside ``metadata`` (``src/tools/session-start.ts:9,45,84``),
+        so the response spelling is translated back to the request spelling
+        here rather than at each call site.
+        """
+        metadata = lane.get("metadata")
+        server_id = metadata.get("server_id") if isinstance(metadata, Mapping) else None
+        return cls(
+            agent=_adopted_text(lane.get("agent")),
+            platform=_adopted_text(lane.get("source")),
+            server_id=_adopted_text(server_id),
+            channel_id=_adopted_text(lane.get("channel_id")),
+            thread_id=_adopted_text(lane.get("thread_id")),
+        )
+
+    def wrap_metadata(self) -> dict[str, Any]:
+        """Return the lane's own coordinates for a ``session_wrap`` payload.
+
+        NULL coordinates are sent as ``None`` rather than omitted: the server
+        compares the request against the lane field-by-field, so a lane whose
+        ``channel_id`` is NULL is matched by an explicit ``None`` and an
+        omitted key is not guaranteed to read the same way.
+        """
+        return {
+            "platform": self.platform,
+            "server_id": self.server_id,
+            "channel_id": self.channel_id,
+            "thread_id": self.thread_id,
+        }
+
+
+# The server's one-way-fill refusal, verbatim and lowercased
+# (`server/tools/session-lifecycle.ts:151-153`, and the same string in
+# `src/tools/session-start.ts`). Matched as a substring because the transport
+# wraps it in a `context=call_tool:session_start body=...` envelope.
+_LANE_SCOPE_REFUSAL = "existing lane exact scope does not match session_start request"
+
+
+def _is_lane_scope_refusal(error: BaseException) -> bool:
+    """Is this the server refusing to re-point an already-scoped lane?
+
+    Deliberately narrow. Only THIS refusal triggers adoption: it is the one
+    that means "the lane exists and its scope is not yours", which is exactly
+    the case the operator ruled a wrap should adopt through (#724 item 4). A
+    connectivity failure, an auth denial, or any other error must keep its
+    existing behavior — spool, fallback, or a LOST receipt — so a broken
+    transport is never mistaken for a lane worth adopting.
+    """
+    return _LANE_SCOPE_REFUSAL in str(error).lower()
+
+
+def _lane_scope_from_start_result(result: Any) -> AdoptedLaneScope:
+    """Read the adopted scope out of a ``session_start`` result envelope.
+
+    The result has already passed ``_validate_adopted_lane``, which proves the
+    lane object exists and is bound to the right session_key and namespace, so
+    a missing lane here is a programming error rather than a hostile response.
+    """
+    lane = result.get("lane") if isinstance(result, Mapping) else None
+    if not isinstance(lane, Mapping):
+        raise ValueError("session_start result missing lane object")
+    return AdoptedLaneScope.from_lane(lane)
+
+
+def _adopted_text(value: Any) -> str | None:
+    """Accept a lane coordinate the server stored, or ``None`` if it is unset.
+
+    Deliberately permissive next to ``_persisted_text``: this value came FROM
+    the server describing a lane that already exists, so refusing it cannot
+    prevent a bad write — it can only refuse to write to a lane that is already
+    there. Anything that is not usable text is treated as unset.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 @dataclass(frozen=True)
@@ -527,6 +645,12 @@ class FirstClassMemoryRuntime:
         # Set only while draining a spooled unit parked under another scope;
         # session_start replay results validate against this instead of scope.
         self._replay_scope: RuntimeScope | None = None
+        # Set only for the duration of one wrap/checkpoint write (#724 item 4):
+        # the lane's own stored scope, read back from session_start, and the
+        # flag that switches session_start validation to the session_key +
+        # namespace binding. Both are reset per write in `_write_locked`.
+        self._adopted_scope: AdoptedLaneScope | None = None
+        self._adopting_lane = False
         direct = client
         setup_error: BaseException | None = None
         if direct is None:
@@ -935,13 +1059,19 @@ class FirstClassMemoryRuntime:
             metadata = _wrap_metadata(key_decisions, next_steps, receipt_refs)
         except ValueError as error:
             return _failed_write("checkpoint", error)
+        # `_adopted_wrap_metadata()` is read INSIDE the lambda, so it resolves
+        # after `_write_locked` has run `_ensure_lane` and adopted the lane's
+        # stored scope. Binding `self.scope.wrap_metadata()` here instead would
+        # freeze the requester's own coordinates before the lane is known,
+        # which is the defect (#724 item 4).
         return self._write(
             "checkpoint",
             lambda: self._memory.checkpoint(
                 safe_summary,
-                **self.scope.wrap_metadata(),
+                **self._adopted_wrap_metadata(),
                 **metadata,
             ),
+            adopt_lane_scope=True,
         )
 
     def wrap(
@@ -958,29 +1088,47 @@ class FirstClassMemoryRuntime:
             metadata = _wrap_metadata(key_decisions, next_steps, receipt_refs)
         except ValueError as error:
             return _failed_write("wrap", error)
+        # See the note in `checkpoint`: the metadata must resolve after lane
+        # adoption, not at lambda-construction time.
         return self._write(
             "wrap",
             lambda: self._memory.wrap_session(
                 safe_summary,
-                **self.scope.wrap_metadata(),
+                **self._adopted_wrap_metadata(),
                 **metadata,
             ),
+            adopt_lane_scope=True,
         )
 
-    def _write(self, operation: str, call: Callable[[], JSON]) -> RuntimeOutput:
+    def _write(
+        self,
+        operation: str,
+        call: Callable[[], JSON],
+        *,
+        adopt_lane_scope: bool = False,
+    ) -> RuntimeOutput:
         with self._operation_lock:
-            return self._write_locked(operation, call)
+            return self._write_locked(
+                operation,
+                call,
+                adopt_lane_scope=adopt_lane_scope,
+            )
 
     def _write_locked(
         self,
         operation: str,
         call: Callable[[], JSON],
+        *,
+        adopt_lane_scope: bool = False,
     ) -> RuntimeOutput:
         self._router.reset()
         if self._spool is not None:
             self._spool.reset()
+        # Reset per write so no later operation can inherit a stale adopted
+        # scope from an earlier wrap; the capture path must never see one.
+        self._adopted_scope = None
         try:
-            self._ensure_lane()
+            self._ensure_lane(adopt_lane_scope=adopt_lane_scope)
             result = call()
             receipt_status = (
                 ReceiptStatus.FALLBACK
@@ -1182,22 +1330,102 @@ class FirstClassMemoryRuntime:
     def _validate_direct_result(self, tool: str, result: Any) -> None:
         try:
             if tool == "session_start":
-                scope = (
-                    self._replay_scope if self._replay_scope is not None else self.scope
-                )
-                _validate_started_lane(result, self.config.namespace, scope)
+                # A spooled session_start REPLAY is parked under its own exact
+                # scope and still proves it; that branch is checked first so a
+                # drain running inside an adopting wrap cannot borrow the
+                # weaker binding.
+                if self._replay_scope is not None:
+                    _validate_started_lane(
+                        result, self.config.namespace, self._replay_scope
+                    )
+                elif self._adopting_lane:
+                    # A wrap/checkpoint claimed no exact scope, so there is no
+                    # requested exact scope to prove. What the caller owns —
+                    # and therefore what binds — is `session_key` plus the
+                    # env-carried namespace. The namespace refusal branches
+                    # (#654/#662) are preserved inside this validator: they are
+                    # a separate isolation control and are not relaxed here.
+                    _validate_adopted_lane(
+                        result,
+                        self.config.namespace,
+                        self.scope.session_key,
+                    )
+                else:
+                    _validate_started_lane(result, self.config.namespace, self.scope)
             elif tool == "agent_context_pack":
                 _validate_context_pack_scope(result, self.config.namespace, self.scope)
         except ValueError as error:
             raise RuntimeCallError(str(error)) from error
 
-    def _ensure_lane(self) -> None:
+    def _ensure_lane(self, *, adopt_lane_scope: bool = False) -> None:
         if self._memory.conversation_key is not None:
+            if adopt_lane_scope and self._adopted_scope is None:
+                # The lane was opened earlier in this process (a capture, say)
+                # and this wrap never saw its session_start result. Its stored
+                # scope is unknown, so fall back to the scope this runtime
+                # opened it with rather than sending NULLs at a lane that has
+                # real coordinates.
+                self._adopted_scope = AdoptedLaneScope(
+                    agent=self.scope.agent,
+                    platform=self.scope.platform,
+                    server_id=self.scope.server_id,
+                    channel_id=self.scope.channel_id,
+                    thread_id=self.scope.thread_id,
+                )
+            return
+        if adopt_lane_scope:
+            # CLAIM FIRST, adopt only on the specific scope refusal.
+            #
+            # Discovering unconditionally (an unscoped `session_start` before
+            # every wrap) was tried and is wrong twice over: on a lane that
+            # does not exist yet it CREATES a bare NULL-scoped lane and strands
+            # it, and it adds a wire call to a sequence the cross-runtime
+            # contract fixture pins. Claiming first keeps the ordinary path
+            # byte-for-byte unchanged — same one call, same arguments — so
+            # adoption costs nothing until it is actually needed.
+            try:
+                self._memory.start_session(
+                    self.scope.session_key,
+                    **self.scope.start_metadata(),
+                )
+                return
+            except Exception as error:
+                if not _is_lane_scope_refusal(error):
+                    raise
+            # The lane exists and already holds a coordinate this session does
+            # not own — the capture-hook case (#724 item 4). Re-issue claiming
+            # NOTHING but the session_key, which puts the server on its
+            # `!hasCompleteExactScope` branch and returns the existing lane
+            # verbatim (`server/tools/session-lifecycle.ts:67,155`), then write
+            # under the scope that comes back.
+            #
+            # `_adopting_lane` is scoped to this one call: the claim-nothing
+            # request has no exact scope for the response to prove, so it
+            # validates on session_key + namespace. Every other session_start,
+            # including the claim above, still proves its exact scope in full.
+            self._adopting_lane = True
+            try:
+                result = self._memory.start_session_unscoped(self.scope.session_key)
+            finally:
+                self._adopting_lane = False
+            self._adopted_scope = _lane_scope_from_start_result(result)
+            self._memory.agent = self._adopted_scope.agent or self.scope.agent
             return
         self._memory.start_session(
             self.scope.session_key,
             **self.scope.start_metadata(),
         )
+
+    def _adopted_wrap_metadata(self) -> dict[str, Any]:
+        """Return the scope a wrap/checkpoint write must carry.
+
+        The adopted lane scope when there is one, and the requester's own scope
+        otherwise — the latter covers a wrap issued before any lane state was
+        observed, which is the pre-#724 behavior and stays correct there.
+        """
+        if self._adopted_scope is not None:
+            return self._adopted_scope.wrap_metadata()
+        return dict(self.scope.wrap_metadata())
 
     def _receipt(
         self,

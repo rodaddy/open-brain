@@ -44,3 +44,73 @@ Delta:
 
 - Fake-emitter tests: disabled = no-op; redaction applied; observe watermark not advanced on emit failure; OB delivery unaffected by emit failure; settings alias resolution.
 - Live: one real Stop on this machine produces a session trace in Langfuse UI.
+
+---
+
+## Resolution
+
+Closed by **PR #524** — feat(capture): Langfuse observation sink — second best-effort lane for captured turns (#523)
+
+- Linkage: Closed by commit `01bb35e53d250f97d0ec989788c2c3f27905346d`, which is the merge commit of this pull request.
+- Merge commit: `01bb35e53d250f97d0ec989788c2c3f27905346d`
+- Merged at: 2026-08-03T17:29:25Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T17:29:26Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #524 body
+
+> ## Summary
+>
+> - Adds the observation sink (#523): the same turns the Stop/SubagentStop capture delivers to Open Brain also ship to the fleet Langfuse server (`langfuse.rodaddy.live`, v3.173.0) as content-ful session traces — Open Brain stays the memory authority, Langfuse is the flight recorder.
+> - New `ObservationSettings` config section + `load_observation_settings` (capture/canon pattern: optional coordinates, use-time enforcement, typo-guarded; `hmac_secret` declared-but-unused so the provisioned #372 variable is no longer an unknown-variable rejection).
+> - New `apps/capture/observe.py` spine: same reader and watermark store as the raw lane, own `observe:`-prefixed key, advance only after the emitter returns (`docs/decisions/capture-never-drops-a-turn.md` applied per lane). Secret-shaped values masked client-side with the existing `redact()` before anything leaves the process — Langfuse redacts nothing server-side.
+> - New `apps/capture/langfuse_emitter.py`: SDK v4 mapping, one trace per delivery grouped by session; `shutdown()` before return so the short-lived hook process never silently drops a batch.
+> - `run_stop`/`run_subagent_stop` wiring: observation runs after the memory delivery, best-effort — failure logged content-free (class name only), never reaches the caller or the memory watermark.
+> - `docs/CONFIG_REFERENCE.md`: the five variables + the deploy coupling.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> `uv run mypy src/openbrain` clean (48 files), `uv run ruff check src tests` clean, `uv run pytest` 490 passed / 1 skipped. Red-proofs: the redaction test fails with the mask removed; the failure-isolation test fails with the catch narrowed (both run and restored in-session). Live: `run_stop` with the real emitter against the local brain + real Langfuse landed trace `104d933b276b2085803472025cfd69a2` — session-grouped, tagged, 2 observations, planted secret masked (`[REDACTED]` present, raw token absent), memory lane delivered 1 turn normally.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: shipping transcript CONTENT to a second server. Mitigated: opt-in (`enabled` defaults false), client-side `redact()` proven by a red test, operator decision 2026-08-03 explicitly chose a content-ful lane, langfuse LXC is inside the backup surface (operator statement).
+> - Assumptions that could be wrong: Langfuse SDK v4 surface stability (`propagate_attributes`); pinned `langfuse>=4` so an older resolve import-errors instead of misbehaving. Assumes a colon never appears in a raw-lane session key (Claude session ids are UUIDs; subagent watermark keys — verified they contain no colon-prefixed `observe:` collision path).
+> - Missing/weak tests: the real `LangfuseEmitter` mapping is covered by the live canary, not unit tests (a unit test would either mock the SDK into meaninglessness or dial a server). No test for a half-flushed SDK batch — `shutdown()` before return is the mitigation.
+> - Security/permission risk: keys held as `SecretStr`; no settings value appears in any error path (class-name-only logging convention). LAN-local Langfuse keys carry no rotation ceremony per standing pre-prod rule.
+> - Migration/deploy risk: **deploy coupling** — the deployed `openbrain-hook-env` wrapper must gain the `OPENBRAIN_OBSERVATION_*` pass-throughs only together with (or after) installing this package version; adding them to an older install trips `unknown_prefixed_variables` → silent zero capture. Documented in CONFIG_REFERENCE.md. No DB migration.
+> - Downstream client/runtime risk: none to MCP schema/tools — this is Python-hook-side only. Fleet copies of the wrapper tracked in `_plans/fleet-rollout-0.9.md`.
+> - Rollback/cleanup concern: unset `OPENBRAIN_OBSERVATION_ENABLED` (or drop the wrapper pass-throughs) and the sink declines silently; observe watermark rows are inert leftovers. Emitted traces stay in Langfuse.
+> - Fixes made before PR: ruff TRY003/nesting findings restructured (named error class, combined `with`); loguru import was missing from session.py — caught before commit by running the gates.
+> - Known residual risk: on the FIRST enabled Stop of a long-lived session the observe watermark starts at 0 and re-reads the whole transcript, emitting history the raw lane already delivered — a one-time backfill per session, by design (the watermark model's cold-start), not a loop.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no swarm findings yet; this PR introduces the lane, the swarm reviews it.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because: live canary detailed under Verification (trace `104d933b276b2085803472025cfd69a2`).
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no MCP tool/schema change — Python hook process only; the server contract is untouched.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board: no MCP tool, schema, protocol, or client-facing contract changes. The one rollout step is local/deployed-host config (wrapper pass-throughs + package install), sequenced in CONFIG_REFERENCE.md and `_plans/fleet-rollout-0.9.md`.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

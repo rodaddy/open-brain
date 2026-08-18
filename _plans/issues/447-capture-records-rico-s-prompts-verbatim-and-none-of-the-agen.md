@@ -49,3 +49,204 @@ standing rule names.
 Decide: distill in the capture path, capture both sides, or change the rule.
 
 Type: grilling (HITL). Product decision about what memory is for.
+
+---
+
+## Resolution
+
+Closed by **PR #514** — fix(capture): record both sides -- the agent's replies were a port regression (#447)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c52fdd77016f160b215259afffc4a9e2ea27e1c4`
+- Merged at: 2026-08-03T04:48:50Z
+- PR state: MERGED
+- Issue closed: 2026-08-03T04:48:51Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #514 body
+
+> Closes #447. Part of the #443 map.
+>
+> ## The decision, and why the question as posed had a wrong premise
+>
+> #447 asks us to "decide: distill in the capture path, capture both sides, or
+> change the rule." The answer is **capture both sides** — and the reason the
+> other two are wrong is that the rule was never ambiguous. It was already
+> decided, and the port broke it.
+>
+> `docs/decisions/capture-never-drops-a-turn.md:215`:
+>
+> > **Settled: everything on screen goes in.** The operator's words and the
+> > assistant's replies, in full, no length test, no phrasing allowlist.
+>
+> So this is a **port regression**, not an open design question. Measured on the
+> dogfood database, `ob_raw_turns` in namespace `rico`:
+>
+> | Day | assistant | tool | user | Path |
+> |---|---|---|---|---|
+> | 2026-07-27 | 5,773 | 3,022 | 495 | TypeScript adapter |
+> | 2026-07-30 | 3,332 | 1,877 | 255 | TypeScript adapter |
+> | 2026-08-02 | **13** | **0** | 365 | Python port |
+>
+> …and all 13 of those assistant rows begin `<analysis>` — they are `PostCompact`
+> summaries, not replies. The agent side was not thin. It was **absent**, and
+> `ob_session_events` showed zero assistant-side rows exactly as the issue says.
+>
+> The same document had already predicted this failure, in its own words:
+>
+> > "If capture starts silently shrinking again, check whether this decision
+> > survived the port."
+>
+> It did not, and nobody ran the check.
+>
+> ### Rejected alternatives
+>
+> **Rejected: a model-backed distillation step on the capture path.** This is the
+> option the issue floats and the map records as open, and it is wrong at this
+> boundary for three independent reasons:
+>
+> 1. **It is the exact filter the governing decision forbids.** Same document,
+>    line 12: *"A filter on the capture path may TYPE a turn. It may never decide
+>    whether to keep one."* A summarizer decides what survives. That inversion has
+>    already been found twice in this codebase — `SIGNALS` returning null, and
+>    `distill-window.ts` — and both times it was a silent permanent drop.
+> 2. **It cannot fit the budget.** The Stop hook has a hard 5-second harness
+>    deadline, and the per-request timeout is *derived* from it, not chosen:
+>    `apps/hooks/session.py:87-139` pins five round trips at 0.7s plus 0.5s
+>    overhead = 4.0s, with an `assert` at import time enforcing the arithmetic. An
+>    LLM call does not fit, and a killed hook cannot honour the exit-0 contract.
+> 3. **The raw lane is the corpus, not the product.** Distillation is a later,
+>    reversible stage that reads this lane. Distilling on write destroys the
+>    building blocks — which is the operator's stated reason for keeping
+>    everything in the first place (same doc, "we can't start cutting things out
+>    of the building blocks").
+>
+> Because no model-backed step is added, the env-first model-choice and
+> loud-fallback requirements in the brief do not arise: **there is no model on
+> this path, and no silent fallback, because there is nothing to fall back from.**
+> No infrastructure decision is needed and none is being asked for.
+>
+> **Rejected: reading `last_assistant_message` off the Stop payload.** It is
+> present (confirmed on both captured fixtures), and it is the *final* message
+> only — the fixture's value is literally `"ok"`. Capturing that would record the
+> sign-off and discard the findings, which is the same defect with better
+> optics. The transcript holds the whole reply, so the transcript is the source.
+>
+> **Rejected: changing the rule.** Nothing was found to justify it, and the
+> operator's standing position is the opposite.
+>
+> ## What changed
+>
+> `records.py` — the parser that decides what a transcript line *was*, so the
+> owning boundary — now returns a turn for `type == "assistant"` records,
+> reading the `text` blocks off the list-shaped content, attributed
+> `role=assistant`, `is_human_prompt=False`.
+>
+> **Measured this session** on a live open-brain transcript: all 134 assistant
+> records use the LIST content shape, none a `str`, holding `text` (75) and
+> `tool_use` (59) blocks. That is why `operator_text`'s `isinstance(str)` rule
+> could never have reached them — two independent gates were dropping the agent
+> side, so a one-line relaxation would not have worked.
+>
+> ### What stays out, and why each is someone else's settled rule
+>
+> - **`thinking` blocks — chain-of-thought. Never stored.** The standing hard rule
+>   is distilled events only, never raw reasoning. The TypeScript reference
+>   skipped these for the same stated reason
+>   (`scripts/backfill-transcripts.ts:148`), so this preserves settled behaviour.
+> - **`tool_use` blocks — left to the open question, not answered here.** The
+>   decision doc parks memory-vs-observability explicitly (line 213) in terms that
+>   bind this PR: *"Do not resolve this by inference, and do not let it be
+>   resolved by accident. The failure mode is a stage quietly starting to filter
+>   on role."* Reading speech now and leaving machinery to a deliberate decision
+>   is the reversible order — adding tool volume later is purely additive.
+>   Nothing is deleted: those records remain in the transcript, and #417 tracks
+>   where execution traces land.
+>
+> ## Evidence
+>
+> **Red-proof.** `git stash` of `records.py` back to `origin/main`, then the new
+> suite: **15 of 25 fail**, including the product proof —
+> `test_a_conversation_delivers_both_speakers_in_order` delivers **1 turn instead
+> of 2**. Restored: 25/25 pass.
+>
+> **Gates.** `uv run mypy src` → clean (46 files). `uv run ruff check src tests` →
+> clean. `uv run pytest -q` → **458 passed, 1 skipped**.
+>
+> **Playground round-trip** (`pytest -m live`, 4 passed). Target verified *before*
+> writing: `:3101` serves `open_brain_local_play`, not the dogfood database. Two
+> new tests read `role` and `is_human_prompt` **out of Postgres** — `role` is
+> server-validated (`z.enum(["user","assistant","tool"])`), so this is the only
+> proof the server does not refuse or coerce an assistant turn — plus a marker
+> substring search over every stored row proving no reasoning or tool name
+> persists.
+>
+> **THE PRODUCT PATH — one live capture through the real hook entrypoint.**
+> Invoked `openbrain-capture-stop` in the exact shape `~/.claude/settings.json`
+> uses it (the `env -i` clean-child wrapper, only `PATH`/`HOME`/
+> `OPENBRAIN_BASE_URL`/`OPENBRAIN_TOKEN`), with a real Stop payload on stdin,
+> against the playground:
+>
+> ```
+> exit code                     0        (fail-open observer contract honoured)
+> rows in ob_raw_turns          2
+>   user      | is_human_prompt=t | occurred_at set | "what did the measurement actually show?"
+>   assistant | is_human_prompt=f | occurred_at set | "Assistant rows fell from 3332/day to 13..."
+> chain-of-thought leaks        0
+> tool-name leaks               0
+> current_database()            open_brain_local_play   (playground)
+> rows leaked into dogfood      0                       (checked explicitly)
+> ```
+>
+> Both sides land through the real product path.
+>
+> ## Blast radius
+>
+> Five `test_bulk_ingest.py` tests failed on the new behaviour, and that is
+> correct: the bulk ingester **shares this parser**, so restoring the agent side
+> restored it there too — which is the point, since a bulk-ingested corpus holding
+> only the operator's half would grade the same one-sided material. Expectations
+> move from 3 operator turns to the 4-turn conversation, with new per-speaker
+> attribution assertions.
+>
+> Notably `test_bulk_ingest.py` has asserted a `TurnRole.ASSISTANT` turn for the
+> **Codex** adapter all along. Codex captured both sides the whole time; the
+> Claude adapter was the odd one out. That asymmetry was a free defect signal
+> sitting in the suite.
+>
+> ## Docs and SME
+>
+> - `capture-never-drops-a-turn.md` records the outcome of its own warning, with
+>   the measurement.
+> - **Its health check is corrected.** As written it compared transcript against
+>   `is_human_prompt` rows — *one speaker* — which is precisely why nothing fired:
+>   operator numbers stayed healthy the entire six days the assistant side sat at
+>   zero. It now says group by role, with the query.
+> - `docs/sme/gotcha-agent.md` gains *"A port is complete when the BEHAVIOUR
+>   matches, not when the tests pass."*
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: capture volume rises substantially, since assistant records historically outnumber operator ones roughly 10:1. This RESTORES prior behavior rather than exceeding it (the TypeScript adapter sustained 5,773 assistant rows/day), and the operator's standing instruction is that size is not a concern before correctness.
+> - Assumptions that could be wrong: that `text` blocks are the whole of what appeared on screen. Measured across 134 live assistant records; a future block kind would be passed over silently rather than crashing, which is the safe direction but would under-capture. Mitigated by the per-role health check now documented in the decision doc.
+> - Missing/weak tests: no test asserts behavior for an assistant record carrying a `str` content shape, because none has ever been observed in 134 measured records; the code declines it deliberately rather than guessing, and the docstring says so.
+> - Security/permission risk: none new. No namespace, auth, or predicate logic is touched and namespace stays token-derived server-side. The one genuine exposure question, reasoning reaching durable storage, is tested against the Postgres column on the live path rather than only in-process.
+> - Migration/deploy risk: none. No schema change; `role` and `is_human_prompt` are existing columns the server already validates via `z.enum(["user","assistant","tool"])`.
+> - Downstream client/runtime risk: the bulk ingester shares this parser and changes behavior by design, covered in Blast radius above. No MCP tool, schema, or wire contract changed, so `docs/downstream-rollout.md` classification is not applicable: this is a client-side reader change against an unchanged server contract.
+> - Rollback/cleanup concern: revert is a single-file revert of `records.py`; rows already written remain valid and correctly attributed, so no data cleanup is implied.
+> - Fixes made before PR: joined multi-block replies in order rather than taking only the first block; excluded `thinking` before writing any test that could have made storing it look acceptable; verified the playground target served `open_brain_local_play` before the first live write.
+> - Known residual risk: the uv-installed tool is still v0.9.0 (pre-fix), so this machine's live capture keeps dropping the agent side until the post-merge reinstall. Nothing in this PR changes that, and the reinstall is deliberately sequenced after merge.
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below
+>
+> Live checks, all run this session and reported in Evidence above:
+>
+> - Playground round-trip: `pytest -m live` on `test_capture_deliver_live.py`, 4 passed, against `:3101` / `open_brain_local_play`.
+> - Product path: the real `openbrain-capture-stop` entrypoint invoked in the installed hook's `env -i` shape wrote 2 rows (one per speaker), 0 chain-of-thought leaks, 0 tool-name leaks, and 0 rows into the dogfood database.
+>
+> LAW-0 state: the code is WRITTEN and pushed, not yet merged; the behavior is RUNNING against the playground through the real hook entrypoint; it is NOT running on this machine's live capture until the post-merge reinstall.
+>

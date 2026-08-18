@@ -43,3 +43,84 @@ Required design points:
 ## Relationship
 
 Follow-up to #192 and PR #246.
+
+---
+
+## Resolution
+
+Closed by **PR #254** — feat(#247): add DreamEngine entry decomposition
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `cb0404434431a788c100ecb2be878367ff97a981`
+- Merged at: 2026-07-06T20:21:22Z
+- PR state: MERGED
+- Issue closed: 2026-07-06T20:21:23Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #254 body
+
+> Closes #247.
+>
+> ## Summary
+>
+> - Add `decompose_entry`, a dry-run-first MCP tool for oversized entry decomposition with namespace-scoped reads and explicit `apply_mode=write_replacements` for writes.
+> - Add a pure decomposition planner that returns replacement proposals, parent/source links, provenance, and fetch guidance without mutating source rows.
+> - Expose decomposition through contract v18 plus Python `OpenBrainClient` and `DreamEngine` wrappers.
+> - Update Plan 3F/roadmap docs and Python README guidance for the local-complete slice.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit`
+> - `bun test src/contract.test.ts src/tools/__tests__/decompose-entry.test.ts src/tools/__tests__/get-entry.test.ts src/tools/__tests__/resolve-entry.test.ts src/tools/__tests__/promote-entry.test.ts src/tools/__tests__/set-tier.test.ts src/tools/__tests__/archive-entry.test.ts src/tools/__tests__/bulk-archive.test.ts src/tools/__tests__/scan-namespace.test.ts src/tools/__tests__/tier-recommendations.test.ts` - 56 pass, 2 skip
+> - `bun test` - 1124 pass, 51 skip
+> - `cd python/openbrain-memory && uv run pytest -q tests/test_dream.py tests/test_client.py::test_required_contract_tools_have_first_class_wrappers_and_help tests/test_client.py::test_required_contract_matches_server_source_of_truth tests/test_client.py::test_representative_wrappers_use_generic_call_tool_shape` - 20 pass
+> - `cd python/openbrain-memory && uv run pytest -q` - 199 passed, 5 skipped
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `git diff --check`
+>
+> ## Critical Self-Review
+>
+> Critical self-review:
+> - Highest-risk behavior: accidentally mutating/archive/promote/tier from dream planning; mitigated by dry_run default, explicit apply_mode gate, no source-row mutation, and regression tests.
+> - Assumptions that could be wrong: replacement thoughts in the same namespace with provenance is the right first apply surface; existing `chunkText` behavior is acceptable even when sentence splitting creates more chunks than a naive size estimate.
+> - Missing/weak tests: no live Postgres apply test; mock tests cover SQL shape and permission checks. Live DB-gated coverage stays deferred to CI/db-integration.
+> - Security/permission risk: ID reads and replacement writes must respect auth namespace; covered by read predicate and write-namespace denial tests.
+> - Migration/deploy risk: no migration and no core01 deploy in this PR; new public contract v18 requires downstream classification.
+> - Downstream client/runtime risk: Python required contract list now includes `decompose_entry`; downstream refresh/canary is deferred until an approved release/deploy phase.
+> - Rollback/cleanup concern: revert removes tool/schema/wrappers/docs; no data is created unless explicit apply is called after deployment.
+> - Fixes made before PR: added explicit apply gate, no source mutation, contract v18, Python drift tests, roadmap/board update.
+> - Known residual risk: existing `chunkText` sentence-boundary behavior can produce more chunks than nominal max size might suggest; output remains bounded and non-mutating by default.
+> - SME review-memory update: [x] `docs/sme/` updated for PR #254 MEDIUM findings in correctness, domain-backend, quality, and gotcha-agent lanes.
+>
+> ## Downstream Rollout
+>
+> This PR is downstream-applicable because it changes MCP tool/schema contract surface and `python/openbrain-memory` client behavior.
+>
+> Local slice completed:
+> - Open Brain server/tool tests and typecheck.
+> - Python wrapper, contract drift, mypy, ruff, and pytest checks.
+> - Contract bumped to v18 with `decompose_entry` in the required capability/tool surface.
+>
+> Deferred by current local-only scope:
+> - No hosted core01 deploy.
+> - No mcp2cli schema cache refresh or generated skill regeneration.
+> - No rtech-mcps handoff.
+> - No rtech-hermes runtime/plugin update.
+> - No Hermes live rollout or live agent canary.
+>
+> Those steps must run in the later release/deploy phase before claiming production downstream readiness.
+>
+> ## Review Gate
+>
+> Pre-merge gauntlet is required for this non-trivial behavior/contract PR:
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured - initial findings posted at https://github.com/rodaddy/open-brain/pull/254#issuecomment-4896913956 and promoted into `docs/sme/`.
+> - Live Open Brain checks: [x] not applicable because: this is the local-only PR slice; hosted core01 deploy, mcp2cli refresh, rtech-mcps handoff, rtech-hermes update, Hermes rollout, and live agent canaries are deferred to a later approved release/deploy phase.
+>
+> - Phase 1 critical self-review: included above.
+> - Phase 2 review swarm: pending after PR creation.
+> - Phase 3 opposite-runtime cross-review: pending.
+> - Phase 4 address all findings: pending.
+> - Phase 5 merge: blocked until all findings are fixed or explicitly waived on the PR.
+>

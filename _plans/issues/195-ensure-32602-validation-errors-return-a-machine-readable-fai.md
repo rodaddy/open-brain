@@ -28,3 +28,71 @@ MCP error -32602: Input validation error: Invalid arguments for tool append_sess
 ## Related
 - rtech-hermes log-truncation bug (client cuts this at `[`).
 - Schema: `append_session_event.event_type` enum.
+
+---
+
+## Resolution
+
+Closed by **PR #196** — Fix Open Brain session pressure and validation diagnostics
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `77aa127ab24c35a423f46d32eeb8393fd4c53509`
+- Merged at: 2026-06-22T20:45:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-22T20:45:01Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #196 body
+
+> ## Summary
+>
+> Closes #194.
+> Closes #195.
+>
+> This PR keeps the default Open Brain session cap unchanged and makes session pressure explicit and retryable:
+>
+> - returns HTTP 429 for MCP initialize requests over the active-session cap
+> - includes `Retry-After` and a machine-readable `session_cap_exceeded` body
+> - counts pending initialize requests so concurrent session pressure does not hand clients dead sessions
+> - teaches `openbrain-memory` to retry initialize on 429 and honor retry-after metadata
+> - formats SDK tool-input validation failures as bounded JSON with field-level details instead of raw validator dumps
+>
+> ## Helper / downstream notes
+>
+> - Helps the Hermes fleet recovery work by giving clients a stable rate-limit contract instead of a generic 503/session failure.
+> - Companion rtech-hermes client work is on branch `fix/hermes-fleet-incident-cleanup`; that repo consumes this via `openbrain-memory` retry policy and legacy direct-HTTP initialize retry handling.
+> - Downstream rollout applies because this touches Streamable HTTP behavior, error envelopes, and the Python client. Hermes readiness is not claimed by this PR alone; the rtech-hermes PR and live agent canary remain separate rollout steps.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit`
+> - `bun test src/server.test.ts -t "returns retryable session-cap diagnostics" --timeout 20000`
+> - `bun test src/server.test.ts src/tools/__tests__/protocol.test.ts --timeout 20000`
+> - `bun test`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run pytest -q tests/test_client.py tests/test_safety.py`
+> - `cd python/openbrain-memory && uv run pytest -q`
+> - `git diff --check`
+> - `ggshield secret scan repo .`
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: MCP initialize pressure now returns 429 instead of 503, so downstream clients that special-case only 503 need rollout updates.
+> - Assumptions that could be wrong: using 429 for session-cap pressure is the intended long-term contract; default `Retry-After` of 2 seconds is conservative enough for current fleet behavior.
+> - Missing/weak tests: local tests cover server diagnostics and Python retry behavior with fake transports, but live fleet-load behavior still needs hosted smoke and Hermes canary.
+> - Security/permission risk: validation summaries intentionally expose failing field names/codes/messages, not secrets or raw request dumps.
+> - Migration/deploy risk: deployed clients may need the updated `openbrain-memory` constructor support before Hermes passes retry policy.
+> - Downstream client/runtime risk: rtech-hermes has companion client changes; mcp2cli/generated skills should be checked under the downstream rollout contract.
+> - Rollback/cleanup concern: rollback restores prior 503 behavior and removes Python retry-after handling; clients should tolerate both during rollout.
+> - Fixes made before PR: added machine-readable validation summaries, 429 session-cap diagnostics, Python retry policy support, pending-initialize admission tracking, docs, and regression tests.
+> - Known residual risk: hosted deployment and live Hermes canary are still required before declaring the fleet fully recovered.
+> - SME review-memory update: [ ] `docs/sme/` updated [x] not applicable because: findings were PR-local implementation/test/doc issues already fixed here and did not create a reusable new review pattern.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below [ ] not applicable because -
+>
+> Live checks are tracked in the downstream rollout notes and will be completed after PR review/merge as required by `docs/downstream-rollout.md`.
+>

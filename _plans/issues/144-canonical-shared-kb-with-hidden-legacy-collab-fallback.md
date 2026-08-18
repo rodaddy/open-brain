@@ -80,3 +80,45 @@ Use count-based fallback first; do not rely on fuzzy score thresholds until scor
 - Do not silently map writes to `collab`; reject normal legacy writes.
 - Do not create split-brain shared truth with independent client routing.
 - Do not call `/mnt/collab` just `collab` in docs; use `fs collab` for filesystem references.
+
+---
+
+## Resolution
+
+Closed by **PR #149** — Canonicalize shared-kb namespace
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `e8e65e9330cc8c643190e74f72f00995153872e5`
+- Merged at: 2026-06-18T22:02:43Z
+- PR state: MERGED
+- Issue closed: 2026-06-18T22:02:44Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #149 body
+
+> ## Summary
+> - Make `shared-kb` the canonical shared namespace with server-owned legacy `collab` fallback.
+> - Extend fallback across search_brain, search_all, brain_answer, REST search, and repo-fact reads while canonicalizing client-facing output.
+> - Lock promotion provenance to authenticated identity and remove caller-spoofable `promotion_actor`.
+> - Update client/runtime docs, skill guidance, Python dream defaults, and eval fixtures away from client-facing `collab`.
+>
+> Closes #144
+> Closes #145
+> Closes #146
+>
+> ## Review swarm findings addressed
+> - HIGH/P1: shared-kb fallback only covered search_brain; fixed by reusing fallback across other read surfaces and adding regressions.
+> - MEDIUM/P2: client-facing collab guidance/defaults remained; updated tool schemas, skill docs, Python default, and fixtures.
+> - MEDIUM security: promotion_actor could spoof `promoted_by`; removed public input and made provenance auth-derived.
+>
+> ## Validation
+> - `git diff --check`
+> - `bunx tsc --noEmit`
+> - `bun test src/tools/__tests__/search-all.test.ts src/tools/__tests__/brain-answer.test.ts src/tools/__tests__/repo-facts.test.ts src/rest-promotion.test.ts src/tools/__tests__/promote-entry.test.ts src/rest-api.test.ts` -> 92 pass
+> - `cd python/openbrain-memory && uv run pytest -q tests/test_dream.py` -> 15 passed
+> - `cd python/openbrain-memory && uv run mypy src/openbrain_memory`
+> - `cd python/openbrain-memory && uv run ruff check src tests`
+> - `bun test` -> 707 pass, 16 skip, 0 fail
+>
+> ## Board
+> - Project 8: https://github.com/users/rodaddy/projects/8
+> - #144/#145/#146 moved to Fixes In Progress after review findings; ready for fix-verification on this PR.

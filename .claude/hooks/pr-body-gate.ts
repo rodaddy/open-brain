@@ -133,10 +133,16 @@ type PrCommand = {
   verb: "create" | "edit";
   title: string | null;
   body: BodySource | null;
+  /**
+   * The value of `--head`/`-H`, when the invocation names its own head branch
+   * (issue #709). This is the PR's head straight from the horse's mouth, so it
+   * outranks anything derived from a directory.
+   */
+  head: string | null;
 };
 
 /**
- * Identify a `gh pr create|edit` and read its body/title OPTIONS.
+ * Identify a `gh pr create|edit` and read its body/title/head OPTIONS.
  *
  * Everything here is positional and flag-shaped: the executable must be gh, the
  * next word must be `pr`, the next must be create/edit. A command that does not
@@ -169,6 +175,7 @@ function parsePrCommand(command: Token[]): PrCommand | null {
 
   let title: string | null = null;
   let body: BodySource | null = null;
+  let head: string | null = null;
 
   const valueOf = (i: number, inlineValue: string | null): [string | null, number] => {
     if (inlineValue !== null) return [inlineValue, i + 1];
@@ -209,11 +216,169 @@ function parsePrCommand(command: Token[]): PrCommand | null {
       i = next;
       continue;
     }
+    // Issue #709. `gh pr create --head <branch>` states the PR's head branch
+    // outright; nothing derived from a directory can beat that.
+    if (flag === "--head" || flag === "-H") {
+      const [value, next] = valueOf(i, inlineValue);
+      head = value;
+      i = next;
+      continue;
+    }
 
     i += 1;
   }
 
-  return { verb, title, body };
+  return { verb, title, body, head };
+}
+
+/**
+ * The directory a `cd` in this command line moves into (issue #709).
+ *
+ * A lane opens its PR as one Bash call: `cd /path/to/worktree && gh pr create`.
+ * The hook payload's `cwd` is the SESSION's directory and that `cd` never moves
+ * it, so without this the gate inspects the primary checkout — the exact tree
+ * #706 existed to stop consulting.
+ *
+ * Deliberately narrow. It reads `cd` commands that appear BEFORE the gh call in
+ * the same command line, in order, taking the last one — which is where the gh
+ * call actually runs. A `cd` with no argument (`$HOME`), with `-` (the previous
+ * directory, unknowable here), or after the gh call is ignored rather than
+ * guessed at. Relative targets are resolved against the payload cwd, which is
+ * what the shell would do.
+ *
+ * This emulates no shell. Anything it cannot read with certainty yields null
+ * and the caller falls back to the payload cwd, which is the pre-#709 behaviour
+ * — never a wrong answer stated confidently.
+ */
+function cdTargetBefore(
+  commands: Token[][],
+  ghCommandIndex: number,
+  payloadCwd: string,
+): string | null {
+  let target: string | null = null;
+
+  for (let i = 0; i < ghCommandIndex; i += 1) {
+    const words = executableWords(commands[i]!);
+    const first = words[0];
+    if (!first || first.quoted || first.value !== "cd") continue;
+
+    // Skip cd's own flags (-L/-P). `cd -` is the previous directory, which this
+    // process has no way to know, so the whole hint is discarded rather than
+    // guessed.
+    const operands = words.slice(1).filter((word) => {
+      if (word.quoted) return true;
+      return !(word.value.startsWith("-") && word.value !== "-");
+    });
+    const arg = operands[0];
+    if (!arg || arg.value === "-") {
+      target = null;
+      continue;
+    }
+    // A path built from an unexpanded variable or command substitution is not
+    // something this parser can resolve; refuse to guess.
+    if (!arg.quoted && /[$`]/.test(arg.value)) {
+      target = null;
+      continue;
+    }
+    target = isAbsolute(arg.value) ? arg.value : join(payloadCwd, arg.value);
+  }
+
+  return target;
+}
+
+/**
+ * The branch checked out in `dir`, or null.
+ *
+ * `git -C <dir> symbolic-ref --quiet --short HEAD` answers exactly this: the
+ * short branch name, quiet-failing on a detached HEAD or a non-repository
+ * rather than printing a SHA. That distinction matters — a raw SHA is a
+ * perfectly good `git cat-file` argument, so returning one would make the
+ * validator's announcement say "resolved in branch 9f3a1c2", which is not a
+ * branch and reads as a fact when it is not. Round 28: a lookup whose failure
+ * is indistinguishable from its legitimate empty case must be asserted on
+ * positively.
+ */
+function branchOf(dir: string): string | null {
+  const probe = spawnSync(
+    "git",
+    ["-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
+    { encoding: "utf8" },
+  );
+  if (probe.status !== 0) return null;
+  const branch = (probe.stdout ?? "").trim();
+  return branch ? branch : null;
+}
+
+/** Does `ref` name something `git` can resolve inside `dir`? */
+function refResolves(dir: string, ref: string): boolean {
+  const probe = spawnSync(
+    "git",
+    ["-C", dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+    { encoding: "utf8" },
+  );
+  return probe.status === 0;
+}
+
+/**
+ * The ref that actually CONTAINS the PR's commits, given a branch NAME.
+ *
+ * ISSUE #714. A branch name is not a ref until some repository can resolve it,
+ * and `gh pr create --head <branch>` names a branch on the REMOTE. Run from a
+ * root checkout that fetched but never created a local branch of that name —
+ * which is exactly where a lane opens a PR with `--head` and no `cd` — the bare
+ * name resolves to nothing:
+ *
+ *   $ git cat-file -e lane/x:scripts/done-means/check.sh
+ *   fatal: invalid object name 'lane/x'.
+ *   $ git cat-file -e origin/lane/x:scripts/done-means/check.sh   # exit 0
+ *
+ * #709 made the hook FEED the branch tier; this makes what it feeds RESOLVABLE.
+ * Without it the tier is fed a dead string and the refusal prints
+ * `; and in ref lane/x`, which reads as "your check is not on the branch" when
+ * the truth is "that name means nothing here" — a refusal that misdirects is
+ * worse than one that admits it looked nowhere, because the cheapest way past a
+ * misdirecting refusal is a false receipt (#706's lesson, one layer out).
+ *
+ * Candidates are tried in order and each is ASSERTED ON POSITIVELY — round 28:
+ * a lookup whose failure is indistinguishable from its legitimate empty case
+ * must be asserted on positively, never by observing that nothing broke. So a
+ * name that resolves nowhere returns null and the branch tier is skipped
+ * entirely rather than fed a string that will fail for the wrong reason.
+ *
+ *   1. the name as given — a local branch, a SHA, a tag, or a ref the caller
+ *      already spelled correctly (`--head origin/lane/x`). Trying this FIRST is
+ *      what stops a correct ref being mangled, and keeps a local-only checkout
+ *      working with no remote at all.
+ *   2. `<remote>/<name>` for each configured remote, origin first. This is the
+ *      #714 case. Remotes are ENUMERATED rather than assuming `origin` exists,
+ *      because a checkout with a differently-named remote is not an error.
+ *
+ * This only ever changes WHICH ref is consulted; `existsInRef`'s containment
+ * guard on the PATH is untouched, so it widens where a check may live and never
+ * what may be named.
+ */
+function resolvableRef(dir: string, name: string): string | null {
+  if (refResolves(dir, name)) return name;
+
+  const remotesProbe = spawnSync("git", ["-C", dir, "remote"], {
+    encoding: "utf8",
+  });
+  if (remotesProbe.status !== 0) return null;
+  const remotes = (remotesProbe.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort((a, b) => Number(b === "origin") - Number(a === "origin"));
+
+  for (const remote of remotes) {
+    // A name that already carries this remote's prefix was covered by the
+    // as-given attempt above; re-prefixing it would only build origin/origin/x.
+    if (name.startsWith(`${remote}/`)) continue;
+    const candidate = `${remote}/${name}`;
+    if (refResolves(dir, candidate)) return candidate;
+  }
+
+  return null;
 }
 
 function refuse(lines: string[]): never {
@@ -257,10 +422,12 @@ if (!rawCommand.trim()) process.exit(0);
 const commands = parseSimpleCommands(rawCommand);
 
 let target: PrCommand | null = null;
-for (const command of commands) {
+let targetIndex = -1;
+for (const [index, command] of commands.entries()) {
   const parsed = parsePrCommand(command);
   if (parsed?.body) {
     target = parsed;
+    targetIndex = index;
     break;
   }
 }
@@ -325,13 +492,111 @@ if (!existsSync(VALIDATOR)) {
   ]);
 }
 
+/**
+ * WHICH TREE THE Done-means PATH IS RESOLVED AGAINST (issue #706).
+ *
+ * This hook is registered as `$CLAUDE_PROJECT_DIR/.claude/hooks/pr-body-gate.ts`,
+ * so VALIDATOR above always points into the PRIMARY CHECKOUT — which is sitting
+ * on the base branch. Lanes work in a worktree, and a lane's done-means check is
+ * a NEW file on the lane branch. The validator used to resolve `Done-means`
+ * against its own tree, so a PR that introduced its own check was structurally
+ * refused, and the cheapest ways past were all false receipts: name a different
+ * pre-existing check that never judged this lane, or claim `not applicable`.
+ *
+ * The payload's `cwd` is the tree the command was actually run from — the lane
+ * worktree — so it is handed to the validator as the tree under review. The
+ * VALIDATOR SCRIPT is still the primary checkout's copy: this passes the tree to
+ * inspect, not the rules to inspect it with, so a lane cannot weaken the gate by
+ * editing the validator on its own branch.
+ *
+ * `CLAUDE_PROJECT_DIR` is deliberately NOT used here. It is the primary
+ * checkout, which is the exact tree that produced the bug.
+ *
+ * ---------------------------------------------------------------------------
+ * ISSUE #709 — the payload's cwd is NOT the tree the command runs in, and the
+ * head ref was never supplied at all.
+ * ---------------------------------------------------------------------------
+ *
+ * The paragraph above says "the payload's cwd is the tree the command was
+ * actually run from — the lane worktree". That was wrong, and #706 shipped with
+ * only half of it reachable:
+ *
+ *   - `input.cwd` is the HARNESS payload's cwd — the SESSION's directory. A
+ *     lane opens its PR as `cd /path/to/worktree && gh pr create ...` in ONE
+ *     Bash call, and that `cd` does not move the session. So the "tree under
+ *     review" was the primary checkout on the base branch: the very tree #706
+ *     existed to stop consulting.
+ *   - the validator's THIRD tier (`git cat-file -e <PR_HEAD_REF>:<path>`), the
+ *     one #706 asked for by name, was never fed. `PR_HEAD_REF` was not set here
+ *     and `--head` was not parsed, so the tier was dead code from the only
+ *     caller that runs. Its own done-means check passed throughout because it
+ *     calls the validator DIRECTLY and sets the variable itself — round 28's
+ *     "a seam added to make a gate testable is not the path that runs",
+ *     recurring in the lane that wrote it.
+ *
+ * So the hook now tells the validator what the PR actually IS, in a fixed
+ * precedence, and SAYS which source answered (AGENTS.md, nothing is adjusted
+ * silently — a self-made decision that is invisible cannot be checked):
+ *
+ *   1. `--head`/`-H` on the intercepted command. The invocation naming its own
+ *      head branch beats anything inferred.
+ *   2. the branch checked out in the directory the command `cd`s into.
+ *   3. the branch checked out in the payload cwd.
+ *
+ * `PR_REPO_DIR` follows the same target directory, so the two tiers stay
+ * complementary rather than alternatives: the working tree answers for files
+ * present on disk, the ref answers for files that are committed but in no
+ * checkout this process can see. Every step degrades to the pre-#709 behaviour
+ * rather than guessing, and `scripts/done-means/709-hook-feeds-head-ref.sh`
+ * drives THIS file with real payloads to hold it there.
+ *
+ * ---------------------------------------------------------------------------
+ * ISSUE #714 — a branch NAME is not a ref until something can resolve it.
+ * ---------------------------------------------------------------------------
+ *
+ * The precedence above produces a branch NAME. `gh pr create --head <branch>`
+ * names a branch on the REMOTE, and in a root checkout that fetched it but
+ * never created a local branch of that name, the bare name resolves to nothing
+ * — so the tier #709 made reachable was still handed a dead string. The name is
+ * therefore run through `resolvableRef()` (as-given, then `<remote>/<name>`),
+ * each candidate asserted on positively, and the SETTLED ref is what reaches
+ * `PR_HEAD_REF`. `scripts/done-means/714-head-ref-resolves-remote.sh` holds it
+ * with a genuine bare-remote fixture, because the defect is invisible in any
+ * fixture where the lane branch also exists locally.
+ */
+const payloadCwd = input.cwd?.trim() || process.cwd();
+const cdTarget = cdTargetBefore(commands, targetIndex, payloadCwd);
+
+const reviewRootSource = cdTarget
+  ? `the directory the command cd's into (${cdTarget})`
+  : `the hook payload's cwd (${payloadCwd})`;
+const reviewRoot = cdTarget ?? payloadCwd;
+
+// The branch NAME the PR is opened from, and where that name came from.
+const headName = target.head?.trim() || branchOf(reviewRoot);
+const headNameSource = target.head?.trim()
+  ? `explicit --head on the gh command`
+  : `branch checked out in ${reviewRoot}`;
+
+// ...and the ref that can actually be READ in the tree being asked (issue
+// #714). A name that resolves nowhere yields null, so the branch tier is
+// skipped rather than fed a string that fails for a reason nobody can act on.
+const headRef = headName ? resolvableRef(reviewRoot, headName) : null;
+const headRefSource =
+  headRef && headRef !== headName
+    ? `${headNameSource}; '${headName}' does not resolve in ${reviewRoot}, so the remote-tracking ref was used`
+    : headNameSource;
+
 const result = spawnSync("bun", [VALIDATOR], {
   encoding: "utf8",
   env: {
     ...process.env,
     PR_BODY: body,
     PR_TITLE: target.title ?? "",
+    PR_REPO_DIR: reviewRoot,
+    ...(headRef ? { PR_HEAD_REF: headRef } : {}),
   },
+  cwd: reviewRoot,
 });
 
 if (result.error || result.status === null) {
@@ -346,12 +611,32 @@ if (result.error || result.status === null) {
   ]);
 }
 
+// What the validator was fed, in one place, for both verdicts. Issue #709 was
+// diagnosed from a REFUSAL that named the tree it looked in but not where that
+// tree came from, and said nothing about the head ref because there was none —
+// so the refusal read as "your path does not exist" when the truth was "the
+// gate was looking in the wrong place". A refusal is exactly when someone has
+// to work out why, so the inputs are printed on the failing path too.
+// Issue #714 adds a third state to this line. A head NAME with no resolvable
+// ref is not the same as no name at all, and reporting it as "not on a named
+// branch" would send the reader looking for the wrong problem.
+const inputNotes = [
+  `[${HOOK_NAME}] tree under review: ${reviewRootSource}`,
+  headRef
+    ? `[${HOOK_NAME}] head ref: ${headRef} (source: ${headRefSource})`
+    : headName
+      ? `[${HOOK_NAME}] head ref: none — '${headName}' (${headNameSource}) resolves to no ref in ${reviewRoot}, locally or on any remote; the branch tier cannot run. Fetch the branch, or pass a --head that this checkout can see.`
+      : `[${HOOK_NAME}] head ref: none — no --head on the command and ${reviewRoot} is not on a named branch; the branch tier cannot run`,
+];
+
 if (result.status !== 0) {
   const validatorOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`.trimEnd();
   refuse([
     `BLOCKED by ${HOOK_NAME}: this PR body fails scripts/validate-pr-body.ts.`,
     "",
     `  gh pr ${target.verb}, body from ${source.kind === "inline" ? source.flag : `${source.flag} ${source.path}`}`,
+    "",
+    ...inputNotes.map((line) => `  ${line}`),
     "",
     "The validator said:",
     "",
@@ -361,6 +646,20 @@ if (result.status !== 0) {
       .join("\n"),
     ...REMEDY,
   ]);
+}
+
+// ALLOWED. Echo what the gate was FED (issue #709) and the validator's own
+// resolution notes (issue #706), so the pass is silent about neither which tree
+// and ref were handed over nor which one answered. stderr, because stdout on a
+// PreToolUse hook is parsed as a decision document; this is commentary on an
+// allow, not a decision.
+for (const note of inputNotes) {
+  console.error(note);
+}
+for (const line of (result.stdout ?? "").split("\n")) {
+  if (line.startsWith("Done-means resolved")) {
+    console.error(`[${HOOK_NAME}] ${line}`);
+  }
 }
 
 process.exit(0);

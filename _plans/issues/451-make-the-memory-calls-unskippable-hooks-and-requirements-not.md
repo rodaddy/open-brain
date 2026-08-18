@@ -3,11 +3,12 @@
 
 # #451 — Make the memory calls unskippable — hooks and requirements, not good intentions
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: wayfinder:grilling
 Created: 2026-07-30T01:04:26Z
-Updated: 2026-08-04T23:27:30Z
+Updated: 2026-08-08T18:51:01Z
+Closed: 2026-08-08T18:51:01Z
 
 ---
 
@@ -50,7 +51,217 @@ Type: grilling (HITL). Where the hard edges go is Rico's call.
 
 ---
 
-## Discussion (2)
+## Resolution
+
+Closed by **PR #649** — chore(451): retire the capture merge-gate tier on main (ledger item 25)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d0ee3283e06fc88a7a122519c52c1cd6d3f7726d`
+- Merged at: 2026-08-08T18:51:00Z
+- PR state: MERGED
+- Issue closed: 2026-08-08T18:51:01Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #649 body
+
+> ## Summary
+>
+> - Implements ledger item 25 (`docs/issue-graph.md`) on `main`: the #451 CAPTURE
+>   merge-gate tier is RETIRED. The ruling was recorded 2026-08-08 but never
+>   applied to `main`, so `.claude/settings.json` on `main` still registered
+>   `capture-gate.ts` as a `PreToolUse` hook and any session started from `main`
+>   could still hit the merge wedge that blocked PR #645 (and structurally
+>   blocked the merge of any fix for the gate itself).
+> - Removes ONLY the `capture-gate` entry from `PreToolUse`. The five survivors —
+>   `pr-body-gate`, `merge-gate`, `design-lookup-gate`, `design-contract`,
+>   `hydration-stamp` — are untouched, and clause D of the new check asserts the
+>   registered set is exactly those five in both directions (none missing, none
+>   extra).
+> - RETIRES rather than deletes: `.claude/hooks/capture-gate.ts` moves to
+>   `.claude/hooks/_retired/capture-gate.ts` with a header naming the ruling and
+>   #646/#647. Its server-side receipt probe, drain step, and outage-vs-skip
+>   discrimination are prior art for the #647 liveness lane, which must answer
+>   the same question ("did capture deliver for this session?") without the
+>   block. Deleting it would make that lane rediscover it.
+> - Inverts the capture clauses of `scripts/done-means/451-tiered-coverage.sh`
+>   (A/B/C/F) to assert the retirement instead of the refusal behaviour, and
+>   keeps them FAILING if the source is absent from both paths — deleted is not
+>   retired. The KEPT tiers of item 24 are unchanged and still enforced there:
+>   hydration D/D2 and recall telemetry E.
+> - Fixes two now-stale cross-references to the moved file, in
+>   `.claude/hooks/hydration-stamp.ts` and
+>   `python/openbrain/src/openbrain/apps/hooks/post_tool_use.py`. Comment-only;
+>   no behaviour change in either.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/648-capture-gate-retired.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> RED (against unmodified `origin/main`, before any change) — the retirement is
+> recorded but not implemented, so four clauses fail:
+>
+> ```
+> CLAUSE 0   PASS — CONTROL: bun executes and settings.json is readable
+> CLAUSE A   FAIL — settings.json still references capture-gate — the wedge can still fire
+> CLAUSE B   FAIL — capture-gate.ts still sits on the live hook path
+> CLAUSE C   FAIL — no retired copy at .claude/hooks/_retired/capture-gate.ts
+> CLAUSE D   FAIL — registered hook set is not the five survivors — found [capture-gate design-contract design-lookup-gate hydration-stamp merge-gate pr-body-gate]
+> CLAUSE E   PASS — 451-tiered-coverage.sh PASSES against the retired state
+> RESULT: FAIL — at least one clause did not hold
+> ```
+>
+> SECOND RED (after retiring the hook, BEFORE adjusting 451) — this is the
+> mismatch the change exists to resolve, captured rather than skipped past:
+>
+> ```
+> $ bash scripts/done-means/451-tiered-coverage.sh
+> CLAUSE A   FAIL — no capture gate at .claude/hooks/capture-gate.ts
+> CLAUSE B   FAIL — no capture gate at .claude/hooks/capture-gate.ts
+> CLAUSE C   FAIL — no capture gate at .claude/hooks/capture-gate.ts
+> CLAUSE F   FAIL — no capture gate to register
+> CLAUSE D   PASS — canon pack empty -> loud marker emitted, session NOT blocked
+> CLAUSE D2  PASS — healthy pack -> no marker (control: the marker carries signal)
+> CLAUSE E   PASS — recall counted in the existing telemetry lane, facts only
+> RESULT: FAIL — at least one clause did not hold
+> ```
+>
+> GREEN (after the full change):
+>
+> ```
+> $ bash scripts/done-means/648-capture-gate-retired.sh
+> CLAUSE 0   PASS — CONTROL: bun executes and settings.json is readable
+> CLAUSE A   PASS — settings.json contains zero capture-gate references
+> CLAUSE B   PASS — capture-gate.ts is no longer on the live hook path
+> CLAUSE C   PASS — retired copy present at .claude/hooks/_retired/ naming ledger item 25, #646 and #647
+> CLAUSE D   PASS — registered hook set is exactly the five survivors
+> CLAUSE E   PASS — 451-tiered-coverage.sh PASSES against the retired state, hydration (D/D2) and recall (E) clauses still running
+> RESULT: PASS — the capture gate is retired, the survivors are intact
+>
+> $ bash scripts/done-means/451-tiered-coverage.sh
+> CLAUSE 0/A/B/C/F/D/D2/E all PASS
+> RESULT: PASS — all clauses hold
+> ```
+>
+> MUTATION TESTS. Per the round-9 Tightening, a green clause is not evidence
+> until it has been seen to fail — and both new clauses here are the kind whose
+> PASS comes from a negative match, which passes both when the thing is absent
+> and when the check is broken:
+>
+> - MUT1 — move the retired source away so it is absent from BOTH paths. 451
+>   clauses A/B/C/F FAIL with "deleted, not retired (ledger item 25 says
+>   retire)". The retire-vs-delete distinction is load-bearing, not decorative.
+> - MUT2 — inject a sixth hook (`sneaky-sixth.ts`) into `PreToolUse`. 648 clause
+>   D FAILS naming the extra: "found [... pr-body-gate sneaky-sixth]". The
+>   "none extra" half of the set assertion is live, so this cannot pass while a
+>   hook creeps in.
+>
+> Suite and typecheck, in the lane worktree against a fresh isolated database:
+>
+> ```
+> $ bunx tsc --noEmit          # clean, exit 0
+> $ bun run test:isolated
+>  3718 pass / 35 skip / 0 fail / 15189 expect() calls
+>  Ran 3753 tests across 242 files. [38.90s]
+>  tests exited 0 — database ob_isolated_81795_mskptsg3j5 dropped
+> ```
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: removing a registered `PreToolUse` hook. The blast
+>   radius is bounded because the entry removed is the only one that can REFUSE a
+>   merge on a capture receipt; the other four PreToolUse/UserPromptSubmit gates
+>   and the SessionStart stamp are byte-identical, which clause D asserts rather
+>   than assumes.
+> - Assumptions that could be wrong: (1) that no consumer outside
+>   `.claude/settings.json` executes `capture-gate.ts` by path. Checked with `rg`
+>   across the tree including hidden files — the only remaining references are
+>   the two comments this PR updates, the two done-means scripts, and the retired
+>   file itself. (2) That `.claude/hooks/_retired/` is off every hook path: it is,
+>   because Claude Code executes only the commands named in settings.json, and no
+>   command names that directory. (3) That #647 will actually want this code —
+>   that is a judgment from the ruling text, not a verified fact; if wrong, the
+>   cost is one unreferenced file.
+> - Missing/weak tests: 648 clause E delegates to 451 rather than re-asserting
+>   the hydration and recall tiers itself, so the two checks are coupled — if 451
+>   regresses, 648 reports it as its own failure. That is deliberate (duplicating
+>   the assertions would make them mutually recursive) but it does mean 648 alone
+>   is not a complete statement of the kept tiers. Not covered: whether a Claude
+>   Code session started from this branch actually stops invoking the hook —
+>   settings.json is the mechanism and is asserted, but the live harness reading
+>   it is not driven by any check here.
+> - Security/permission risk: none. No auth, namespace, token, or SQL path is
+>   touched. Removing this gate cannot widen access to anything; it only stops a
+>   local merge refusal.
+> - Migration/deploy risk: none. No schema, no migration, no serving-tree file.
+>   `.claude/` is repo-local agent configuration and is not deployed to core01.
+> - Downstream client/runtime risk: none per `docs/downstream-rollout.md` — no
+>   MCP tool, schema, transport, or Python-client contract changes. The one
+>   Python file touched is a module docstring.
+> - Rollback/cleanup concern: rollback is `git revert` of a single commit; the
+>   hook source is preserved in-tree, so a revert restores a working gate rather
+>   than a stub. The lane worktree and its scratch are removed at teardown.
+> - Fixes made before PR: found and fixed two stale path references
+>   (`hydration-stamp.ts:24`, `post_tool_use.py:19`) that would have pointed the
+>   next reader at a file that no longer exists at that path — the exact
+>   archaeology cost this repo keeps paying. Also widened 451's absent-gate
+>   branch so that DELETING the source stays a failure; the first draft treated
+>   any absence as retirement, which would have let a future cleanup silently
+>   destroy the #647 prior art.
+> - Known residual risk: `main` sessions that already loaded the old settings
+>   keep the hook registered until they restart. That is inherent to hook config
+>   and not fixable in a diff; it is why this PR exists rather than a session-only
+>   workaround.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the reusable lesson here is operating knowledge for lanes (retire
+>   rather than delete when the code is prior art for a named successor; invert a
+>   done-means clause instead of dropping it), which the lane contract's
+>   Tightenings own. It is returned in the lane report's `lessons` field for the
+>   controller's harvest. No reviewer-facing code-defect pattern was found.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific,
+>   non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked
+>   not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this
+>   change touches only repo-local agent hook configuration and two done-means
+>   scripts. Nothing in the running service, its schema, or its API is involved,
+>   so a live smoke would exercise nothing the diff can affect.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: `.claude/hooks/` and
+>   `.claude/settings.json` are Claude Code harness configuration for this repo
+>   only. There is no cross-runtime contract or fixture corpus that mirrors the
+>   hook registry.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable on every line above: no MCP tool, schema, transport, or
+>   client-facing surface changes. The classification rule in
+>   `docs/downstream-rollout.md` keys on contract-changing MCP/transport/Python
+>   client/agent-facing changes; this diff is hook configuration, two done-means
+>   scripts, and two comments.
+> - Does NOT close #451 — item 24's hydration and recall tiers remain enforced by
+>   `451-tiered-coverage.sh`, which still passes. Does not implement #647; the
+>   liveness check that replaces this tier is its own lane, and this PR only
+>   preserves the prior art it needs.
+>
+
+---
+
+## Discussion (6)
 
 ### rodaddy — 2026-08-03T01:03:51Z
 
@@ -104,3 +315,87 @@ Latency, measured over 10 invocations: ~76 ms for the Python against ~20 ms for 
 ### rodaddy — 2026-08-04T23:27:30Z
 
 2026-08-04 — state correction, not a resolution. The design question this issue owns (PreToolUse as observation vs enforcement) is still OPEN; `python/openbrain/src/openbrain/apps/hooks/pre_tool_use.py` remains the deliberate stub. What changed: the operator settings swap the 2026-08-01 comment listed as pending is DONE. RUNNING — `~/.claude/settings.json:334` now registers `sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env ob-guard`, not `bun .../guard.ts`. Read the earlier "Live registration: UNCHANGED" line as superseded. Consequence for this ticket: the two pinned known gaps (`( mcp2cli open-brain search_all )` and `if true; then mcp2cli open-brain search_all; fi`, both pinned in `TestKnownGapsArePinned`) are now live in the Python guard rather than the TypeScript one. If this issue resolves to "enforcement, and it must hold", those two are the concrete work items and the recorded fixture harness makes them cheap to prove.
+
+---
+
+### rodaddy — 2026-08-08T16:30:39Z
+
+## Lane STOP — this needs the ruling before it needs code
+
+Dispatched as an implementation lane ("smallest correct enforcement that makes capture/checkpoint/hydration unskippable"). Stopping at a written design delta instead, per the lane's own STOP clause. Reason is specific, not a dodge: **every candidate gate here contradicts a live design contract that only Rico can overturn**, and the issue body already says where the hard edges go is his call.
+
+### What is actually RUNNING today (measured this session, not recalled)
+
+Hydration works. Probed the real hook with a synthetic `SessionStart` payload:
+
+```
+BASE=http://127.0.0.1:3100   health=200
+openbrain-session-start -> CANON PACK 1/2 (openbrain.agent_context_pack.v1)
+  namespace=rico | profile_guidance=20, process_guidance=49   exit 0
+```
+
+So the premise "the memory calls get skipped" is **not** currently a hydration-content failure. The three lanes that `_plans/canon-always-known.md:23-27` measured at 0 items are populated now.
+
+Registration is **global, not repo-local** — `~/.claude/settings.json` lines 334-419 carry `SessionStart` (`openbrain-session-start`, `-remaining`), `SessionEnd`, `Stop` (`openbrain-capture-stop`), `SubagentStop`, `PreCompact`/`PostCompact`. This repo's `.claude/settings.json` registers **no** session-lifecycle hook at all; it carries only `design-lookup-gate`, `pr-body-gate`, `merge-gate`, `design-contract`.
+
+### The blocker: "unskippable" collides with a written contract at every point
+
+Every lifecycle hook is **fail-open by explicit, documented design**:
+
+- `python/openbrain/src/openbrain/apps/hooks/session_end.py:23-27` — "ALWAYS EXIT 0 WITH EMPTY STDOUT. A hook that observes a session must never block or break one."
+- `.../hooks/stop.py:16-19` — same contract for capture.
+- `.../hooks/session_start.py:41-43` — "FAIL OPEN. A hook that opens a session must never block or break one."
+- `.../hooks/post_tool_use.py:38-41` — same.
+
+That is not an oversight to patch. It is the same constraint the issue itself names: *"a memory service that is down must not brick the session."* Making a fail-open observer hard-fail is a **reversal of a recorded decision**, which per lane-contract clause on deviations (`docs/lane-contract.md:205-210`) must be flagged for a ruling, never taken silently by a lane.
+
+`.../hooks/pre_tool_use.py:1-20` is a deliberate stub whose docstring says **"do not conflate observation with enforcement here"** — the exact question this issue owns, left open on purpose.
+
+### The four decisions, each with the option I'd argue for
+
+Not asking for a blank check — one item, one recommendation, TL;DR each.
+
+**1. Which call is gated?** Hydration, capture, or recall.
+Recommend: **capture-at-boundary only.** Hydration already runs and a gate on it can only fire when OB is down — a pure false-block generator. Recall-before-rederiving is unfalsifiable (no gate can tell that canon already answered a question). Capture is the one with a checkable receipt.
+
+**2. Hard block or loud warn?** Precedent inside this repo is hard-block: `design-lookup-gate.ts` uses `process.exit(2)` at five sites (`:588,836,874,916,965`), which returns stderr to the model and is what makes it corrective. But those gate a **tool call the agent chose**; a memory gate would gate a session boundary.
+Recommend: **hard block on `PreToolUse` for the mutation the session is trying to land, never on the session itself.** A session that cannot start is bricked; a `gh pr merge` that refuses until a capture receipt exists is recoverable and is exactly the merge-gate shape already proven at `.claude/hooks/merge-gate.ts`.
+
+**3. Where does the receipt live?** `design-lookup-gate.ts:257-277` keeps its own JSON state keyed by session id, with corrupt-file tolerance ("a corrupt state file must not wedge every tool call"). Memory calls have server-side receipts, so there are two candidate sources of truth and they can disagree.
+Recommend: **server receipt is the proof, local state is a cache.** Otherwise a gate can be satisfied by writing a local file, which is a gate an agent can forge.
+
+**4. Service-down semantics.** The one that decides whether any of this is safe. If OB is unreachable: block (honest, bricks work), or pass with a recorded degradation (safe, and the skip case becomes indistinguishable from an outage).
+Recommend: **pass, and stamp the degradation into the session** so the gap is visible after the fact rather than silently absorbed.
+
+### What I did NOT do, deliberately
+
+No hook written, no `scripts/done-means/451-unskippable-memory.sh`, no branch, no PR. A done-means check must encode the accept/reject boundary, and that boundary is precisely decisions 1-4 — a check written before the ruling would hard-code my guess at Rico's policy into the repo's enforcement layer, which is the failure mode the issue warns about ("a false block teaches agents to route around the guard, which is exactly how the `Grep`-with-a-capital-G workaround happened").
+
+Ready to implement immediately on a ruling; the concrete shape I'd build is decisions 1+2+3+4 as recommended, which is a repo-local `PreToolUse` gate on merge/PR-landing that requires a current capture receipt and degrades open when OB is unreachable. Estimated as a FAST LANE against the known merge-gate class.
+
+---
+
+### rodaddy — 2026-08-08T16:39:51Z
+
+**Operator ruling (2026-08-08, ledger item 24, docs/issue-graph.md):** TIERED ALL-THREE coverage.
+
+- **Capture — HARD GATE** at merge/wrap-landing: requires a server-side receipt for the session. Server receipt is the proof; local state is only a cache.
+- **Hydration — VERIFY + STAMP**: session start verifies the canon pack arrived (sections > 0); absence lands a loud visible marker on the session and its PRs. Never a block.
+- **Recall — MEASURE**: counts into existing telemetry, facts only; the operator reads the trend.
+- **Outage**: capture already spools durably (capture/outage.py, watermark.py, openbrain-memory _runtime_spool.py). The merge gate attempts a spool drain first — drain success produces the receipt and passes clean; a still-unreachable service passes WITH the visible stamp, and the spool guarantees eventual delivery. Skip and outage remain distinguishable in the record permanently.
+
+Decisions 1–4 from the lane's delta: 1=capture (with hydration verify-stamp and recall telemetry as sibling tiers), 2=gate-the-merge, 3=server receipt, 4=pass+stamp augmented with drain-first. Implementation is a FAST LANE against the known merge-gate class.
+
+---
+
+### rodaddy — 2026-08-08T17:00:10Z
+
+PR #642 MERGED — tiered coverage per ledger item 24 is implemented and controller-verified (verify-lane receipt at 7b13131; red-first 7-clause check, all green + mutation-proven): capture-gate.ts (merge refusal without server receipt, drain-first), hydration-stamp.ts, recall counter reusing usage_kind=canon (schema pinned by Zod enum + DB CHECK; new kind was a forbidden schema change).
+
+REMAINS OPEN for the named PROPOSED gaps before this is called done against LIVE Open Brain: (1) drain-DELIVERS direction unproven — needs a seeded-spool clause flipping a refusal to a pass; (2) hung-TCP outage shape untested (only closed-port refusal proven); (3) session_id/session_key equivalence assumed, enforced nowhere. MERGED, unverified-live.
+
+---
+
+### rodaddy — 2026-08-08T18:19:36Z
+
+**Ruling amended (ledger item 25, 2026-08-08):** the capture merge-gate tier is RETIRED after its first live firing wedged the pipeline. Reasoning recorded in docs/issue-graph.md item 25 — short form: raw capture is automatic (Stop hooks → watermark → spool), distillation is the DREAM pipeline's designed job (docs/dream-design.md), so the gate hard-blocked merges to force hand-distillation of a designed automatic step. Replacement: an automatic-capture LIVENESS check (the #625 pattern). Hydration stamp and recall telemetry from item 24 remain. #646 (provider scope contradiction) stays open as a real defect regardless.

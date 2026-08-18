@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-05T02:39:48Z
-Updated: 2026-08-05T22:43:25Z
+Updated: 2026-08-08T17:00:10Z
 
 ---
 
@@ -62,7 +62,7 @@ Closing #549 does not answer the question above, and answering the question abov
 
 ---
 
-## Discussion (2)
+## Discussion (5)
 
 ### rodaddy — 2026-08-05T03:22:36Z
 
@@ -78,3 +78,27 @@ Follow-up measurement 2026-08-05 (live #549 proof, revision d46d68e): the same d
 Operator decision required on the response shape for a budgetless, broad durable_memory request. Three implementable options to put in front of Rico: (a) make budget.max_tokens REQUIRED for durable_memory (server/tools/context-pack-args.ts:97, drop .optional()); (b) apply a server-side default cap by replacing DURABLE_MEMORY_MAX_CONTENT_CHARS = Number.MAX_SAFE_INTEGER (context-pack-durable-memory.ts:43) with a finite ceiling, noting the docstring says a prior 4,000-token default was removed for violating the pack contract, so the contract text must change with it; (c) return pointers-only / paginated above a size threshold, using the pointer pool the pack already builds. After the ruling: implement, add a regression test proving the budgetless path is bounded, and update the "Still open" paragraph at docs/core01-nats-worker-runbook.md:390.
 
 **Stale text in this issue corrected by this comment:** Body cites `server/tools/context-pack-durable-memory.ts` sizes from tables `ob_sessions`/`ob_decisions`/`ob_thoughts`, which do not exist in the local dogfood DB (actual: ob_session_events, ob_entities, ob_links, ...); the measurement table may reflect core01 or a superseded schema, so re-measure against named tables before using those row counts as a baseline.
+
+---
+
+### rodaddy — 2026-08-08T16:16:04Z
+
+**Operator ruling recorded (2026-08-08, ledger item 23, docs/issue-graph.md):** the whole-corpus single reply must not be a shape the server can produce — "I don't see any reason why this whole thing would ship in a single shot to anywhere. It defeats the whole purpose of this."
+
+Resolution shape: recall always returns a bounded reply; everything beyond the returned slice stays reachable via pointers/follow-up requests (the pointer pool the pack already builds). All data remains retrievable in bounded pieces; nothing is dropped. Response-shape ruling only — storage keeps everything (#604/#606 already settled the storage side).
+
+Remaining work (frontier lane): enforce the shape on the budgetless path in server/tools/context-pack-durable-memory.ts, regression test proving a budgetless broad request returns bounded-plus-pointers, update docs/core01-nats-worker-runbook.md "Still open". This issue stays open until that lane's done-means check passes.
+
+---
+
+### rodaddy — 2026-08-08T16:16:50Z
+
+**Ruling refined (operator, same conversation):** when all or a large portion of the corpus is legitimately requested, delivery is still individual input/output messages or bursts of 5–10 messages sent server→client — a stream of bounded exchanges, "not ever as the whole file." Ledger item 23 amended accordingly.
+
+---
+
+### rodaddy — 2026-08-08T17:00:09Z
+
+PR #639 MERGED — the ruled shape is implemented and controller-verified (verify-lane receipt at 30efb2a; whole-corpus single-shot eliminated: budgetless broad request now returns a bounded burst + pointer pool, paged walk retrieved 60/60 records across 6 bursts, largest reply 44,437 bytes vs 186,604 pre-change; regression check scripts/done-means/563-bounded-recall.sh red-first proven).
+
+REMAINS OPEN for: downstream rollout per docs/downstream-rollout.md — this is an MCP response-shape change, so mcp2cli / rtech-mcps / Hermes canary classification is outstanding, and core01 deployment is pending the cutover. MERGED, not deployed.

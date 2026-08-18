@@ -120,3 +120,61 @@ Keep these here until they become issue-ready:
 
 Write the `agent_context_pack` contract/spec first. Do not start with NATS
 implementation until the envelope and scope rules are stable enough to carry.
+
+---
+
+## Resolution
+
+Closed by **PR #226** — feat: define agent context pack contract
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `335f0c7438515580eae63c9e6efc8030453d3b3a`
+- Merged at: 2026-06-28T03:16:22Z
+- PR state: MERGED
+- Issue closed: 2026-06-28T03:16:23Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #226 body
+
+> ## Summary
+> - Adds `docs/agent-context-pack-contract.md` for the planned `agent_context_pack` surface from #220.
+> - Exposes `agent_context_pack` in `get_contract` as a planned schema capability only.
+> - Keeps `agent_context_pack` out of `tool_contracts` so clients cannot treat it as runtime-available.
+> - Bumps the TS/Python contract version lockstep to `2026-06-28.memory-tools.v10`.
+>
+> Closes #220.
+>
+> ## Verification
+> - `bun test src/contract.test.ts`
+> - `bunx tsc --noEmit`
+> - `uv run pytest python/openbrain-memory/tests/test_client.py python/openbrain-memory/tests/test_contract.py`
+> - `git diff --check origin/main..HEAD`
+>
+> ## Critical self-review
+> - Highest-risk behavior: downstream agents may confuse the planned context-pack schema with an available tool.
+> - Assumptions that could be wrong: a schema-only contract version bump may still require downstream refresh expectations even though no runtime tool is exposed.
+> - Missing/weak tests: no runtime scope-denial fixtures yet because this PR defines the contract only; #222/#221/#224 own implementation fixtures.
+> - Security/permission risk: low runtime risk; no server tool or storage path is added. The doc explicitly requires exact-scope filtering before ranking.
+> - Migration/deploy risk: no migration or deploy script changes.
+> - Downstream client/runtime risk: contract manifest version changes; downstream rollout is applicable for manifest consumers, but runtime canaries for an unavailable tool are not applicable yet.
+> - Rollback/cleanup concern: rollback removes the planned schema/doc and contract version bump; no data cleanup needed.
+> - Fixes made before PR: kept `agent_context_pack` out of `tool_contracts` and required client wrappers to prevent false availability.
+> - Known residual risk: implementation PRs still need actual cross-scope denial fixtures, hosted `get_contract` rollout, mcp2cli cache refresh, generated skill refresh, and Hermes compatibility checks before agent readiness.
+> - SME review-memory update: [x] not applicable because: this is a contract-definition PR with no new review finding pattern to add.
+>
+> ## Review Gate
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR has not been merged or deployed; hosted `get_contract` verification is required in the downstream rollout after merge.
+> - Requested review scope: contract/schema correctness, exact-scope safety rules, and whether planned availability is clearly separated from runtime availability.
+> - Not requested: NATS implementation review, working-set implementation review, recovery WAL implementation review, or Hermes runtime implementation review.
+> - Current validation: focused local contract and Python client checks passed; CI is running.
+>
+> ## Downstream rollout classification
+> - Applies: public contract manifest and Python client contract-version pin changed.
+> - Local verification: complete, commands listed above.
+> - Hosted Open Brain deploy/get_contract smoke: required after merge before claiming hosted availability.
+> - mcp2cli cache/generated skills refresh: required after hosted rollout.
+> - rtech-hermes runtime/live canaries: not applicable to this PR as a runtime tool canary because `agent_context_pack` is explicitly `not_runtime_available`; compatibility review still applies before any agent claims use it.
+>
+> ## Notes
+> This PR depends on the research/control-plane receipt from #225, now merged into `main`.

@@ -22,6 +22,65 @@ Slug convention is git-root basename lowercased (#517). Any future fact bound un
 
 ---
 
+## Resolution
+
+Closed by **PR #596** — docs(canon): seed remaining king repository facts
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `4351bb43736628b7657121f3d2ad025c034a2519`
+- Merged at: 2026-08-06T00:25:58Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T00:26:00Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #596 body
+
+> ## Summary
+>
+> - Seeded seven source-verified operational facts for each of king-trading, king-status, king-ops, king-market-data, and king-reconciliation through the established `upsert_repo_fact` client boundary.
+> - Added reviewable canon-pack sources for all current Development and king-* repository facts: 12 TOML files, 92 entries.
+> - Added a durable closure receipt with per-repository keys, source commits, read-back evidence, and live fact counts.
+>
+> Fixes #520
+>
+> ## Live receipts
+>
+> - Direct `OpenBrainClient` read-back matched all 35 new rows on repo, collection, path, subject, fact type, fact text, source commit, source URL, and verification timestamp.
+> - Independent SQL count receipt: each of the five target repositories has 8 standing facts and all 8 carry `source_commit`, `source_url`, and `verified_at`.
+> - Pack parse receipt: 12 new TOML files parsed successfully, 92 entries total.
+> - Namespace selection came from `OPENBRAIN_NAMESPACE`; no credential values were logged or committed.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` — clean.
+> - `bun test src/tools/__tests__/repo-facts.test.ts` — 20 passed, 0 failed.
+> - `python/openbrain`: mypy clean; ruff clean; pytest 594 passed, 19 deselected.
+> - `python/openbrain-memory`: mypy clean; ruff clean; pytest 569 passed, 9 skipped.
+> - New-test failure proof: not applicable because this change adds no tests; the behavior proof is the live write plus exact read-back and independent SQL count.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: Incorrect operational facts would be injected into repo-scoped startup context; each new fact was checked against committed source at the named SHA, accepted by `repoFactMetadata`, and read back field-for-field.
+> - Assumptions that could be wrong: The older Development/king rows are suitable to mirror into pack files; this PR preserves their live text and stored provenance but does not independently re-verify every historical source claim.
+> - Missing/weak tests: No new executable behavior exists; pack parsing and existing repo-fact tests cover the file shape and server validation, while the live read-back proves persistence.
+> - Security/permission risk: Namespace isolation is the primary risk; writes used the namespace supplied by the installed environment and exact basename slugs, with no credential values in output or files.
+> - Migration/deploy risk: No schema or service deployment changes; the 35 idempotent repo-fact upserts are already live in dogfood and independently counted.
+> - Downstream client/runtime risk: No MCP schema, transport, package, or client contract changed; downstream rollout is not applicable.
+> - Rollback/cleanup concern: Reverting the commit removes the reviewable pack sources but does not remove live entities; reverting live data would require an explicit archive operation on the exact new entity IDs, which was not performed.
+> - Fixes made before PR: Corrected pack and receipt wording that initially overstated historical source verification, and reworded two facts rejected by the existing raw-code safeguard before the successful writes.
+> - Known residual risk: Issue #588 still blocks the repo-fact branch of `openbrain-canon-reconcile --apply`; these packs parse and are reviewable, while this issue's live writes used the established direct client path.
+> - SME review-memory update: [x] not applicable because: no source-code review pattern or missed defect class changed; this is canon content plus live write receipts.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: the self-review found a provenance-wording overstatement in every new pack header and the receipt; it was corrected before commit, with no unresolved material finding.
+> - Live Open Brain checks: [x] linked below
+>
+> Live Open Brain receipt: 35 direct-client read-backs matched exactly, and SQL independently reported 8 standing/provenanced facts for each target repository.
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-05T22:43:27Z

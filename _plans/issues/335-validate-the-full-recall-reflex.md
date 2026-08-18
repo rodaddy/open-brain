@@ -51,3 +51,66 @@ Integrate the detect, recall, suppress, and cited-pointer stages and measure liv
 - Prompt placement stays client/runtime-owned; no implicit MCP `_meta` injection.
 - Observability remains content-free.
 - Dream planning remains dry-run-safe unless a separately authorized mutating wrapper is used.
+
+---
+
+## Resolution
+
+Closed by **PR #367** — feat(335): validate reflex suppression with live A/B gate
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `5ff6aa9be2ad472a6f890f07d36eb43eea6d9ce8`
+- Merged at: 2026-07-23T20:04:31Z
+- PR state: MERGED
+- Issue closed: 2026-07-23T20:04:33Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #367 body
+
+> ## Summary
+>
+> - add a sealed live REFLEX-4 suppression gate around the existing `agent_reflex_pointers` stack
+> - compare identical seeded evidence across two unsuppressed stability arms and one prior-context-suppressed arm
+> - emit a content-free structured receipt for attribution, relevance, redundant resurfacing, citation multiplicity, budget, exact-scope isolation, and teardown
+>
+> Closes #335
+>
+> ## Validation
+>
+> - focused fixture/gate tests: **39 passed, 0 failed**
+> - full `eval/open-brain` suite: **194 passed, 0 failed** (799 assertions)
+> - `bunx tsc --noEmit`: passed
+> - `git diff --check`: passed
+> - focused fix verification: **FOCUSED CLEAN**; 0 P0/P1/P2 findings
+> - exact-head hosted three-arm gate on deployed v23 at `f828787cac87b4e0d8450f5056e8afc8bd8080b5`: **PASS**
+>   - suppression OFF: 6 pointers; 3/3 net-new present; 2 already-known resurfaced
+>   - unsuppressed CONTROL: 6 pointers; 3/3 net-new present; same 2 already-known resurfaced
+>   - suppression ON: 4 pointers; 3/3 net-new present; 0 already-known resurfaced
+>   - stable known baseline: true; stable known count: 2
+>   - prior-context references sent: 2; exact OFF-known coverage: true
+>   - suppression delta: 2; citations multiplicity-bijective; body-free; client-owned placement; within whole-pack budget
+>   - negative namespace denied; 0 leaks
+>   - teardown: 8/8 archived; 0 failures
+>
+> ## Downstream rollout classification
+>
+> Not applicable. This PR adds an eval fixture/gate and CLI only; it does not change the hosted MCP contract, transport, server behavior, Python/TypeScript client API, or generated skill guidance.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: a false PASS from unstable recall, empty/partial prior-context, vacuous suppression, duplicate citation multiplicity, allowed-but-empty negative reads, or stranded seeded records.
+> - Assumptions that could be wrong: seeded records rank inside the reflex pointer budget and server-assigned ids map exactly to emitted pointer ids.
+> - Missing/weak tests: the live gate remains opt-in; deterministic fake transport tests cover stability, reference coverage, citation multiplicity, failure, and teardown branches, while the exact-head hosted receipt proves the real boundary.
+> - Security/permission risk: exact namespace/session scope and an explicit denied cross-namespace read are required; receipts contain counts/labels/booleans only and never bodies, tokens, or pointer identities.
+> - Migration/deploy risk: none; eval-only.
+> - Downstream client/runtime risk: none; the gate consumes the existing public tool without changing it.
+> - Rollback/cleanup concern: teardown archives only server ids returned from this run; failures preserve a content-free failed count.
+> - Fixes made before PR: required two stable non-vacuous unsuppressed arms, non-empty exact prior-context coverage, zero ON resurfacing, strict per-identity citation multiplicity, client-owned placement, body-free pointers, and denial rather than empty-read isolation.
+> - Known residual risk: a committed seed whose response is lost cannot be auto-identified for teardown; the unique namespace contains that bounded operator-cleanup case. The third call intentionally fails closed if ranked recall is unstable.
+> - SME review-memory update: [x] not applicable because: this eval-only gate applies already-captured citation/isolation/teardown patterns without introducing a new missed-review pattern.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] linked below — exact-head hosted three-arm PASS receipt is recorded in Validation above
+>

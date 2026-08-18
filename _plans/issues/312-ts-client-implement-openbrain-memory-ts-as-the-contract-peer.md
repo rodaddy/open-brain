@@ -19,3 +19,64 @@ Scope: direct HTTP client (bearer auth, exact-scope session proof per #294), JSO
 Non-goals: no change to the Python client; no adapter cutover in this issue (Development-side follow-up); no server changes beyond what the parity tripwire needs.
 
 Measured motivation: the current Claude path spawns a Python child per hook event (~55-80ms before any I/O); a bun-native client fetch round trip to core01 measures ~33ms total. The TS client removes the entire artifact-management class (venv/wheel/pinning) from the TS runtime path.
+
+---
+
+## Resolution
+
+Closed by **PR #319** — feat(ts): add openbrain-memory contract peer
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d3e0f0d0590030fc6cb62eb5bdf8e65a8bf2cbd3`
+- Merged at: 2026-07-22T06:33:34Z
+- PR state: MERGED
+- Issue closed: 2026-07-22T06:33:35Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #319 body
+
+> ## Summary
+>
+> - add a Bun/TypeScript Open Brain client with bearer-auth Streamable HTTP, bounded incremental SSE decoding, session reuse, and expiry recovery
+> - add first-class lifecycle APIs with exact-scope proof, live contract compatibility checks, content-free receipts, and scope-aware automatic spool drain
+> - add a bounded JSONL spool with redact-before-persist, cross-process exclusion, fail-closed directory durability, backpressure, retry accounting, quarantine, restore, and namespace provenance
+> - extend the shared parity harness so TypeScript and Python replay the same 13 fixtures across 8 required capabilities
+> - document the TypeScript peer, memory limits, compatibility, redacted-representation replay, and intentional runtime differences
+>
+> Closes #312
+>
+> ## Validation
+>
+> - TypeScript typecheck — passed
+> - TypeScript client suite — 69 passed
+> - Contract parity — 13 fixtures across 8 capabilities
+> - Python contract fixtures — 13 passed
+> - diff check and pre-commit/pre-push secret checks — passed, zero findings
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: durable spool/replay state transitions, auth-bearing Streamable HTTP, and exact-scope lifecycle proof.
+> - Assumptions that could be wrong: portable lock-file recovery and filesystem sync behavior may vary by host; server SSE framing may expose legal variants beyond the tested chunk/CRLF/open-stream cases.
+> - Missing/weak tests: no live hosted transport canary in this issue because no runtime consumes this client yet; deterministic fakes carry schema and protocol coverage.
+> - Security/permission risk: bearer redirect/plaintext handling, replay namespace provenance, symlink rejection, remote-error containment, and redaction-before-disk are the main boundaries.
+> - Migration/deploy risk: no database migration, deployed server runtime change, or existing consumer cutover.
+> - Downstream client/runtime risk: this adds a new peer implementation but does not activate it in Development, mcp2cli, rtech-hermes, or Hermes.
+> - Rollback/cleanup concern: remove the unconsumed clients/ts peer and revert parity declarations; no persisted server state requires rollback.
+> - Fixes made before PR: the Full-tier initial review found and fixed bounded-stream, SSE EOF, cross-process spool, directory fsync, symlink, receipt disclosure, fixture-schema, and parity-drift defects; the controller additionally caught a bare-JSON/SSE decoder integration regression before commit.
+> - Known residual risk: no known MEDIUM+ defect remains after the Full-tier initial review, focused fix verification, opposite-runtime terminal audit, and targeted terminal-fix verification; downstream activation remains intentionally outside #312.
+> - SME review-memory update: [x] docs/sme/ updated
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this PR adds an unconsumed local client and does not change or deploy the live server contract/runtime
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+>
+> The parity manifest and validator now require every both-runtime fixture under a TypeScript-implemented capability to declare the TypeScript consumer. The TypeScript expected fixture set is derived from manifest capability state instead of a hand-maintained list.
+>
+> ## Downstream rollout classification
+>
+> Applicable only to the new client source and parity contract. Hosted Open Brain deploy, rtech-mcps, mcp2cli cache/skill refresh, rtech-hermes changes, Hermes rollout, and live agent canaries are not applicable because no existing downstream runtime consumes clients/ts; Development-side adapter cutover is an explicit follow-up/non-goal of #312. No server MCP schema, transport implementation, or deployed contract-manifest field changes.

@@ -16,6 +16,122 @@ Observed 2026-08-04 by the NATS wiring lane: com.rico.open-brain-local-clone fai
 
 ---
 
+## Resolution
+
+Closed by **PR #552** — fix(config): a blank optional secret is an absent one, whitespace included (#548)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d9845049b3728230dc0333623edb2d2f7ce536c8`
+- Merged at: 2026-08-04T21:57:14Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T21:57:16Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #552 body
+
+> Closes #548.
+>
+> ## What the issue reported, and what was actually true
+>
+> #548 says `server/config.ts` "intermittently rejects empty `EMBEDDING_API_KEY=` on restart" and treats the empty form as the open defect. Both halves turned out to be wrong, so this PR does not fix what the title asks for — it fixes what is actually still broken and states the rest.
+>
+> **There is no intermittency.** The only `EMBEDDING_API_KEY: Too small` crash on this box is in `~/Library/Logs/open-brain-local/autostart.err.log`, at **2026-08-02 ~20:08:31**. That file's mtime is `Aug 2 19:42` — it has not been written since. Commit `5f1595b` (#507), which added the empty-as-absent `z.preprocess`, landed at **2026-08-02 20:09:16** — 45 seconds after that stack trace. The crash is what *prompted* #507, not something that survived it.
+>
+> **The 2026-08-04 14:34:52Z timestamp in the issue is a healthy line, not a failure.** In `autostart.out.log`:
+>
+> ```
+> 2026-08-04T14:34:52Z local-clone-autostart: serving f705fc9 from /Volumes/ThunderBolt/open-brain-local/app
+> 2026-08-04T14:34:52Z local-clone-autostart: running preflight
+> 2026-08-04T14:34:54Z local-clone-autostart: preflight verified, starting launcher
+> ```
+>
+> `app/.deployed-revision` stamps `f705fc9` at `deployed_at=2026-08-04T14:34:50Z`, and `git merge-base --is-ancestor 5f1595b f705fc9` passes — the runtime restarting at 14:34:52 already contained the fix, and it started fine. The service log confirms it: migrations run clean at `14:34:51`. The appearance of a restart coin-flip came from reading a **deploy-restart line in one log** next to a **two-day-old stack trace in another**. No log anywhere contains a config rejection after 2026-08-02.
+>
+> So the operator mitigation was defusing a tripwire that was already disarmed.
+>
+> ## What is still broken (the actual fix)
+>
+> `z.string().min(1)` counts a space as a character, so `EMBEDDING_API_KEY="   "` survived the schema and arrived downstream as a **real key**. `server/transport/health.ts:57` then takes its `if (input.embeddingApiKey)` branch and sends an `Authorization` header whose value is whitespace, on every embedding probe.
+>
+> The launcher that starts that very same process already disagreed — `scripts/local-clone.ts:368`:
+>
+> ```ts
+> const apiKey = env.EMBEDDING_API_KEY?.trim();
+> if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+> ```
+>
+> Preflight sees "no key" and sends no header; the server sees "key" and sends a blank one. **One variable, two components in the same startup sequence, two different answers.** That disagreement is the defect this PR closes.
+>
+> The fix extends the shared `optionalSecret` preprocess so blank means empty **or** whitespace-only. It normalizes for the blank-vs-content **decision only** — a value with content is passed through byte-for-byte, because altering a real secret whose padding is genuine would silently swap one credential for another. Fixing it in the shared schema rather than at the `EMBEDDING_API_KEY` declaration is the same reasoning #507 recorded: all eight `OPTIONAL_SECRET_KEYS` fields get the rule, including any added later.
+>
+> ## The red proof found something wider than the embedding key
+>
+> Against unmodified `config.ts`, the new whitespace test over every optional secret failed by registering blank `AUTH_TOKEN_*` values as **live auth credentials**:
+>
+> ```
+> +  { "clientId": "ob-admin",  "role": "ob-admin",  "token": "   " },
+> +  { "clientId": "promoter",  "role": "promoter",  "token": "   " },
+> +  { "clientId": "readonly",  "role": "readonly",  "token": "   " },
+> ```
+>
+> `src/auth.ts` skips a role token with `if (!token)`, so a whitespace-only token was a registered credential the auth layer believed was real. That is a wider blast radius than the embedding key and is now covered.
+>
+> ## Verification
+>
+> Red-proved by reverting `server/config.ts` to `origin/main` with the new tests in place:
+>
+> - RED (origin/main config.ts): `2 fail / 25 pass` — the whitespace case and the every-optional-secret case
+> - GREEN (with fix): `27 pass / 0 fail`
+>
+> Gates:
+>
+> - `bunx tsc --noEmit` — clean, exit 0
+> - `bun test server/config.test.ts` — 27 pass, 0 fail
+> - `bun test server/ src/auth.test.ts src/embedding.test.ts` — **335 pass, 0 fail**, 456 assertions across 36 files
+> - `bun install --frozen-lockfile` — no changes
+>
+> The three states #548 asks for are asserted explicitly (absent, empty, set), plus whitespace-only and byte-for-byte preservation of a padded key. These also now cover **`loadServerConfig`** — the composition root named in the original crash stack, which had **no test at all**. That gap is precisely why the schema could be fixed in #507 while nothing proved the startup path a launchd service actually takes was fixed with it.
+>
+> ## Operator follow-up after merge
+>
+> The placeholder applied 2026-08-04 can be reverted. `local-clone.env` currently carries `EMBEDDING_API_KEY=local-mlx-no-key-required`; the backup with the original empty value is at `local-clone.env.bak-20260804-embedkey`. Restoring the empty form is safe both before and after this PR — it was already safe as of #507. Reverting is preferred so the env states the truth (the local MLX embedder needs no key) rather than carrying a fake credential that a future reader could mistake for a real one.
+>
+> ## Critical self-review
+>
+> - Highest-risk behavior: treating a whitespace value as absent. If any deployment legitimately used a whitespace-only secret as a real credential, this silently stops sending it. I judged that not credible — a provider cannot distinguish `Bearer` + whitespace from a malformed header, and `scripts/local-clone.ts` has always treated it as absent, so no working configuration can depend on the old behavior.
+> - Assumptions that could be wrong: that the log files I read are complete. `autostart.err.log` has not rotated (mtime `Aug 2 19:42`, one file, no `.1`), and `open-brain.log` covers 2026-08-02T23:43 onward with `.1`/`.2`/`.3` present — so the 08-02 crash and the 08-04 window are both in retained data. If a rotation dropped a genuine 08-04 failure, my "no intermittency" finding weakens; I found no evidence of one and the healthy 14:34:52 lines argue against it.
+> - Missing/weak tests: no test drives the whitespace value all the way to `server/transport/health.ts` and asserts the header is not sent. I asserted at the config boundary (the owning boundary, where the fix lives) and read the consumer to confirm the branch it feeds. A transport-level test would need the embedding probe fixture and belongs with that surface.
+> - Security/permission risk: this **closes** one. Blank `AUTH_TOKEN_*` values registered as usable credentials with whitespace tokens before this change, shown in the red proof above. No secret value appears in any test assertion — real-key cases use `randomUUID()`.
+> - Migration/deploy risk: none. No migration, no schema change, no wire change. The only behavior difference is which values count as absent, and it strictly widens what starts successfully.
+> - Downstream client/runtime risk: none. `optionalSecret` is internal to `server/config.ts`; no MCP tool, transport, schema, or Python client surface changes.
+> - Rollback/cleanup concern: reverting the commit restores the prior schema. The operator env placeholder is independent of the merge and is safe in either state, noted above.
+> - Fixes made before PR: the original scope was "make the schema accept empty." Investigation showed that already shipped in #507 and that the issue's evidence was two logs misread together, so the scope moved to the whitespace disagreement between launcher and config boundary — the defect that is genuinely still present. Reporting the empty case as fixed without checking would have closed the issue with no code change and left the real one in place.
+> - Known residual risk: the whitespace path is proven at the config boundary but has not been observed end to end against a live embedding probe, and I did not restart the local clone to prove it. The claim here is MERGED-pending, not RUNNING.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the pattern class (empty/blank env value passing a `min(1)` optional and reaching a consumer as real) is already documented at the rule site in `optionalSecret`'s own doc comment, which this PR extends with the whitespace case and its two-components-disagreeing rationale. No new review-lane heuristic arose.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` — the blank-auth-token finding is recorded in the commit message and this body at the rule site
+> - Live Open Brain checks: [x] not applicable because: no service, transport, MCP tool, or schema surface is touched. The live evidence that does apply — the deploy stamp and the two launchd logs — is quoted under the root-cause section
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: `optionalSecret` is a server-internal env-validation schema with no contract fixture, client binding, or wire representation
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable
+>
+> Notes/evidence: no MCP tool, schema, transport, or client-facing surface changes. The change is confined to how `server/config.ts` decides whether an optional secret is present.
+>
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-08-04T15:27:15Z

@@ -39,6 +39,77 @@ PR fixes it with a separate insert value (`insertStatus = args.status ?? 'active
 
 ---
 
+## Resolution
+
+Closed by **PR #164** — fix(lane-upsert): cast $3::text to fix param-type inference regression (#162)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `61f6710d411a4e3d17872c64d3484d02cdde4473`
+- Merged at: 2026-06-19T14:52:35Z
+- PR state: MERGED
+- Issue closed: 2026-06-19T14:52:36Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #164 body
+
+> ## Summary
+>
+> - Fix the regression introduced by #163: `lane_upsert` failed every call with `could not determine data type of parameter $3`.
+> - #163 repointed the INSERT status slot to `$24`, leaving `$3` used ONLY in `CASE` comparisons (`IS NULL` / `= 'literal'`). With no typed binding site, Postgres cannot infer `$3`'s type at plan time → every `lane_upsert` failed.
+> - Cast `$3::text` in all three comparison sites (status type is `TEXT`). Behavior identical: null stays null, equality unchanged.
+> - Adds **env-gated DB-backed integration tests** (`OPENBRAIN_TEST_DATABASE_URL`) that run the real query through a real pool — the coverage gap that let both the original NOT NULL bug and this regression through.
+>
+> Fixes #162.
+>
+> ## Root cause
+>
+> `pg` sends parameters untyped and relies on Postgres inferring each param's type from a typed usage site (e.g. a column in INSERT VALUES). After #163, `$3` was no longer bound into the `status` column — it appears only as `$3 IS NULL` and `$3 = 'wrapped'/'active'/...`. None of those pin a type, so the plan-time inference fails. Cast resolves it.
+>
+> ## Why #163's tests didn't catch it
+>
+> #163's regression test was mock-only (the repo had no live-pg harness). A mock pool returns canned rows and never executes the SQL, so neither the original NOT NULL violation nor this type-inference failure could surface in tests. This PR closes that gap with real-pool tests.
+>
+> ## Validation
+>
+> - Manual repro against live PG: bare `$3` in comparisons → `ERROR: could not determine data type of parameter $1`; `$3::text` → works.
+> - DB-backed integration tests run against live Postgres (hosted OB DB): **2 pass** — (a) new lane omitted-status creates `status='active'` with no inference error; (b) status-omitted update of a wrapped lane preserves `status` + `ended_at`.
+> - Default suite (mock, DB tests skip): 22 pass, 2 skip, 0 fail. `bunx tsc --noEmit` clean.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: The `::text` casts on `$3`. Verified against live PG that casts make the query plan and execute, and that null/equality semantics are unchanged (a status-omitted update still preserves status and ended_at — proven by DB test, not just reasoning).
+> - Assumptions that could be wrong: That `TEXT` is the correct cast target. Confirmed against migration `012_session_lanes.sql` (`status TEXT NOT NULL`).
+> - Missing/weak tests: Prior to this PR, the lane_upsert path had NO real-DB coverage — that is exactly why #163's regression shipped. This PR adds it (env-gated). The default CI run still won't execute them unless a test DB URL is provided; running them in CI would require provisioning a Postgres service (noted as a follow-up worth doing).
+> - Security/permission risk: None — no auth/namespace logic touched.
+> - Migration/deploy risk: No schema change. Requires redeploy on hosted OB (the previous deploy of #163 is live and broken).
+> - Downstream client/runtime risk: Positive — unblocks Bilby/Skippy lane writes that currently 100% fail. Bilby spool drain (rtech-hermes#84) resumes only after this is live AND verified from the client side.
+> - Rollback/cleanup concern: Pure SQL/test change, trivially revertible. Diagnostic `log_thought` 5f3db27d in bilby's namespace still pending owner cleanup.
+> - Fixes made before PR: `$3::text` casts (3 sites); DB-backed integration tests; updated the mock test's SQL assertion to match the cast.
+> - Known residual risk: I previously declared #163 "verified/deployed" on ~40s uptime with no real lane traffic — a false positive. This time verification is a real query through a real pool PLUS a post-deploy check against actual Bilby/Skippy lane traffic before declaring success.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because:
+>
+> Live checks: DB-backed integration tests pass against the hosted OB Postgres (2 pass). Post-deploy, will verify real Bilby/Skippy lane_upsert traffic succeeds (no new `lane_upsert_db_error`) before closing #162.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [ ] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Server-side SQL fix; no client/schema/contract change. rtech-hermes items unchecked: Bilby spool drain (34 stuck `lane_upsert`) resumes after this deploys and is verified client-side (rtech-hermes#84, owner-driven).
+>
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-19T14:42:34Z

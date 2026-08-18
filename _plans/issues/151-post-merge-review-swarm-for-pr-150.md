@@ -36,6 +36,17 @@ Run a post-merge review swarm against the exact merged PR #150 diff and fix or d
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-18T23:25:17Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-19T01:01:33Z.
+
+---
+
 ## Discussion (3)
 
 ### rodaddy — 2026-06-18T23:02:08Z

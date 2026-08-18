@@ -32,3 +32,36 @@ Schema drift, transport/header regressions, secret leakage patterns, and brittle
 - Add schema-backed or snapshot tests for representative Python wrappers vs server tool contracts.
 - Add replay-dispatch tests that map spooled operations back to fake client/facade calls.
 - Add DreamEngine malformed-report tests and lock intended behavior: fail closed or skip invalid candidates with diagnostics.
+
+---
+
+## Resolution
+
+Closed by **PR #88** — fix: strengthen memory package contracts
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `146376ee32099e4659c9a010e8262b7654b32caf`
+- Merged at: 2026-06-11T02:25:45Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T02:25:46Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #88 body
+
+> ## Summary
+>
+> - Expand shared Python redaction coverage for AWS access keys, AWS secret-shaped values, Slack tokens, Google API keys, JWT-like strings, and MCP/session ids.
+> - Route client diagnostics through the shared redactor so package redaction behavior does not drift between `client.py` and `policy.py`.
+> - Strengthen `AgentMemory` facade contracts against server tool schemas by deriving accepted/required fields from TypeScript tool schema blocks and validating representative payload types.
+> - Fix facade schema drift for `append_session_event` (`artifact_path`/`importance` top-level, no unsupported `project`) and `log_decision` (`context` string, `alternatives` string list).
+> - Make DreamEngine fail closed on malformed report containers, non-list candidates, and malformed candidate fields.
+>
+> Closes #82.
+>
+> ## Validation
+>
+> - `uv run pytest tests/test_agent.py tests/test_client.py tests/test_safety.py tests/test_dream.py`: 74 passed
+> - `uv run pytest`: 74 passed, 1 skipped
+> - `uv build`: built sdist and wheel
+> - `bun test`: 579 passed, 16 skipped
+> - `git diff --check`: passed
+>

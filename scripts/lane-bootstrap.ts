@@ -248,6 +248,47 @@ function step(name: string, detail: string): void {
   process.stdout.write(`  [ok]   ${name}: ${detail}\n`);
 }
 
+/**
+ * Which hooks the new worktree will actually run (issue #711).
+ *
+ * `.git/config` is SHARED by every linked worktree, so `core.hooksPath` is not
+ * a property of the worktree this script just created — it is inherited. An
+ * ABSOLUTE value points this brand-new lane at the PRIMARY CHECKOUT's hooks,
+ * which is how a lane fixing a git hook ends up unable to exercise its own fix
+ * on push, and how a lane breaking one pushes green. The value diverged from
+ * what `_githooks/install.sh` writes and nothing said so for long enough that a
+ * family of lane failures (#705-#714) traced back to it.
+ *
+ * So the LANE READY block STATES it rather than leaving the lane to discover
+ * which hooks it is about to run (AGENTS.md, "nothing is adjusted silently").
+ * This reports; it does not fix. `_githooks/pre-push` is what refuses, because
+ * that is the thing that runs on every push rather than only on bootstrap.
+ *
+ * Never throws: a hooks-path probe failing is not a reason to fail a lane whose
+ * worktree, env, and deps are all good.
+ */
+function describeHooksPath(worktreePath: string): string {
+  const probe = spawnSync("git", ["config", "--get", "core.hooksPath"], {
+    cwd: worktreePath,
+    encoding: "utf-8",
+  });
+  if (probe.error) {
+    return `could not read core.hooksPath (${probe.error.message}) — check it yourself before trusting a pre-push verdict`;
+  }
+  const value = (probe.stdout || "").trim();
+  if (value === "") {
+    return "core.hooksPath is UNSET — git will use .git/hooks and the tracked _githooks/ will NOT run. Fix: ./_githooks/install.sh (#711)";
+  }
+  if (value === "_githooks") {
+    return `core.hooksPath=${value} (relative) — this worktree runs its OWN _githooks/`;
+  }
+  return (
+    `core.hooksPath=${value} — NOT the relative "_githooks" the installer writes. ` +
+    `This worktree will run the hooks at that path, NOT its own, so a pre-push ` +
+    `verdict here is about a different tree. Fix: ./_githooks/install.sh (#711)`
+  );
+}
+
 /** Parse the repo `.env` for the libpq vars used to create the test database. */
 function readEnvFile(path: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -515,6 +556,7 @@ function main(): void {
     `  branch:    ${args.branch} (${branchOrigin})`,
     `  env:       .env copied — OK`,
     `  deps:      bun install --frozen-lockfile — OK`,
+    `  hooks:     ${describeHooksPath(worktreePath)}`,
   ];
   if (args.freshDb) {
     lines.push(`  database:  ${dbName} — created and migrated`);

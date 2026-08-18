@@ -21,3 +21,133 @@ Fix shape: list-row schema accepts observation ids (`z.union([observationSchema,
 Lesson for the record (extends the #601 SME entry): validating against a hand-written stub proves conformance to the stub, not to the API — a captured real response belongs in the fixtures.
 
 Part of the #569 wave (tooling follow-up); found before #569 closure, so #569 stays open until this is fixed and the live repeat demo passes.
+
+---
+
+## Resolution
+
+Closed by **PR #603** — fix(langfuse): accept list observation ids
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `d3fdc8a7378fa88aa3fe1c9b650f60301eee0acd`
+- Merged at: 2026-08-06T12:31:09Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T12:31:10Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #603 body
+
+> Fixes #602
+>
+> ## Summary
+>
+> - validate Langfuse list rows independently from detail traces, because list-row `observations` are IDs and the list path never reads them
+> - add a sanitized fixture captured from the live list endpoint and exercise it through the public `session` CLI path
+> - record the post-merge fixture-parity lesson in the correctness SME guide
+>
+> ## Validation
+>
+> - Regression proof before fix: `bun test ./scripts/langfuse-trace.test.ts` — exit 1; 18 passed, 1 failed; the captured list fixture produced CLI exit 2 where the test expected 0.
+> - Regression proof after fix: `bun test ./scripts/langfuse-trace.test.ts` — exit 0; 19 passed, 0 failed.
+> - `bunx tsc --noEmit` — exit 0.
+> - Full suite against fresh isolated databases matching `.github/workflows/ci.yml`: `bun test` — exit 0; 3697 passed, 35 skipped, 0 failed, 15121 assertions.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: List validation could accidentally weaken detail-trace validation; `fetchTrace` still uses the unchanged object-valued `traceSchema`, while only `tracePageSchema` uses the observation-agnostic list-row schema.
+> - Assumptions that could be wrong: The list path does not consume observation payloads and Langfuse list rows expose observation IDs; this is supported by the issue root cause, the captured live fixture, and the successful live `session`/`repeat` smokes below.
+> - Missing/weak tests: The captured fixture covers the live object envelope and string observation IDs; the alternate top-level array envelope remains covered by schema construction rather than a second live fixture.
+> - Security/permission risk: No auth or permission behavior changed; every string payload in the captured fixture was replaced and the real instance counts were normalized before commit.
+> - Migration/deploy risk: No database, migration, service, or deployment surface changed; this is an operator script, test fixture, and SME guidance update.
+> - Downstream client/runtime risk: The downstream rollout contract is not applicable because no MCP tool, transport, Python client, generated skill, or agent-facing Open Brain contract changed.
+> - Rollback/cleanup concern: Reverting commit `701b849` restores the prior strict list schema and removes only the new fixture, regression test, and SME entry; the isolated test databases were dropped after validation.
+> - Fixes made before PR: Split list-row validation from detail validation, added a public CLI regression test backed by a sanitized live response, wrapped the test helper for readability, and added the #602 SME pattern.
+> - Known residual risk: A future Langfuse list-contract change outside the captured envelope will continue to fail closed until another real response updates the schema and fixture.
+> - SME review-memory update: [x] docs/sme/ updated [ ] not applicable because:
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured (review produced no MEDIUM+ findings; SME fixture-parity entry ships in this PR)
+> - Live Open Brain checks: [x] linked below [ ] not applicable because:
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+>
+> ## Live Open Brain Checks
+>
+> ### `repeat search_brain --query issue-602-schema-smoke-9f7c2d1e-unmatchable -n 2`
+>
+> Exit code: `0`
+>
+> ```text
+> sessionId=619f8660-ec28-4d73-ac94-a35602276d7d
+> trace_ids=70c332d512790c631098abbdab4d57fd,805ffdba0abfdd266a5c040db3ad7935
+> stage=retrieval.embedding VARIES fields=duration_ms
+> stage=retrieval.execute VARIES fields=duration_ms
+> stage=retrieval.keyword_query VARIES fields=duration_ms
+> stage=retrieval.rank_rrf VARIES fields=duration_ms,score_fields
+> stage=retrieval.vector_query VARIES fields=duration_ms
+> stage=search_brain VARIES fields=duration_ms
+>
+> comparison=1:2
+> equivalent=true
+> tool A=search_brain B=search_brain
+> release A=b2bd77d B=b2bd77d
+> namespace A=rico,shared-kb B=rico,shared-kb
+> stage=retrieval.embedding basis=counts+degradation duration_ms A=42 B=40
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores —
+> stage=retrieval.execute basis=row_ids duration_ms A=110 B=57
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores —
+> stage=retrieval.keyword_query basis=counts+degradation duration_ms A=30 B=15
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores —
+> stage=retrieval.rank_rrf basis=row_ids duration_ms A=0 B=1
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores 10df6f4b-5944-4570-9386-99b5ef1c6e26.rrf_score: 0.35706599648983683 -> 0.35706599616654566 delta=-3.2329117161111753e-10,28e34542-df09-487a-955c-905cd5dba5fa.rrf_score: 0.01589982270454186 -> 0.015899822690146052 delta=-1.4395807462763699e-11,338358c9-7150-4b9f-8dce-701def0027d2.rrf_score: 0.013158422058652303 -> 0.013158422046738626 delta=-1.1913676642438809e-11,341753eb-0fdd-4e02-9af7-377e34759c1f.rrf_score: 0.017086379620808615 -> 0.01708637960533849 delta=-1.5470125180883088e-11,37e11190-fb21-453a-b75d-9885ba3d85d7.rrf_score: 0.01761238318866885 -> 0.017612383172722235 delta=-1.5946615555817445e-11,39a429b4-06b4-468b-a8aa-a648dc68f0c7.rrf_score: 0.014677015858593082 -> 0.014677015845304184 delta=-1.3288897759977658e-11,40f8a95b-44bc-402c-bc7d-a82417ec7afa.rrf_score: 0.008683081044932851 -> 0.008683081036882768 delta=-8.050083169508504e-12,51244daf-6929-4334-8a65-2c55fb909fba.rrf_score: 0.013961056759285618 -> 0.013961056746644971 delta=-1.2640647209516409e-11,5493551f-69c6-4816-8f02-4eab87496a49.rrf_score: 0.01028261234220453 -> 0.010282612332671507 delta=-9.53302367601161e-12,92715d0c-f7bc-46cf-a290-a755d905a979.rrf_score: 0.014867601213102724 -> 0.014867601199641292 delta=-1.3461431622174835e-11,94147080-552c-4aa5-aa36-30dd96f32d9f.rrf_score: 0.016835397680013665 -> 0.01683539766477052 delta=-1.5243147022392378e-11,99f91a0c-0440-4671-b61a-7559bf90f09e.rrf_score: 0.011006740495719739 -> 0.011006740485515374 delta=-1.0204365130661586e-11,a2e9922c-b633-4b65-99f2-f5f812946d2b.rrf_score: 0.013468313561551796 -> 0.013468313549357288 delta=-1.2194507556517742e-11,b3ba64d6-0412-4cdb-9ef7-8b7cbefd2a24.rrf_score: 0.01430992874788651 -> 0.014309928734930127 delta=-1.2956382494655472e-11,b9e29945-855d-44d7-93c5-22a091293add.rrf_score: 0.009892091757746703 -> 0.009892091748575771 delta=-9.170931375424018e-12,ba1eed42-1c70-42e1-af43-ed4e80dda382.rrf_score: 0.01659140926369589 -> 0.01659140924867366 delta=-1.5022229987726732e-11,c55eaa53-3ab7-4e0d-b970-21f45d3b46bd.rrf_score: 0.011163982786422156 -> 0.01116398277607201 delta=-1.0350146087412249e-11,cd95a37c-f690-445b-a2a0-332db9f260a0.rrf_score: 0.012862859498340012 -> 0.01286285948669382 delta=-1.164619269078404e-11,d3c765cf-6dc7-47e6-abfa-97cad4736bb2.rrf_score: 0.015470365417922986 -> 0.015470365403915772 delta=-1.400721379163361e-11,dd14861a-d65f-4cbb-8ee5-09a6bff32515.rrf_score: 0.015264088700395364 -> 0.015264088686574922 delta=-1.3820441319145615e-11,e416efce-96c2-4df1-86b2-2227ecc8ddab.rrf_score: 0.014133417874259747 -> 0.014133417861463037 delta=-1.2796709872309187e-11,e6f1dda6-bc52-4232-8c32-fd199ad661d9.rrf_score: 0.012210601532914018 -> 0.012210601521593556 delta=-1.13204619289764e-11,ecd20ee0-0b2b-456a-be4c-375b567b0604.rrf_score: 0.01070513935303346 -> 0.010705139343108757 delta=-9.92470342020546e-12,ede389ff-ca46-40df-bcfa-7bf044cb99c5.rrf_score: 0.017345237380715636 -> 0.017345237365011167 delta=-1.5704468975252794e-11,efd5b773-4c56-40c3-b48f-2d6f3659aef3.rrf_score: 0.018171506461690582 -> 0.018171506445237726 delta=-1.6452856438364805e-11,fa2483ef-e778-4be6-931a-a3b3cf27d0d1.rrf_score: 0.3567436103604052 -> 0.35674361003741084 delta=-3.22994353485484e-10,fcf3706c-e5fc-4352-a00b-17d6aba06651.rrf_score: 0.013009162099031095 -> 0.013009162087252316 delta=-1.1778779340776424e-11,fd8d055f-3887-411b-80c7-d188bdf42aab.rrf_score: 0.018464595277627623 -> 0.0184645952609094 delta=-1.671822402737888e-11
+> stage=retrieval.vector_query basis=row_ids duration_ms A=65 B=15
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores —
+> stage=search_brain basis=counts+degradation duration_ms A=110 B=58
+>   candidate_row_ids added=— removed=—
+>   chosen_row_ids added=— removed=— reordered=false
+>   counts —
+>   degradation —
+>   filtered —
+>   scores —
+> ```
+>
+> ### `session 619f8660-ec28-4d73-ac94-a35602276d7d -n 2`
+>
+> Exit code: `0`
+>
+> ```text
+> 70c332d512790c631098abbdab4d57fd search_brain 2026-08-06T12:08:47.501Z release=b2bd77d status=success duration_ms=1
+> 805ffdba0abfdd266a5c040db3ad7935 search_brain 2026-08-06T12:08:47.575Z release=b2bd77d status=success duration_ms=3
+> ```
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+>

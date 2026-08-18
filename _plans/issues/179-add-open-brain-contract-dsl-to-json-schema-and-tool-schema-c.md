@@ -28,6 +28,121 @@ Scope:
 
 ---
 
+## Resolution
+
+Closed by **PR #186** — feat: add contract schema helpers
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `31fc0943a15f462979d2faa7c540ea544b072258`
+- Merged at: 2026-06-20T16:37:23Z
+- PR state: MERGED
+- Issue closed: 2026-06-20T16:37:25Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #186 body
+
+> ## Summary
+>
+> Adds package-owned helpers that translate the Open Brain `get_contract` DSL into
+> JSON Schema-compatible tool input schemas.
+>
+> This covers the Run C package boundary for #179 so `rtech-hermes` can consume a
+> shared package helper instead of maintaining a Hermes-only contract normalizer.
+>
+> ## What changed
+>
+> - Added `openbrain_memory.schema` with:
+>   - `contract_field_to_json_schema`
+>   - `contract_input_to_json_schema`
+>   - `tool_contract_to_input_schema`
+>   - `tool_contracts_to_tool_schemas`
+>   - `ContractSchemaError`
+> - Exported the helper API from `openbrain_memory`.
+> - Added tests for:
+>   - `type: "enum"` + `values`
+>   - `type: "literal"` + `value`
+>   - min/max conversion
+>   - semantic string types
+>   - nested object fields
+>   - arrays with primitive and enum string refs
+>   - typeless repo-fact metadata field maps
+>   - typeless repo-fact validation metadata
+>   - unsupported/mixed typeless nodes with path-bearing failures
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: typeless contract nodes. `upsert_repo_fact.metadata`
+>   is a typeless contract field map, while `validation` is typeless validation
+>   metadata. The converter now distinguishes field maps from metadata maps and
+>   rejects mixed shapes.
+> - Assumptions that could be wrong: package consumers may need a different outer
+>   tool-schema envelope than `{name, input_schema}`. The lower-level
+>   `tool_contract_to_input_schema` API is available so Hermes can wrap the output
+>   in its own tool format without moving Hermes policy here.
+> - Missing/weak tests: tests model the known repo-fact constants but do not load
+>   the live TypeScript contract directly. Hermes will still verify against live
+>   `get_contract` during the downstream PR.
+> - Security/permission risk: no auth, namespace, transport, or server-side
+>   permission behavior changed. The package does not add Hermes allowlists or
+>   session policy.
+> - Migration/deploy risk: this is an additive package export. Existing package
+>   callers should be unaffected.
+> - Downstream client/runtime risk: applicable. This is intended for
+>   `rtech-hermes`; the Hermes PR must consume the helper, preserve allowlists and
+>   protected `session_key`, and pass canaries before agent rollout is complete.
+> - Rollback/cleanup concern: rollback is removing the additive module/export and
+>   returning Hermes to its existing local normalizer until the helper is fixed.
+> - Fixes made before PR: added real repo-fact metadata/validation tests after a
+>   controller repro showed the first implementation rejected `metadata`.
+> - Known residual risk: #181 lane/spool/canary helper expansion is not included
+>   in this slice.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: initial author-side change adds no new MEDIUM+ review finding yet; swarm findings will be posted before merge and promoted if needed.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this PR changes only the Python package helper/export and does not change hosted server runtime behavior or MCP schemas.
+>
+> ## Downstream rollout classification
+>
+> Applies under `docs/downstream-rollout.md` because this changes
+> `python/openbrain-memory` package behavior and exports.
+>
+> - Open Brain local verification: complete, see validation below.
+> - Hosted Open Brain deploy/smoke: not applicable for this PR by itself; server
+>   runtime behavior and MCP schemas are unchanged.
+> - rtech-mcps/mcp2cli generated skill refresh: not applicable; no MCP tool or
+>   server contract changed.
+> - rtech-hermes runtime/plugin check: required in the follow-up Hermes Phase 2
+>   PR before claiming agent readiness.
+> - Hermes live rollout: deferred to the Hermes PR/canary phase after package
+>   consumption lands.
+>
+> ## Validation
+>
+> From `python/openbrain-memory`:
+>
+> ```text
+> uv run ruff check src tests
+> uv run mypy src/openbrain_memory
+> uv run pytest -q
+> uv build
+> ```
+>
+> Results:
+>
+> ```text
+> ruff: All checks passed
+> mypy: Success: no issues found in 8 source files
+> pytest: 136 passed, 1 skipped
+> uv build: built sdist and wheel successfully
+> ```
+>
+> Closes #179.
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-20T06:18:19Z

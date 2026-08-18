@@ -42,6 +42,49 @@ Agents should call OB through tools, not hand-roll conventions in prompt text. T
 
 ---
 
+## Resolution
+
+Closed by **PR #47** — feat: entity graph tools, qmd timeout fix, OB memory contract (#39, #40)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `0c6cea199adf5ec0a660ea8d67e592392de48d1d`
+- Merged at: 2026-06-08T05:17:01Z
+- PR state: MERGED
+- Issue closed: 2026-06-08T05:17:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #47 body
+
+> ## Summary
+> Completes the remaining open issues for OB v2.
+>
+> ### Entity Graph Tools (#39)
+> - **`upsert_entity`**: Idempotent entity creation/update with embedding, metadata merge on conflict
+> - **`link_entities`**: Create/update links between any two nodes (13 relation types), self-link prevention, weight + metadata upsert
+> - **`adjacent_context`**: Traverse link graph from a source node — outgoing/incoming/both, relation + namespace filtering
+>
+> ### QMD Timeout Fix
+> - Replace racy `clearTimeout` pattern with `Promise.race` in `searchQmd`
+>
+> ### OB Operational Memory Contract (#40)
+> - `docs/memory-contract.md`: Defines what OB is/isn't, memory tiers (hot/warm/cold), agent workflow (start → events → checkpoint → resume), namespace conventions, full tool reference
+>
+> ### Shared Constants
+> - `LINK_RELATIONS` added to `table-constants.ts` (13 values matching `LinkRelation` type + DB CHECK)
+>
+> ## Test plan
+> - [x] `bunx tsc --noEmit` passes
+> - [x] 520 tests pass (50 new)
+> - [x] Auth gates verified on all 3 tools
+> - [x] Self-link prevention tested
+> - [x] All 13 relation types tested
+> - [x] Embedding failure non-fatal
+>
+> Closes #39, closes #40
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-08T05:08:06Z

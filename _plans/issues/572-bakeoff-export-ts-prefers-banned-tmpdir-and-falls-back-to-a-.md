@@ -19,3 +19,73 @@ Found by the close-run-1 review swarm's mixed-family delta lane (Opus verifying 
 Failure modes: TMPDIR unset on Linux → write fails; TMPDIR set → output lands sandbox-local and invisible. Fix shape (same as 94ae538): derive from repoRoot + gitignored `out/`. Also sweep: `rg -n '/Volumes/ThunderBolt' scripts/ --type ts` for other members of the class.
 
 Epic: none (tooling hygiene); candidate for the overnight mechanical batch. SME: promote the pattern (module-top-level absolute paths / TMPDIR in repo tooling) to docs/sme/quality.md.
+
+---
+
+## Resolution
+
+Closed by **PR #573** — fix(scripts): derive the bakeoff export path from the repo root instead of TMPDIR (#572)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `6d88ebd4dcbea0be70ff3dc7772eff456125ca6d`
+- Merged at: 2026-08-05T07:10:47Z
+- PR state: MERGED
+- Issue closed: 2026-08-05T07:10:48Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #573 body
+
+> Closes #572.
+>
+> `scripts/bakeoff-export.ts:19` built its output path as
+> `${process.env.TMPDIR ?? "/Volumes/ThunderBolt/_tmp/open-brain/_scratch"}/rem-bakeoff-items.json`.
+> Both halves are wrong: `TMPDIR` is banned by repo standards because it is
+> sandbox-local (a runner, a Codex sandbox, and the host each resolve a different
+> one, so the artifact is invisible to whoever needed it), and the fallback is a
+> macOS-only literal that does not exist on Linux CI, so with `TMPDIR` unset the
+> write fails outright.
+>
+> The path is now derived from the repository root plus the gitignored `out/`
+> directory — the same shape 94ae538 used for the setup-client hook fixtures —
+> and `mkdirSync(outDir, { recursive: true })` runs before the write so the
+> directory exists on a fresh checkout.
+>
+> ### Sweep of the defect class
+>
+> `rg -n "/Volumes/ThunderBolt" scripts/ --type ts` returned four hits. One is a
+> real member; three are not, and were deliberately left alone:
+>
+> | Hit | Verdict |
+> |---|---|
+> | `scripts/bakeoff-export.ts:19` | **Fixed** — an absolute host-specific path used as an actual filesystem write target. |
+> | `scripts/bakeoff-export.ts:7` | Left — doc comment describing where the external MLX venv lives. Not a path this script opens. |
+> | `scripts/grading-server-run.ts:16` | Left — doc comment showing an operator `set -a; . <envfile>` example. Not code. |
+> | `scripts/core01-deploy-local.integration.test.ts:229` | Left — a `not.toContain("/Volumes/ThunderBolt is not mounted")` string assertion on log output. Changing it would change what the test asserts. |
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the new module-top-level `mkdirSync` runs at import time, so a read-only repo root now fails at import rather than at write — the same hard error, marginally earlier, and the old top-level `OUT` const already failed at import time too.
+> - Assumptions that could be wrong: that `fileURLToPath(new URL("..", import.meta.url))` resolves to the repo root, which holds only because this file sits one level down in `scripts/`; relocating it would silently shift the output directory. 94ae538 made the identical assumption for `scripts/setup-client-hook-env.test.ts`, so the repo is consistent with it.
+> - Missing/weak tests: none added — `rg -n "bakeoff-export|rem-bakeoff-items" --glob '*test.ts'` returns no matches, so nothing covers this one-shot operator export script today, and it needs a live Postgres pool; standing up a DB fixture to assert one path constant costs more than it proves, so `bunx tsc --noEmit` plus the `out/` gitignore check is the honest bound of what was verified.
+> - Security/permission risk: none new — the write moves from a shared/temp scratch location into the repo's own gitignored `out/`, which narrows exposure rather than widening it, and no credentials, tokens, or namespace predicates are touched.
+> - Migration/deploy risk: none — no schema, no migration, no service config, and this script is not on any deploy path.
+> - Downstream client/runtime risk: none — per `docs/downstream-rollout.md` this is not an MCP tool, schema, protocol, transport, or Python-client change, so no rtech-mcps / mcp2cli / rtech-hermes rollout applies; the only visible change is that the JSON now lands at `<repo>/out/rem-bakeoff-items.json` instead of a non-deterministic `$TMPDIR` path.
+> - Rollback/cleanup concern: revert is a single-file nine-line revert with no state to unwind, and `out/` is already gitignored (`.gitignore:5`) so the generated artifact cannot leak into git.
+> - Fixes made before PR: verified `out` is genuinely in `.gitignore` rather than assuming it (the fix depends on that being true, or the export becomes committable), and classified each of the four sweep hits individually instead of blindly rewriting all `/Volumes/ThunderBolt` occurrences.
+> - Known residual risk: the script stays untested, and the repo-root derivation breaks silently if `scripts/bakeoff-export.ts` is ever moved to a different depth — accepted, because it is the established pattern here and the failure mode is a wrong-directory write, not data loss.
+> - SME review-memory update: [x] not applicable because: this PR touches no `src/` or client contract and adds no reviewer-relevant pattern beyond the one #572 already names for the next KB curation pass (module-top-level absolute paths / TMPDIR in repo tooling → `docs/sme/quality.md`); editing the KB mid-fix would fork it from the swarm's own update cycle.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this change touches only a repo-local script's output path and exercises no Open Brain endpoint, tool, or namespace.
+>
+> Checks run by the supervising node in the worktree, not taken on the
+> implementer's word:
+>
+> - `bunx tsc --noEmit` — clean, exit 0.
+> - `bun test scripts/` — not run; no test file references `bakeoff-export` or `rem-bakeoff-items`, so there is nothing for it to exercise on the touched file.
+> - `.gitignore:5` contains `out`, confirmed by `rg`.
+> - Scope: one file, +9/-2. Nothing outside the output-path constant changes.
+> - Not merged; #572 is left open for the reviewer to close.
+>

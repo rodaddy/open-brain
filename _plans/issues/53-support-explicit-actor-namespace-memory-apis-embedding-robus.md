@@ -84,6 +84,17 @@ Add API support, or at least clean primitives, for a Dreamer process that:
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-06-15T21:09:15Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-06-15T21:09:15Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-06-10T08:23:54Z

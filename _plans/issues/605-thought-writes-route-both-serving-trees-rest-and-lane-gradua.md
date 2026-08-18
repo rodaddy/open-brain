@@ -41,3 +41,115 @@ The thought writers are not consistent with `src/chunk-write.ts:10-30`, which de
 Create one shared thought-write boundary used by both serving trees, REST creation, and lane graduation. Preserve each caller's auth/provenance/receipt semantics, add real-Postgres coverage per caller, and define repair behavior for a parent that committed before per-section writing failed.
 
 This is intentionally separate from #604: changing three production writers across two serving trees, their response fixtures, and partial-failure behavior is not a bounded remediation-script change.
+
+---
+
+## Resolution
+
+Closed by **PR #611** — fix(thoughts): route every thought write through chunk-write (#605)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `f0bc9a25c816964681a495297719796b5c226e1d`
+- Merged at: 2026-08-07T23:02:29Z
+- PR state: MERGED
+- Issue closed: 2026-08-07T23:02:31Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #611 body
+
+> Closes #605 when merged (leaving the issue open; not merging here).
+>
+> ## What was wrong
+>
+> `writeEntryChunks` was not the common thought-write boundary. Each claim in the issue was re-verified against the base branch before any code changed:
+>
+> | Path | Site | Before |
+> |---|---|---|
+> | rewrite-tree `log_thought` | `server/tools/capture.ts` | wrote parent only, returned a **hardcoded** `chunks_written: 0` / `chunks_unembedded: 0` |
+> | REST `POST /api/v1/thoughts` | `src/rest-api.ts` | wrote parent only, no chunk fields at all |
+> | lane graduation | `src/tiering.ts` `graduateLaneEvent` | wrote parent only |
+> | MCP `log_thought` | `src/tools/log-thought.ts` | the one path that **did** chunk |
+>
+> A ~6 KB thought (CHUNK_THRESHOLD = 2000) written through any of the first three landed with **zero** chunk rows. The hardcoded zero in `capture.ts` was the worst of it: an entry of any length reported as if it were short.
+>
+> ## The fix
+>
+> One boundary, four callers. `writeThoughtChunks` in `src/chunk-write.ts` owns commit-then-chunk, the `isNew` skip, the failure log, and the `failed` signal; `chunkReceiptFields` owns the receipt shape. `log-thought.ts` was refactored **onto** it rather than left as a fourth copy — that is what makes this one boundary instead of four implementations that agree today.
+>
+> Preserved deliberately:
+>
+> - Partial failure never escalates into a lost write. The parent is committed with the complete text, so a per-section failure is logged (`entry_chunk_write_failed`) and reported, not thrown. Discarding a good parent over a recoverable partial would invert the guarantee.
+> - `chunking_status: "failed"` stays distinguishable from "short entry". Without it the two are byte-identical and a repair pass has no signal.
+> - `graduateLaneEvent`'s `embedFn` is optional, so any caller without an embedder still graduates rather than newly failing.
+>
+> Untouched, per the issue's own "intentionally separate paths": decompose-entry (replacement semantics, `src/chunk-write.ts:21-26`), ingest-raw-turn, append-session-event.
+>
+> ## Done-means evidence
+>
+> `scripts/done-means/605-chunk-write-routing.sh` drives each path at its **real entry point** — the MCP tool through a real `McpServer`, REST over real HTTP, `graduateLaneEvent` directly — against the dogfood DB in a throwaway namespace it tears down. It reads chunk counts back from the database, not from the driver's own report.
+>
+> RED (before the fix):
+>
+> ```
+> capture: FAIL — parent=c92cff72… source=mcp wrote a long thought but ZERO chunk rows link to it (bypasses writeEntryChunks)
+> rest: FAIL — parent=04e7c6d1… source=rest wrote a long thought but ZERO chunk rows link to it (bypasses writeEntryChunks)
+> graduation: FAIL — parent=7d10c7e8… source=lane-tiering wrote a long thought but ZERO chunk rows link to it (bypasses writeEntryChunks)
+> VERDICT: FAIL   (exit 1)
+> ```
+>
+> GREEN (after):
+>
+> ```
+> capture: PASS — parent=830f011d… source=mcp chunk rows with parent_id=3
+> rest: PASS — parent=205ba913… source=rest chunk rows with parent_id=3
+> graduation: PASS — parent=6c34b2e7… source=lane-tiering chunk rows with parent_id=3
+>
+> parent-row sources exercised: lane-tiering,mcp,rest
+> VERDICT: PASS   (exit 0)
+> ```
+>
+> The three distinct `source` values are the proof the driver exercised three separate production writers rather than one helper three times. The check was also re-run with the fix stashed and went red again — it discriminates the fix, not the harness.
+>
+> ## Gates
+>
+> - `bunx tsc --noEmit` — clean, exit 0.
+> - Touched areas (`chunk-write.pg`, `log-thought`, `rest-api`) — 40 pass, 0 fail.
+> - `server-capture-checkpoint` parity fixture — passes; the receipt shape stayed compatible because `log-thought` already returned `chunks_written: 0` for a short entry.
+> - Full suite — noisy. Baseline on unmodified code varied 49 → 43 → 40 failures across three runs with zero code change, all in live-Postgres suites against the shared dogfood DB (the #498 contention pattern). Comparing failing *sets* rather than totals left 7 candidates; running those files in isolation with and without the change produced byte-identical failures both ways. No regression attributable to this PR, established by differential run rather than assumption.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: chunk writing now runs inside the REST request and the graduation loop, where it did not before. Both await it, so a slow embedder shows up as latency on a path that was previously parent-only. Chosen over fire-and-forget because a background write that fails silently is the exact defect #605 is about.
+> - Assumptions that could be wrong: that no consumer depended on `capture.ts`'s hardcoded `chunks_written: 0` always being present. Checked — the only fixture asserting it (`server-capture-checkpoint`) uses a short thought, where the field is still emitted as 0, and it passes.
+> - Missing/weak tests: the done-means check is the real-Postgres coverage across all three callers; per-caller unit tests for the partial-failure branch exist only for `log-thought` (inherited). The repair behavior for a parent committed before per-section writing failed is signalled (`chunking_status`) but no automated repair is added — #605 asks to "define" that behavior, and it is defined as: report, and leave it to `src/embedding-repair.ts`.
+> - Security/permission risk: none new. Chunk rows inherit the parent's namespace and `created_by` from the already-authorized parent write; no path takes a namespace that was not already validated upstream.
+> - Migration/deploy risk: no schema change. `parent_id`/`chunk_index` already exist.
+> - Downstream client/runtime risk: REST responses gain `chunks_written`/`chunks_unembedded` on long thoughts; additive, and the MCP shape already did this. Per `docs/downstream-rollout.md` this is a response-shape addition on an existing endpoint, so no client is broken by omission — but it is a client-facing change and worth a note at rollout.
+> - Rollback/cleanup concern: revert is a clean single commit; existing chunk rows would simply stop being added to. Pre-#605 parents remain unchunked either way — this fixes new writes, it does not backfill. The done-means script writes its probe JSON to the temp scratch bucket rather than the checkout, so it leaves `git status` clean.
+> - Fixes made before PR: the harness initially read the driver's JSON off stdout, which the app logger also writes to, producing a false FAIL on paths that had actually succeeded; moved to an explicit output file. The driver also failed to pass `embedFn` to `graduateLaneEvent`, which looked like a fix defect and was a check defect.
+> - Known residual risk: existing long thoughts already in the table are still unchunked; that backfill is #604's remediation lane, not this one.
+> - SME review-memory update: [x] `docs/sme/` updated
+>
+> `docs/sme/correctness.md` gains the divergent-write-boundary pattern: when one helper defines how an object must be stored, every writer of that table has to reach it, and a receipt field hardcoded to a constant (`chunks_written: 0`) is the tell — it reports the shape of a code path rather than the state of the row. The three follow-on checks are: count the writers of the table before trusting one helper to be "the" boundary, refactor the compliant caller onto the shared function rather than leaving it as an agreeing copy, and drive each path at its real entry point in the acceptance gate so a shared helper cannot be mistaken for three separate writers.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] linked below
+>
+> Live checks ran against the dogfood database `open_brain_local_20260724` (the real one for this machine in dev mode). The done-means gate seeds into and reads from that live database on every run; the RED and GREEN transcripts above are its real output, and the chunk counts in the GREEN block were read back from the database rather than reported by the driver. Teardown drops the throwaway namespace on exit whatever the verdict.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [ ] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Deliberately left unchecked. REST `POST /api/v1/thoughts` responses gain `chunks_written` / `chunks_unembedded` on long thoughts, so this is a client-facing response-shape change and those rollout steps are APPLICABLE and NOT DONE. Checking them would be false. The change is additive — no existing field changed meaning or was removed — so a client that ignores unknown fields is unaffected.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>

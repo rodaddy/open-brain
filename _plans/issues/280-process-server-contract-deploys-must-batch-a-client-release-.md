@@ -22,6 +22,17 @@ Ask: make that lockstep a deploy-gate (CI check or runbook hard step) — e.g. b
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-05T02:41:59Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-05T02:41:58Z.
+
+---
+
 ## Discussion (6)
 
 ### rodaddy — 2026-07-08T04:43:25Z

@@ -26,6 +26,77 @@ State: PROPOSED — nothing here is written. Do not start until 0.9.0 is tagged.
 
 ---
 
+## Resolution
+
+Closed by **PR #595** — feat(bulk): ingest Hermes messages and charter telemetry
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bcac418e1bf0dcfc241a88840a1464d180bf9512`
+- Merged at: 2026-08-06T00:56:43Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T00:56:44Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #595 body
+
+> ## Summary
+>
+> - Implements the Hermes `messages`-row adapter in the Python bulk ingester and registers it for `InputFormat.HERMES`.
+> - Adds a sanitized fixture shaped like the charted Hermes SQLite schema plus functional normalization, identity, non-turn, and malformed-row tests.
+> - Records the agent-telemetry-to-Langfuse decision, including the shipped capture/tool/launcher surfaces, the #569 full-coverage masking-first ruling, and the explicit separation from #469 usage metrics.
+>
+> Fixes #492
+>
+> ## Implementation
+>
+> - Hermes rows are consumed as JSON lines exported from the charted SQLite `messages` table, validated with Pydantic, and normalized to user, assistant, or tool `RawTurn` values.
+> - Turn identity includes both `session_id` and row `id`, preventing collisions when multiple Hermes sessions reuse row identifiers.
+> - System and content-free machinery rows are valid non-turns; malformed rows fail loudly with file and line while keeping corpus content out of the error.
+> - The generated bulk package README was refreshed from its `__init__.py` source docstring.
+>
+> ## Validation
+>
+> - `bunx tsc --noEmit` — pass.
+> - `bun test scripts/local-clone.test.ts server/observability/langfuse-tracing.test.ts` — 51 pass, 1 skip, 0 fail.
+> - `uv run mypy src/openbrain` — success, 49 source files.
+> - `uv run ruff check src tests` — all checks passed.
+> - `uv run pytest -q` — 596 pass, 19 deselected.
+> - `generate_package_docs.py --check --path python/openbrain/src` — 9 packages documented.
+> - `git diff --check` — pass.
+>
+> ## New-Test Failure Proofs
+>
+> - Changed the Hermes tool-role mapping to assistant: `test_sanitized_schema_sample_reaches_fake_lane` failed on expected `TurnRole.TOOL`; restored and green.
+> - Removed `session_id` from Hermes turn identity: `test_identity_includes_session_and_nonturn_rows_are_declined` failed because both sessions produced `hermes:7`; restored and green.
+> - Removed the source line number from Hermes malformed-row errors: `test_malformed_row_names_location_without_content` failed because `:2` was absent; restored and green.
+> - Final Hermes-focused receipt: 3 pass, 20 deselected.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: mapping heterogeneous Hermes message rows into the raw-turn identity and role contract; guarded by schema-shaped end-to-end staging tests and cross-session collision proof.
+> - Assumptions that could be wrong: the charted SQLite export represents timestamps as strings and uses the observed user/assistant/tool/system role vocabulary; unknown or structurally changed rows fail loudly rather than being silently accepted.
+> - Missing/weak tests: no copied production database was used by instruction; fixtures cover the charted schema shape but cannot prove an uncharted Hermes type variation.
+> - Security/permission risk: malformed-row errors include field locations and source position only, never message content; no auth, namespace, or server permission boundary changes.
+> - Migration/deploy risk: no database migration or service deployment; this changes an operator-run Python bulk input adapter and repository documentation.
+> - Downstream client/runtime risk: not applicable because no MCP tool, wire schema, `openbrain-memory` client export, generated skill, or Hermes runtime/plugin contract changes.
+> - Rollback/cleanup concern: reverting the commit restores Hermes as unavailable; existing staging databases and other format adapters are unchanged.
+> - Fixes made before PR: added session-scoped identity, loud content-free Hermes parse errors with line attribution, generated package docs, and removed unrelated formatter churn from existing tests.
+> - Known residual risk: richer Hermes columns such as reasoning and tool-call metadata are validated only as ignored extras because `RawTurn` has no fields for them; conversational `content` remains whole.
+> - SME review-memory update: [x] not applicable because: this closes a named adapter gap without producing a reusable MEDIUM+ review pattern.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled.
+> - [x] MEDIUM+ review findings were captured: controller diff inspection found none; no review worker was used per the explicit single-process task constraint.
+> - Live Open Brain checks: [x] not applicable because: the change is an offline bulk normalizer plus a decision record and does not alter a live MCP, database, namespace, or transport surface.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`.
+> - [x] Downstream rollout is not applicable because this PR changes no public MCP/client contract, generated skill, or runtime/plugin call shape.
+>
+
+---
+
 ## Discussion (6)
 
 ### rodaddy — 2026-08-03T16:06:54Z

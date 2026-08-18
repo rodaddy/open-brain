@@ -33,3 +33,36 @@ Dry-run promotion planning can report candidates as safe even when they already 
 - Rename response fields like `existing_collab_id` or add target-neutral aliases such as `existing_target_id`.
 - Make `DreamEngine.dream_once(namespace=...)` pass `policy.target_namespace` to `scan_namespace`.
 - Add tests for scanning against a custom target namespace in both MCP and REST paths.
+
+---
+
+## Resolution
+
+Closed by **PR #95** — fix: harden backend namespace isolation follow-ups
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `bf93092bef220708ccaf999d1a1066ae55a4302a`
+- Merged at: 2026-06-11T03:39:00Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T03:39:02Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #95 body
+
+> ## Summary
+> - Enforce write-scope namespace predicates on ID-based mutating MCP tools, including delegated namespace callers.
+> - Bind MCP HTTP sessions to the effective namespace and agent identity, not just the bearer token role.
+> - Make the Python client close server-side MCP sessions with best-effort DELETE.
+> - Bound exported redact_value() recursion for deeply nested values.
+> - Let promotion scans check duplicates against a configurable target_namespace.
+> - Add AGENTS.md as the canonical agent instruction file with CLAUDE.md symlinked to it, including coding standards and SME swarm rules.
+>
+> Closes #90
+> Closes #91
+> Closes #92
+> Closes #93
+> Closes #94
+>
+> ## Validation
+> - bun test
+> - bun run typecheck
+> - uv run pytest from python/openbrain-memory

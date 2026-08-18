@@ -280,6 +280,30 @@ class AgentMemory:
         self.conversation_key = conversation_key
         return result
 
+    def start_session_unscoped(self, conversation_key: str) -> JSON:
+        """Open or adopt a lane WITHOUT claiming any exact-scope coordinate.
+
+        The ordinary ``start_session`` asserts this memory's ``agent`` and
+        whatever lane coordinates the caller passes. That is right when the
+        caller owns the lane, and wrong for a manual wrap/checkpoint against a
+        lane another process opened (#724 item 4): the server's #646 one-way
+        fill refuses to re-point an already-set coordinate, so the claim itself
+        is what fails the write.
+
+        Sending only ``session_key`` puts the server on its
+        ``!hasCompleteExactScope`` path, where an existing lane is returned
+        verbatim and its stored scope can be adopted by the caller
+        (``server/tools/session-lifecycle.ts:67,155``). ``project`` is still
+        sent because it is not an exact-scope coordinate and is not part of the
+        refusing predicate.
+        """
+        payload: dict[str, Any] = {"session_key": conversation_key}
+        if self.project is not None:
+            payload["project"] = self.project
+        result = self._call_write("session_start", payload, self.client.session_start)
+        self.conversation_key = conversation_key
+        return result
+
     def recall(
         self,
         query: str,

@@ -34,3 +34,151 @@ Whether Skippy's memories live in his own namespace or rico's. The auth model al
 ## Related
 
 - #517 (repo_facts cwd derivation), #420 (cutover), `_plans/fleet-rollout-0.9.md` (family map), 2026-08-02 proven silent-decline incident.
+
+---
+
+## Resolution
+
+Closed by **PR #544** — fix(config): declare the LAN plain-http opt-in so remote hooks can reach the brain (#525)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `cfa9745de5705731693c0c57c58550c1d8de4b30`
+- Merged at: 2026-08-04T16:44:17Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T16:44:18Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #544 body
+
+> Closes #525 (the config/plumbing half; the parked namespace decision is Rico's and is untouched).
+>
+> ## Summary
+>
+> - A Claude-family agent on a LAN box woke with the policy hook firing and **zero** Open Brain hydration — no CANON PACK, no capture — and nothing anywhere said why. Two walls, stacked, each silent.
+> - `openbrain_memory.client._validate_base_url` refuses a non-loopback plain-`http` base URL unless the caller passes `allow_insecure_http=True`. The strict `openbrain` config declared no such field, so exporting `OPENBRAIN_ALLOW_INSECURE_HTTP` made `unknown_prefixed_variables` reject the **whole** environment as a typo — which the hook entrypoints swallow into a clean exit 0.
+> - So a LAN host had no legal way to say it: setting the variable killed every lane, not setting it left the client refusing the URL. The deployed `openbrain-hook-env` wrapper stripped the variable precisely to avoid the first failure, which locked in the second.
+> - **Fix:** declare `allow_insecure_http` on `CaptureSettings` and `CanonSettings`, binding **one** environment name — the same name `openbrain_memory.runtime` already reads — and flow it to all five client construction sites. This is the declared-opt-in route the issue names, **not** the Caddy/TLS route.
+> - This is the **third** time a variable the hook environment can carry had to be declared even though this package barely reads it (after `OPENBRAIN_OBSERVATION_*` and `OPENBRAIN_SPOOL_PATH`), so the rationale lives on `ALLOW_INSECURE_HTTP_ALIASES` rather than in a commit message nobody will find.
+> - **The default is untouched.** Unset, loopback-only stands exactly as before, so a public endpoint still has to be `https`. Turning it on is an explicit, per-host, documented choice scoped to the LAN-internal pre-production posture.
+>
+> Construction sites covered (all five; a site left off the flow is a lane that declines silently on a LAN box, which is this bug again in miniature):
+>
+> | site | lane |
+> |---|---|
+> | `apps/hooks/session.py::_started_memory` | capture spine — every turn |
+> | `apps/hooks/session.py::_record_skill_usage` | `PostToolUse` skill metric |
+> | `apps/hooks/session.py::_canon_context` | the CANON PACK read |
+> | `apps/hooks/session_start.py::_lane_resume_text` | emission two (#519) |
+> | `apps/canon/run.py::_apply` | operator canon reconcile |
+> | `apps/bulk/run.py::_lane` | operator bulk ingest |
+>
+> `ObservationSettings` needs no flag — that sink ships to Langfuse via its own SDK, not `OpenBrainClient`. `openbrain-provider` builds no clients (pure policy gates).
+>
+> ## Red-proof
+>
+> **Pre-fix refusal, both walls, reproduced first:**
+>
+> ```
+> load_capture_settings     RAISED: unrecognised Open Brain environment variable(s): OPENBRAIN_ALLOW_INSECURE_HTTP
+> load_canon_settings       RAISED: unrecognised Open Brain environment variable(s): OPENBRAIN_ALLOW_INSECURE_HTTP
+> load_observation_settings RAISED: unrecognised Open Brain environment variable(s): OPENBRAIN_ALLOW_INSECURE_HTTP
+> client REFUSED: OpenBrainClient base_url must use https, localhost http, or allow_insecure_http=True
+> ```
+>
+> **New tests against the pre-fix source** (`git stash` of `python/openbrain/src`): **14 failed, 2 passed**. The 2 that pass are the ones asserting the *unchanged default* (`test_a_real_non_loopback_http_endpoint_is_refused_without_the_opt_in`, `test_a_misspelled_opt_in_is_still_rejected`) — they must pass both ways, which is the point of including them. Restored: **16 passed**.
+>
+> **The construction-site assertions are not vacuous.** Deleting a single `allow_insecure_http=` line from `apps/canon/run.py` fails exactly its own test — `KeyError: 'allow_insecure_http'`, 1 failed / 15 deselected — and nothing else.
+>
+> **Non-loopback http is proven over a real socket, not a string check.** `test_a_real_non_loopback_http_endpoint_answers_under_the_opt_in` binds an `HTTPServer` on this machine's real LAN address — resolved to `10.71.1.20`, the exact endpoint shape from the issue — and drives a real `OpenBrainClient` built from the declared setting to a `200`. The paired test proves the same live endpoint is still **refused** without the opt-in, so reachability is not what the rule is answering.
+>
+> ## Follow-up fix in this PR: the suite hung on an operator's machine
+>
+> Reported after the first push: `uv run pytest -q` **hung indefinitely** at test 8 of 45 of
+> `test_capture_outage_notice.py`, reproducibly, while the same file passed on merge-base `main`.
+> The test file is byte-identical between the two commits, so the branch was the suspect.
+>
+> **Root cause — this branch unmasked a pre-existing leak; it did not introduce one.**
+> `capture_stop_with` accepts an injected `CaptureSettings` but resolves the *observation* section
+> itself, from the live process environment, on every call. On a machine whose shell carries the four
+> provisioned coordinates — which `~/.local/share/openbrain-memory/env/claudex-observation.env`
+> supplies, so any hook-configured host has them — the unit suite built a **real `LangfuseEmitter`
+> and posted its fixture transcripts to the production fleet Langfuse server**. `emit` ends in
+> `client.shutdown()`, which blocks draining the OpenTelemetry batch worker, so the suite waited on
+> the network forever rather than failing.
+>
+> `unknown_prefixed_variables` had been acting as an accidental network guard: with
+> `OPENBRAIN_ALLOW_INSECURE_HTTP` undeclared, the settings load *raised*, `loaded_observation()`
+> swallowed the raise, and the sink stayed silently off. Declaring the variable — the entire point of
+> this PR — let the load succeed, and the observation lane it had been shadowing started dialing.
+> CI never saw it because CI sets no observation coordinates, so `observation_active` is False there
+> either way.
+>
+> **Faulthandler stack at the stall (abridged):**
+>
+> ```
+> capture_stop_with (stop.py:145)
+>   -> asyncio.run -> run_stop -> _observe_best_effort
+>   -> LangfuseEmitter.emit -> client.shutdown()
+> Thread: opentelemetry/sdk/_shared_internal/__init__.py:156 in worker
+> Thread: langfuse/_utils/prompt_cache.py:50 in run
+> ```
+>
+> **Fix, at the owning boundary:** the autouse `_clean_environment` fixture that `test_settings` has
+> carried file-scoped since it was written is promoted to the shared `tests/conftest.py`, so it
+> applies to the whole suite. `OPENBRAIN_TEST_*` is deliberately preserved — the `-m live` gate
+> addresses its playground service through that prefix, and clearing it would make the live gate pass
+> having run nothing.
+>
+> **Red-proof:** with the fixture at `autouse=False` in an operator shell, the two new
+> `TestTheSuiteNeverInheritsAnOperatorsSink` tests fail (`assert True is False`; `assert
+> ['OPENBRAIN_ALLOW_INSECURE_HTTP', ...] == []`). With it restored they pass, the previously hanging
+> file passes **3/3**, and the full suite reaches a real summary line — **565 passed, 19 deselected in
+> 13.6s** — in the exact environment that hung.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — `uv run pytest -q` in `python/openbrain`: **565 passed, 19 deselected**; pre-push full suite passed with **no bypass**
+> - [x] Python package checks passed or are not applicable — `uv run mypy src/openbrain` clean (49 files); `uv run ruff check src tests` clean. Sibling `openbrain-memory` also re-checked (mypy clean, 17 files; ruff clean) though untouched
+> - [x] `bunx tsc --noEmit` — not applicable: no TypeScript touched (`git diff --name-only -- 'src/*.ts'` empty)
+> - [x] Live Open Brain smoke passed — a real `SessionStart` driven through the **deployed wrapper** emitted a real CANON PACK with non-zero section counts (`profile_guidance=10, process_guidance=22`, `namespace=rico`), exit 0
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: relaxing a transport security check. Scoped hard — the field defaults `False`, the client's loopback-only rule is untouched, and the opt-in only takes effect when a host explicitly sets one documented variable. A public endpoint still requires `https`. I did not weaken `_validate_base_url` itself, which is where a careless fix would have gone.
+> - Assumptions that could be wrong: that the LAN-internal pre-prod posture is the intended route rather than TLS. The issue offers both and the operator direction for this run named the opt-in explicitly; if that posture changes, this field becomes the thing to remove, not a thing to widen. Also assumed `ObservationSettings` needs no flag — verified it emits through the Langfuse SDK, not `OpenBrainClient`.
+> - Missing/weak tests: the socket test proves a `/health` round trip, not a full MCP session against a real brain over LAN — the genuine end-to-end receipt is a LAN box (the Air, `10.71.1.26`) hydrating, which is deployment, not a test. The five construction-site tests assert the constructor argument, not that each lane's subsequent traffic succeeds. Added after the reported hang: the two `TestTheSuiteNeverInheritsAnOperatorsSink` tests assert the environment the hook resolves is inert, red-proven by flipping the fixture to `autouse=False`. They cannot assert the hang itself — a test that hangs to prove a hang reports nothing and blocks the suite behind it — so they pin the precondition (`observation_active` False, no `OPENBRAIN_*` leaked) instead of the symptom.
+> - Security/permission risk: this permits plain-text bearer tokens over the LAN when enabled. That is the accepted pre-prod posture for `10.71.x` and is stated as such in the doc rather than left implicit; it is off by default and per-host. No namespace, auth, or server-side check is touched.
+> - Migration/deploy risk: the real risk here was **ordering**, and it is the one that bites silently. Passing the variable through the wrapper against an install that does not declare it rejects the whole environment and zeroes every lane. Verified empirically in the safe order — old install raised `UnknownEnvironmentVariableError`, then reinstall, then the installed interpreter resolved `allow_insecure_http=True`, then the wrapper edit, then a live CANON PACK. The rule is now written into `CONFIG_REFERENCE.md`, `420-cutover-rollback.md`, and the rollout plan so the next person does not have to rediscover it.
+> - Downstream client/runtime risk: none — no MCP tool, schema, transport, or wire surface changes. `openbrain-memory` is unmodified; it already read this variable.
+> - Rollback/cleanup concern: reverting the commit restores the old strict config, at which point the **deployed wrapper must also drop the pass-through** or every hook on a box with the variable set goes to silent zero capture. That coupling is the reason it is called out in three docs. The wrapper lives outside this repo (`~/.local/share/openbrain-memory/env/openbrain-hook-env`) and cannot be versioned here.
+> - Fixes made before PR: reinstalled the `openbrain` uv tool from this branch *before* touching the wrapper, after proving the old install rejected the variable — doing it the other way round would have broken live capture on this machine. Replaced a ruff-flagged inline token literal with a named fixture constant rather than blanket-suppressing the rule. After the hang report: promoted the env-isolation fixture to the shared conftest rather than adding a narrow guard to the one file that happened to hang, because the leak is in every hook entrypoint that resolves a section its caller did not inject.
+> - Known residual risk: the fleet rollout plan's family-A/LAN notes are updated, but the Buzz/`claude-agent-acp` launch-path steps (the issue's second bullet) are **not** added — I have not observed that host and will not write rollout steps I cannot verify. Filed as follow-up below. Also: the wrapper change is live on this machine only; every other family-A box needs the same two-part change in the same order. Also: the env-isolation fixture fixes the TEST suite, not the underlying design — `capture_stop_with` still resolves the observation section from the ambient process environment at runtime, which is correct for a hook but means any future in-process caller inherits the same coupling.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no new review-lane pattern arose — this is the third instance of an already-documented gotcha (undeclared sibling-owned env var → silent zero capture), and the rationale is recorded at the rule site in code plus `CONFIG_REFERENCE.md`, which is where the previous two instances put it
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` — none arose
+> - Live Open Brain checks: [x] linked below or [ ] not applicable because: real `SessionStart` through the deployed wrapper returned a CANON PACK with non-zero section counts; no server, transport, MCP tool, or schema surface is touched
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: `CaptureSettings` / `CanonSettings` are Python-side hook configuration with no contract fixture, wire representation, or client binding. The client keyword `allow_insecure_http` it feeds is pre-existing `openbrain_memory` API, unchanged by this PR.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable — not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable — not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable — not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable — not applicable
+>
+> Notes/evidence:
+>
+> - No MCP tool, schema, transport, or client-facing surface is modified. Changes are the Python `openbrain` hook config plus three docs.
+> - **Deploy coupling, outside this repo:** `~/.local/share/openbrain-memory/env/openbrain-hook-env` was updated in place to pass `OPENBRAIN_ALLOW_INSECURE_HTTP` through, and its comments now explain why it used to strip it. Every other family-A box needs the same change, in the same order (declare → reinstall → verify → wrapper).
+>
+> **Follow-up (not in this PR):** the Buzz / `claude-agent-acp` launch path still needs adding to the Claude-family rollout steps in `_plans/fleet-rollout-0.9.md` — the issue's second bullet. Deliberately deferred: writing rollout steps for a host I have not observed would be a guess in the grammar of a procedure.
+>
+> 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+>
+>

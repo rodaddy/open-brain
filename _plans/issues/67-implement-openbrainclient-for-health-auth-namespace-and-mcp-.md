@@ -72,3 +72,41 @@ This is the hard blocker for #68, #69, #70, and #71. Do not build higher-level m
 - Optional live canary is documented and disabled unless env is present.
 
 Parent: #66
+
+---
+
+## Resolution
+
+Closed by **PR #72** — feat: add OpenBrain Python client
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `22fe1a2dd3d19b57887ccb305a4fed1005a33f38`
+- Merged at: 2026-06-11T00:01:25Z
+- PR state: MERGED
+- Issue closed: 2026-06-11T00:01:27Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #72 body
+
+> Closes #67
+>
+> ## Summary
+> - Add python/openbrain-memory with a synchronous OpenBrainClient and injectable transport.
+> - Implement health(), MCP initialize/initialized session setup, generic call_tool(), and thin wrappers for registered Open Brain tools.
+> - Add fake-transport tests plus an env-gated live canary.
+>
+> ## Acceptance criteria
+> - Health check uses GET /health without credentials.
+> - Auth sends Authorization: Bearer <token>.
+> - Namespace sends X-Namespace plus optional X-Agent-Id and X-Role.
+> - MCP initialize stores mcp-session-id and protocol version, then sends notifications/initialized.
+> - call_tool() emits JSON-RPC tools/call and validates response version/id/errors.
+> - session_start, append_session_event, and search_all wrappers are covered through the generic call shape.
+> - No live Open Brain server or credentials are required by default.
+>
+> ## Verification
+> - uv run pytest: 19 passed, 1 skipped.
+> - bun test: 579 passed, 16 skipped.
+> - git diff --cached --check: passed.
+>
+> ## Live canary
+> Disabled by default. Enable with OPENBRAIN_LIVE_CANARY=1 plus OPENBRAIN_BASE_URL, OPENBRAIN_TOKEN, and OPENBRAIN_NAMESPACE. Non-local HTTP requires OPENBRAIN_ALLOW_INSECURE_HTTP=1.

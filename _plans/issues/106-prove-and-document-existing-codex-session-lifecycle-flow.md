@@ -50,6 +50,39 @@ Add ergonomic Codex-facing wrappers or examples for the Open Brain session lifec
 
 ---
 
+## Resolution
+
+Closed by **PR #112** — feat: add Codex memory citation contract
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `fd8e7b6eb0cc50644a2c70c259b2364526c71cc9`
+- Merged at: 2026-06-15T18:34:26Z
+- PR state: MERGED
+- Issue closed: 2026-06-15T18:34:27Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #112 body
+
+> ## Summary
+>
+> - add `source_ref` citation objects to `search_brain` and `search_all` results
+> - include qmd citation parity through path/collection source refs
+> - request explicit links for federated brain search results
+> - document Codex durable memory flow, capability audit gate, and namespace security boundary
+> - add dry-run/default Codex memory lifecycle smoke script
+>
+> Closes #106.
+> Closes #108.
+>
+> ## Validation
+>
+> - `bun run scripts/codex-memory-smoke.ts` (dry run)
+> - `bun test src/tools/__tests__/search-brain.test.ts src/tools/__tests__/search-all.test.ts`
+> - `bun run typecheck`
+> - `bun test` (619 pass, 16 skip)
+>
+
+---
+
 ## Discussion (1)
 
 ### rodaddy — 2026-06-15T17:41:07Z

@@ -7,11 +7,148 @@ set -eu
 # Each is gated on its own paths with its own validation, so a push touching only
 # one still runs that one's mypy/ruff/pytest -- a push touching only
 # python/openbrain used to skip every Python check entirely.
+#
+# ---------------------------------------------------------------------------
+# BASE SELECTION (issue #705)
+# ---------------------------------------------------------------------------
+# Which base the push is diffed against decides which gates run, so getting it
+# wrong does not make the gate stricter -- it makes it STOP DISCRIMINATING.
+# This file used to hardcode `origin/main` in TWO places (the stdin-range path
+# and the manual path). Every lane in the current flow branches from a wip
+# branch that was 80 commits ahead of origin/main, and one of those commits
+# touches python/openbrain, so every lane -- including ones whose diff contained
+# no Python at all -- was told it had changed the Python package and ran that
+# package's pytest. That suite executes the out-of-repo context-budget-gate
+# crosslang proof, which fails for main-owned reasons (#704).
+#
+# The damage is not the wasted minutes. Once every lane is told it changed
+# Python, a push that GENUINELY breaks Python looks exactly like one that
+# touched only markdown, and "not mine" becomes the habitual response -- which
+# is how a gate turns into noise that gets routed around with `--no-verify`.
+#
+# So the base is the branch's actual INTEGRATION TARGET: its configured upstream
+# when it has one, falling back to origin/main, then main, then the empty tree.
+# It is resolved by exactly ONE function, called from both paths, because the
+# duplicated copy is what let the original fix land on one path and miss the
+# other. And the chosen base is ANNOUNCED, so a future lane can read which base
+# produced the verdict instead of inferring it from a failure.
 
-echo "pre-push: running Open Brain validation..."
+EXPLAIN_ONLY=no
+for arg in "$@"; do
+  if [ "$arg" = "--explain" ]; then
+    EXPLAIN_ONLY=yes
+  fi
+done
+
+if [ "$EXPLAIN_ONLY" = no ]; then
+  echo "pre-push: running Open Brain validation..."
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+# ---------------------------------------------------------------------------
+# WHICH HOOKS DIRECTORY IS THIS (issue #711)
+# ---------------------------------------------------------------------------
+# `.git/config` is SHARED BY EVERY LINKED WORKTREE. So an ABSOLUTE
+# `core.hooksPath` -- `/Volumes/.../open-brain/_githooks` -- points every lane
+# worktree at the PRIMARY CHECKOUT's hooks: the copy on the base branch, not the
+# copy the lane is changing. A RELATIVE value resolves against each worktree's
+# own root, which is why `_githooks/install.sh` writes `_githooks` and says so
+# in a comment written against this exact trap.
+#
+# Measured live before this assertion existed (throwaway worktree, a distinct
+# marker line in each tree's copy of this file, `git hook run pre-push`):
+#
+#   absolute config, from the worktree -> MARKER: PRIMARY-COPY
+#   relative config, from the worktree -> MARKER: WORKTREE-COPY
+#
+# THIS CHECK IS IN THE HOOK, NOT ONLY IN A DONE-MEANS SCRIPT, BECAUSE THE HOOK
+# IS THE THING THAT RUNS. The config had already diverged from its own installer
+# and nothing noticed: the installer is idempotent and reports "already set"
+# only on an exact match, and no check asserted the value. A drift that only a
+# check nobody runs would catch is a drift nobody catches.
+#
+# WHY THIS FAILS THE PUSH RATHER THAN WARNING. When this is wrong, the verdict
+# this hook is about to produce is about THE WRONG TREE -- a lane fixing a hook
+# cannot exercise its fix, and a lane BREAKING one pushes green. A gate that
+# knows its own answer is untrustworthy and returns it anyway is worse than one
+# that stops, so it stops, and it prints the one command that fixes it.
+#
+# The unset case is deliberately NOT an error here: a clone that never ran the
+# installer has no value and git falls back to `.git/hooks`, in which case this
+# file is not running at all and cannot be the thing complaining. If it IS set,
+# it must match.
+HOOKS_PATH="$(git config --get core.hooksPath 2>/dev/null || true)"
+EXPECTED_HOOKS_PATH="_githooks"
+if [ -n "$HOOKS_PATH" ] && [ "$HOOKS_PATH" != "$EXPECTED_HOOKS_PATH" ]; then
+  echo "  ✗ core.hooksPath does not match what _githooks/install.sh writes." >&2
+  echo "      configured: $HOOKS_PATH" >&2
+  echo "      expected:   $EXPECTED_HOOKS_PATH" >&2
+  echo "" >&2
+  echo "    .git/config is shared by every linked worktree, so a non-relative value" >&2
+  echo "    makes EVERY worktree run the primary checkout's hooks -- including this" >&2
+  echo "    one. The verdict this gate is about to give would be about a tree other" >&2
+  echo "    than the one being pushed, so it is refusing instead of guessing." >&2
+  echo "" >&2
+  echo "    Fix it by running, from the repo root:" >&2
+  echo "        ./_githooks/install.sh" >&2
+  echo "" >&2
+  echo "    (issue #711)" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# THE VALUE BEING RIGHT IS NOT THE DIRECTORY BEING COMPLETE (issue #719)
+# ---------------------------------------------------------------------------
+# The assertion above proves core.hooksPath points at the right DIRECTORY. It
+# says nothing about what is IN it — and `core.hooksPath` REPLACES the hooks
+# directory it displaces rather than overlaying it, so a correct value with an
+# incomplete directory silently drops every hook the previous value provided.
+# That is exactly how #719 survived #711: clause (e) of
+# `711-hookspath-relative.sh` proved the value, was 5/5 GREEN throughout, and
+# this repo still had NO pre-commit hook, so gitleaks secret scanning and the
+# LAW #8 protected-branch block were off for every commit made here.
+#
+# So the completeness of the directory is asserted HERE, in the hook that runs,
+# for the same reason #711's own value check lives here rather than only in a
+# done-means script: a drift that only an unrun check would catch is a drift
+# nobody catches.
+#
+# This WARNS rather than refusing, and the asymmetry is deliberate. A wrong
+# VALUE means the verdict this hook is about to give is about the wrong tree —
+# the answer is untrustworthy, so it must stop. A missing SIBLING hook does not
+# corrupt this hook's verdict; it means a DIFFERENT gate is missing. Failing the
+# push would block work on a defect the push cannot cause and the pusher may not
+# own, and a gate that refuses for something unrelated to the change in hand is
+# the condition that makes `--no-verify` habitual (#705, #712).
+GLOBAL_HOOKS_PATH="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+if [ -n "$GLOBAL_HOOKS_PATH" ] && [ -d "$GLOBAL_HOOKS_PATH" ] && [ "$GLOBAL_HOOKS_PATH" != "$ROOT/$EXPECTED_HOOKS_PATH" ]; then
+  DISPLACED_MISSING=""
+  for displaced_hook in "$GLOBAL_HOOKS_PATH"/*; do
+    [ -f "$displaced_hook" ] || continue
+    [ -x "$displaced_hook" ] || continue
+    displaced_name="${displaced_hook##*/}"
+    if [ ! -x "$ROOT/$EXPECTED_HOOKS_PATH/$displaced_name" ] \
+      && ! grep -q "^${displaced_name}:" "$ROOT/$EXPECTED_HOOKS_PATH/displaced-hooks-allowlist.txt" 2>/dev/null; then
+      DISPLACED_MISSING="$DISPLACED_MISSING $displaced_name"
+    fi
+  done
+  if [ -n "$DISPLACED_MISSING" ]; then
+    echo "  ! WARNING: core.hooksPath is correct, but $EXPECTED_HOOKS_PATH/ is INCOMPLETE." >&2
+    echo "      not provided here:$DISPLACED_MISSING" >&2
+    echo "      displaced directory: $GLOBAL_HOOKS_PATH" >&2
+    echo "" >&2
+    echo "    core.hooksPath REPLACES that directory — git consults exactly one and" >&2
+    echo "    never chains — so whatever those hooks enforced is NOT running in this" >&2
+    echo "    repo. Provide them in $EXPECTED_HOOKS_PATH/, or record the omission with" >&2
+    echo "    a reason in $EXPECTED_HOOKS_PATH/displaced-hooks-allowlist.txt so it is a" >&2
+    echo "    decision someone made rather than one nobody noticed." >&2
+    echo "" >&2
+    echo "    Full check: bash scripts/done-means/719-hooks-dir-complete.sh" >&2
+    echo "    (issue #719)" >&2
+  fi
+fi
 
 # Single source of truth for the parity path filter; CI and the PR-body
 # workflow read the same file, and check-parity.ts asserts it is non-empty.
@@ -19,68 +156,366 @@ PARITY_PATHS=("${(f)$(cat "$ROOT/contracts/parity-paths.txt")}")
 
 ZERO_SHA=0000000000000000000000000000000000000000
 SAW_RANGE=no
+
+# The last non-deleting ref pair seen on stdin, kept for the #719 push-side
+# secret scan and default-branch guard further down. They are captured in the
+# read loop rather than re-derived afterwards, because after the loop ends the
+# hook has no other way to know WHICH ref was pushed — and guessing it from
+# HEAD would be a gate judging something other than the thing in hand, which is
+# the #705-#714 family this file already carries two fixes for.
+PUSH_LOCAL_SHA=""
+PUSH_REMOTE_REF=""
 CHANGED_PYTHON=no
 CHANGED_OPENBRAIN=no
 CHANGED_PARITY=no
 
-while read -r _local_ref local_sha _remote_ref remote_sha; do
-  SAW_RANGE=yes
-  if [ "$local_sha" = "$ZERO_SHA" ]; then
-    continue
-  fi
-  if [ "$remote_sha" = "$ZERO_SHA" ]; then
-    if git rev-parse --verify origin/main >/dev/null 2>&1; then
-      base_sha="$(git merge-base "$local_sha" origin/main)"
-    elif git rev-parse --verify main >/dev/null 2>&1; then
-      base_sha="$(git merge-base "$local_sha" main)"
-    else
-      base_sha="$(git hash-object -t tree /dev/null)"
-    fi
-  else
-    base_sha="$remote_sha"
+# The resolved base and how it was chosen. Set by resolve_base.
+#
+# WHY THESE ARE GLOBALS SET IN PLACE, AND NOT A PRINTED RESULT. The obvious
+# spelling -- `base_sha="$(resolve_base "$tip")"` -- runs the function in a
+# COMMAND-SUBSTITUTION SUBSHELL, so BASE_REF and BASE_SOURCE are assigned in a
+# child process and are empty in the parent the moment it returns. That failure
+# is silent and it fails GREEN in the direction that matters: the flags are
+# still computed correctly, so only the ANNOUNCEMENT goes blank, and an
+# announcement nobody is asserting on is exactly the thing that rots. Observed
+# here on the first GREEN run of scripts/done-means/705-pre-push-base-selection.sh
+# (clauses c and d caught it). So resolve_base writes all three outputs into
+# globals and returns nothing.
+BASE_REF=""
+BASE_SOURCE=""
+BASE_SHA=""
+
+# resolve_base <tip-rev> [branch-ref]
+#
+# Sets BASE_SHA to the base to compare <tip-rev> against, and records the ref it
+# came from in BASE_REF / BASE_SOURCE. The ONLY place a base is chosen; both the
+# stdin-range path and the manual path call it.
+#
+# Order, most specific first:
+#   1. the branch's configured upstream -- the branch it actually integrates
+#      into. This is what makes a lane off a wip branch diff against that wip
+#      branch instead of inheriting the wip-vs-main span.
+#   2. origin/main, then main -- the historical behaviour, kept as the fallback
+#      for a branch with no upstream configured. Dropping it would leave those
+#      pushes ungated, which is the opposite of the fix.
+#   3. the empty tree -- a repository with no main at all; everything counts as
+#      changed, which is the safe direction to fail.
+#
+# WHY THE BRANCH REF IS A SEPARATE ARGUMENT FROM THE TIP.
+# `@{upstream}` is a property of a BRANCH, and git can only answer it for
+# something that names one. On a real push git hands this hook the tip as a raw
+# SHA, and `<sha>@{upstream}` is meaningless -- git errors, the lookup returns
+# empty, and the resolution silently falls through to origin/main, which is
+# EXACTLY the bug being fixed. Observed live 2026-08-09: the first push of this
+# very lane announced "base: origin/main -- fallback (no configured upstream)"
+# and charged the lane a python/openbrain change it did not make, while
+# `--explain` (which passes the symbolic `HEAD`) resolved the upstream
+# correctly. So the caller passes the branch ref it already has, and the tip is
+# used only for the merge-base. A check that exercised only `--explain` could
+# not see this; scripts/done-means/705-pre-push-base-selection.sh now drives the
+# stdin-range path with a SHA tip for that reason.
+resolve_base() {
+  local tip="$1"
+  local branch_ref="${2:-}"
+  local upstream=""
+
+  # `@{upstream}` takes a SHORT BRANCH NAME. git sends the FULL ref on stdin
+  # (`refs/heads/lane/x`), and `refs/heads/lane/x@{upstream}` is a hard error --
+  # "fatal: no such branch" -- not a missing upstream, so it would fall through
+  # to origin/main just as silently as the SHA did. The prefix is therefore
+  # stripped here. `HEAD` is passed through unchanged because it already names a
+  # branch for this purpose.
+  local branch_name="${branch_ref#refs/heads/}"
+
+  # `2>/dev/null` because git errors loudly when no upstream is configured,
+  # which is an ordinary case here and not a failure.
+  if [ -n "$branch_name" ]; then
+    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name "${branch_name}@{upstream}" 2>/dev/null || true)"
   fi
 
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain-memory)" ]; then
+  if [ -n "$upstream" ] && git rev-parse --verify "$upstream" >/dev/null 2>&1; then
+    BASE_REF="$upstream"
+    BASE_SOURCE="configured upstream"
+    BASE_SHA="$(git merge-base "$tip" "$upstream")"
+    return 0
+  fi
+
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    BASE_REF="origin/main"
+    BASE_SOURCE="fallback (no configured upstream)"
+    BASE_SHA="$(git merge-base "$tip" origin/main)"
+    return 0
+  fi
+
+  if git rev-parse --verify main >/dev/null 2>&1; then
+    BASE_REF="main"
+    BASE_SOURCE="fallback (no configured upstream, no origin/main)"
+    BASE_SHA="$(git merge-base "$tip" main)"
+    return 0
+  fi
+
+  BASE_REF="(empty tree)"
+  BASE_SOURCE="fallback (no upstream and no main)"
+  BASE_SHA="$(git hash-object -t tree /dev/null)"
+}
+
+# classify <base-sha> <tip-rev> -- set the CHANGED_* flags from one diff range.
+# Extracted alongside resolve_base for the same reason: the pathspec list was
+# also written twice, so a package added to one copy would be missed by the
+# other.
+classify() {
+  local base="$1" tip="$2"
+  if [ -n "$(git diff --name-only "$base" "$tip" -- python/openbrain-memory)" ]; then
     CHANGED_PYTHON=yes
   fi
   # `python/openbrain` is a distinct path from `python/openbrain-memory`: a git
   # pathspec matches whole path components, so this leading-dir filter never
   # catches the sibling package. Each package gets its own gate on its own paths.
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- python/openbrain)" ]; then
+  if [ -n "$(git diff --name-only "$base" "$tip" -- python/openbrain)" ]; then
     CHANGED_OPENBRAIN=yes
   fi
-  if [ -n "$(git diff --name-only "$base_sha" "$local_sha" -- "${PARITY_PATHS[@]}")" ]; then
+  if [ -n "$(git diff --name-only "$base" "$tip" -- "${PARITY_PATHS[@]}")" ]; then
     CHANGED_PARITY=yes
   fi
-done
+}
+
+# `--explain` has no stdin range to read, and reading stdin would block.
+if [ "$EXPLAIN_ONLY" = no ]; then
+  while read -r _local_ref local_sha _remote_ref remote_sha; do
+    SAW_RANGE=yes
+    if [ "$local_sha" = "$ZERO_SHA" ]; then
+      continue
+    fi
+
+    # Remember this ref pair for the #719 guards below. A deleting push (the
+    # zero-SHA case above) is skipped: it adds no commits to scan, and there is
+    # nothing to refuse.
+    PUSH_LOCAL_SHA="$local_sha"
+    PUSH_REMOTE_REF="$_remote_ref"
+    if [ "$remote_sha" = "$ZERO_SHA" ]; then
+      # A brand-new branch: the remote has nothing to compare against, so the
+      # base has to be chosen. This is EVERY first lane push, and it is the path
+      # #705 was measured on.
+      #
+      # `$_local_ref` is the LOCAL ref being pushed (e.g. refs/heads/lane/x).
+      # It is passed because git gives `$local_sha` as a raw SHA, which cannot
+      # answer `@{upstream}` -- see resolve_base's own note.
+      resolve_base "$local_sha" "$_local_ref"
+    else
+      # The remote already has this branch, so what the push actually adds is
+      # exactly remote..local. Nothing to choose.
+      BASE_SHA="$remote_sha"
+      BASE_REF="$_remote_ref"
+      BASE_SOURCE="remote tip of the branch being pushed"
+    fi
+
+    classify "$BASE_SHA" "$local_sha"
+  done
+fi
 
 # A direct/manual invocation has no pre-push stdin. Compare the current branch
-# to main so local hook testing retains useful behavior.
+# to its integration target so local hook testing retains useful behavior.
 if [ "$SAW_RANGE" = no ]; then
-  if git rev-parse --verify origin/main >/dev/null 2>&1; then
-    BASE="$(git merge-base HEAD origin/main)"
-  elif git rev-parse --verify main >/dev/null 2>&1; then
-    BASE="$(git merge-base HEAD main)"
-  else
-    BASE="HEAD^"
+  resolve_base HEAD HEAD
+  classify "$BASE_SHA" HEAD
+fi
+
+# ANNOUNCE THE BASE (issue #705, and AGENTS.md "nothing is adjusted silently").
+# The base is a self-made decision that changes which gates run, so it is stated
+# rather than left to be inferred from whichever validation happens to fail.
+echo "  base: ${BASE_REF} — ${BASE_SOURCE}"
+echo "  changed: python/openbrain-memory=${CHANGED_PYTHON} python/openbrain=${CHANGED_OPENBRAIN} parity=${CHANGED_PARITY}"
+
+# `--explain` stops here: it exists so the base-selection decision above can be
+# tested on its own, without the multi-minute typecheck/test phases that follow
+# and that have nothing to do with which base was picked. It is the SHIPPED
+# resolution running on a real repository -- not a second implementation.
+if [ "$EXPLAIN_ONLY" = yes ]; then
+  echo "  base_ref=${BASE_REF}"
+  echo "  base_source=${BASE_SOURCE}"
+  echo "  changed_openbrain_memory=${CHANGED_PYTHON}"
+  echo "  changed_openbrain=${CHANGED_OPENBRAIN}"
+  echo "  changed_parity=${CHANGED_PARITY}"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# THE DISPLACED PUSH-SIDE CONTROLS (issue #719)
+# ---------------------------------------------------------------------------
+# `core.hooksPath = _githooks` REPLACES the operator's global hooks directory —
+# git consults exactly one, and it does not overlay. That directory's `pre-push`
+# carried two controls that this file, by existing, silently switched off:
+#
+#   1. a `gitleaks` scan of the commits actually being pushed
+#   2. a guard against pushing directly to a remote's DEFAULT branch
+#
+# #719 was filed about the missing `pre-commit`, and this second gap was found
+# by the sweep that issue's fix required: enumerate the WHOLE displaced set,
+# because an override replaces rather than overlays. Measured on the pre-fix
+# tree: `rg -n "gitleaks|ALLOW_DEFAULT_PUSH" _githooks/pre-push` returned
+# nothing, so secret scanning was absent from BOTH ends of the commit path, not
+# one.
+#
+# These run BEFORE typecheck and the test suite. A secret must be refused in
+# seconds rather than after a multi-minute suite, and a push to a protected
+# branch should not buy a full validation run first.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "  ✗ BLOCKED: gitleaks is required for secret scanning but is not installed." >&2
+  echo "    This gate fails CLOSED: it will not pass a push it could not scan." >&2
+  echo "        brew install gitleaks" >&2
+  exit 1
+fi
+
+# The default-branch guard, restored from the displaced global hook including
+# its one deliberate escape hatch. `ALLOW_DEFAULT_PUSH=1` is a CONSCIOUS HUMAN
+# override for a personal repo; agents get no override (AGENTS.md protected
+# branches). It is honoured here rather than dropped so this hook does not
+# quietly become stricter than the machine-wide rule it is restoring — a
+# silent tightening is still a silent adjustment.
+# `SAW_RANGE=yes` with an empty PUSH_LOCAL_SHA is a DELETE-ONLY push: every ref
+# on stdin carried the zero SHA. There are no commits to scan and no new tip to
+# judge, so both guards are inapplicable — and that is said out loud rather than
+# folded into the clean path.
+if [ "$SAW_RANGE" = yes ] && [ -n "$PUSH_LOCAL_SHA" ]; then
+  DEFAULT_REF="$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/|refs/heads/|')"
+  if [ -n "$DEFAULT_REF" ] && [ "$PUSH_REMOTE_REF" = "$DEFAULT_REF" ] && [ "${ALLOW_DEFAULT_PUSH:-}" != "1" ]; then
+    echo "  ✗ BLOCKED: direct push to the default branch ($PUSH_REMOTE_REF). Open a PR." >&2
+    echo "    Conscious human override only: ALLOW_DEFAULT_PUSH=1 git push ..." >&2
+    exit 1
   fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain-memory)" ]; then
-    CHANGED_PYTHON=yes
+
+  # Scan only what this push ADDS — commits reachable from the pushed tip that
+  # are not already on a known remote ref. A full-history scan on every push is
+  # explicitly forbidden by _DOCS/STANDARDS-git.md, and it would re-report
+  # every historical finding on every push until the noise trained everyone to
+  # pass `--no-verify`.
+  echo "  gitleaks: scanning the commits being pushed ..."
+  if ! gitleaks git --log-opts="$PUSH_LOCAL_SHA --not --remotes" --redact=100 --no-banner .; then
+    echo "" >&2
+    echo "  ✗ BLOCKED: gitleaks found a secret in the commits being pushed." >&2
+    echo "    The finding above is redacted; the file and rule are named." >&2
+    echo "    The secret is already in your local object store — rewrite the" >&2
+    echo "    history that contains it, do not just delete the file in a new commit." >&2
+    exit 1
   fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- python/openbrain)" ]; then
-    CHANGED_OPENBRAIN=yes
-  fi
-  if [ -n "$(git diff --name-only "$BASE" HEAD -- "${PARITY_PATHS[@]}")" ]; then
-    CHANGED_PARITY=yes
-  fi
+  echo "  ✓ gitleaks found no secrets in the pushed commits"
+elif [ "$SAW_RANGE" = yes ]; then
+  echo "  gitleaks: delete-only push (all refs zero-SHA) — no commits to scan; NOT a clean verdict"
+else
+  # A manual/`--explain` invocation has no stdin range, so there is no set of
+  # commits to scan and no remote ref to compare against. SAID OUT LOUD rather
+  # than skipped silently: a reader must be able to tell "scanned and clean"
+  # from "there was nothing to scan" (AGENTS.md, nothing is adjusted silently).
+  echo "  gitleaks: no push range on stdin (manual invocation) — nothing to scan; NOT a clean verdict"
+fi
+
+# An escape hatch for `scripts/done-means/719-hooks-dir-complete.sh`, which
+# drives THIS hook through a real `git push` in a throwaway two-file fixture to
+# prove the secret and branch guards above actually refuse. Everything past this
+# point (typecheck, the full suite, the package gates) needs this repo's own
+# node_modules and cannot run in such a fixture at all, and takes minutes.
+#
+# THIS IS NOT A BYPASS OF THE CONTROLS UNDER TEST: it sits BELOW both guards, so
+# a check using it has already been judged by them — that is the whole point of
+# placing them first. It cannot weaken a real push either, because a real push
+# does not set it. It is announced, so it can never be mistaken for a full run.
+if [ -n "${OPENBRAIN_DONE_MEANS_719:-}" ]; then
+  echo "  (OPENBRAIN_DONE_MEANS_719 set — secret + branch guards ran above;"
+  echo "   stopping before typecheck/tests, which cannot run in a fixture repo)"
+  exit 0
 fi
 
 echo "  bun run typecheck ..."
 bun run typecheck
 echo "  ✓ TypeScript passed"
 
-echo "  bun test ..."
-bun test
+# ---------------------------------------------------------------------------
+# THE TEST SUITE (issue #712)
+# ---------------------------------------------------------------------------
+# `bun test` used to run here bare, inheriting git's stdout and stderr. When git
+# is invoked with its output captured (`git push ... | tail`, or any wrapper that
+# reads it), those fds are PIPES, and bun 1.3.14 aborts partway through writing
+# the full-suite coverage table:
+#
+#     src/validation-errors.ts       |  100.00 |   90.
+#     error: An internal error occurred (WriteFailed)
+#
+# It exits 1 having run a GREEN suite. Measured on the untouched primary at
+# e3917ab, clean tree, by redirecting each fd independently:
+#
+#   stdout PIPE  + stderr PIPE  -> exit 1 (WriteFailed)
+#   stdout FILE  + stderr FILE  -> exit 0 (3372 pass, 0 fail)
+#   stdout FILE  + stderr PIPE  -> exit 1 (WriteFailed)   <-- stderr is the writer
+#   stdout PIPE  + stderr FILE  -> exit 0
+#
+# So the failing writer is bun's STDERR -- which is where the coverage table and
+# the pass/fail summary go. Redirecting stdout alone would not have fixed this,
+# and a fix that "looked right" that way would have left the defect live. Piping
+# into a fully-draining `cat` does not help either, and the output truncates
+# MID-LINE, so this is bun's own write path against a pipe fd rather than a
+# consumer that stopped reading.
+#
+# WHY THIS MATTERS MORE THAN THE WASTED RUN. The verdict depended on how the
+# CALLER captured output, so the push failed "randomly" from the operator's
+# seat, with text identical to a genuinely broken branch. A gate that fails the
+# same way for a green push and a broken one has stopped carrying information,
+# and that is precisely the condition that makes `--no-verify` habitual. It is
+# the same family as CLOSED #483: something the hook INHERITED from its caller
+# decided its verdict. The rule both share -- a gate must not let anything it
+# inherited from its caller decide its verdict.
+#
+# THE FIX. Both fds go to a log file under the temp workspace, so neither is a
+# pipe no matter how git was called, and the verdict is read from bun's EXIT
+# CODE. The log is tee'd back afterwards so the operator still sees the output
+# they would have seen. The redirect is ANNOUNCED (AGENTS.md, nothing is
+# adjusted silently): a reader of the transcript can see where the output went
+# rather than wondering why the suite went quiet.
+#
+# AND THE TWO FAILURES ARE NAMED SEPARATELY. "the tests failed" and "the runner
+# could not write its output" are different defects with different owners, and
+# before this they were the same bare `WriteFailed` plus a refused push. The
+# WriteFailed marker is searched for in the log so that if this ever fires again
+# through a path not covered here, the hook says which one it was instead of
+# blaming the branch.
+TEST_LOG_DIR="${OPENBRAIN_TEMP_WORKSPACE:-/Volumes/ThunderBolt/_tmp}/open-brain/_scratch/pre-push"
+TEST_LOG="$TEST_LOG_DIR/bun-test-$$-$(date +%s).log"
+if ! mkdir -p "$TEST_LOG_DIR" 2>/dev/null; then
+  echo "  ✗ pre-push could not create the test log directory: $TEST_LOG_DIR" >&2
+  echo "    This is a HOOK environment problem, not a test failure." >&2
+  exit 1
+fi
+
+echo "  bun test ... (stdout+stderr -> $TEST_LOG, replayed below; #712)"
+
+# `set -e` is on, so the exit code is captured explicitly rather than letting a
+# non-zero status kill the hook before the log can be replayed and classified.
+TEST_EXIT=0
+bun test > "$TEST_LOG" 2>&1 || TEST_EXIT=$?
+
+# Replay what the operator would have seen. `cat` writes to the hook's OWN
+# stdout, which may still be git's pipe -- but a truncated REPLAY cannot change
+# the verdict, because the verdict was already decided by TEST_EXIT above. That
+# separation is the entire point of the fix. `|| true` so a broken replay is
+# never mistaken for a failing suite.
+cat "$TEST_LOG" 2>/dev/null || true
+
+if [ "$TEST_EXIT" -ne 0 ]; then
+  # Distinguish the two failures and SAY WHICH.
+  # POSIX `grep` deliberately, not `rg`: this is a git hook that must classify
+  # the failure in any environment it is installed into (CI image, fresh clone,
+  # a box without ripgrep). The repo's fast-tools rule governs what an AGENT
+  # types to search the tree, not what a shipped script depends on at runtime.
+  if grep -q "An internal error occurred (WriteFailed)" "$TEST_LOG" 2>/dev/null; then
+    echo "  ✗ THE TEST RUNNER COULD NOT WRITE ITS OUTPUT (WriteFailed) — this is NOT a test failure." >&2
+    echo "    bun exited ${TEST_EXIT} while writing its report, so the suite's real verdict is unknown." >&2
+    echo "    Full output: $TEST_LOG  (see issue #712)" >&2
+  else
+    echo "  ✗ TESTS FAILED (bun exit ${TEST_EXIT}) — the suite ran and reported failures." >&2
+    echo "    Full output: $TEST_LOG" >&2
+  fi
+  exit "$TEST_EXIT"
+fi
+
 echo "  ✓ Bun tests passed"
 
 if [ "$CHANGED_PYTHON" = yes ]; then

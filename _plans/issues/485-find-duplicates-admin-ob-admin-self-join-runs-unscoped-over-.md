@@ -79,3 +79,99 @@ Not prescribing the fix, but the options worth weighing:
 (2) is complementary to whichever of (1)/(3) is chosen: the timeout is the safety net, the scoping is the fix.
 
 Found while building the #463 search/context-pack wave. Refs #463.
+
+---
+
+## Resolution
+
+Closed by **PR #531** — fix(find-duplicates): scope the global-role self-join to a namespace (#485)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `fccb8df1d9691e97256a410316e761ddd06d53ff`
+- Merged at: 2026-08-04T01:41:24Z
+- PR state: MERGED
+- Issue closed: 2026-08-04T01:41:26Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #531 body
+
+> ## Summary
+>
+> - `src/tools/find-duplicates.ts` built its pairwise self-join by appending a read predicate to each side via `appendReadNamespacePredicate()`. For a global role `readableNamespaces()` returns `undefined`, so **both** predicates collapsed to the empty string and the emitted SQL carried no namespace filter at all — a full cross-product over the table. `ORDER BY distance ASC` means `LIMIT` bounds only the output, never the work.
+> - The fix replaces the two-sided predicate append with `duplicateScanNamespaces()`, a **total** function: it returns a non-empty list for every identity, so no input produces an unscoped join. Both sides of the join bind the **same** list (`$3`) — a pair drawn from two different namespaces is not a duplicate, and binding one side only would still admit a cross-namespace pair while leaving the unbounded shape intact.
+> - `find_duplicates` gains an optional `namespace` argument. `docs/sme/adversarial.md` names the absence of one as part of the defect: "a privileged path with no way to scope it is not an escape hatch." A global role defaults to its own namespace and may point the scan at any namespace it can read.
+> - The defect covers `promoter` as well as `admin`/`ob-admin` — all three return `undefined` from `readableNamespaces()`. The issue named the first two; the regression test covers all three.
+> - `server/tools/find-duplicates.ts` already carried this fix from the #463 rewrite (verified this session, including its `ported-tools-scope.test.ts` coverage). **No change was needed there**; this brings current-`src` to the same shape.
+>
+> Refs #485.
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [ ] Live Open Brain smoke passed or is not applicable
+>
+> **Which suites actually ran** (`bun test` Postgres suites skip silently without `OPENBRAIN_TEST_DATABASE_URL`, so this is stated explicitly):
+>
+> - `bunx tsc --noEmit` — clean.
+> - `bun test` **with** `OPENBRAIN_TEST_DATABASE_URL` pointed at the existing throwaway `open_brain_parity_463` database: **3449 pass, 0 fail, 35 skip** across 227 files. The DB-gated suites genuinely ran — the same command without the env var reports **506 skip** instead of 35.
+> - The Postgres-backed contract parity suite ran, so `contracts/server/server-duplicate-discovery.fixture.json` was actually exercised: 88 pass, 0 fail. `expectObserved` in `contracts/server-tool-parity.test.ts` iterates only the *expected* keys, so the added `namespaces` response key is compatible by design rather than by luck (read at `contracts/server-tool-parity.test.ts:102-127`).
+> - Python package checks not applicable: `client.py:1324` forwards `**arguments` and `dream.py:269` forwards `**filters`, so a new *optional* input argument needs no client change. No Python file is touched by this PR.
+> - Live hosted smoke **not run** — I did not touch the running service or any deployed artifact, per the task constraints. See Downstream Rollout below.
+>
+> ### Red-proof (the test fails on the old behavior)
+>
+> Stashed only `src/tools/find-duplicates.ts`, keeping the new assertions, and reran: **3 pass, 6 fail**. The received SQL is the defect verbatim — both predicates rendered as empty strings:
+>
+> ```
+> error: expect(received).toContain(expected)
+> Expected to contain: "a.namespace = ANY($3::text[])"
+> Received: "... FROM thoughts a\n          JOIN thoughts b ON a.id < b.id\n
+>    AND b.archived_at IS NULL\n            AND b.embedding IS NOT NULL\n
+>  WHERE a.archived_at IS NULL\n            AND a.embedding IS NOT NULL\n
+>  AND a.embedding <=> b.embedding < $1\n            \n            \n
+> ORDER BY distance ASC\n          LIMIT $2"
+> ```
+>
+> Those two bare `\n            \n            \n` lines are where the namespace predicates should have been. Restored via `git stash pop`; the file suite is now 10 pass / 0 fail.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: cross-namespace duplicate pairs are no longer reported to a global caller. This is a real behavior change, not a side effect, and it is the deliberate trade — reporting such pairs is exactly what requires the unbounded join. It matches the decision already shipped on the `server/` rewrite path, so the two runtimes agree rather than diverge.
+> - Assumptions that could be wrong: that a duplicate is meaningful only *within* a namespace. If Rico wants cross-namespace duplicate detection for admins, that is a separate feature needing a bounded algorithm (per-namespace iterate-and-merge, or an ANN pre-filter), not a restored cross-product. Also assumed: `physicalNamespace()` is the right normalization for a caller-named namespace — it is what `namespaceFilterFor()` already uses for the same purpose.
+> - Missing/weak tests: the regression tests assert **SQL text and bound parameters** against a mock pool, not a seeded two-namespace corpus proving non-pairing at the data level. SQL-text assertions are brittle to reformatting. I chose them because they pin the exact defect (an *absent* predicate) precisely, and because the DB-backed alternative reintroduces the slow-join hazard into the suite. I did **not** add a performance/timing test — timing tests are flaky and the issue's measurements are already recorded in the SME KB.
+> - Security/permission risk: this *narrows* a read path, so it cannot widen access. `canReadNamespace()` is reused rather than reimplemented, keeping the authorization decision at its existing owning boundary. The refusal happens **before** any pool access (asserted by a test). The one input that could smuggle the unbounded scan back in is the literal `"all"` sentinel, which `canReadNamespace` permits for a global role — a dedicated test proves it resolves to a bounded single-element list, never to "no predicate". SQL stays fully parameterized; the only interpolation is the Zod-enum-validated table name, unchanged.
+> - Migration/deploy risk: none. No schema change, no migration, no config.
+> - Downstream client/runtime risk: additive only — a new *optional* input and a new *additive* output key. An existing caller sending no `namespace` keeps working; an existing consumer reading `duplicates`/`duplicates_found` is unaffected. The behavioral delta for an admin caller is narrower results, not an error.
+> - Rollback/cleanup concern: single commit, two files, revertible in isolation. No worktree or temp artifact left behind; no deployed artifact touched.
+> - Fixes made before PR: widened the fix and its tests from `admin`/`ob-admin` to include `promoter` after reading `read-policy.ts` and finding it takes the same `undefined` branch — the issue text names only the first two. Added the `"all"`-sentinel test after tracing `canReadNamespace` rather than assuming the sentinel was safe.
+> - Known residual risk: the `statement_timeout` safety net that the issue recommends as complementary (option 2) and that `server/tools/find-duplicates.ts` already implements is **not** ported to `src/` here. Scoping is the fix; the timeout is defense-in-depth for a pathologically large *single* namespace. I left it out to keep this change minimal at the owning boundary — `src/` has no transaction wrapper on this path, so adding one is a larger structural change than the bug requires. Worth a follow-up issue; it is not required to close #485.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: `docs/sme/adversarial.md` already carries this exact pattern ("a namespace predicate that vanishes for privileged roles", provenance #485, severity HIGH) with the measurements and review questions. Its status line says "fixed on the rewrite path" and is now also true of current-`src`; no new MEDIUM+ finding surfaced in this PR.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this PR is not deployed and the task explicitly scoped out touching the running service or any deployed artifact. A hosted `find_duplicates` call should be recorded at deploy time per the Downstream Rollout section.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] fixtures updated
+> - Contract parity: [ ] runtime-specific because:
+>
+> `contracts/server/server-duplicate-discovery.fixture.json` needed no edit and passes as-is against real Postgres. Its `json` expectation is matched subset-wise, and it runs under the scoped `agent` role, which was never the defective path. Its `description` field still narrates the old defect as current behavior ("under the admin role read-policy contributes no namespace predicate and the tool self-joins the whole table"); that prose is now stale for both runtimes. I left it untouched rather than silently rewriting a frozen parity artifact — flagging it for the reviewer to direct.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [ ] rtech-mcps handoff is complete or not applicable
+> - [ ] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [ ] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - The gate **applies**: this changes an MCP tool input schema and namespace semantics, which `docs/downstream-rollout.md` lists explicitly under "When This Applies". I am recording it as **owed, not done** rather than checking boxes I did not verify.
+> - **rtech-mcps / mcp2cli cache refresh / Hermes canaries: outstanding.** These require the candidate to be on `origin/main` and deployed to core01 (`workflow_dispatch` with `deploy_core01=true`, or a `v*` tag), which this PR deliberately does not do. Left unchecked.
+> - **rtech-hermes Python runtime/plugin: not applicable.** No Python source changes; `openbrain_memory` forwards tool arguments generically (`client.py:1324`, `dream.py:269`), so an added optional argument requires no runtime or plugin update.
+> - Because the change is additive (optional input, additive output key), a stale downstream cache degrades to *previous* behavior — callers omitting `namespace` — rather than erroring. That lowers rollout urgency but does not remove the step.
+>

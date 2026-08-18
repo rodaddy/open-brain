@@ -52,6 +52,17 @@ Type: task (AFK for 1 and 4; mutations in another repo need Rico's go-ahead).
 
 ---
 
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-07-29T21:28:47Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-07-29T21:28:46Z.
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-07-29T21:28:45Z

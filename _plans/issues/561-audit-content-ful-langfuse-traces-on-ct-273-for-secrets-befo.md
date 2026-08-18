@@ -20,6 +20,77 @@ That is a second full copy of agent tool traffic. Known trap (independently repo
 
 ---
 
+## Resolution
+
+Closed by **PR #593** — fix(observability): mask Langfuse trace payloads
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `40dc2d78af82bba750fa9ccd780a1581b3f3e353`
+- Merged at: 2026-08-06T01:04:25Z
+- PR state: MERGED
+- Issue closed: 2026-08-06T01:04:27Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #593 body
+
+> ## Summary
+>
+> - Apply masking at the Langfuse emitter boundary in `server/observability/langfuse-tracing.ts:419`, using the shared labeled detectors from `src/secret-patterns.ts:80`.
+> - Replace only matched string spans with `[MASKED:<detector>]`; retain surrounding text, object fields, array items, and complete tool input/output structure.
+> - Add default-on `OPENBRAIN_TRACING_MASKING_ENABLED`; only the explicit value `"0"` bypasses masking.
+> - Document the configuration and capture the reusable security pattern in `docs/sme/security.md`.
+>
+> Fixes #561
+>
+> ## Verification
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — `bun test server/observability/langfuse-tracing.test.ts` (46 pass, 0 fail) and `bunx tsc --noEmit` (exit 0); no migration changed.
+> - [x] Python package checks passed or are not applicable — not applicable; no Python package files or behavior changed.
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable before merge/deploy; the changed boundary is directly exercised through the exported trace-body builder and injected sink tests.
+> - Deliberate-break proof: changed masking default logic so non-zero text disabled it; `readMcpTracingConfig > masking is disabled only by the explicit zero value` failed (`Expected: true`, `Received: false`). Restored and green.
+> - Deliberate-break proof: bypassed `maskTraceValue`; `trace body helpers > masks detector matches in tool arguments and results while retaining every field` failed because the seeded labeled fixture reached the builder output. Restored and green.
+> - Deliberate-break proof: inverted the explicit bypass branch; `trace body helpers > the explicit masking opt-out retains the original trace body` failed because the fixture was masked. Restored and green.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: A recursive transform at the egress boundary could accidentally remove structure or alter benign payload identity; the implementation uses replacement-only traversal and returns unchanged branches by identity when no detector fires.
+> - Assumptions that could be wrong: MCP tool arguments and results reaching this builder are JSON-compatible arrays, objects, primitives, and strings with outbound content represented by enumerable string-keyed fields.
+> - Missing/weak tests: No live Langfuse deployment smoke is included on this unmerged branch; focused tests prove builder output, explicit configuration behavior, and unchanged tool-call behavior through the injected sink seam.
+> - Security/permission risk: The explicit `OPENBRAIN_TRACING_MASKING_ENABLED=0` operator bypass permits detector matches to leave unmasked; default and every other value keep masking enabled.
+> - Migration/deploy risk: No database migration exists; the environment is read at process start, so changing the masking setting requires the same service restart as the existing tracing variables.
+> - Downstream client/runtime risk: Not applicable to MCP schemas, transport, Python exports, generated skills, mcp2cli, or Hermes call shapes; this changes only the server-owned observability copy.
+> - Rollback/cleanup concern: Revert the commit to restore prior behavior; no persisted local artifact, schema change, or cleanup job is introduced.
+> - Fixes made before PR: Preserved benign input/output identity after self-review found that an eager deep copy would break the existing same-object trace assertion even when no detector matched.
+> - Known residual risk: Pattern-based detectors cannot identify an arbitrary unlabelled secret with no recognizable shape; the emitter now consistently applies the repo's shared detector set rather than creating a separate heuristic.
+> - SME review-memory update: [x] docs/sme/ updated — security.md masking pattern
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [x] not applicable because: this branch changes the pre-enqueue builder and is not deployed; local boundary tests are the applicable pre-PR evidence.
+> - Review tier: Full — secret-handling behavior at an outbound observability boundary.
+> - Independent review status: pending at the PR boundary; this run was explicitly required to use one process with no nested workers.
+>
+> ## Contract Parity
+>
+> - Contract parity: [x] runtime-specific because: no MCP tool schema, contract manifest, fixture contract, or client call shape changes.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`.
+> - [x] rtech-mcps handoff is not applicable — no registry, schema, or service definition changes.
+> - [x] mcp2cli cache/skill refresh is not applicable — no consumer-visible tool contract changes.
+> - [x] rtech-hermes Python runtime/plugin changes are not applicable — no client or plugin behavior changes.
+> - [x] Hermes live rollout/canaries are not applicable — the server observability copy is not agent-facing behavior.
+>
+> Notes/evidence:
+>
+> - Existing design: #530 keeps complete tool-call content; #561 and the 2026-08-05 #569 ruling require masking before tracing coverage widens.
+> - Owning boundary: `buildToolTraceBody()` immediately before `sink.emit()` (`server/observability/langfuse-tracing.ts:419`, `server/observability/langfuse-tracing.ts:820`).
+>
+
+---
+
 ## Discussion (2)
 
 ### rodaddy — 2026-08-05T04:12:52Z
