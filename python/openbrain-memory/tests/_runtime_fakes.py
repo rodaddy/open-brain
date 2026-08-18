@@ -123,11 +123,25 @@ class LaneAwareTransport:
             lane = self.started_sessions.setdefault(
                 arguments["session_key"], requested_lane
             )
-            if any(
-                lane.get(key) != requested_lane.get(key)
-                for key in ("agent", "source", "channel_id", "thread_id")
-            ) or lane["metadata"].get("server_id") != requested_lane["metadata"].get(
-                "server_id"
+            # Mirrors the server's `hasCompleteExactScope` gate
+            # (server/tools/session-lifecycle.ts:28-37,155). The one-way-fill
+            # refusal below runs ONLY when the request carries the complete
+            # exact-scope predicate; a request that claims no scope takes the
+            # server's other branch and gets the existing lane back verbatim,
+            # which is what a wrap/checkpoint adopting a lane relies on
+            # (#724 item 4). Without this gate the fake refused a request the
+            # real server accepts.
+            claims_complete_exact_scope = all(
+                arguments.get(key) is not None
+                for key in ("agent", "platform", "server_id", "channel_id")
+            )
+            if claims_complete_exact_scope and (
+                any(
+                    lane.get(key) != requested_lane.get(key)
+                    for key in ("agent", "source", "channel_id", "thread_id")
+                )
+                or lane["metadata"].get("server_id")
+                != requested_lane["metadata"].get("server_id")
             ):
                 return self._tool_error(
                     json_body["id"],
@@ -443,15 +457,21 @@ class StartThenFailClient:
         if self.fail_start:
             raise ConnectionError("session start failed with token=secret-value")
         self.started = True
+        # Every exact-scope coordinate is read with `.get()`, matching the
+        # server's own schema, where all of them are `.optional()`
+        # (server/tools/session-lifecycle.ts:120-127). A wrap/checkpoint
+        # discovering a lane to adopt sends only `session_key` (#724 item 4),
+        # and subscripting here turned that legitimate request into a KeyError
+        # inside the fake rather than a response.
         return {
             "lane": {
                 "namespace": "bilby",
                 "session_key": arguments["session_key"],
-                "agent": arguments["agent"],
-                "source": arguments["platform"],
-                "channel_id": arguments["channel_id"],
+                "agent": arguments.get("agent"),
+                "source": arguments.get("platform"),
+                "channel_id": arguments.get("channel_id"),
                 "thread_id": arguments.get("thread_id"),
-                "metadata": {"server_id": arguments["server_id"]},
+                "metadata": {"server_id": arguments.get("server_id")},
             }
         }
 

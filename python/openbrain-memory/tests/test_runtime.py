@@ -568,34 +568,14 @@ def test_fresh_checkpoint_and_wrap_are_immediately_recallable() -> None:
         )
 
 
-def test_checkpoint_first_lane_denies_hostile_same_namespace_claim() -> None:
-    transport = LaneAwareTransport()
-    owner = FirstClassMemoryRuntime(
-        runtime_config(), runtime_scope(), transport=transport
-    )
-    hostile = FirstClassMemoryRuntime(
-        runtime_config(),
-        RuntimeScope(
-            agent="bilby",
-            platform="discord",
-            server_id="hostile-guild",
-            channel_id="channel-2",
-            thread_id="thread-3",
-            session_key="repo/session-4",
-        ),
-        transport=transport,
-    )
-
-    assert owner.checkpoint("owner summary").receipt.status is ReceiptStatus.SAVED
-    denied = hostile.wrap("hostile summary")
-
-    assert denied.receipt.status is ReceiptStatus.LOST
-    assert transport.started_sessions["repo/session-4"]["metadata"] == {
-        "server_id": "guild-1"
-    }
-    assert transport.started_sessions["repo/session-4"]["current_context_md"] == (
-        "owner summary"
-    )
+# RETIRED 2026-08-17 (operator ruling, Rico):
+# test_checkpoint_first_lane_denies_hostile_same_namespace_claim was removed, not lost.
+# With wrap-adopts-lane-scope (#724 item 4), the client provably cannot distinguish
+# the capture hook's lane from another same-namespace session's lane -- the wire
+# sequences are identical, so there is nothing observable to assert on. Same namespace
+# is same tenant; the real boundary is the server's namespace predicate, and
+# AGENTS.md Coding Standards already state that client-side convenience checks are
+# not security controls.
 
 
 def test_same_session_key_with_different_scope_is_denied_by_transport_boundary() -> (
