@@ -29,7 +29,6 @@ __all__ = [
     "PresentationContext",
     "capture_banner",
     "gate_status_line",
-    "handoff_banner",
     "nag_banner",
     "readback_banner",
     "transition_message",
@@ -195,35 +194,6 @@ def nag_banner(state: SessionState, context: PresentationContext) -> str:
     )
 
 
-def handoff_banner(state: SessionState, context: PresentationContext) -> str:
-    """Render the permanent end-of-sprint handoff block.
-
-    Args:
-        state: Session state.
-        context: Rendering context.
-
-    Returns:
-        The required next action and the narrow operations still admitted.
-    """
-    return "\n".join(
-        [
-            "<!-- Context Budget: handoff required -->",
-            f"This session has {state.compact_boundary_count} compact boundary "
-            f"marker(s) and ~{_format_thousands(state.context_tokens)} "
-            "post-compact tokens.",
-            "Task mutation is BLOCKED. Run the checkpoint skill's handoff verb now:",
-            f"  write the brief under {context.cwd}/_DOCS/_handoff/",
-            "  save the distilled state through the direct OB checkpoint provider,",
-            "  then start a fresh session from that brief.",
-            "Read-only checks, the handoff document write, and checkpoint provider "
-            "calls remain available.",
-            "A checkpoint receipt does not clear this gate; this session does not "
-            "reopen.",
-            "<!-- End Context Budget -->",
-        ]
-    )
-
-
 def readback_banner(state: SessionState, context: PresentationContext) -> str:
     """Render the banner shown when a post-compact recall is owed.
 
@@ -275,18 +245,12 @@ def gate_status_line(
         "ok", because reporting an unread file as healthy is the failure mode
         this line exists to make visible.
     """
-    failing = (
-        state.handoff_required
-        or state.readback_required
-        or state.capture_required
-        or policy_stale is True
-    )
+    failing = state.readback_required or state.capture_required or policy_stale is True
     if policy_stale is None:
         policy = "—"
     else:
         policy = "STALE" if policy_stale else "ok"
     segments = [
-        f"handoff {'DUE' if state.handoff_required else 'ok'}",
         f"recall {'DUE' if state.readback_required else 'ok'}",
         f"policy {policy}",
         f"capture {'DUE' if state.capture_required else 'ok'}",
