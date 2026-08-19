@@ -200,6 +200,8 @@ def run_gate(
         "200000",
         "--hard-tokens",
         "250000",
+        "--handoff-tokens",
+        "200000",
     ]
     if project:
         argv += ["--project", project]

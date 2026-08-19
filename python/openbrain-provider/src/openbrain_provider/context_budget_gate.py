@@ -59,6 +59,7 @@ from .gate_presentation import (
     PresentationContext,
     capture_banner,
     gate_status_line,
+    handoff_banner,
     nag_banner,
     readback_banner,
     transition_message,
@@ -82,7 +83,11 @@ from .gate_state import (
     save_session_state,
     verified_checkpoint,
 )
-from .gate_transcript import read_context_tokens, turn_did_work
+from .gate_transcript import (
+    count_compact_boundaries,
+    read_context_tokens,
+    turn_did_work,
+)
 from .hook_io import HookEvent, emit, emit_json, read_hook_event
 from .receipt_state import (
     current_compact_cycle,
@@ -121,6 +126,11 @@ _DEFAULT_COMPACT_PCT: Final[int] = 92
 #: (~14k out, compaction is imminent).
 _NAG_FRACTION_OF_COMPACT: Final[float] = 0.88
 _ADVISORY_FRACTION_OF_COMPACT: Final[float] = 0.96
+
+#: Rico's 2026-08-19 single-sprint rule: compact once, then hand off after
+#: roughly 200k more tokens. This is intentionally separate from the first-sprint
+#: advisory, whose live profile override is currently higher.
+_DEFAULT_HANDOFF_TOKENS: Final[int] = 200_000
 
 #: context-budget-gate.ts:75 -- how much the count must climb before the same
 #: advisory is repeated, so one long session does not print it every turn.
@@ -282,6 +292,7 @@ def _build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
     # it cannot be computed while the parser is still being built.
     parser.add_argument("--nag-tokens", type=int, default=None)
     parser.add_argument("--hard-tokens", type=int, default=None)
+    parser.add_argument("--handoff-tokens", type=int, default=_DEFAULT_HANDOFF_TOKENS)
     parser.add_argument(
         "--state-path",
         type=Path,
@@ -366,23 +377,30 @@ class _Gate:
             self.raw_sessions.get(self.session_id), self.session_id, self.now
         )
         self._set_project()
+        if self.event_name != "pre-tool-use":
+            observed_boundaries = count_compact_boundaries(event.transcript_path)
+            self.state.compact_boundary_count = max(
+                self.state.compact_boundary_count, observed_boundaries
+            )
         tokens = read_context_tokens(event.transcript_path)
         if tokens > 0:
             self.state.context_tokens = tokens
         reconcile_gate_state(
             self.state, receipt_state_path=args.receipt_state_path, now=self.now
         )
+        self._arm_handoff_if_due()
         self.presentation = PresentationContext(
             advisory_tokens=args.hard_tokens,
             provider_script_path=args.provider_script_path,
             settings_path=args.settings_path,
-            cwd=self._development_cwd(),
+            cwd=str(self._project_root()),
         )
         self.shell = ShellGateContext(
             state=self.state,
             gate_script_path=args.gate_script_path or _default_gate_script_path(),
             provider_script_path=args.provider_script_path,
             settings_path=args.settings_path,
+            project_root=self._project_root(),
         )
         self._policy_stale: bool | None | _Unset = _UNSET
         self._spool_pending: int | None | _Unset = _UNSET
@@ -403,38 +421,38 @@ class _Gate:
         if scope is not None:
             self.state.project = scope.project
 
-    def _development_cwd(self) -> str:
-        """Return the cwd a recovery command should carry.
-
-        The fallback composes `<root>/<project>`, EXCEPT when the project is the
-        root's own name. A hook fired from the Development repository itself
-        reports project `Development`, and the naive composition then yields
-        `<development-root>/Development`, which does not exist --
-        so the recovery command the banner tells the operator to paste fails,
-        and the block never clears. That is the #419 deadlock arriving through
-        the escape hatch meant to resolve it.
-
-        `context-budget-gate.ts:352-355` has this defect. It is fixed here
-        rather than there, per the port's rule that bugs are fixed by being
-        written correctly in Python.
-
-        The same fallback fails a second way when the CONFIGURED ROOT does not
-        exist on this machine: every composition from it names a directory that
-        cannot be entered, and the operator reads it as their own cwd
-        (open-brain#556). So a measured cwd is preferred over any composed path
-        whenever the root is absent -- it is the one directory here known to be
-        real. The diagnosis itself is emitted separately, by
-        `_warn_missing_development_root`.
-        """
-        if self.event.cwd and resolve_development_scope(self.event.cwd) is not None:
-            return self.event.cwd
+    def _project_root(self) -> Path:
+        """Return the owning repo root for handoff output and recovery payloads."""
         if development_root_missing() and self.event.cwd:
-            return self.event.cwd
-        project = self.state.project or ""
+            return Path(self.event.cwd)
         root = development_root()
+        project = self.state.project or ""
         if not project or project == root.name:
-            return str(root)
-        return str(root / project)
+            return root
+        return root / project
+
+    def _arm_handoff_if_due(self) -> None:
+        """Arm handoff after compact one consumes its 200k post-compact budget."""
+        state = self.state
+        if state.handoff_required:
+            return
+        if state.compact_boundary_count < 1:
+            return
+        if state.context_tokens < self.args.handoff_tokens:
+            return
+        self.require_handoff(
+            f"compact #1 plus {round(state.context_tokens / 1000)}k "
+            f"post-compact tokens reached the "
+            f"{round(self.args.handoff_tokens / 1000)}k handoff band"
+        )
+
+    def require_handoff(self, reason: str) -> None:
+        """Permanently close this sprint and record why."""
+        if self.state.handoff_required:
+            return
+        self.state.handoff_required = True
+        self.state.handoff_required_at = self.now
+        record_transition(self.state, "handoff-armed", self.now, reason)
 
     def save(self) -> None:
         """Persist this session's state."""
@@ -563,7 +581,9 @@ def _handle_user_prompt_submit(gate: _Gate) -> int:
     gate.save()
     banner = ""
     state = gate.state
-    if state.readback_required:
+    if state.handoff_required:
+        banner = handoff_banner(state, gate.presentation)
+    elif state.readback_required:
         banner = readback_banner(state, gate.presentation)
     elif (
         state.context_tokens >= gate.args.nag_tokens
@@ -598,6 +618,13 @@ def _handle_pre_tool_use(gate: _Gate) -> int:
     tool_name = gate.event.tool_name.lower()
     tool_input = gate.event.tool_input
     state = gate.state
+
+    if state.handoff_required and not is_checkpoint_activity(
+        tool_name, tool_input, gate.shell
+    ):
+        return _block(
+            gate, "handoff-required", handoff_banner(state, gate.presentation)
+        )
 
     if repair_mode_is_active(state, gate.now) and is_repair_capable_tool(tool_name):
         gate.save()
@@ -685,7 +712,13 @@ def _handle_checkpoint_done(gate: _Gate) -> int:
             [
                 f"Checkpoint verified remotely at "
                 f"~{round(state.context_tokens / 1000)}k tokens.",
-                "Task tools remain available; automatic compaction handles rollover.",
+                (
+                    "Handoff remains required; this session does not reopen. "
+                    "Start a fresh session."
+                    if state.handoff_required
+                    else "Task tools remain available; automatic compaction "
+                    "handles rollover."
+                ),
             ]
         )
     )
@@ -739,7 +772,23 @@ def _handle_stop(gate: _Gate) -> int:
 
 
 def _handle_pre_compact(gate: _Gate) -> int:
-    """Persist state before context is discarded; decide nothing."""
+    """Allow compact one and refuse every later compaction."""
+    state = gate.state
+    if state.handoff_required or state.compact_boundary_count >= 1:
+        gate.require_handoff(
+            "second compaction refused; one compact boundary already exists"
+        )
+        gate.save()
+        gate.emit_json(
+            {
+                "decision": "block",
+                "reason": handoff_banner(state, gate.presentation),
+                "systemMessage": transition_message(
+                    "handoff-armed", "second compaction refused"
+                ),
+            }
+        )
+        return 0
     gate.save()
     return 0
 
@@ -768,6 +817,10 @@ def _handle_compact_lifecycle(gate: _Gate) -> int:
     record_transition(
         state, "armed", gate.now, f"post-compact read-back cycle {cycle_id}"
     )
+    if state.compact_boundary_count >= 2:
+        gate.require_handoff(
+            "second compact boundary observed; fail-safe handoff required"
+        )
     if gate.event_name == "session-start":
         reconcile_gate_state(
             state, receipt_state_path=gate.args.receipt_state_path, now=gate.now
@@ -820,10 +873,14 @@ def _handle_status(gate: _Gate) -> int:
         "sessionId": gate.session_id,
         "project": state.project or None,
         "contextTokens": state.context_tokens,
+        "compactBoundaryCount": state.compact_boundary_count,
+        "handoffRequired": state.handoff_required,
+        "handoffRequiredAt": state.handoff_required_at or None,
         "nagAt": gate.args.nag_tokens,
         "hardAt": gate.args.hard_tokens,
+        "handoffAt": gate.args.handoff_tokens,
         "checkpointRequired": False,
-        "preCompactTaskBlocking": False,
+        "preCompactTaskBlocking": state.handoff_required,
         "readbackRequired": state.readback_required,
         "captureRequired": state.capture_required,
         "repairModeActive": state.repair_mode_active,

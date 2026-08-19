@@ -20,13 +20,55 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
 from parity_runner import ParityCase, load_cases, normalise, run_case
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ts_gate_parity" / "recorded.json"
 CASES = load_cases(FIXTURE)
+_HANDOFF_STATUS_FIELDS = {
+    "compactBoundaryCount",
+    "handoffAt",
+    "handoffRequired",
+    "handoffRequiredAt",
+}
+
+
+def _legacy_budget_projection(text: str) -> str:
+    """Project Python's additive handoff fields onto the retired TS contract.
+
+    The handoff acceptance suite owns the new contract. These recordings still
+    prove every pre-existing byte after removing only the new status keys and
+    the new healthy status segment.
+    """
+    if not text.startswith("{"):
+        return text
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        return text
+    for key in _HANDOFF_STATUS_FIELDS:
+        payload.pop(key, None)
+    encoded = json.dumps(
+        _replace_handoff_status(payload),
+        ensure_ascii=False,
+        indent=2 if text.startswith("{\n") else None,
+        separators=None if text.startswith("{\n") else (",", ":"),
+    )
+    return encoded + ("\n" if text.endswith("\n") else "")
+
+
+def _replace_handoff_status(value: Any) -> Any:
+    """Remove only the additive healthy handoff segment from JSON strings."""
+    if isinstance(value, dict):
+        return {key: _replace_handoff_status(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_handoff_status(item) for item in value]
+    if isinstance(value, str):
+        return value.replace("OB ✓ handoff ok · ", "OB ✓ ").replace(
+            "OB ✗ handoff ok · ", "OB ✗ "
+        )
+    return value
 
 
 class Replay(NamedTuple):
@@ -67,9 +109,14 @@ def test_the_recordings_exist_and_cover_both_gates() -> None:
 @pytest.mark.parametrize("name", [case.name for case in CASES])
 def test_matches_the_typescript_gate(name: str, replays: dict[str, Replay]) -> None:
     replay = replays[name]
-    assert normalise(replay.produced, replay.scratch) == normalise(
-        replay.case.stdout, replay.scratch
-    ), name
+    produced = replay.produced
+    recorded = replay.case.stdout
+    if replay.case.script == "budget":
+        produced = _legacy_budget_projection(produced)
+        recorded = _legacy_budget_projection(recorded)
+    assert normalise(produced, replay.scratch) == normalise(recorded, replay.scratch), (
+        name
+    )
     assert replay.code == replay.case.status, name
 
 

@@ -87,6 +87,7 @@ VERIFIED_RECALL_MAX_AGE_SECONDS: Final[float] = 2 * 60.0
 TRANSITION_NAMES: Final[frozenset[str]] = frozenset(
     {
         "armed",
+        "handoff-armed",
         "cleared-by-recall",
         "cleared-by-capture",
         "repair-entered",
@@ -132,6 +133,9 @@ class SessionState:
     session_id: str
     project: str = ""
     context_tokens: int = 0
+    compact_boundary_count: int = 0
+    handoff_required: bool = False
+    handoff_required_at: str = ""
     last_nag_at_tokens: int = 0
     checkpoint_required: bool = False
     checkpoint_required_at: str = ""
@@ -156,6 +160,9 @@ class SessionState:
             "sessionId": self.session_id,
             "project": self.project,
             "contextTokens": self.context_tokens,
+            "compactBoundaryCount": self.compact_boundary_count,
+            "handoffRequired": self.handoff_required,
+            "handoffRequiredAt": self.handoff_required_at,
             "lastNagAtTokens": self.last_nag_at_tokens,
             "checkpointRequired": self.checkpoint_required,
             "checkpointRequiredAt": self.checkpoint_required_at,
@@ -264,6 +271,9 @@ def hydrate_session_state(
         session_id=session_id,
         project=_string(source.get("project")),
         context_tokens=_integer(source.get("contextTokens")),
+        compact_boundary_count=_integer(source.get("compactBoundaryCount")),
+        handoff_required=_boolean(source.get("handoffRequired")),
+        handoff_required_at=_string(source.get("handoffRequiredAt")),
         last_nag_at_tokens=_integer(source.get("lastNagAtTokens")),
         checkpoint_required=False,
         checkpoint_required_at="",
@@ -498,6 +508,9 @@ def fresh_session_state(previous: SessionState) -> SessionState:
         session_id=previous.session_id,
         project=previous.project,
         context_tokens=0,
+        compact_boundary_count=0,
+        handoff_required=False,
+        handoff_required_at="",
         last_nag_at_tokens=0,
         checkpoint_required=False,
         checkpoint_required_at="",
