@@ -118,7 +118,7 @@ def test_the_status_line_reports_every_gate_every_turn(tmp_path: Path) -> None:
 
     clear = run_gate(paths, "user-prompt-submit")
     assert clear.json["systemMessage"] == (
-        "OB ✓ recall ok · policy ok · capture ok · spool 0"
+        "OB ✓ handoff ok · recall ok · policy ok · capture ok · spool 0"
     )
     assert "hookSpecificOutput" not in clear.json
 
@@ -134,7 +134,7 @@ def test_the_status_line_reports_every_gate_every_turn(tmp_path: Path) -> None:
     armed = run_gate(paths, "user-prompt-submit")
     assert (
         armed.json["systemMessage"]
-        == "OB ✗ recall DUE · policy STALE · capture ok · spool 2"
+        == "OB ✗ handoff ok · recall DUE · policy STALE · capture ok · spool 2"
     )
     assert armed.json["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert (
@@ -146,7 +146,7 @@ def test_the_status_line_reports_every_gate_every_turn(tmp_path: Path) -> None:
     assert status["policyStale"] is True
     assert status["spoolPending"] == 2
     assert status["statusLine"] == (
-        "OB ✗ recall DUE · policy STALE · capture ok · spool 2"
+        "OB ✗ handoff ok · recall DUE · policy STALE · capture ok · spool 2"
     )
 
 
@@ -161,7 +161,7 @@ def test_unknown_is_shown_as_unknown_and_the_gate_is_silent_outside_development(
     no_policy = run_gate(paths, "user-prompt-submit")
     assert (
         no_policy.json["systemMessage"]
-        == "OB ✓ recall ok · policy — · capture ok · spool 0"
+        == "OB ✓ handoff ok · recall ok · policy — · capture ok · spool 0"
     )
 
     outside = run_gate(
@@ -195,13 +195,13 @@ def test_a_cleared_notice_waits_for_a_surface_that_displays_it(
     prompted = run_gate(paths, "user-prompt-submit")
     assert prompted.json["systemMessage"] == (
         "OB ✓ read-back cleared · direct recall receipt verified\n"
-        "OB ✓ recall ok · policy — · capture ok · spool 0"
+        "OB ✓ handoff ok · recall ok · policy — · capture ok · spool 0"
     )
     assert read_session_state(paths)["pendingClearedNotices"] == []
 
     again = run_gate(paths, "user-prompt-submit")
     assert again.json["systemMessage"] == (
-        "OB ✓ recall ok · policy — · capture ok · spool 0"
+        "OB ✓ handoff ok · recall ok · policy — · capture ok · spool 0"
     )
 
 
