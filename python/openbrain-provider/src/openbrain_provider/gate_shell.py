@@ -169,7 +169,7 @@ class ShellGateContext:
         gate_script_path: Path a `repair-enter`/`repair-exit` command must name.
         provider_script_path: Path a direct provider command must name.
         settings_path: Settings file scanned for activated adapter generations.
-        project_root: Owning repo root whose handoff directory remains writable.
+        project_root: Owning repo root for recovery-command payloads.
     """
 
     state: SessionState
@@ -480,10 +480,6 @@ def is_checkpoint_activity(
         return True
     if tool_name in _FILE_TOOLS:
         path = str(tool_input.get("file_path") or "")
-        if context.state.handoff_required and _is_handoff_document(
-            path, context.project_root
-        ):
-            return True
         return "/.claude/projects/" in path and "/memory/" in path
     if tool_name not in _SHELL_TOOLS:
         return False
@@ -561,7 +557,7 @@ def _is_gate_repair_command(
 def _provider_events_allowed_by_state(state: SessionState) -> frozenset[str]:
     """Return the provider events permitted by the session's current block.
 
-    A handoff admits only its final checkpoint. A read-back block is cleared
+    A read-back block is cleared
     only by a recall (`session-start`), and a capture block only by a durable
     write. Allowing a different event would admit mutation that cannot produce
     the evidence the block is waiting for.
@@ -572,8 +568,6 @@ def _provider_events_allowed_by_state(state: SessionState) -> frozenset[str]:
     Returns:
         The allowed provider event names.
     """
-    if state.handoff_required:
-        return frozenset({"checkpoint"})
     if state.readback_required:
         return frozenset({"session-start"})
     if state.capture_required:
@@ -766,27 +760,6 @@ def _parse_flag(words: list[str], index: int) -> tuple[str, str, int] | None:
         if word.startswith(f"{flag}="):
             return name, word[len(flag) + 1 :], index + 1
     return None
-
-
-def _is_handoff_document(path: str, project_root: Path) -> bool:
-    """Report whether a file mutation stays inside the handoff directory.
-
-    Args:
-        path: Candidate file path.
-        project_root: Owning repo root.
-
-    Returns:
-        True only for a Markdown file below `_DOCS/_handoff` with traversal
-        resolved away before the comparison.
-    """
-    if not path:
-        return False
-    try:
-        candidate = Path(path).resolve(strict=False)
-        root = (project_root / "_DOCS" / "_handoff").resolve(strict=False)
-    except OSError:
-        return False
-    return candidate.suffix == ".md" and root in candidate.parents
 
 
 def _is_read_only_bash(command: str) -> bool:

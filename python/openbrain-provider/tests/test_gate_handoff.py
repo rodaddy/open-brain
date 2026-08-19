@@ -1,4 +1,11 @@
-"""The one-compaction sprint boundary and its only permitted exit."""
+"""Compact-boundary counting, and the proof it never blocks the session.
+
+Claudex is Claude Code and compacts natively. The gate observes how many
+compactions a session has taken and may ADVISE a fresh one, but it must
+never latch the session closed or veto compaction -- doing so force-feeds a
+second discipline onto the one that already works, and the veto makes the
+very number it complains about unable to fall (dev 2026-08-19).
+"""
 
 from __future__ import annotations
 
@@ -7,7 +14,6 @@ from pathlib import Path
 
 from gate_harness import (
     DEVELOPMENT_CWD,
-    PROJECT,
     SESSION,
     gate_paths,
     read_session_state,
@@ -68,6 +74,7 @@ def _provider_command(event: str = "checkpoint") -> str:
 
 
 def test_zero_compacts_keeps_first_sprint_advisory_only(tmp_path: Path) -> None:
+    """A session with no compaction is untouched by the sprint advisory."""
     paths = gate_paths(tmp_path)
     transcript = _transcript(tmp_path, 0, 260_000)
 
@@ -82,16 +89,15 @@ def test_zero_compacts_keeps_first_sprint_advisory_only(tmp_path: Path) -> None:
         },
     )
 
-    assert "automatic compaction handles rollover" in prompted.stdout
     assert "handoff required" not in prompted.stdout
     assert not write.blocked
-    assert read_session_state(paths) | {
-        "compactBoundaryCount": 0,
-        "handoffRequired": False,
-    } == read_session_state(paths)
+    state = read_session_state(paths)
+    assert state["compactBoundaryCount"] == 0
+    assert state["longSprintNoted"] is False
 
 
 def test_first_compact_still_requires_its_exact_cycle_recall(tmp_path: Path) -> None:
+    """The pre-existing post-compact read-back is untouched by this change."""
     paths = gate_paths(tmp_path)
     transcript = _transcript(tmp_path, 1, 80_000)
     run_gate(
@@ -116,187 +122,100 @@ def test_first_compact_still_requires_its_exact_cycle_recall(tmp_path: Path) -> 
     assert "read-back cleared" in allowed.stdout
     state = read_session_state(paths)
     assert state["compactBoundaryCount"] == 1
-    assert state["handoffRequired"] is False
     assert state["readbackRequired"] is False
 
 
-def test_first_compact_plus_200k_blocks_task_mutation(tmp_path: Path) -> None:
+def test_long_sprint_advises_but_never_blocks(tmp_path: Path) -> None:
+    """Past the band the gate advises; task mutation still runs."""
     paths = gate_paths(tmp_path)
     transcript = _transcript(tmp_path, 1, 200_000)
 
     prompted = run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
-    blocked = run_gate(
+    write = run_gate(
         paths,
         "pre-tool-use",
         {
             "tool_name": "Write",
-            "tool_input": {"file_path": str(tmp_path / "blocked.py")},
+            "tool_input": {"file_path": str(tmp_path / "still-allowed.py")},
         },
     )
 
-    assert "handoff required" in prompted.stdout
-    assert "_DOCS/_handoff/" in prompted.stdout
-    assert blocked.blocked
-    assert "this session does not reopen" in blocked.stdout
+    assert "automatic compaction handles rollover" in prompted.stdout
+    assert "handoff required" not in prompted.stdout
+    assert not write.blocked
     state = read_session_state(paths)
     assert state["compactBoundaryCount"] == 1
-    assert state["handoffRequired"] is True
+    assert state["longSprintNoted"] is True
 
 
-def test_handoff_document_and_checkpoint_are_the_only_mutating_exit(
+def test_second_precompact_is_allowed(tmp_path: Path) -> None:
+    """Compaction is the relief valve and is never vetoed."""
+    paths = gate_paths(tmp_path)
+    transcript = _transcript(tmp_path, 1, 300_000)
+
+    run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
+    compacting = run_gate(paths, "pre-compact", {"transcript_path": transcript})
+
+    assert not compacting.blocked
+    assert "second compaction refused" not in compacting.stdout
+
+
+def test_missing_transcript_never_forgets_an_observed_boundary(
     tmp_path: Path,
 ) -> None:
+    """A boundary already observed survives a later unreadable transcript."""
     paths = gate_paths(tmp_path)
-    transcript = _transcript(tmp_path, 1, 200_000)
+    transcript = _transcript(tmp_path, 1, 10_000)
     run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
-    handoff = development_root() / "_DOCS" / "_handoff" / "session-handoff-test.md"
+    assert read_session_state(paths)["compactBoundaryCount"] == 1
 
-    read_state = run_gate(
+    run_gate(
         paths,
-        "pre-tool-use",
-        {"tool_name": "Read", "tool_input": {"file_path": str(paths.state)}},
+        "user-prompt-submit",
+        {"transcript_path": str(tmp_path / "missing.jsonl")},
     )
-    document = run_gate(
-        paths,
-        "pre-tool-use",
-        {"tool_name": "Write", "tool_input": {"file_path": str(handoff)}},
-    )
-    checkpoint = run_gate(
-        paths,
-        "pre-tool-use",
-        {"tool_name": "Bash", "tool_input": {"command": _provider_command()}},
-    )
-    other_provider_events = [
-        run_gate(
-            paths,
-            "pre-tool-use",
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": _provider_command(event)},
-            },
-        )
-        for event in ("capture", "wrap")
-    ]
-    non_markdown = run_gate(
-        paths,
-        "pre-tool-use",
-        {
-            "tool_name": "Write",
-            "tool_input": {"file_path": str(handoff.with_suffix(".json"))},
-        },
-    )
-    traversal = run_gate(
-        paths,
-        "pre-tool-use",
-        {
-            "tool_name": "Write",
-            "tool_input": {"file_path": str(handoff.parent / ".." / "outside.md")},
-        },
-    )
-
-    assert not read_state.blocked
-    assert not document.blocked
-    assert not checkpoint.blocked
-    assert all(result.blocked for result in other_provider_events)
-    assert non_markdown.blocked
-    assert traversal.blocked
-
-
-def test_second_precompact_is_refused_from_the_boundary_count(tmp_path: Path) -> None:
-    paths = gate_paths(tmp_path)
-    transcript = _transcript(tmp_path, 1, 40_000)
-
-    blocked = run_gate(paths, "pre-compact", {"transcript_path": transcript})
-
-    assert blocked.blocked
-    assert "second compaction refused" in blocked.stdout
-    state = read_session_state(paths)
-    assert state["compactBoundaryCount"] == 1
-    assert state["handoffRequired"] is True
-
-
-def test_missing_transcript_never_forgets_an_observed_boundary(tmp_path: Path) -> None:
-    paths = gate_paths(tmp_path)
-    transcript = _transcript(tmp_path, 1, 40_000)
-    run_gate(paths, "status", {"transcript_path": transcript})
-
-    run_gate(paths, "status")
-    blocked = run_gate(paths, "pre-compact")
-
-    assert blocked.blocked
-    assert "second compaction refused" in blocked.stdout
     assert read_session_state(paths)["compactBoundaryCount"] == 1
 
 
-def test_second_postcompact_boundary_fails_safe(tmp_path: Path) -> None:
+def test_boundary_count_reads_the_whole_append_only_transcript(
+    tmp_path: Path,
+) -> None:
+    """Markers are counted past the token tail, not only in the last lines."""
     paths = gate_paths(tmp_path)
-    transcript = _transcript(tmp_path, 2, 20_000)
-    run_gate(paths, "post-compact", {"transcript_path": transcript})
-
-    blocked = run_gate(
-        paths,
-        "pre-tool-use",
-        {
-            "tool_name": "Write",
-            "tool_input": {"file_path": str(tmp_path / "blocked.py")},
-        },
+    filler = "\n".join(
+        json.dumps({"type": "assistant", "message": {"content": f"line {index}"}})
+        for index in range(500)
     )
-
-    assert blocked.blocked
-    assert "handoff required" in blocked.stdout
-    state = read_session_state(paths)
-    assert state["compactBoundaryCount"] == 2
-    assert state["handoffRequired"] is True
-
-
-def test_boundary_count_reads_the_whole_append_only_transcript(tmp_path: Path) -> None:
-    paths = gate_paths(tmp_path)
-    transcript = _transcript(
-        tmp_path,
-        1,
-        200_000,
-        filler="x" * (2 * 1024 * 1024 + 128),
-    )
+    transcript = _transcript(tmp_path, 2, 120_000, filler)
 
     run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
 
-    state = read_session_state(paths)
-    assert state["compactBoundaryCount"] == 1
-    assert state["handoffRequired"] is True
+    assert read_session_state(paths)["compactBoundaryCount"] == 2
 
 
 def test_fresh_session_resets_the_sprint(tmp_path: Path) -> None:
-    paths = gate_paths(tmp_path)
-    used = _transcript(tmp_path, 1, 200_000)
-    run_gate(paths, "user-prompt-submit", {"transcript_path": used})
-
-    fresh = tmp_path / "fresh.jsonl"
-    fresh.write_text(
-        json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": 1_000}}})
-        + "\n",
-        encoding="utf8",
-    )
-    run_gate(
-        paths,
-        "session-start",
-        {"source": "startup", "transcript_path": str(fresh)},
-    )
-
-    state = read_session_state(paths)
-    assert state["compactBoundaryCount"] == 0
-    assert state["handoffRequired"] is False
-    assert state["contextTokens"] == 0
-
-
-def test_checkpoint_receipt_never_reopens_a_required_handoff(tmp_path: Path) -> None:
+    """A genuinely new session starts with a clean sprint record."""
     paths = gate_paths(tmp_path)
     transcript = _transcript(tmp_path, 1, 200_000)
     run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
-    record_receipt(paths.receipts, "checkpoint", "saved", True)
+    assert read_session_state(paths)["longSprintNoted"] is True
 
-    verified = run_gate(paths, "checkpoint-done")
+    run_gate(paths, "session-start", {"source": "startup"})
 
-    assert verified.code == 0
-    assert "Handoff remains required" in verified.stdout
-    assert read_session_state(paths)["handoffRequired"] is True
-    assert PROJECT == development_root().name
+    state = read_session_state(paths)
+    assert state["longSprintNoted"] is False
+    assert state["compactBoundaryCount"] == 0
+
+
+def test_status_reports_the_sprint_without_blocking(tmp_path: Path) -> None:
+    """Status exposes the count and never claims pre-compact blocking."""
+    paths = gate_paths(tmp_path)
+    transcript = _transcript(tmp_path, 1, 200_000)
+    run_gate(paths, "user-prompt-submit", {"transcript_path": transcript})
+
+    status = run_gate(paths, "status", {"transcript_path": transcript})
+
+    payload = json.loads(status.stdout)
+    assert payload["compactBoundaryCount"] == 1
+    assert payload["preCompactTaskBlocking"] is False
+    assert "handoffRequired" not in payload

@@ -59,7 +59,6 @@ from .gate_presentation import (
     PresentationContext,
     capture_banner,
     gate_status_line,
-    handoff_banner,
     nag_banner,
     readback_banner,
     transition_message,
@@ -388,7 +387,7 @@ class _Gate:
         reconcile_gate_state(
             self.state, receipt_state_path=args.receipt_state_path, now=self.now
         )
-        self._arm_handoff_if_due()
+        self._note_long_sprint()
         self.presentation = PresentationContext(
             advisory_tokens=args.hard_tokens,
             provider_script_path=args.provider_script_path,
@@ -431,28 +430,31 @@ class _Gate:
             return root
         return root / project
 
-    def _arm_handoff_if_due(self) -> None:
-        """Arm handoff after compact one consumes its 200k post-compact budget."""
+    def _note_long_sprint(self) -> None:
+        """Advise a fresh session once compact one passes its token band.
+
+        ADVISORY ONLY. Claudex is Claude Code and compacts natively; a local
+        gate that blocks compaction or latches a session closed force-feeds a
+        second, competing discipline onto the one that already works. This
+        prints and never blocks, so a miscalibrated threshold costs a line of
+        text instead of the session.
+        """
         state = self.state
-        if state.handoff_required:
+        if state.long_sprint_noted:
             return
         if state.compact_boundary_count < 1:
             return
         if state.context_tokens < self.args.handoff_tokens:
             return
-        self.require_handoff(
+        state.long_sprint_noted = True
+        record_transition(
+            state,
+            "long-sprint",
+            self.now,
             f"compact #1 plus {round(state.context_tokens / 1000)}k "
-            f"post-compact tokens reached the "
-            f"{round(self.args.handoff_tokens / 1000)}k handoff band"
+            f"post-compact tokens passed the "
+            f"{round(self.args.handoff_tokens / 1000)}k advisory band",
         )
-
-    def require_handoff(self, reason: str) -> None:
-        """Permanently close this sprint and record why."""
-        if self.state.handoff_required:
-            return
-        self.state.handoff_required = True
-        self.state.handoff_required_at = self.now
-        record_transition(self.state, "handoff-armed", self.now, reason)
 
     def save(self) -> None:
         """Persist this session's state."""
@@ -581,9 +583,7 @@ def _handle_user_prompt_submit(gate: _Gate) -> int:
     gate.save()
     banner = ""
     state = gate.state
-    if state.handoff_required:
-        banner = handoff_banner(state, gate.presentation)
-    elif state.readback_required:
+    if state.readback_required:
         banner = readback_banner(state, gate.presentation)
     elif (
         state.context_tokens >= gate.args.nag_tokens
@@ -618,13 +618,6 @@ def _handle_pre_tool_use(gate: _Gate) -> int:
     tool_name = gate.event.tool_name.lower()
     tool_input = gate.event.tool_input
     state = gate.state
-
-    if state.handoff_required and not is_checkpoint_activity(
-        tool_name, tool_input, gate.shell
-    ):
-        return _block(
-            gate, "handoff-required", handoff_banner(state, gate.presentation)
-        )
 
     if repair_mode_is_active(state, gate.now) and is_repair_capable_tool(tool_name):
         gate.save()
@@ -712,13 +705,7 @@ def _handle_checkpoint_done(gate: _Gate) -> int:
             [
                 f"Checkpoint verified remotely at "
                 f"~{round(state.context_tokens / 1000)}k tokens.",
-                (
-                    "Handoff remains required; this session does not reopen. "
-                    "Start a fresh session."
-                    if state.handoff_required
-                    else "Task tools remain available; automatic compaction "
-                    "handles rollover."
-                ),
+                "Task tools remain available; automatic compaction handles rollover.",
             ]
         )
     )
@@ -772,23 +759,12 @@ def _handle_stop(gate: _Gate) -> int:
 
 
 def _handle_pre_compact(gate: _Gate) -> int:
-    """Allow compact one and refuse every later compaction."""
-    state = gate.state
-    if state.handoff_required or state.compact_boundary_count >= 1:
-        gate.require_handoff(
-            "second compaction refused; one compact boundary already exists"
-        )
-        gate.save()
-        gate.emit_json(
-            {
-                "decision": "block",
-                "reason": handoff_banner(state, gate.presentation),
-                "systemMessage": transition_message(
-                    "handoff-armed", "second compaction refused"
-                ),
-            }
-        )
-        return 0
+    """Persist state before context is discarded; decide nothing.
+
+    Native compaction is the mechanism that relieves context pressure. A gate
+    that blocks it can only make the number it is complaining about grow, which
+    is precisely the trap the one-compaction rule created (dev 2026-08-19).
+    """
     gate.save()
     return 0
 
@@ -817,10 +793,6 @@ def _handle_compact_lifecycle(gate: _Gate) -> int:
     record_transition(
         state, "armed", gate.now, f"post-compact read-back cycle {cycle_id}"
     )
-    if state.compact_boundary_count >= 2:
-        gate.require_handoff(
-            "second compact boundary observed; fail-safe handoff required"
-        )
     if gate.event_name == "session-start":
         reconcile_gate_state(
             state, receipt_state_path=gate.args.receipt_state_path, now=gate.now
@@ -874,13 +846,11 @@ def _handle_status(gate: _Gate) -> int:
         "project": state.project or None,
         "contextTokens": state.context_tokens,
         "compactBoundaryCount": state.compact_boundary_count,
-        "handoffRequired": state.handoff_required,
-        "handoffRequiredAt": state.handoff_required_at or None,
+        "longSprintNoted": state.long_sprint_noted,
         "nagAt": gate.args.nag_tokens,
         "hardAt": gate.args.hard_tokens,
-        "handoffAt": gate.args.handoff_tokens,
         "checkpointRequired": False,
-        "preCompactTaskBlocking": state.handoff_required,
+        "preCompactTaskBlocking": False,
         "readbackRequired": state.readback_required,
         "captureRequired": state.capture_required,
         "repairModeActive": state.repair_mode_active,

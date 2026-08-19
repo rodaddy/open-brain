@@ -87,7 +87,7 @@ VERIFIED_RECALL_MAX_AGE_SECONDS: Final[float] = 2 * 60.0
 TRANSITION_NAMES: Final[frozenset[str]] = frozenset(
     {
         "armed",
-        "handoff-armed",
+        "long-sprint",
         "cleared-by-recall",
         "cleared-by-capture",
         "repair-entered",
@@ -134,8 +134,7 @@ class SessionState:
     project: str = ""
     context_tokens: int = 0
     compact_boundary_count: int = 0
-    handoff_required: bool = False
-    handoff_required_at: str = ""
+    long_sprint_noted: bool = False
     last_nag_at_tokens: int = 0
     checkpoint_required: bool = False
     checkpoint_required_at: str = ""
@@ -161,8 +160,7 @@ class SessionState:
             "project": self.project,
             "contextTokens": self.context_tokens,
             "compactBoundaryCount": self.compact_boundary_count,
-            "handoffRequired": self.handoff_required,
-            "handoffRequiredAt": self.handoff_required_at,
+            "longSprintNoted": self.long_sprint_noted,
             "lastNagAtTokens": self.last_nag_at_tokens,
             "checkpointRequired": self.checkpoint_required,
             "checkpointRequiredAt": self.checkpoint_required_at,
@@ -272,8 +270,7 @@ def hydrate_session_state(
         project=_string(source.get("project")),
         context_tokens=_integer(source.get("contextTokens")),
         compact_boundary_count=_integer(source.get("compactBoundaryCount")),
-        handoff_required=_boolean(source.get("handoffRequired")),
-        handoff_required_at=_string(source.get("handoffRequiredAt")),
+        long_sprint_noted=_boolean(source.get("longSprintNoted")),
         last_nag_at_tokens=_integer(source.get("lastNagAtTokens")),
         checkpoint_required=False,
         checkpoint_required_at="",
@@ -509,8 +506,7 @@ def fresh_session_state(previous: SessionState) -> SessionState:
         project=previous.project,
         context_tokens=0,
         compact_boundary_count=0,
-        handoff_required=False,
-        handoff_required_at="",
+        long_sprint_noted=False,
         last_nag_at_tokens=0,
         checkpoint_required=False,
         checkpoint_required_at="",

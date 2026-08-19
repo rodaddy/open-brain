@@ -28,7 +28,7 @@
       "session_id": "rec-1",
       "cwd": "/Volumes/ThunderBolt/Development"
     },
-    "stdout": "{\n  \"sessionId\": \"rec-1\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
+    "stdout": "{\n  \"sessionId\": \"rec-1\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"compactBoundaryCount\": 0,\n  \"longSprintNoted\": false,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
     "stderr": "",
     "status": 0
   },
@@ -338,7 +338,7 @@
       "session_id": "rec-2",
       "cwd": "/Volumes/ThunderBolt/Development"
     },
-    "stdout": "{\n  \"sessionId\": \"rec-2\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": true,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✗ recall DUE · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": [\n    {\n      \"name\": \"armed\",\n      \"at\": \"2026-08-03T00:48:35.180Z\",\n      \"reason\": \"post-compact read-back cycle 1c4be25b-7866-4913-b45b-a168f192984a\"\n    },\n    {\n      \"name\": \"still-blocking-with-reason\",\n      \"at\": \"2026-08-03T00:48:35.230Z\",\n      \"reason\": \"readback-required\"\n    }\n  ]\n}\n",
+    "stdout": "{\n  \"sessionId\": \"rec-2\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"compactBoundaryCount\": 0,\n  \"longSprintNoted\": false,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": true,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✗ recall DUE · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": [\n    {\n      \"name\": \"armed\",\n      \"at\": \"2026-08-03T00:48:35.180Z\",\n      \"reason\": \"post-compact read-back cycle 1c4be25b-7866-4913-b45b-a168f192984a\"\n    },\n    {\n      \"name\": \"still-blocking-with-reason\",\n      \"at\": \"2026-08-03T00:48:35.230Z\",\n      \"reason\": \"readback-required\"\n    }\n  ]\n}\n",
     "stderr": "",
     "status": 0
   },
@@ -609,7 +609,7 @@
       "Development"
     ],
     "stdin": {},
-    "stdout": "{\n  \"sessionId\": \"rec-5\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
+    "stdout": "{\n  \"sessionId\": \"rec-5\",\n  \"project\": \"Development\",\n  \"contextTokens\": 0,\n  \"compactBoundaryCount\": 0,\n  \"longSprintNoted\": false,\n  \"nagAt\": 200000,\n  \"hardAt\": 250000,\n  \"checkpointRequired\": false,\n  \"preCompactTaskBlocking\": false,\n  \"readbackRequired\": false,\n  \"captureRequired\": false,\n  \"repairModeActive\": false,\n  \"repairModeEnteredAt\": null,\n  \"repairModeExpiresAt\": null,\n  \"lastWriteAt\": null,\n  \"checkpointAt\": null,\n  \"policyStale\": null,\n  \"spoolPending\": 0,\n  \"statusLine\": \"OB ✓ recall ok · policy — · capture ok · spool 0\",\n  \"pendingClearedNotices\": [],\n  \"transitions\": []\n}\n",
     "stderr": "",
     "status": 0
   },
