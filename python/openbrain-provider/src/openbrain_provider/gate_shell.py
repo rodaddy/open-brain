@@ -169,12 +169,14 @@ class ShellGateContext:
         gate_script_path: Path a `repair-enter`/`repair-exit` command must name.
         provider_script_path: Path a direct provider command must name.
         settings_path: Settings file scanned for activated adapter generations.
+        project_root: Owning repo root for recovery-command payloads.
     """
 
     state: SessionState
     gate_script_path: str
     provider_script_path: str
     settings_path: Path
+    project_root: Path
 
 
 def shell_quote(value: str) -> str:
@@ -555,10 +557,10 @@ def _is_gate_repair_command(
 def _provider_events_allowed_by_state(state: SessionState) -> frozenset[str]:
     """Return the provider events permitted by the session's current block.
 
-    A read-back block is cleared ONLY by a recall (`session-start`), and a
-    capture block ONLY by a durable write. Allowing the other one would let an
-    agent satisfy a block with a command that cannot possibly produce the
-    evidence the block is waiting for.
+    A read-back block is cleared
+    only by a recall (`session-start`), and a capture block only by a durable
+    write. Allowing a different event would admit mutation that cannot produce
+    the evidence the block is waiting for.
 
     Args:
         state: Session state.

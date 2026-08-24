@@ -82,7 +82,11 @@ from .gate_state import (
     save_session_state,
     verified_checkpoint,
 )
-from .gate_transcript import read_context_tokens, turn_did_work
+from .gate_transcript import (
+    count_compact_boundaries,
+    read_context_tokens,
+    turn_did_work,
+)
 from .hook_io import HookEvent, emit, emit_json, read_hook_event
 from .receipt_state import (
     current_compact_cycle,
@@ -121,6 +125,11 @@ _DEFAULT_COMPACT_PCT: Final[int] = 92
 #: (~14k out, compaction is imminent).
 _NAG_FRACTION_OF_COMPACT: Final[float] = 0.88
 _ADVISORY_FRACTION_OF_COMPACT: Final[float] = 0.96
+
+#: Rico's 2026-08-19 single-sprint rule: compact once, then hand off after
+#: roughly 200k more tokens. This is intentionally separate from the first-sprint
+#: advisory, whose live profile override is currently higher.
+_DEFAULT_HANDOFF_TOKENS: Final[int] = 200_000
 
 #: context-budget-gate.ts:75 -- how much the count must climb before the same
 #: advisory is repeated, so one long session does not print it every turn.
@@ -282,6 +291,7 @@ def _build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
     # it cannot be computed while the parser is still being built.
     parser.add_argument("--nag-tokens", type=int, default=None)
     parser.add_argument("--hard-tokens", type=int, default=None)
+    parser.add_argument("--handoff-tokens", type=int, default=_DEFAULT_HANDOFF_TOKENS)
     parser.add_argument(
         "--state-path",
         type=Path,
@@ -366,23 +376,30 @@ class _Gate:
             self.raw_sessions.get(self.session_id), self.session_id, self.now
         )
         self._set_project()
+        if self.event_name != "pre-tool-use":
+            observed_boundaries = count_compact_boundaries(event.transcript_path)
+            self.state.compact_boundary_count = max(
+                self.state.compact_boundary_count, observed_boundaries
+            )
         tokens = read_context_tokens(event.transcript_path)
         if tokens > 0:
             self.state.context_tokens = tokens
         reconcile_gate_state(
             self.state, receipt_state_path=args.receipt_state_path, now=self.now
         )
+        self._note_long_sprint()
         self.presentation = PresentationContext(
             advisory_tokens=args.hard_tokens,
             provider_script_path=args.provider_script_path,
             settings_path=args.settings_path,
-            cwd=self._development_cwd(),
+            cwd=str(self._project_root()),
         )
         self.shell = ShellGateContext(
             state=self.state,
             gate_script_path=args.gate_script_path or _default_gate_script_path(),
             provider_script_path=args.provider_script_path,
             settings_path=args.settings_path,
+            project_root=self._project_root(),
         )
         self._policy_stale: bool | None | _Unset = _UNSET
         self._spool_pending: int | None | _Unset = _UNSET
@@ -403,38 +420,41 @@ class _Gate:
         if scope is not None:
             self.state.project = scope.project
 
-    def _development_cwd(self) -> str:
-        """Return the cwd a recovery command should carry.
-
-        The fallback composes `<root>/<project>`, EXCEPT when the project is the
-        root's own name. A hook fired from the Development repository itself
-        reports project `Development`, and the naive composition then yields
-        `<development-root>/Development`, which does not exist --
-        so the recovery command the banner tells the operator to paste fails,
-        and the block never clears. That is the #419 deadlock arriving through
-        the escape hatch meant to resolve it.
-
-        `context-budget-gate.ts:352-355` has this defect. It is fixed here
-        rather than there, per the port's rule that bugs are fixed by being
-        written correctly in Python.
-
-        The same fallback fails a second way when the CONFIGURED ROOT does not
-        exist on this machine: every composition from it names a directory that
-        cannot be entered, and the operator reads it as their own cwd
-        (open-brain#556). So a measured cwd is preferred over any composed path
-        whenever the root is absent -- it is the one directory here known to be
-        real. The diagnosis itself is emitted separately, by
-        `_warn_missing_development_root`.
-        """
-        if self.event.cwd and resolve_development_scope(self.event.cwd) is not None:
-            return self.event.cwd
+    def _project_root(self) -> Path:
+        """Return the owning repo root for handoff output and recovery payloads."""
         if development_root_missing() and self.event.cwd:
-            return self.event.cwd
-        project = self.state.project or ""
+            return Path(self.event.cwd)
         root = development_root()
+        project = self.state.project or ""
         if not project or project == root.name:
-            return str(root)
-        return str(root / project)
+            return root
+        return root / project
+
+    def _note_long_sprint(self) -> None:
+        """Advise a fresh session once compact one passes its token band.
+
+        ADVISORY ONLY. Claudex is Claude Code and compacts natively; a local
+        gate that blocks compaction or latches a session closed force-feeds a
+        second, competing discipline onto the one that already works. This
+        prints and never blocks, so a miscalibrated threshold costs a line of
+        text instead of the session.
+        """
+        state = self.state
+        if state.long_sprint_noted:
+            return
+        if state.compact_boundary_count < 1:
+            return
+        if state.context_tokens < self.args.handoff_tokens:
+            return
+        state.long_sprint_noted = True
+        record_transition(
+            state,
+            "long-sprint",
+            self.now,
+            f"compact #1 plus {round(state.context_tokens / 1000)}k "
+            f"post-compact tokens passed the "
+            f"{round(self.args.handoff_tokens / 1000)}k advisory band",
+        )
 
     def save(self) -> None:
         """Persist this session's state."""
@@ -739,7 +759,12 @@ def _handle_stop(gate: _Gate) -> int:
 
 
 def _handle_pre_compact(gate: _Gate) -> int:
-    """Persist state before context is discarded; decide nothing."""
+    """Persist state before context is discarded; decide nothing.
+
+    Native compaction is the mechanism that relieves context pressure. A gate
+    that blocks it can only make the number it is complaining about grow, which
+    is precisely the trap the one-compaction rule created (dev 2026-08-19).
+    """
     gate.save()
     return 0
 
@@ -820,6 +845,8 @@ def _handle_status(gate: _Gate) -> int:
         "sessionId": gate.session_id,
         "project": state.project or None,
         "contextTokens": state.context_tokens,
+        "compactBoundaryCount": state.compact_boundary_count,
+        "longSprintNoted": state.long_sprint_noted,
         "nagAt": gate.args.nag_tokens,
         "hardAt": gate.args.hard_tokens,
         "checkpointRequired": False,

@@ -19,7 +19,7 @@ from typing import Final
 
 from .receipt_state import parse_iso
 
-__all__ = ["read_context_tokens", "turn_did_work"]
+__all__ = ["count_compact_boundaries", "read_context_tokens", "turn_did_work"]
 
 #: How much of the tail to read when looking for the latest usage record.
 #: context-budget-gate.ts:442.
@@ -28,6 +28,12 @@ _TOKEN_SCAN_BYTES: Final[int] = 2 * 1024 * 1024
 #: How much of the tail to read when looking for work in the current turn.
 #: context-budget-gate.ts:411.
 _WORK_SCAN_BYTES: Final[int] = 512 * 1024
+
+#: The durable marker Claude appends for each compaction. This is the same
+#: transcript signal the status line counts; the gate does not maintain a second
+#: lifecycle counter.
+_COMPACT_BOUNDARY_MARKER: Final[bytes] = b'"subtype":"compact_boundary"'
+_TRANSCRIPT_SCAN_CHUNK_BYTES: Final[int] = 64 * 1024
 
 #: context-budget-gate.ts:422 — the timestamp field on a transcript record.
 _TIMESTAMP_PATTERN: Final[re.Pattern[str]] = re.compile(r'"timestamp":"([^"]+)"')
@@ -99,6 +105,37 @@ def _usage_tokens(line: str) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool):
             total += value
     return total
+
+
+def count_compact_boundaries(transcript_path: str) -> int:
+    """Count durable compact-boundary markers in the whole transcript.
+
+    The transcript is append-only, and the first marker may sit megabytes behind
+    the latest usage record. Read in bounded chunks and stop after two: the gate
+    only distinguishes zero, one, and a forbidden second compact.
+
+    Args:
+        transcript_path: The hook's reported transcript path.
+
+    Returns:
+        Zero, one, or at least two. Unreadable input returns zero.
+    """
+    if not transcript_path:
+        return 0
+    path = Path(transcript_path)
+    try:
+        with path.open("rb") as handle:
+            carry = b""
+            count = 0
+            while chunk := handle.read(_TRANSCRIPT_SCAN_CHUNK_BYTES):
+                payload = carry + chunk
+                count += payload.count(_COMPACT_BOUNDARY_MARKER)
+                if count >= 2:
+                    return count
+                carry = payload[-(len(_COMPACT_BOUNDARY_MARKER) - 1) :]
+    except OSError:
+        return 0
+    return count
 
 
 def read_context_tokens(transcript_path: str) -> int:

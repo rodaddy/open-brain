@@ -249,9 +249,7 @@ def test_recall_allows_explicit_false_opt_out_without_recovery_section() -> None
 
     assert output.receipt.status is ReceiptStatus.DIRECT
     calls = tool_calls(transport)
-    assert (
-        calls[1]["params"]["arguments"]["include_unreviewed_recovery"] is False
-    )
+    assert calls[1]["params"]["arguments"]["include_unreviewed_recovery"] is False
 
 
 def test_recall_omitting_recovery_opt_in_preserves_prior_argument_shape() -> None:
@@ -375,10 +373,7 @@ def test_json_adapter_ignores_unknown_optional_top_level_fields(
     output = execute_json(payload, transport=transport)
 
     assert output["receipt"]["status"] == expected_status
-    assert (
-        output["receipt"]["compatibility_note"]
-        == "ignored_optional_request_keys"
-    )
+    assert output["receipt"]["compatibility_note"] == "ignored_optional_request_keys"
     assert output["receipt"]["ignored_optional_key_count"] == unknown_key_count
     serialized_calls = json.dumps(tool_calls(transport))
     assert "future_optional_field" not in serialized_calls
@@ -396,10 +391,7 @@ def test_json_adapter_required_field_typo_still_fails_closed() -> None:
 
     assert output["receipt"]["status"] == "failed"
     assert output["receipt"]["error"] == "query must be a non-empty string"
-    assert (
-        output["receipt"]["compatibility_note"]
-        == "ignored_optional_request_keys"
-    )
+    assert output["receipt"]["compatibility_note"] == "ignored_optional_request_keys"
     assert output["receipt"]["ignored_optional_key_count"] == 1
     assert tool_calls(transport) == []
 
@@ -578,9 +570,17 @@ def test_fresh_checkpoint_and_wrap_are_immediately_recallable() -> None:
 # not security controls.
 
 
-def test_same_session_key_with_different_scope_is_denied_by_transport_boundary() -> (
-    None
-):
+def test_same_session_key_with_different_scope_adopts_the_lanes_stored_scope() -> None:
+    """A later capture on the same session_key lands under the LANE's scope.
+
+    Until dev#267 this asserted the second capture was LOST: the client
+    claimed its own coordinates, the server's one-way fill refused, and the
+    receipt said `lost`. That is the head-session capture failure measured
+    2026-08-23. Wrap/checkpoint already adopt through that refusal (#724
+    item 4); capture now does the same. The isolation boundary that holds is
+    the namespace (#654/#662), not a channel coordinate on a lane the caller
+    already owns by session_key.
+    """
     transport = LaneAwareTransport()
     first = FirstClassMemoryRuntime(
         runtime_config(), runtime_scope(), transport=transport
@@ -603,16 +603,17 @@ def test_same_session_key_with_different_scope_is_denied_by_transport_boundary()
         first.capture_distilled("First scoped event").receipt.status
         is ReceiptStatus.SAVED
     )
-    conflict = second.capture_distilled("Conflicting scoped event")
+    adopted = second.capture_distilled("Conflicting scoped event")
 
-    assert conflict.receipt.status is ReceiptStatus.LOST
+    assert adopted.receipt.status is ReceiptStatus.SAVED, adopted.receipt.error
     append_calls = [
         call["params"]["arguments"]
         for call in tool_calls(transport)
         if call["params"]["name"] == "append_session_event"
     ]
-    assert len(append_calls) == 1
-    assert append_calls[0]["channel_id"] == "channel-2"
+    assert len(append_calls) == 2
+    assert [call["channel_id"] for call in append_calls] == ["channel-2", "channel-2"]
+    assert transport.started_sessions["repo/session-4"]["channel_id"] == "channel-2"
 
 
 def test_concurrent_writes_have_isolated_receipts_and_single_lane_start() -> None:
@@ -853,9 +854,7 @@ def test_runtime_drain_dispatch_failure_logs_are_content_free(
     assert [record.idempotency_key for record in spool.records()] == [key_sentinel]
     assert spool.status().retry_counts == {key_sentinel: 1}
 
-    records = [
-        r for r in caplog.records if r.name.startswith("openbrain_memory")
-    ]
+    records = [r for r in caplog.records if r.name.startswith("openbrain_memory")]
     assert records  # the drain path did log
     for record in records:
         for leaked in (body_sentinel, path_sentinel, key_sentinel):
@@ -906,9 +905,7 @@ def test_runtime_outer_drain_failure_log_is_content_free(
     assert recalled.receipt.status is ReceiptStatus.DIRECT
     assert recalled.drain is None
 
-    records = [
-        r for r in caplog.records if r.name.startswith("openbrain_memory")
-    ]
+    records = [r for r in caplog.records if r.name.startswith("openbrain_memory")]
     assert records
     for record in records:
         for leaked in (body_sentinel, path_sentinel):
@@ -1089,9 +1086,7 @@ def test_spool_drain_rejects_tampered_lane_echo_for_parked_scope(
         for call in tool_calls(transport)
         if call["params"]["name"] == "append_session_event"
     ]
-    assert all(
-        arguments["content"] != "Must stay parked" for arguments in appended
-    )
+    assert all(arguments["content"] != "Must stay parked" for arguments in appended)
 
 
 def test_spool_drain_retains_start_record_missing_scope_coordinates(
@@ -1259,9 +1254,7 @@ class AppendFailingTransport(LaneAwareTransport):
             and json_body["params"]["name"] == "append_session_event"
         ):
             return self._tool_error(json_body["id"], "append unavailable")
-        return super().post(
-            url, headers=headers, json_body=json_body, timeout=timeout
-        )
+        return super().post(url, headers=headers, json_body=json_body, timeout=timeout)
 
 
 def test_lone_spooled_write_carries_namespace_and_replays_marker_stripped(
@@ -1345,9 +1338,7 @@ def test_lone_foreign_namespace_unit_is_retained_without_retry_accounting(
 
     # Retained in the spool with zero dispatches, zero retry increments, and
     # never quarantined into this runtime's sidecar.
-    assert [record.idempotency_key for record in spool.records()] == [
-        "lone-foreign"
-    ]
+    assert [record.idempotency_key for record in spool.records()] == ["lone-foreign"]
     status = spool.status()
     assert status.retry_counts == {}
     assert status.quarantined_count == 0
@@ -1399,9 +1390,7 @@ def test_spool_drain_rejects_any_tampered_lane_field_for_parked_scope(
         for call in tool_calls(transport)
         if call["params"]["name"] == "append_session_event"
     ]
-    assert all(
-        arguments["content"] != "Must stay parked" for arguments in appended
-    )
+    assert all(arguments["content"] != "Must stay parked" for arguments in appended)
 
 
 def test_flapping_provider_auto_drain_reports_replayed_receipts(
@@ -1445,9 +1434,7 @@ def test_flapping_provider_auto_drain_reports_replayed_receipts(
     assert spool.status().last_success_at is not None
     rendered = saved.as_dict()
     assert rendered["drain"]["replayed_records"] == 2
-    assert all(
-        entry["status"] == "replayed" for entry in rendered["drain"]["receipts"]
-    )
+    assert all(entry["status"] == "replayed" for entry in rendered["drain"]["receipts"])
 
 
 def test_drain_quarantines_poison_unit_and_skips_it_afterward(
@@ -1481,9 +1468,7 @@ def test_drain_quarantines_poison_unit_and_skips_it_afterward(
     assert first.drain.replayed_units == 1
     assert first.drain.failed_units == 1
     assert first.drain.quarantined_units == 0
-    assert [record.idempotency_key for record in spool.records()] == [
-        "poison-key"
-    ]
+    assert [record.idempotency_key for record in spool.records()] == ["poison-key"]
     assert spool.status().retry_counts == {"poison-key": 1}
 
     second = runtime.recall_context("Second healthy drain")

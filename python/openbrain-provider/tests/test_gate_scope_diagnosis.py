@@ -6,7 +6,7 @@ the session's directory. The operator pasted a `cd` into a directory that does
 not exist on that machine, so the block could not be cleared from inside the
 session.
 
-`_development_cwd` is where that string is produced, so that is where this is
+`_project_root` is where that string is produced, so that is where this is
 pinned. The companion assertion is that the diagnosis does not make the gate
 newly blocking: `context_budget_gate`'s own docstring forbids deadlocking on
 what it gates (#419), and a root the operator cannot reach is precisely the
@@ -62,10 +62,10 @@ def test_recovery_cwd_is_the_measured_directory_not_the_absent_root(
     here = tmp_path / "real-working-directory"
     here.mkdir(parents=True)
 
-    recovery = _gate(tmp_path, here)._development_cwd()
+    recovery = _gate(tmp_path, here)._project_root()
 
-    assert recovery == str(here)
-    assert str(absent_root) not in recovery
+    assert recovery == here
+    assert str(absent_root) not in str(recovery)
 
 
 def test_gate_still_answers_when_the_configured_root_is_absent(

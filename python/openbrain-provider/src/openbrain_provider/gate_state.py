@@ -87,6 +87,7 @@ VERIFIED_RECALL_MAX_AGE_SECONDS: Final[float] = 2 * 60.0
 TRANSITION_NAMES: Final[frozenset[str]] = frozenset(
     {
         "armed",
+        "long-sprint",
         "cleared-by-recall",
         "cleared-by-capture",
         "repair-entered",
@@ -132,6 +133,8 @@ class SessionState:
     session_id: str
     project: str = ""
     context_tokens: int = 0
+    compact_boundary_count: int = 0
+    long_sprint_noted: bool = False
     last_nag_at_tokens: int = 0
     checkpoint_required: bool = False
     checkpoint_required_at: str = ""
@@ -156,6 +159,8 @@ class SessionState:
             "sessionId": self.session_id,
             "project": self.project,
             "contextTokens": self.context_tokens,
+            "compactBoundaryCount": self.compact_boundary_count,
+            "longSprintNoted": self.long_sprint_noted,
             "lastNagAtTokens": self.last_nag_at_tokens,
             "checkpointRequired": self.checkpoint_required,
             "checkpointRequiredAt": self.checkpoint_required_at,
@@ -264,6 +269,8 @@ def hydrate_session_state(
         session_id=session_id,
         project=_string(source.get("project")),
         context_tokens=_integer(source.get("contextTokens")),
+        compact_boundary_count=_integer(source.get("compactBoundaryCount")),
+        long_sprint_noted=_boolean(source.get("longSprintNoted")),
         last_nag_at_tokens=_integer(source.get("lastNagAtTokens")),
         checkpoint_required=False,
         checkpoint_required_at="",
@@ -498,6 +505,8 @@ def fresh_session_state(previous: SessionState) -> SessionState:
         session_id=previous.session_id,
         project=previous.project,
         context_tokens=0,
+        compact_boundary_count=0,
+        long_sprint_noted=False,
         last_nag_at_tokens=0,
         checkpoint_required=False,
         checkpoint_required_at="",
