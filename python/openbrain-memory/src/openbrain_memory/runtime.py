@@ -988,18 +988,22 @@ class FirstClassMemoryRuntime:
             )
         except ValueError as error:
             return _failed_write("capture", error)
+        # Same adoption as wrap/checkpoint (#724 item 4): when the lane was
+        # opened by another process under coordinates this session does not
+        # own (the SessionStart adapter, the capture hook), claiming our own
+        # scope trips the server's one-way fill and the capture is LOST
+        # (dev#267, reproduced 2026-08-23). `_adopted_wrap_metadata()` is read
+        # INSIDE the lambda so it resolves after `_ensure_lane` has adopted.
         return self._write(
             "capture",
             lambda: self._memory.append_scoped_event(
                 self.scope.agent,
                 safe_content,
-                platform=self.scope.platform,
-                server_id=self.scope.server_id,
-                channel_id=self.scope.channel_id,
-                thread_id=self.scope.thread_id,
+                **self._adopted_wrap_metadata(),
                 event_type=safe_event_type,
                 **lifecycle,
             ),
+            adopt_lane_scope=True,
         )
 
     def ingest_raw_turns(
@@ -1125,7 +1129,7 @@ class FirstClassMemoryRuntime:
         if self._spool is not None:
             self._spool.reset()
         # Reset per write so no later operation can inherit a stale adopted
-        # scope from an earlier wrap; the capture path must never see one.
+        # scope from an earlier write; every adopting write re-derives it.
         self._adopted_scope = None
         try:
             self._ensure_lane(adopt_lane_scope=adopt_lane_scope)

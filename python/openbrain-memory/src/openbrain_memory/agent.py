@@ -628,14 +628,19 @@ class AgentMemory:
         role: str,
         content: str,
         *,
-        platform: str,
-        server_id: str,
-        channel_id: str,
+        platform: str | None,
+        server_id: str | None,
+        channel_id: str | None,
         thread_id: str | None = None,
         event_type: str = "fact",
         **metadata: Any,
     ) -> JSON:
         """Append an event with server-validated exact-scope coordinates.
+
+        A coordinate may be ``None`` only when it is the lane's own stored
+        NULL, adopted from ``session_start`` (dev#267): the server compares
+        the request against the lane field-by-field, so the NULL is sent
+        explicitly rather than omitted, exactly as ``checkpoint`` does.
 
         Args:
             role: Source role recorded on the event.
@@ -664,9 +669,9 @@ class AgentMemory:
         payload: dict[str, Any] = {
             "session_key": self.conversation_key,
             "agent": self.agent,
-            "platform": _required_str(platform, "platform"),
-            "server_id": _required_str(server_id, "server_id"),
-            "channel_id": _required_str(channel_id, "channel_id"),
+            "platform": _lane_coordinate(platform, "platform"),
+            "server_id": _lane_coordinate(server_id, "server_id"),
+            "channel_id": _lane_coordinate(channel_id, "channel_id"),
             "event_type": event_type,
             "content": content,
             "source": role,
@@ -1317,6 +1322,11 @@ def _tags(required: str, value: Any) -> list[str]:
     if isinstance(value, list):
         tags.extend(str(item) for item in value if item != required)
     return tags
+
+
+def _lane_coordinate(value: Any, name: str) -> str | None:
+    """An exact-scope coordinate: a non-empty string, or the lane's own NULL."""
+    return None if value is None else _required_str(value, name)
 
 
 def _required_str(value: Any, name: str) -> str:
