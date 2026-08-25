@@ -44,6 +44,7 @@ import {
   agentReflexPointersStrictSchema,
   parseAgentContextPackArgs,
   parseAgentReflexPointersArgs,
+  SECTION_NAMES,
   type AgentContextPackArgs,
   type AgentReflexPointersArgs,
 } from "./context-pack-args.ts";
@@ -700,6 +701,27 @@ export async function buildAgentContextPackPayload(
             : requestedSections.filter(
                 (name) => !servedSections.includes(name),
               ),
+        // What a BARE call (no requested_sections) did not consult.
+        //
+        // `requested_not_served` is empty for a bare call and always will be:
+        // nothing was requested, so by its own definition nothing was withheld.
+        // That is truthful and useless. The caller receives an `ok` envelope
+        // listing only `working_set` and has no way to distinguish "the durable
+        // corpus was searched and had nothing" from "the durable corpus was
+        // never consulted at all" -- and every default-shaped recall takes the
+        // second path.
+        //
+        // This field states the omission plainly instead. It changes no
+        // selection behaviour: which sections a bare call serves is a contract
+        // decision (docs/agent-context-pack-contract.md), not a receipt
+        // concern. It only stops the receipt from implying completeness it
+        // never had.
+        not_consulted_by_default:
+          requestedSections === null
+            ? SECTION_NAMES.filter(
+                (name: string) => !servedSections.includes(name),
+              )
+            : [],
       },
       warnings: {
         scope_denials: [
