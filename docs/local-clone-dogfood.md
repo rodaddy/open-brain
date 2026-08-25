@@ -141,6 +141,8 @@ DB_POOL_MAX=10
 OPEN_BRAIN_RUN_MIGRATIONS=0
 
 EMBEDDING_BASE_URL=http://127.0.0.1:<local-embedding-port>/v1
+# Optional (#757): name ONE non-loopback embedding host to allow, exactly.
+# OPEN_BRAIN_EMBEDDING_HOST_ALLOW=10.71.1.11
 EMBEDDING_API_KEY=<local-only-key-if-required>
 EMBEDDING_MODEL=embeddinggemma-300m-8bit
 EMBEDDING_DIMENSIONS=768

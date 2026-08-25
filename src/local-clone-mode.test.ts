@@ -270,4 +270,76 @@ describe("validateLocalCloneMode", () => {
       ),
     ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
   });
+  // #757 (Rico ruling 2026-08-25): the embedding provider moved to the fleet AI
+  // box, so clone mode takes ONE named non-loopback embedding host by explicit
+  // opt-in. Unset or empty must behave exactly as before.
+  it("refuses a fleet embedding host when the opt-in is unset", () => {
+    expect(() =>
+      validateLocalCloneMode(
+        validCloneEnv({ EMBEDDING_BASE_URL: "http://10.71.1.11:8080/v1" }),
+      ),
+    ).toThrow("literal loopback");
+  });
+
+  it("accepts the exact embedding host named by the opt-in", () => {
+    expect(
+      validateLocalCloneMode(
+        validCloneEnv({
+          EMBEDDING_BASE_URL: "http://10.71.1.11:8080/v1",
+          OPEN_BRAIN_EMBEDDING_HOST_ALLOW: "10.71.1.11",
+        }),
+      ),
+    ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
+  });
+
+  it("refuses an embedding host the opt-in does not name", () => {
+    expect(() =>
+      validateLocalCloneMode(
+        validCloneEnv({
+          EMBEDDING_BASE_URL: "http://10.71.1.12:8080/v1",
+          OPEN_BRAIN_EMBEDDING_HOST_ALLOW: "10.71.1.11",
+        }),
+      ),
+    ).toThrow("OPEN_BRAIN_EMBEDDING_HOST_ALLOW host");
+  });
+
+  it("still accepts a loopback embedding host while the opt-in is set", () => {
+    expect(
+      validateLocalCloneMode(
+        validCloneEnv({ OPEN_BRAIN_EMBEDDING_HOST_ALLOW: "10.71.1.11" }),
+      ),
+    ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
+  });
+
+  it.each([
+    "http://10.71.1.11",
+    "10.71.1.11:8080",
+    "10.71.1.11/v1",
+    "10.71.1.11 ",
+  ])("rejects an opt-in value that is not a bare hostname: %s", (configured) => {
+    expect(() =>
+      validateLocalCloneMode(
+        validCloneEnv({
+          EMBEDDING_BASE_URL: "http://10.71.1.11:8080/v1",
+          OPEN_BRAIN_EMBEDDING_HOST_ALLOW: configured,
+        }),
+      ),
+    ).toThrow("OPEN_BRAIN_EMBEDDING_HOST_ALLOW");
+  });
+
+  it("treats an empty opt-in as unset", () => {
+    expect(() =>
+      validateLocalCloneMode(
+        validCloneEnv({
+          EMBEDDING_BASE_URL: "http://10.71.1.11:8080/v1",
+          OPEN_BRAIN_EMBEDDING_HOST_ALLOW: "",
+        }),
+      ),
+    ).toThrow("literal loopback");
+    expect(
+      validateLocalCloneMode(
+        validCloneEnv({ OPEN_BRAIN_EMBEDDING_HOST_ALLOW: "" }),
+      ),
+    ).toEqual({ enabled: true, bindHost: "127.0.0.1" });
+  });
 });
