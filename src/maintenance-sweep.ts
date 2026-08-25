@@ -93,12 +93,28 @@ async function selectDistillLaneBatches(
           AND s.session_rank <= $1
         WHERE t.retention_tier = 'live'
      ),
+     -- RANK ONLY WORK THAT NEEDS DOING (#747). turn_rank is compared against
+     -- the batch bound downstream, so anything ranked here consumes a position
+     -- in that window. Ranking already-distilled turns alongside due ones let
+     -- finished work hold the whole window: measured 2026-08-25 on the dogfood
+     -- corpus, 2,070 already-distilled turns pushed the first due turn to rank
+     -- 1501 -- one past the bound -- so the producer selected 0 batches on
+     -- every tick for 27 days while 189,725 turns waited. Because finished
+     -- turns are re-ranked identically on each pass, the starvation was
+     -- permanent rather than transient, and it worsens as a namespace grows:
+     -- the four namespaces that kept working are simply small enough that all
+     -- their turns fit under the bound.
+     --
+     -- The is_due column stays SELECTed because the FILTER clauses and
+     -- batch_hash below still read it; this changes WHICH ROWS ARE RANKED,
+     -- not the shape of the result.
      ranked_window_turns AS (
        SELECT *, row_number() OVER (
                 PARTITION BY lane_id, namespace
                 ORDER BY ${DISTILL_ORDER_BY}
               ) AS turn_rank
          FROM window_turns
+        WHERE is_due
      ),
      lane_totals AS (
        SELECT lane_id, namespace, count(*)::int AS pending_turns,
