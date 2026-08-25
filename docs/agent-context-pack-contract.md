@@ -84,6 +84,20 @@ Optional fields:
 - `requested_sections`: subset of the known section names listed under
   "Response Shape". It selects `sections` members only; it does not toggle the
   always-present envelope fields (`warnings`, `budget`, `citations`).
+
+  **Omitting it serves `working_set` and `durable_memory`.** Every other
+  section is opt-in. `durable_memory` joined the default by operator decision
+  2026-08-25 (#744): it had been opt-in with the rest, and because the Python
+  client never sets `requested_sections`, every bare recall consulted no
+  durable memory and reported success. Measured before the change -- bare
+  recall served `[working_set]` with 0 citations, the same call naming
+  `durable_memory` served it with 10 -- so the corpus and query were fine and
+  only the default was wrong. A caller who asks for context and silently gets
+  none has no way to tell.
+
+  A bare call's `sections_receipt` carries `not_consulted_by_default`, listing
+  the sections it did not consult. `requested_not_served` stays empty for a
+  bare call by definition: nothing was requested, so nothing was withheld.
 - `repo`: repo slug for repo-fact filtering, such as `rodaddy/open-brain`.
 - `task`: short current task label for ranking and warnings.
 - `include_unreviewed_recovery`: false by default; true only for explicit

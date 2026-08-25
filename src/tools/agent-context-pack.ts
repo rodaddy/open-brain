@@ -348,8 +348,16 @@ export async function buildAgentContextPackPayload(
     (!args.requested_sections || args.requested_sections.includes("recovery"));
   const includeDurableLaneContext =
     args.requested_sections?.includes("durable_lane_context") === true;
+  // Absent requested_sections includes durable_memory (#744, operator decision
+  // 2026-08-25). Twin of the server tree; see the long note at
+  // server/tools/agent-context-pack.ts for the measurement and reasoning. The
+  // short form: working_set treated an absent requested_sections as INCLUDED
+  // and durable_memory as EXCLUDED one line apart, the Python client never sets
+  // the key, so every bare recall consulted no durable memory and reported
+  // success.
   const includeDurableMemorySection =
-    args.requested_sections?.includes("durable_memory") === true;
+    !args.requested_sections ||
+    args.requested_sections.includes("durable_memory");
   const includeProfileGuidance =
     args.requested_sections?.includes("profile_guidance") === true;
   const includeProcessGuidance =
