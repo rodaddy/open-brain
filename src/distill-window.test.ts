@@ -291,8 +291,52 @@ describe("claimDistillBatch — ordering key and stamping", () => {
   it("bounds both the session and turn limits so one sweep cannot read the table", async () => {
     const db = fakeDb([]);
     await claimDistillBatch(db, { maxSessions: 10_000, maxTurns: 10_000_000 });
-    // Clamped at the module's ceilings (64 sessions / 20,000 turns).
-    expect(db.seen[0]!.values).toEqual([64, 20_000]);
+    // Clamped at the module's ceilings (64 sessions / 20,000 turns). Asserted
+    // positionally rather than as the whole array: the third parameter is the
+    // context reach, which the query gained when the turn bound was moved onto
+    // the due turns alone, and which the next test covers directly.
+    expect(db.seen[0]!.values[0]).toBe(64);
+    expect(db.seen[0]!.values[1]).toBe(20_000);
+  });
+
+  it("bounds the turn count by DUE turns, never by due-plus-context", async () => {
+    // THE REGRESSION THIS EXISTS FOR. The query once read each due session
+    // whole and applied `LIMIT maxTurns` to the result, so in a long-running
+    // session the already-distilled context consumed the entire bound and the
+    // due turns fell off the end. Measured on the dogfood corpus 2026-08-25:
+    // 0 due turns and 1500 context turns claimed against a 190,102-turn
+    // backlog, which the handler then reported as a successful sweep.
+    const db = fakeDb([]);
+    await claimDistillBatch(db, { maxTurns: 1500, contextWindow: 3 });
+    const sql = db.seen[0]!.text;
+
+    // The bound applies inside the due-turn selection...
+    const dueClause = sql.slice(
+      sql.indexOf("due_turns AS ("),
+      sql.indexOf("context_bounds AS ("),
+    );
+    expect(dueClause).toContain("distilled_at IS NULL");
+    expect(dueClause).toContain("LIMIT $2");
+
+    // ...and the context read carries no turn bound of its own, so context can
+    // never displace work.
+    const contextClause = sql.slice(sql.indexOf("context_turns AS ("));
+    expect(contextClause).not.toContain("LIMIT");
+
+    // The context reach is a bound parameter, not interpolated.
+    expect(db.seen[0]!.values[2]).toBe(3);
+  });
+
+  it("reads context as a session_seq range within the due turn's own session", async () => {
+    // A row-count reach could walk off the start of a session and pull the tail
+    // of an unrelated one as if it were preceding context. The range is
+    // computed per session_ref and joined on it.
+    const db = fakeDb([]);
+    await claimDistillBatch(db, { contextWindow: 5 });
+    const sql = db.seen[0]!.text;
+    expect(sql).toContain("min(session_seq) -");
+    expect(sql).toContain("t.session_ref IS NOT DISTINCT FROM b.session_ref");
+    expect(db.seen[0]!.values[2]).toBe(5);
   });
 
   it("returns an empty batch for an empty queue -- the terminal state", async () => {
