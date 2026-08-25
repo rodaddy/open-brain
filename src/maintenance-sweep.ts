@@ -42,6 +42,16 @@ export interface MaintenanceSweepOptions {
 export interface MaintenanceSweepSummary {
   distillBatchesSelected: number;
   distillJobsEnqueued: number;
+  /**
+   * Enqueue attempts the queue dropped on an existing idempotency key.
+   *
+   * A nonzero value here against a nonzero backlog means the lane is WEDGED,
+   * not busy: the key is unchanged because nothing consumed the work it names,
+   * so no new job can be scheduled under it. This count is the difference
+   * between "the sweep is keeping up" and "the sweep has been shouting into a
+   * dropped insert for 27 days", which were previously the same log line.
+   */
+  distillJobsDeduped: number;
   distillBatchesDeferred: number;
   distillTurnsDeferred: number;
   graphJobsEnqueued: number;
@@ -166,30 +176,50 @@ async function enqueueDistillBatches(
   batches: readonly DistillLaneBatch[],
   maxSessions: number,
   maxTurns: number,
-): Promise<{ jobs: MaintenanceJob[]; deferredTurns: number }> {
+): Promise<{
+  jobs: MaintenanceJob[];
+  deferredTurns: number;
+  /** Inserts the queue dropped on the idempotency key: attempted, not scheduled. */
+  dedupedJobs: number;
+}> {
   const jobs: MaintenanceJob[] = [];
   let deferredTurns = 0;
+  let dedupedJobs = 0;
   for (const batch of batches) {
     deferredTurns += Math.max(
       batch.pendingTurns - batch.processableTurns,
       0,
     );
-    jobs.push(
-      await options.queue.enqueue(
-        buildMemoryDistillEnqueue({
-          // The key binds the exact bounded due-turn window the handler can
-          // consume. Unchanged ticks dedupe; consuming any due turn changes the
-          // watermark, so a succeeded job cannot block the lane's next window.
-          sweepLabel: `${batch.batchHash}:s${maxSessions}:t${maxTurns}`,
-          namespace: batch.namespace,
-          laneId: batch.laneId,
-          maxSessions,
-          maxTurns,
-        }),
-      ),
+    const job = await options.queue.enqueue(
+      buildMemoryDistillEnqueue({
+        // The key binds the exact bounded due-turn window the handler can
+        // consume. Unchanged ticks dedupe; consuming any due turn changes the
+        // watermark, so a succeeded job cannot block the lane's next window.
+        //
+        // That reasoning holds ONLY while something actually consumes. When the
+        // claim returned no due turns (fixed in src/distill-window.ts), nothing
+        // was consumed, the watermark never moved, and this key stayed
+        // identical forever -- so every later insert was dropped by ON CONFLICT
+        // DO NOTHING while this loop went on counting them as enqueued.
+        // Observed: `distill_jobs_enqueued: 1` every 5 seconds against a
+        // newest job row six hours old.
+        sweepLabel: `${batch.batchHash}:s${maxSessions}:t${maxTurns}`,
+        namespace: batch.namespace,
+        laneId: batch.laneId,
+        maxSessions,
+        maxTurns,
+      }),
     );
+    // Count what the queue DID, not what was attempted. A deduped insert
+    // scheduled no work, and reporting it as an enqueue is what made a wedged
+    // lane read as a healthy one.
+    if (job.enqueueOutcome === "deduped") {
+      dedupedJobs++;
+      continue;
+    }
+    jobs.push(job);
   }
-  return { jobs, deferredTurns };
+  return { jobs, deferredTurns, dedupedJobs };
 }
 
 async function enqueueGraphBatches(
@@ -265,6 +295,7 @@ export async function runMaintenanceSweep(
   const summary: MaintenanceSweepSummary = {
     distillBatchesSelected: batches.length,
     distillJobsEnqueued: distill.jobs.length,
+    distillJobsDeduped: distill.dedupedJobs,
     distillBatchesDeferred: deferredBatches,
     distillTurnsDeferred: distill.deferredTurns,
     graphJobsEnqueued: graph.jobs.length,
@@ -273,6 +304,7 @@ export async function runMaintenanceSweep(
   options.logger.info("maintenance_sweep_complete", {
     distill_batches_selected: summary.distillBatchesSelected,
     distill_jobs_enqueued: summary.distillJobsEnqueued,
+    distill_jobs_deduped: summary.distillJobsDeduped,
     distill_batches_deferred: summary.distillBatchesDeferred,
     distill_turns_deferred: summary.distillTurnsDeferred,
     graph_jobs_enqueued: summary.graphJobsEnqueued,

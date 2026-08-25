@@ -352,10 +352,28 @@ export async function runDistillSweep(
         params,
       );
       outstanding = Number((rows[0] as { due?: unknown } | undefined)?.due ?? 0);
-    } catch {
-      // The probe is observability, never a gate: if it fails, the sweep still
-      // returns its summary rather than turning a diagnostic into an outage.
+    } catch (error: unknown) {
+      // DOCUMENTED FAIL-OPEN. The probe is observability, never a gate: if it
+      // fails, the sweep still returns its summary rather than turning a
+      // diagnostic into an outage.
+      //
+      // Logged rather than swallowed, because a silent fallback here would
+      // recreate in the detector the exact defect the detector exists to
+      // catch. If this probe is failing, the operator is blind to an empty
+      // claim and must know that -- an unreported `outstanding = null` makes
+      // the pathological case indistinguishable from a drained queue all over
+      // again.
       outstanding = null;
+      deps.logger.warn("distill_backlog_probe_failed", {
+        namespace: deps.namespace ?? "(all)",
+        lane_id:
+          deps.laneId === null || deps.laneId === undefined
+            ? "(none)"
+            : deps.laneId,
+        reason: error instanceof Error ? error.name : "non_error",
+        detail:
+          "could not count outstanding turns; an empty claim this sweep is unclassified, not proven drained",
+      });
     }
 
     if (outstanding !== null && outstanding > 0) {

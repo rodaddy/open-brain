@@ -91,6 +91,23 @@ export interface MaintenanceJob {
   provenance: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * What `enqueue` actually DID: `created` minted this row, `deduped` means the
+   * insert was dropped by ON CONFLICT DO NOTHING and this is the row that
+   * already held the key.
+   *
+   * WHY IT EXISTS. `enqueue` returns a job either way, and for hours the distill
+   * sweep logged `distill_jobs_enqueued: 1` every 5 seconds while the newest
+   * job row in the table stayed six hours old. The caller pushed the returned
+   * object into its jobs array and counted the length, with no way to tell a
+   * job it had just created from one that succeeded long ago. A dropped insert
+   * and a scheduled job were the same value.
+   *
+   * Optional so every existing reader and queue fake keeps compiling; a caller
+   * that reports counts is expected to read it. Absent means "not reported by
+   * this producer", never "created".
+   */
+  enqueueOutcome?: "created" | "deduped";
 }
 
 export interface EnqueueMaintenanceJob {
@@ -382,7 +399,9 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
         job.provenance === null ? null : JSON.stringify(job.provenance),
       ],
     );
-    if (inserted.rows[0]) return toJob(inserted.rows[0]);
+    if (inserted.rows[0]) {
+      return { ...toJob(inserted.rows[0]), enqueueOutcome: "created" };
+    }
 
     const existing = await this.pool.query<MaintenanceJobRow>(
       `SELECT ${JOB_COLUMNS}
@@ -405,7 +424,14 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
         "maintenance queue idempotency key reused with divergent job semantics",
       );
     }
-    return existingJob;
+    // The insert was dropped by ON CONFLICT DO NOTHING and this is the row that
+    // already held the key. Returning it bare is what let the distill sweep
+    // report `distill_jobs_enqueued: 1` every 5 seconds for hours while the
+    // newest job row stayed six hours old: the caller pushed this object into
+    // its jobs array and counted it, unable to tell a job it just created from
+    // one that succeeded long ago. The outcome is now on the return value so a
+    // caller cannot count a dropped insert as work scheduled.
+    return { ...existingJob, enqueueOutcome: "deduped" };
   }
 
   async claimDueJobs(input: ClaimMaintenanceJobs): Promise<MaintenanceJob[]> {
