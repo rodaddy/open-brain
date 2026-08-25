@@ -73,7 +73,7 @@
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { TransportCaptureHealth } from "../transport/index.ts";
-import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
+import { EXPECTED_LIVE_ROLES } from "../domain/raw-turn-roles.ts";
 
 /**
  * Sessions that must be observed before total silence counts as a fault.
@@ -108,7 +108,14 @@ export const MIN_SESSIONS_FOR_SILENCE = 2;
  * boundary's own set, so a role the server learns to accept becomes a role this
  * observer expects, with no second edit to forget.
  */
-const EXPECTED_ROLES = RAW_TURN_ROLES;
+// Seeded from the LIVE-expected set, not the accept set (#685). The two are
+// different questions and the accept set answers the wrong one: it includes
+// `tool`, which no live producer emits by design, so seeding from it raised a
+// permanent silent-role fault and rolled back every deploy. The subset relation
+// between the two sets is pinned by raw-turn-roles.test.ts, so a role the
+// boundary learns to accept still cannot escape liveness silently -- the #681
+// lesson this module exists for is unchanged.
+const EXPECTED_ROLES = EXPECTED_LIVE_ROLES;
 
 /**
  * Faults this vantage point can actually raise, named in the reading.
