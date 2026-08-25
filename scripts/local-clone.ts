@@ -78,6 +78,9 @@ const CHILD_ENV_KEYS = [
   "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES",
   "OPENBRAIN_RECOVERY_WAL_PATH",
   "OPEN_BRAIN_BIND_HOST",
+  // #757: the fleet-embedding opt-in read by `validateLocalCloneMode`; without
+  // it here the key is dropped before the child sees it (the #755 trap).
+  "OPEN_BRAIN_EMBEDDING_HOST_ALLOW",
   "OPEN_BRAIN_MAINTENANCE_ENABLED",
   "OPEN_BRAIN_RUN_MIGRATIONS",
   "OPENBRAIN_TRANSPORT",

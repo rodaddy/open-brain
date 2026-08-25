@@ -153,7 +153,33 @@ export function validateLocalCloneMode(
   }
   const embeddingHost =
     embeddingUrl.hostname === "[::1]" ? "::1" : embeddingUrl.hostname;
-  requireLiteralLoopback(embeddingHost, "EMBEDDING_BASE_URL");
+  // Fleet embedding opt-in (Rico, 2026-08-25, #757): the embedding provider
+  // moved off this machine to the fleet AI box, so clone mode accepts ONE
+  // explicitly named host alongside loopback. Exact string equality only -- no
+  // wildcard, no CIDR, no substring, no name resolution -- and every other
+  // clone-mode guard stays loopback-locked, exactly as the bind-host opt-in
+  // above does.
+  // Read the RAW value, not the trimmed one: surrounding whitespace means the
+  // operator wrote something other than a bare hostname, and trimming it away
+  // would silently accept a value this guard exists to refuse.
+  const allowedEmbeddingHost = env.OPEN_BRAIN_EMBEDDING_HOST_ALLOW;
+  if (allowedEmbeddingHost === undefined || allowedEmbeddingHost === "") {
+    requireLiteralLoopback(embeddingHost, "EMBEDDING_BASE_URL");
+  } else {
+    if (/[:/\s]/.test(allowedEmbeddingHost)) {
+      throw new Error(
+        "Local clone mode requires OPEN_BRAIN_EMBEDDING_HOST_ALLOW to be a bare hostname",
+      );
+    }
+    if (
+      !LOOPBACK_HOSTS.has(embeddingHost) &&
+      embeddingHost !== allowedEmbeddingHost
+    ) {
+      throw new Error(
+        "Local clone mode requires EMBEDDING_BASE_URL to be a literal loopback address or the OPEN_BRAIN_EMBEDDING_HOST_ALLOW host",
+      );
+    }
+  }
 
   const database = requireValue(env, "DB_NAME");
   if (!database.startsWith("open_brain_local_")) {
