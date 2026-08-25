@@ -95,4 +95,28 @@ if ! "${BUN_BIN}" run scripts/local-clone.ts --verify; then
 fi
 
 log "preflight verified, starting launcher"
-exec "${BUN_BIN}" run scripts/local-clone.ts --start
+
+# Hand off to the launcher as a CHILD of this shell, not via exec.
+#
+# Why (measured 2026-08-25, #757): macOS Local Network privacy attributes the
+# LAN grant to the launchd job's MAIN process. With `exec`, bun became that
+# process and its fetch to the fleet embedder (10.71.1.11) was refused with
+# "Was there a typo in the url or port?", while the same fetch from a bun child
+# of this bash succeeded. That is exactly why the --verify preflight above
+# passed under launchd and --start then died on "embedding preflight failed"
+# every 30 seconds. Keeping bash as the main process keeps the grant. TERM and
+# INT are forwarded so `launchctl kickstart -k` still stops the launcher, which
+# in turn stops its server child.
+"${BUN_BIN}" run scripts/local-clone.ts --start &
+launcher_pid=$!
+forward_signal() { kill -s "$1" "${launcher_pid}" 2>/dev/null || true; }
+trap 'forward_signal TERM' TERM
+trap 'forward_signal INT' INT
+status=0
+wait "${launcher_pid}" || status=$?
+# A trapped signal returns from `wait` before the child has exited; keep
+# waiting so the exit status below is the launcher's, not the signal's.
+while kill -0 "${launcher_pid}" 2>/dev/null; do
+  wait "${launcher_pid}" || status=$?
+done
+exit "${status}"
