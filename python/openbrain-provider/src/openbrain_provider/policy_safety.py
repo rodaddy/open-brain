@@ -495,13 +495,13 @@ def _branch_block_reason(cwd: Path) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return (
-            "Codex git guard: unable to verify the current branch; commit/push is "
+            "git guard: unable to verify the current branch; commit/push is "
             "blocked until branch state is readable."
         )
     branch = completed.stdout.strip()
     if branch in ("main", "master"):
         return (
-            f"Codex git guard: current branch is {branch}; do not commit or push "
+            f"git guard: current branch is {branch}; do not commit or push "
             "from a protected branch."
         )
     return None
@@ -515,7 +515,7 @@ def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
         if not _GIT_MUTATES_HISTORY.search(command):
             return None
         return (
-            "Codex git guard: unable to verify the current branch; commit/push is "
+            "git guard: unable to verify the current branch; commit/push is "
             "blocked until branch state is readable."
         )
     if any(
@@ -523,7 +523,7 @@ def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
         for mutator in mutators
     ):
         return (
-            "Codex git guard: do not commit or push directly to main/master "
+            "git guard: do not commit or push directly to main/master "
             "without explicit approval."
         )
     for mutator in mutators:
@@ -544,15 +544,15 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
         The refusal text, or None.
     """
     if _GIT_RESET_HARD.search(command):
-        return "Codex git guard: `git reset --hard` needs explicit user approval."
+        return "git guard: `git reset --hard` needs explicit user approval."
     if _GIT_CHECKOUT_DISCARD.search(command):
         return (
-            "Codex git guard: `git checkout --` can discard work and needs "
+            "git guard: `git checkout --` can discard work and needs "
             "explicit user approval."
         )
     if _GIT_SWITCH_PROTECTED.search(command):
         return (
-            "Codex git guard: do not switch to main/master for work; use a "
+            "git guard: do not switch to main/master for work; use a "
             "focused work branch."
         )
     if _CLAUDE_WORKTREE.search(command):
@@ -562,7 +562,7 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
         )
     if _GH_PR_MERGE.search(command) and _GH_MERGE_AUTOMATIC.search(command):
         return (
-            "Codex merge guard: do not use `gh pr merge --admin/--auto`. Inspect "
+            "merge guard: do not use `gh pr merge --admin/--auto`. Inspect "
             "checks and merge deliberately."
         )
 
