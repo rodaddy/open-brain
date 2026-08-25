@@ -384,7 +384,8 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
          job_kind, job_version, payload, idempotency_key, run_after,
          max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (job_kind, idempotency_key) DO NOTHING
+       ON CONFLICT (job_kind, idempotency_key)
+         WHERE state IN ('queued', 'running') DO NOTHING
        RETURNING ${JOB_COLUMNS}`,
       [
         job.kind,
@@ -403,14 +404,53 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
       return { ...toJob(inserted.rows[0]), enqueueOutcome: "created" };
     }
 
+    // Scoped to LIVE states, matching the partial index the insert conflicts
+    // against (047). An unscoped lookup would now return a terminal row from
+    // any point in history, and enqueue would hand the caller a job that
+    // finished days ago as though it were the one holding the key -- the same
+    // confusion 047 exists to remove, reintroduced one statement later.
     const existing = await this.pool.query<MaintenanceJobRow>(
       `SELECT ${JOB_COLUMNS}
          FROM maintenance_jobs
-        WHERE job_kind = $1 AND idempotency_key = $2`,
+        WHERE job_kind = $1 AND idempotency_key = $2
+          AND state IN ('queued', 'running')`,
       [job.kind, job.idempotencyKey],
     );
     const existingRow = existing.rows[0];
     if (!existingRow) {
+      // The live holder reached a terminal state between the insert and this
+      // lookup, so the key is free again. Under the blanket constraint this
+      // was impossible -- a dropped insert always had a row behind it -- and
+      // throwing was correct. Under the partial index (047) it is an ordinary
+      // race, and the correct response is to insert, which now succeeds.
+      //
+      // Retried exactly once. A second drop means a new live job took the key
+      // in between, which is genuine contention and not this race; falling
+      // through to the throw keeps an unbounded retry loop out of the queue.
+      const retried = await this.pool.query<MaintenanceJobRow>(
+        `INSERT INTO maintenance_jobs (
+           job_kind, job_version, payload, idempotency_key, run_after,
+           max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (job_kind, idempotency_key)
+           WHERE state IN ('queued', 'running') DO NOTHING
+         RETURNING ${JOB_COLUMNS}`,
+        [
+          job.kind,
+          job.version,
+          JSON.stringify(job.payload),
+          job.idempotencyKey,
+          job.runAfter,
+          job.maxAttempts,
+          job.backoffBaseMs,
+          job.backoffMaxMs,
+          job.namespace,
+          job.provenance === null ? null : JSON.stringify(job.provenance),
+        ],
+      );
+      if (retried.rows[0]) {
+        return { ...toJob(retried.rows[0]), enqueueOutcome: "created" };
+      }
       throw new Error("maintenance queue idempotency lookup failed");
     }
     const existingJob = toJob(existingRow);
