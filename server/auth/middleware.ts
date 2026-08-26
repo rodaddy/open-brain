@@ -51,6 +51,84 @@ export function requestAuth(request: Request): RequestAuthInfo | undefined {
   return (request as Request & { auth?: RequestAuthInfo }).auth;
 }
 
+/** A refusal the handler should send instead of continuing the chain. */
+interface AuthRefusal {
+  readonly status: number;
+  readonly error: string;
+}
+
+/**
+ * Resolve the bearer token in the `Authorization` header to a token identity.
+ *
+ * Both failure modes stay distinct on purpose: a missing header and a header
+ * carrying an unknown token are different operator problems, and collapsing
+ * them into one message is what makes a misconfigured client unreadable.
+ */
+function authenticateBearerHeader(
+  header: string | undefined,
+  configuredTokens: readonly AuthTokenConfig[],
+): AuthIdentity | AuthRefusal {
+  if (!header?.startsWith("Bearer ")) {
+    return { status: 401, error: "Missing Bearer token" };
+  }
+  const identity = resolveBearerToken(
+    header.slice("Bearer ".length),
+    configuredTokens,
+  );
+  if (!identity) return { status: 401, error: "Invalid token" };
+  return identity;
+}
+
+function isRefusal(value: AuthIdentity | AuthRefusal): value is AuthRefusal {
+  return "status" in value;
+}
+
+/**
+ * Check that this role may delegate a namespace at all, then that the value
+ * presented has the delegated-id shape.
+ *
+ * A role that may not delegate is refused rather than downgraded: silently
+ * ignoring the header leaves the caller believing it wrote somewhere it did not.
+ */
+function checkDelegatedNamespace(
+  namespace: string | undefined,
+  role: AuthIdentity["role"],
+): AuthRefusal | undefined {
+  if (!namespace) return undefined;
+  if (role !== "admin" && role !== "ob-admin") {
+    return { status: 403, error: "Role not permitted to delegate namespace" };
+  }
+  if (!DELEGATED_ID_RE.test(namespace)) {
+    return { status: 400, error: "Invalid X-Namespace header" };
+  }
+  return undefined;
+}
+
+/** Check the delegated agent id has the delegated-id shape. */
+function checkDelegatedAgentId(
+  agentId: string | undefined,
+): AuthRefusal | undefined {
+  if (agentId && !DELEGATED_ID_RE.test(agentId)) {
+    return { status: 400, error: "Invalid X-Agent-Id header" };
+  }
+  return undefined;
+}
+
+/** Compose the token identity and the validated delegated values into `req.auth`. */
+function buildRequestAuthInfo(
+  identity: AuthIdentity,
+  namespace: string | undefined,
+  agentId: string | undefined,
+): RequestAuthInfo {
+  return {
+    role: identity.role,
+    clientId: namespace ?? identity.clientId,
+    tokenClientId: identity.clientId,
+    namespaceSource: namespace ? "delegated" : "token",
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
 /**
  * Build the Express handler that turns a bearer token into `req.auth`.
  *
@@ -63,42 +141,27 @@ export function createAuthMiddleware(
   configuredTokens: readonly AuthTokenConfig[],
 ): RequestHandler {
   return (request: Request, response: Response, next: NextFunction): void => {
-    const header = request.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      response.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    const identity = resolveBearerToken(
-      header.slice("Bearer ".length),
+    const authenticated = authenticateBearerHeader(
+      request.headers.authorization,
       configuredTokens,
     );
-    if (!identity) {
-      response.status(401).json({ error: "Invalid token" });
+    if (isRefusal(authenticated)) {
+      response
+        .status(authenticated.status)
+        .json({ error: authenticated.error });
       return;
     }
     const namespace = headerValue(request.headers["x-namespace"]);
-    if (namespace && identity.role !== "admin" && identity.role !== "ob-admin") {
-      response
-        .status(403)
-        .json({ error: "Role not permitted to delegate namespace" });
-      return;
-    }
-    if (namespace && !DELEGATED_ID_RE.test(namespace)) {
-      response.status(400).json({ error: "Invalid X-Namespace header" });
-      return;
-    }
     const agentId = headerValue(request.headers["x-agent-id"]);
-    if (agentId && !DELEGATED_ID_RE.test(agentId)) {
-      response.status(400).json({ error: "Invalid X-Agent-Id header" });
+    const refusal =
+      checkDelegatedNamespace(namespace, authenticated.role) ??
+      checkDelegatedAgentId(agentId);
+    if (refusal) {
+      response.status(refusal.status).json({ error: refusal.error });
       return;
     }
-    (request as Request & { auth?: RequestAuthInfo }).auth = {
-      role: identity.role,
-      clientId: namespace ?? identity.clientId,
-      tokenClientId: identity.clientId,
-      namespaceSource: namespace ? "delegated" : "token",
-      ...(agentId ? { agentId } : {}),
-    };
+    (request as Request & { auth?: RequestAuthInfo }).auth =
+      buildRequestAuthInfo(authenticated, namespace, agentId);
     next();
   };
 }
