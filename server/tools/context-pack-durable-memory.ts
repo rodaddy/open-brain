@@ -511,8 +511,18 @@ function prepareRecall(
   // namespace argument was already authorized by the caller before any query
   // ran; otherwise fall back to the caller's own readable namespaces.
   const namespaceFilter = request.args.namespace
-    ? namespaceFilterFor(request.auth, request.namespace)
-    : namespaceFilterFor(request.auth);
+    ? namespaceFilterFor(
+        request.auth,
+        request.namespace,
+        {},
+        request.dependencies.sharedNamespaceNames,
+      )
+    : namespaceFilterFor(
+        request.auth,
+        undefined,
+        {},
+        request.dependencies.sharedNamespaceNames,
+      );
 
   return { accessibleTables, namespaceFilter };
 }
