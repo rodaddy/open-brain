@@ -24,6 +24,8 @@
  * make `""` "legacy" and match unnamespaced input.
  */
 
+import type { SharedNamespaceGroup } from "../config/env-groups.ts";
+
 /** Public name for shared truth when no operator override is configured. */
 const DEFAULT_SHARED_NAMESPACE = "shared-kb";
 /** No namespace is legacy by default; #167 retired `collab`. */
@@ -55,18 +57,15 @@ function envPositiveInteger(name: string, defaultValue: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
-export interface SharedNamespaceConfig {
-  /** The name callers pass and results report. */
-  readonly canonicalSharedNamespace: string;
-  /** The name the `namespace` column actually holds. */
-  readonly physicalSharedNamespace: string;
-  /** Non-empty only while an operator has configured a migration source. */
-  readonly legacySharedNamespace: string;
-  /** Whether reads may top up from the legacy namespace. */
-  readonly legacyFallbackEnabled: boolean;
-  /** Shared-hit count at or above which the legacy fallback is skipped. */
-  readonly fallbackMinResults: number;
-}
+/**
+ * The shared-namespace name set.
+ *
+ * Declared in `server/config/env-groups.ts` as `SharedNamespaceGroup` and
+ * re-exported here under its historical name so callers do not change: the
+ * dependency direction only runs one way, and `server/config` must never
+ * import from `server/tools`.
+ */
+export type { SharedNamespaceGroup as SharedNamespaceConfig };
 
 /**
  * Resolve the shared-namespace configuration from the environment.
@@ -74,8 +73,16 @@ export interface SharedNamespaceConfig {
  * Read on every call rather than cached at module load: tests and operators
  * both repoint these values at runtime, and a cached copy would silently serve
  * a stale namespace to the predicate that enforces isolation.
+ *
+ * @param names When supplied, the already-validated set from `ServerConfig` is
+ * used verbatim and the environment is not consulted. Omitting it preserves the
+ * historical environment-derived behavior exactly; the reads below go away in a
+ * later rung, once every caller passes the value down.
  */
-export function sharedNamespaceConfig(): SharedNamespaceConfig {
+export function sharedNamespaceConfig(
+  names?: SharedNamespaceGroup,
+): SharedNamespaceGroup {
+  if (names) return names;
   const canonicalSharedNamespace = envString(
     ["SHARED_NAMESPACE_CANONICAL", "OPENBRAIN_SHARED_NAMESPACE"],
     DEFAULT_SHARED_NAMESPACE,
@@ -90,7 +97,10 @@ export function sharedNamespaceConfig(): SharedNamespaceConfig {
       ["SHARED_NAMESPACE_LEGACY", "OPENBRAIN_LEGACY_SHARED_NAMESPACE"],
       DEFAULT_LEGACY_SHARED_NAMESPACE,
     ),
-    legacyFallbackEnabled: envBoolean("OPENBRAIN_LEGACY_SHARED_FALLBACK", false),
+    legacyFallbackEnabled: envBoolean(
+      "OPENBRAIN_LEGACY_SHARED_FALLBACK",
+      false,
+    ),
     fallbackMinResults: envPositiveInteger(
       "OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS",
       DEFAULT_FALLBACK_MIN_RESULTS,
@@ -99,8 +109,11 @@ export function sharedNamespaceConfig(): SharedNamespaceConfig {
 }
 
 /** @returns Whether the name refers to shared truth, canonical or physical. */
-export function isSharedNamespace(namespace: string): boolean {
-  const config = sharedNamespaceConfig();
+export function isSharedNamespace(
+  namespace: string,
+  names?: SharedNamespaceGroup,
+): boolean {
+  const config = sharedNamespaceConfig(names);
   return (
     namespace === config.canonicalSharedNamespace ||
     namespace === config.physicalSharedNamespace
@@ -113,8 +126,11 @@ export function isSharedNamespace(namespace: string): boolean {
  * Applied to emitted rows so a result never exposes the physical partition or
  * the retired legacy name.
  */
-export function canonicalNamespace(namespace: string): string {
-  const config = sharedNamespaceConfig();
+export function canonicalNamespace(
+  namespace: string,
+  names?: SharedNamespaceGroup,
+): string {
+  const config = sharedNamespaceConfig(names);
   if (
     config.legacySharedNamespace !== "" &&
     namespace === config.legacySharedNamespace
@@ -132,8 +148,11 @@ export function canonicalNamespace(namespace: string): string {
  * Applied before building SQL so an authorized canonical name matches the rows
  * that physically carry the partition name.
  */
-export function physicalNamespace(namespace: string): string {
-  const config = sharedNamespaceConfig();
+export function physicalNamespace(
+  namespace: string,
+  names?: SharedNamespaceGroup,
+): string {
+  const config = sharedNamespaceConfig(names);
   return namespace === config.canonicalSharedNamespace
     ? config.physicalSharedNamespace
     : namespace;

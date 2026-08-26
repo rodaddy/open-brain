@@ -16,6 +16,7 @@ import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { ResourceTable } from "../auth/types.ts";
 import type { FtsConfig } from "./fts-config.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 
@@ -71,6 +72,8 @@ export interface SearchDependencies {
    * environment produced when this was read here directly.
    */
   readonly searchEmbeddingTimeoutMs?: number;
+  /** Validated shared-namespace names; env-derived when absent. */
+  readonly sharedNamespaceNames?: SharedNamespaceConfig;
 }
 
 export interface ExecuteSearchOptions {

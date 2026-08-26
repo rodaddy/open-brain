@@ -48,17 +48,18 @@
  * cannot receive the string it would get from `process.env`.
  */
 import { z } from "zod";
-import { ftsConfigSchema, resolveFtsConfig, type FtsConfig } from "../tools/fts-config.ts";
+import {
+  ftsConfigSchema,
+  resolveFtsConfig,
+  type FtsConfig,
+} from "../tools/fts-config.ts";
 
 /** Trim, and treat a blank value as absent. Present-but-empty is unset. */
-const blankAsAbsent = z.preprocess(
-  (value) => {
-    if (typeof value !== "string") return value;
-    const trimmed = value.trim();
-    return trimmed === "" ? undefined : trimmed;
-  },
-  z.string().optional(),
-);
+const blankAsAbsent = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}, z.string().optional());
 
 /**
  * A base-10 integer at or above `minimum`, falling back on anything else.
@@ -153,7 +154,8 @@ const strictZeroDisablesFlag = z.preprocess(
  * allowlist here would be a second opinion on the same question.
  */
 const ftsConfigEnv = z.preprocess(
-  (value) => resolveFtsConfig(typeof value === "string" ? value.trim() : undefined),
+  (value) =>
+    resolveFtsConfig(typeof value === "string" ? value.trim() : undefined),
   ftsConfigSchema,
 );
 
@@ -215,7 +217,9 @@ export const extendedEnvironmentFields = {
   PORT: portNumber,
 } as const;
 
-type ExtendedEnvironment = z.infer<z.ZodObject<typeof extendedEnvironmentFields>>;
+type ExtendedEnvironment = z.infer<
+  z.ZodObject<typeof extendedEnvironmentFields>
+>;
 
 /** No namespace is legacy by default; #167 retired `collab`. */
 const DEFAULT_LEGACY_SHARED_NAMESPACE = "";
@@ -242,10 +246,25 @@ export interface RecoveryConfigGroup {
   readonly walPath: string | null;
 }
 
+/**
+ * The full shared-namespace name set, canonical included.
+ *
+ * Field names match `server/tools/shared-namespace.ts`'s own reader shape
+ * exactly, so the validated group can be handed straight to the helpers there
+ * without a translation step that could invert a name. That module re-exports
+ * this type under its historical name `SharedNamespaceConfig`; the type lives
+ * HERE because `server/config` must never import from `server/tools`.
+ */
 export interface SharedNamespaceGroup {
-  readonly physical: string;
-  readonly legacy: string;
+  /** The name callers pass and results report. */
+  readonly canonicalSharedNamespace: string;
+  /** The name the `namespace` column actually holds. */
+  readonly physicalSharedNamespace: string;
+  /** Non-empty only while an operator has configured a migration source. */
+  readonly legacySharedNamespace: string;
+  /** Whether reads may top up from the legacy namespace. */
   readonly legacyFallbackEnabled: boolean;
+  /** Shared-hit count at or above which the legacy fallback is skipped. */
   readonly fallbackMinResults: number;
 }
 
@@ -305,15 +324,16 @@ export function qmdGroup(parsed: ExtendedEnvironment): QmdConfigGroup {
   return parsed.QMD_PATH ? { path: parsed.QMD_PATH } : {};
 }
 
-export function recoveryGroup(parsed: ExtendedEnvironment): RecoveryConfigGroup {
+export function recoveryGroup(
+  parsed: ExtendedEnvironment,
+): RecoveryConfigGroup {
   return { walPath: parsed.OPENBRAIN_RECOVERY_WAL_PATH ?? null };
 }
 
 /**
- * Physical and legacy shared-namespace names.
+ * Canonical, physical, and legacy shared-namespace names.
  *
- * The canonical name stays on `ServerConfig.sharedNamespace`, which is a
- * `"shared-kb"` literal by decision (`docs/decisions/shared-kb-canonical-namespace.md`).
+ * `ServerConfig.sharedNamespace` remains the `"shared-kb"` literal by decision (`docs/decisions/shared-kb-canonical-namespace.md`).
  * The PHYSICAL name defaults to whatever the canonical override resolved to, so
  * the two are equal in every normal deployment and diverge only when an
  * operator points them apart during a migration —
@@ -337,8 +357,10 @@ export function sharedNamespaceGroup(
   const resolvedCanonical =
     rawCanonical?.trim() || parsed.OPENBRAIN_SHARED_NAMESPACE || "shared-kb";
   return {
-    physical: parsed.SHARED_NAMESPACE_PHYSICAL ?? resolvedCanonical,
-    legacy:
+    canonicalSharedNamespace: resolvedCanonical,
+    physicalSharedNamespace:
+      parsed.SHARED_NAMESPACE_PHYSICAL ?? resolvedCanonical,
+    legacySharedNamespace:
       parsed.SHARED_NAMESPACE_LEGACY ??
       parsed.OPENBRAIN_LEGACY_SHARED_NAMESPACE ??
       DEFAULT_LEGACY_SHARED_NAMESPACE,
