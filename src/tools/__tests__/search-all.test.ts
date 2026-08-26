@@ -177,9 +177,7 @@ describe("search_all", () => {
         const parsed = parseSearchAll(result);
         expect(parsed.brain_hits).toBe(0);
         expect(parsed.qmd_hits).toBe(2);
-        expect(parsed.results.every((r: any) => r.source === "qmd")).toBe(
-          true,
-        );
+        expect(parsed.results.every((r: any) => r.source === "qmd")).toBe(true);
         expect(parsed.results[0].source_ref).toEqual({
           source: "qmd",
           type: "file",
@@ -1292,6 +1290,84 @@ describe("search_all", () => {
         ).toBe(1);
       } finally {
         await cleanup();
+      }
+    });
+  });
+  describe("qmd timeout race (#608, #632)", () => {
+    it("clears the qmd timeout when the subprocess finishes first", async () => {
+      // Regression for #608/#632. The timeout callback used to survive a race
+      // it had already lost: the subprocess resolved, nothing cleared the
+      // timer, and 10s later the callback ran and called `proc.kill()` on a
+      // mocked spawn handle that has no `kill`. Bun reported that as
+      // `# Unhandled error between tests` with `0 fail` and exit 1, on a test
+      // file that had already passed -- which is why it read as a flake.
+      //
+      // `globalThis.setTimeout` is stubbed only for the duration of the call so
+      // the captured callback can be fired on demand instead of waiting out the
+      // real QMD_TIMEOUT_MS (10s). Firing it AFTER the search resolved is the
+      // exact ordering CI hit.
+      const originalSetTimeout = globalThis.setTimeout;
+      const captured: Array<() => void> = [];
+      const qmdTimerHandles = new Set<unknown>();
+      let cleared = 0;
+      // Mirrors QMD_TIMEOUT_MS in ../search-all.ts; the constant is module
+      // private, so the stub matches on its value to identify the qmd timer.
+      const QMD_TIMEOUT_MS = 10_000;
+      const originalClearTimeout = globalThis.clearTimeout;
+
+      // The mock handle deliberately omits `kill`, matching every other spawn
+      // double in this file -- that omission is what the old code tripped on.
+      mockBunSpawn(
+        0,
+        qmdJson([{ path: "/fast.md", content: "fast result", score: 0.9 }]),
+      );
+
+      const pool = { query: async () => ({ rows: [] }) };
+      const { client, cleanup } = await setupClient(pool, {
+        role: "admin",
+        clientId: "admin",
+      });
+
+      try {
+        // Only the qmd timer is tracked. Other machinery in the MCP client
+        // path arms and clears timers of its own, so counting every
+        // clearTimeout would pass on the broken code too -- the sentinel
+        // handle is what makes `cleared` specific to this race.
+        (globalThis as any).setTimeout = (fn: () => void, ms: number) => {
+          if (ms !== QMD_TIMEOUT_MS) return originalSetTimeout(fn as any, ms);
+          captured.push(fn);
+          const handle = originalSetTimeout(() => {}, 0);
+          qmdTimerHandles.add(handle);
+          return handle;
+        };
+        (globalThis as any).clearTimeout = (handle: any) => {
+          if (qmdTimerHandles.has(handle)) cleared++;
+          return originalClearTimeout(handle);
+        };
+
+        const parsed = parseSearchAll(
+          await client.callTool({
+            name: "search_all",
+            arguments: { query: "fast qmd", sources: "qmd" },
+          }),
+        );
+        expect(parsed.results[0].content).toBe("fast result");
+      } finally {
+        (globalThis as any).setTimeout = originalSetTimeout;
+        (globalThis as any).clearTimeout = originalClearTimeout;
+        await cleanup();
+      }
+
+      // The race is decided. The fix cancels the loser; prove the cancellation
+      // happened rather than only that firing it is survivable.
+      expect(captured.length).toBe(1);
+      expect(cleared).toBe(1);
+
+      // Belt and braces: even if a timer escapes cancellation, running its
+      // callback must not throw on a spawn handle without `kill`. On the old
+      // code this line threw `TypeError: proc.kill is not a function`.
+      for (const fire of captured) {
+        expect(() => fire()).not.toThrow();
       }
     });
   });

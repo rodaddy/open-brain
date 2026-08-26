@@ -98,6 +98,12 @@ async function searchQmdInternal(
 
     const proc = Bun.spawn(qmdArgs, { stdout: "pipe", stderr: "pipe" });
 
+    // The timer handle is held outside the race so the winner can cancel the
+    // loser. Without the clearTimeout below, a subprocess that finishes first
+    // leaves the timer armed and it fires later, against an already-settled
+    // race -- after the test that started it has ended. That is how #608/#632
+    // surfaced: `Unhandled error between tests` with `0 fail`, exit 1.
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
       (async () => {
         const stdout = await new Response(proc.stdout).text();
@@ -105,13 +111,21 @@ async function searchQmdInternal(
         return { stdout, exitCode, timedOut: false };
       })(),
       new Promise<{ stdout: string; exitCode: number; timedOut: boolean }>(
-        (resolve) =>
-          setTimeout(() => {
-            proc.kill();
+        (resolve) => {
+          timeoutHandle = setTimeout(() => {
+            // `kill` is guarded rather than called outright: a test double
+            // for `Bun.spawn` returns a plain object carrying only the fields
+            // the happy path reads (stdout/stderr/exited), so `.kill()` on it
+            // throws `TypeError: proc.kill is not a function` -- the exact
+            // error in #632. Guarding keeps the timeout path honest under a
+            // partial spawn handle.
+            if (typeof proc.kill === "function") proc.kill();
             resolve({ stdout: "", exitCode: -1, timedOut: true });
-          }, QMD_TIMEOUT_MS),
+          }, QMD_TIMEOUT_MS);
+        },
       ),
     ]);
+    clearTimeout(timeoutHandle);
 
     if (result.timedOut) {
       logger.warn("qmd search timed out", { timeoutMs: QMD_TIMEOUT_MS });
