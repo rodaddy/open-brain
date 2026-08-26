@@ -30,7 +30,7 @@ function trimmedEnv(
  * Key VALUES are never logged — only whether each one was present.
  */
 export function readMcpTracingConfig(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined>,
 ): McpTracingConfig {
   const endpoint = trimmedEnv(env, "OPENBRAIN_TRACING_ENDPOINT");
   const publicKey = trimmedEnv(env, "OPENBRAIN_TRACING_PUBLIC_KEY");

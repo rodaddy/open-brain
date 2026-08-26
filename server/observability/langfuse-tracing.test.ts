@@ -12,6 +12,7 @@
  * seam `McpAuditDeps.now` provides for the audit lane.
  */
 import { describe, expect, test } from "bun:test";
+import { tracingGroup } from "../config/env-groups.ts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -668,9 +669,9 @@ describe("installMcpTracing", () => {
 
     const spans = sink.bodies[0]?.spans ?? [];
     expect(spans).toHaveLength(2);
-    expect(
-      spans.every((span) => span.metadata.payload_degraded === true),
-    ).toBe(true);
+    expect(spans.every((span) => span.metadata.payload_degraded === true)).toBe(
+      true,
+    );
     expect(JSON.stringify(spans)).not.toContain(large);
     expect(Buffer.byteLength(JSON.stringify(spans), "utf8")).toBeLessThan(
       MAX_ACTIVE_SPAN_BYTES,
@@ -725,9 +726,7 @@ describe("installMcpTracing", () => {
       { vector: equalRows, keyword: [], limit: 2 },
     ];
     const baseline = {
-      rrf: cases.map((item) =>
-        rrfMerge(item.vector, item.keyword, item.limit),
-      ),
+      rrf: cases.map((item) => rrfMerge(item.vector, item.keyword, item.limit)),
       srcFallback: [
         mergeFallbackSearchRows([], [], 3),
         mergeFallbackSearchRows(equalRows.slice(0, 2), [equalRows[2]!], 2),
@@ -813,7 +812,11 @@ describe("installMcpTracing", () => {
     await handlers.get("fallback_classification")?.({}, AUTH);
 
     const output = sink.bodies[0]?.spans?.[0]?.output as {
-      candidates: Array<{ row_id: string; chosen: boolean; filtered_by: string | null }>;
+      candidates: Array<{
+        row_id: string;
+        chosen: boolean;
+        filtered_by: string | null;
+      }>;
     };
     expect(output.candidates).toMatchObject([
       { row_id: "primary", chosen: true, filtered_by: null },
@@ -1542,9 +1545,8 @@ describe("background job tracing", () => {
  */
 describe("the SDK's own logger cannot bypass the content-free discipline", () => {
   test("building the real sink silences SDK-level error and warn output", async () => {
-    const { configureGlobalLogger, getGlobalLogger, LogLevel } = await import(
-      "@langfuse/core"
-    );
+    const { configureGlobalLogger, getGlobalLogger, LogLevel } =
+      await import("@langfuse/core");
 
     // Asserted through the SDK's OWN level gate rather than by capturing
     // `console.error`: Bun's runner installs its own console, so a swapped
@@ -1971,5 +1973,39 @@ describe("the release stamped on every trace", () => {
     // A subprocess per emit would put a fork on the request path, which is the
     // one thing this lane is built not to do.
     expect(repoRelease()).toBe(repoRelease());
+  });
+});
+
+describe("tracing configuration arrives from the composition root (#825)", () => {
+  test("createTracingRuntime observes the validated group, not the ambient environment", () => {
+    // The exact shape `server/main.ts:505` passes: `config.tracing`, produced
+    // by `tracingGroup` (server/config/env-groups.ts:359) from the one
+    // validated parse. Disabled, so nothing is constructed and no socket opens.
+    const fromValidatedConfig = tracingGroup({
+      OPENBRAIN_TRACING_ENDPOINT: "http://from-config:3000",
+      OPENBRAIN_TRACING_PUBLIC_KEY: "pk-from-config",
+      OPENBRAIN_TRACING_SECRET_KEY: "sk-from-config",
+      OPENBRAIN_TRACING_ENABLED: false,
+      OPENBRAIN_TRACING_MASKING_ENABLED: false,
+    } as never);
+
+    // The ambient environment says something DIFFERENT. Before #825 the reader
+    // defaulted its parameter to `process.env`, so a caller that forgot to pass
+    // the value silently answered from here instead.
+    const previousEndpoint = process.env.OPENBRAIN_TRACING_ENDPOINT;
+    process.env.OPENBRAIN_TRACING_ENDPOINT = "http://from-ambient-env:9999";
+    try {
+      const runtime = createTracingRuntime({ config: fromValidatedConfig });
+      expect(runtime.config.endpoint).toBe("http://from-config:3000");
+      expect(runtime.config.publicKey).toBe("pk-from-config");
+      expect(runtime.config.maskingEnabled).toBe(false);
+      expect(runtime.sink).toBeUndefined();
+    } finally {
+      if (previousEndpoint === undefined) {
+        delete process.env.OPENBRAIN_TRACING_ENDPOINT;
+      } else {
+        process.env.OPENBRAIN_TRACING_ENDPOINT = previousEndpoint;
+      }
+    }
   });
 });
