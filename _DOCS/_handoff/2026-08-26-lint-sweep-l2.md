@@ -99,6 +99,8 @@ Close: https://github.com/rodaddy/open-brain/issues/780 closes only when every c
 Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
+- CI: no `push` or `pull_request` run has fired since 2026-08-26 11:01Z; #781 #782 #783 show GitGuardian only. Blocker for every merge until settled — issue #784 (check Actions billing, `gh workflow list`, trigger filters first).
+- Lane 1 harvest (git `**` pathspec skips files directly under `server/`) is a #782 comment; State 3 folds it into Tightenings round 36.
 - Lane 1 and the docs lane may have finished, failed, or died with the authoring session; State 1 re-probe decides whether State 3 collects or re-cuts.
 - Decision for Rico: whether test files carry the full 100-line function rule (2800 test findings) — `_plans/server-hardening-ladder.md:79-81`.
 - Decision for Rico: Python function rule 50 vs TypeScript 100 (`_DOCS/STANDARDS-typescript.md:198-210` still says 50) — open question in the #772 PR body.
