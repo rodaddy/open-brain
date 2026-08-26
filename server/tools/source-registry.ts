@@ -57,7 +57,8 @@ function registryAuth(identity: AuthIdentity): AuthInfo {
     role: identity.role,
     clientId: identity.clientId,
     tokenClientId: identity.tokenClientId,
-    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource:
+      identity.namespaceSource === "delegated" ? "header" : "token",
   };
 }
 
@@ -111,7 +112,8 @@ function registryFailure(result: SourceRegistryResult<unknown>) {
 function internalErrorLabel(error: unknown): string {
   if (error && typeof error === "object") {
     const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && /^[0-9A-Za-z_]{1,32}$/.test(code)) return code;
+    if (typeof code === "string" && /^[0-9A-Za-z_]{1,32}$/.test(code))
+      return code;
     const name = (error as { name?: unknown }).name;
     if (typeof name === "string" && /^[A-Za-z_]{1,64}$/.test(name)) return name;
   }
@@ -137,30 +139,125 @@ const targetNamespaceArg = z
       "to their header namespace.",
   );
 
+/**
+ * Run a registry call, converting an UNEXPECTED throw into one stable
+ * envelope. Typed results pass through untouched; only the throw path is
+ * intercepted, and the log carries an allowlisted label, never a message.
+ */
+async function guarded<T>(
+  dependencies: MemoryToolDependencies,
+  operation: string,
+  run: () => Promise<T>,
+): Promise<T | ReturnType<typeof failure>> {
+  try {
+    return await run();
+  } catch (error) {
+    dependencies.logger.error(
+      { operation, error: internalErrorLabel(error) },
+      "source_registry_internal_error",
+    );
+    return failure("internal_error", "source registry operation failed");
+  }
+}
+
+const REGISTER_SOURCE_INPUT = {
+  source_kind: z.enum(SOURCE_KINDS),
+  external_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(1000)
+    .describe("Stable opaque external locator (repo URL, path, drop id)"),
+  target_namespace: targetNamespaceArg.optional(),
+  title: z.string().trim().min(1).max(500).optional(),
+  scope: scopeArg.optional(),
+  language: z.string().trim().min(1).max(100).optional(),
+  config: configArg.optional(),
+  approved: z
+    .boolean()
+    .optional()
+    .describe(
+      "Request approval on create. Honored only for an authorized " +
+        "admin/ob-admin token identity; otherwise the call is rejected.",
+    ),
+};
+
+const LIST_SOURCES_INPUT = {
+  source_kind: z.enum(SOURCE_KINDS).optional(),
+  approval_state: z.enum(APPROVAL_STATES).optional(),
+  lifecycle_state: z.enum(LIFECYCLE_STATES).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+};
+
+const UPDATE_SOURCE_INPUT = {
+  id: z.string().uuid(),
+  expected_revision: z.number().int().min(1),
+  target_namespace: targetNamespaceArg.optional(),
+  title: z.string().trim().min(1).max(500).nullable().optional(),
+  scope: scopeArg.optional(),
+  language: z.string().trim().min(1).max(100).nullable().optional(),
+  config: configArg.optional(),
+  lifecycle_state: z.enum(LIFECYCLE_STATES).optional(),
+  sync_state: z.enum(SYNC_STATES).optional(),
+  last_synced_at: z.string().datetime().nullable().optional(),
+  approval_state: z.enum(APPROVAL_STATES).optional(),
+};
+
+const REMOVE_SOURCE_INPUT = {
+  id: z.string().uuid(),
+  target_namespace: targetNamespaceArg.optional(),
+};
+
+const ELIGIBILITY_INPUT = {
+  source_kind: z.enum(SOURCE_KINDS),
+  external_id: z.string().trim().min(1).max(1000),
+  target_namespace: targetNamespaceArg.optional(),
+};
+
+const COLLECT_DROP_FOLDER_INPUT = {
+  external_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(1000)
+    .describe("The registered drop source's stable external locator"),
+  target_namespace: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe(
+      "Namespace the drop source lives in. Defaults to your own. A " +
+        "global admin/ob-admin token may target another namespace; " +
+        "header-scoped identities are bound to their header namespace. " +
+        "Write authority for this namespace is enforced before any read.",
+    ),
+  tags: z
+    .array(z.string().trim().min(1).max(120))
+    .max(64)
+    .optional()
+    .describe(
+      "Content-free tags to carry onto every durable row from this collection (never bodies)",
+    ),
+};
+
 export function registerSourceRegistryTools(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {
-  /**
-   * Run a registry call, converting an UNEXPECTED throw into one stable
-   * envelope. Typed results pass through untouched; only the throw path is
-   * intercepted, and the log carries an allowlisted label, never a message.
-   */
-  async function guarded<T>(
-    operation: string,
-    run: () => Promise<T>,
-  ): Promise<T | ReturnType<typeof failure>> {
-    try {
-      return await run();
-    } catch (error) {
-      dependencies.logger.error(
-        { operation, error: internalErrorLabel(error) },
-        "source_registry_internal_error",
-      );
-      return failure("internal_error", "source registry operation failed");
-    }
-  }
+  registerRegisterSource(server, dependencies);
+  registerListSources(server, dependencies);
+  registerUpdateSource(server, dependencies);
+  registerRemoveSource(server, dependencies);
+  registerIngestionEligibility(server, dependencies);
+  registerCollectDropFolder(server, dependencies);
+}
 
+function registerRegisterSource(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "register_source",
     {
@@ -168,27 +265,7 @@ export function registerSourceRegistryTools(
         "Register an ingestion source (git/directory/drop/conversation) in a " +
         "namespace. Sources start pending; only an approved, active source is " +
         "ingestion-eligible. Re-registering an identical source is idempotent.",
-      inputSchema: {
-        source_kind: z.enum(SOURCE_KINDS),
-        external_id: z
-          .string()
-          .trim()
-          .min(1)
-          .max(1000)
-          .describe("Stable opaque external locator (repo URL, path, drop id)"),
-        target_namespace: targetNamespaceArg.optional(),
-        title: z.string().trim().min(1).max(500).optional(),
-        scope: scopeArg.optional(),
-        language: z.string().trim().min(1).max(100).optional(),
-        config: configArg.optional(),
-        approved: z
-          .boolean()
-          .optional()
-          .describe(
-            "Request approval on create. Honored only for an authorized " +
-              "admin/ob-admin token identity; otherwise the call is rejected.",
-          ),
-      },
+      inputSchema: REGISTER_SOURCE_INPUT,
       annotations: {
         title: "Register Source",
         readOnlyHint: false,
@@ -199,7 +276,7 @@ export function registerSourceRegistryTools(
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity) return failure("unauthenticated", "not authenticated");
-      return guarded("register_source", async () => {
+      return guarded(dependencies, "register_source", async () => {
         const result = await registerSource(
           dependencies.pool,
           registryAuth(identity),
@@ -218,19 +295,19 @@ export function registerSourceRegistryTools(
       });
     },
   );
+}
 
+function registerListSources(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "list_sources",
     {
       description:
         "List registered sources visible to you, constrained to your readable " +
         "namespaces. Supports filtering by kind, approval, and lifecycle state.",
-      inputSchema: {
-        source_kind: z.enum(SOURCE_KINDS).optional(),
-        approval_state: z.enum(APPROVAL_STATES).optional(),
-        lifecycle_state: z.enum(LIFECYCLE_STATES).optional(),
-        limit: z.number().int().min(1).max(500).optional(),
-      },
+      inputSchema: LIST_SOURCES_INPUT,
       annotations: {
         title: "List Sources",
         readOnlyHint: true,
@@ -241,7 +318,7 @@ export function registerSourceRegistryTools(
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity) return failure("unauthenticated", "not authenticated");
-      return guarded("list_sources", async () => {
+      return guarded(dependencies, "list_sources", async () => {
         const sources = await listSources(
           dependencies.pool,
           registryAuth(identity),
@@ -251,11 +328,19 @@ export function registerSourceRegistryTools(
           { tool: "list_sources", count: sources.length },
           "tool_result",
         );
-        return okResult({ count: sources.length, sources: sources.map(publicRecord) });
+        return okResult({
+          count: sources.length,
+          sources: sources.map(publicRecord),
+        });
       });
     },
   );
+}
 
+function registerUpdateSource(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "update_source",
     {
@@ -263,19 +348,7 @@ export function registerSourceRegistryTools(
         "Update a registered source by id within its namespace. Requires the " +
         "last-observed revision (optimistic concurrency). Approval transitions " +
         "are authorized server-side; a caller cannot self-approve.",
-      inputSchema: {
-        id: z.string().uuid(),
-        expected_revision: z.number().int().min(1),
-        target_namespace: targetNamespaceArg.optional(),
-        title: z.string().trim().min(1).max(500).nullable().optional(),
-        scope: scopeArg.optional(),
-        language: z.string().trim().min(1).max(100).nullable().optional(),
-        config: configArg.optional(),
-        lifecycle_state: z.enum(LIFECYCLE_STATES).optional(),
-        sync_state: z.enum(SYNC_STATES).optional(),
-        last_synced_at: z.string().datetime().nullable().optional(),
-        approval_state: z.enum(APPROVAL_STATES).optional(),
-      },
+      inputSchema: UPDATE_SOURCE_INPUT,
       annotations: {
         title: "Update Source",
         readOnlyHint: false,
@@ -286,7 +359,7 @@ export function registerSourceRegistryTools(
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity) return failure("unauthenticated", "not authenticated");
-      return guarded("update_source", async () => {
+      return guarded(dependencies, "update_source", async () => {
         const result = await updateSource(
           dependencies.pool,
           registryAuth(identity),
@@ -301,17 +374,19 @@ export function registerSourceRegistryTools(
       });
     },
   );
+}
 
+function registerRemoveSource(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "remove_source",
     {
       description:
         "Retire a registered source (soft delete) within its namespace so it " +
         "can never become ingestion-eligible again; provenance is preserved.",
-      inputSchema: {
-        id: z.string().uuid(),
-        target_namespace: targetNamespaceArg.optional(),
-      },
+      inputSchema: REMOVE_SOURCE_INPUT,
       annotations: {
         title: "Remove Source",
         readOnlyHint: false,
@@ -322,7 +397,7 @@ export function registerSourceRegistryTools(
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity) return failure("unauthenticated", "not authenticated");
-      return guarded("remove_source", async () => {
+      return guarded(dependencies, "remove_source", async () => {
         const result = await removeSource(
           dependencies.pool,
           registryAuth(identity),
@@ -338,7 +413,12 @@ export function registerSourceRegistryTools(
       });
     },
   );
+}
 
+function registerIngestionEligibility(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "source_ingestion_eligibility",
     {
@@ -346,11 +426,7 @@ export function registerSourceRegistryTools(
         "Check whether a source location is ingestion-eligible in a namespace. " +
         "Eligible only when a matching registry entry is approved and active; " +
         "unregistered or unapproved locations are rejected server-side.",
-      inputSchema: {
-        source_kind: z.enum(SOURCE_KINDS),
-        external_id: z.string().trim().min(1).max(1000),
-        target_namespace: targetNamespaceArg.optional(),
-      },
+      inputSchema: ELIGIBILITY_INPUT,
       annotations: {
         title: "Source Ingestion Eligibility",
         readOnlyHint: true,
@@ -361,7 +437,7 @@ export function registerSourceRegistryTools(
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity) return failure("unauthenticated", "not authenticated");
-      return guarded("source_ingestion_eligibility", async () => {
+      return guarded(dependencies, "source_ingestion_eligibility", async () => {
         const result = await resolveIngestionEligibility(
           dependencies.pool,
           registryAuth(identity),
@@ -370,13 +446,21 @@ export function registerSourceRegistryTools(
         // Ineligibility is an ANSWER, not a tool failure: the caller asked a
         // yes/no question and gets `eligible: false` with the typed reason.
         if (!result.ok || !result.data) {
-          return okResult({ eligible: false, code: result.code ?? "not_found" });
+          return okResult({
+            eligible: false,
+            code: result.code ?? "not_found",
+          });
         }
         return okResult({ eligible: true, source: publicRecord(result.data) });
       });
     },
   );
+}
 
+function registerCollectDropFolder(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "collect_drop_folder",
     {
@@ -390,33 +474,7 @@ export function registerSourceRegistryTools(
         "callers without write authority for the target namespace are rejected " +
         "before any file is read. Repeated content dedupes by hash, so a rerun " +
         "of an unchanged folder is a no-op.",
-      inputSchema: {
-        external_id: z
-          .string()
-          .trim()
-          .min(1)
-          .max(1000)
-          .describe("The registered drop source's stable external locator"),
-        target_namespace: z
-          .string()
-          .trim()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe(
-            "Namespace the drop source lives in. Defaults to your own. A " +
-              "global admin/ob-admin token may target another namespace; " +
-              "header-scoped identities are bound to their header namespace. " +
-              "Write authority for this namespace is enforced before any read.",
-          ),
-        tags: z
-          .array(z.string().trim().min(1).max(120))
-          .max(64)
-          .optional()
-          .describe(
-            "Content-free tags to carry onto every durable row from this collection (never bodies)",
-          ),
-      },
+      inputSchema: COLLECT_DROP_FOLDER_INPUT,
       annotations: {
         title: "Collect Drop Folder",
         readOnlyHint: false,
@@ -449,7 +507,10 @@ export function registerSourceRegistryTools(
         return textResult(publicCollection(result));
       } catch (error) {
         dependencies.logger.error(
-          { operation: "collect_drop_folder", error: internalErrorLabel(error) },
+          {
+            operation: "collect_drop_folder",
+            error: internalErrorLabel(error),
+          },
           "drop_folder_internal_error",
         );
         return failure("internal_error", "drop folder collection failed");
