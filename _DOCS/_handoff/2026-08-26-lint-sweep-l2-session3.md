@@ -26,8 +26,9 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
 - Clones `lane-1`..`lane-11` under `/Volumes/ThunderBolt/_tmp/open-brain/_worktrees/`;
   lane-1..9 hold the nine PR branches, lane-10 free, lane-11 this handoff —
   RUNNING (`git -C <clone> branch --show-current`)
-- Rest of the program: `_plans/server-hardening-ladder.md` (L2b-2, L2c, L3-L6)
-  and the #780 checklist tail — MERGED
+- Mac checkout `/Volumes/ThunderBolt/Development/open-brain` is DIRTY on `sprint/standards-fmt`
+  (Rico's, on hold, 37 paths); lanes work in clones, never there — RUNNING (`git -C /Volumes/ThunderBolt/Development/open-brain status -sb`)
+- Rest of the program: `_plans/server-hardening-ladder.md` (L2b-2, L2c, L3-L6) and the #780 checklist tail — MERGED
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has
   `780-touched-files-lint-clean.sh`, `handoff-validates.sh`)
 Re-probe before dispatching anything (live state beats this doc):
@@ -112,9 +113,8 @@ Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
   full name), `server/realtime/working-set.ts`, `server/maintenance/index.ts`,
   `server/logging/sanitize.ts` — and the seven below them on the #780 checklist.
 - #773 (Contract Parity two-dot diff), #774 (oxlint-tsgolint) filed, not started.
-- L2b-2 env rewiring: reads inventoried at
-  `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/server-env-lint-audit.md`.
-- `src/` twins duplicate `server/` logic (citation-recall, agent-context-pack-repo-facts);
-  out of #780 scope, ladder archive rung (rule 9: the edge is circular).
+- L2b-2 env rewiring: #825 (23 reads re-probed at `origin/main`, content moved off scratch).
+- `src/` twins duplicate `server/` logic: #826 (rule 9 — the edge is circular).
+- `tier_lane_denied` warn line has no pinning test: #827 (from #819's self-review).
 - `clone-20260825` carries `stash@{0}` (the #779 wiring half, already merged) —
   reported per GIT_STANDARDS, not dropped by an agent.
