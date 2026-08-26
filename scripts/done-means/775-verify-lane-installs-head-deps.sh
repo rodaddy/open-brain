@@ -130,12 +130,22 @@ fi
 # ---------------------------------------------------------------------------
 # CLAUSE 3 — the comparison fires on a real dependency-adding head.
 # ---------------------------------------------------------------------------
-SCRATCH_BASE="${OPENBRAIN_TEMP_WORKSPACE:-${DEV_TMP:-/Volumes/ThunderBolt/_tmp}}/open-brain/_scratch"
+# Repo-relative, matching src/operator-doctor.test.ts and this check's own unit
+# test: `_scratch/<name>/` under the repo root, already excluded by
+# .gitignore:119. The previous fallback hardcoded the operator's Mac
+# (`/Volumes/ThunderBolt/_tmp`), so CI died on `EACCES: permission denied,
+# mkdir '/Volumes'` — a Linux runner cannot create that path, and a done-means
+# check that only runs on one machine's volume layout gates nothing in CI.
+#
+# Keeping the fixture INSIDE the repo also bounds the escape guarded against
+# below: the worst a stray git call can reach is a directory the repo already
+# ignores.
+SCRATCH_BASE="$REPO_ROOT/_scratch/verify-lane-deps"
 mkdir -p "$SCRATCH_BASE" || fail_hard "cannot create scratch dir at $SCRATCH_BASE"
 # NOT mktemp -d (AGENTS.md hard rule: it resolves to a sandbox-local $TMPDIR
-# that no other process can see). An explicit path under the temp workspace,
-# unique by pid + epoch so concurrent runs cannot collide.
-FIXTURE="$SCRATCH_BASE/775-deps-fixture-$$-$(date +%s)"
+# that no other process can see). An explicit path, unique by pid + epoch so
+# concurrent runs cannot collide.
+FIXTURE="$SCRATCH_BASE/fixture-$$-$(date +%s)"
 mkdir -p "$FIXTURE" || fail_hard "cannot create fixture dir at $FIXTURE"
 
 # Pin BOTH the git dir and the work tree, never a bare -C. With only -C, git

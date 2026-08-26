@@ -13,7 +13,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decideDepsAtHead, DEPENDENCY_MANIFESTS } from "./verify-lane.ts";
 
 describe("DEPENDENCY_MANIFESTS", () => {
@@ -89,13 +90,24 @@ describe("git diff --quiet over the dependency manifests", () => {
   };
 
   beforeAll(() => {
-    const base =
-      process.env.OPENBRAIN_TEMP_WORKSPACE?.trim() ||
-      process.env.DEV_TMP?.trim() ||
-      "/Volumes/ThunderBolt/_tmp";
-    const scratch = join(base, "open-brain", "_scratch");
+    // Repo-relative by default, matching src/operator-doctor.test.ts: a
+    // `_scratch/<name>/` directory under the repo root, which .gitignore:119
+    // already excludes. The previous fallback hardcoded the operator's Mac
+    // (`/Volumes/ThunderBolt/_tmp`), so CI died on `EACCES: permission denied,
+    // mkdir '/Volumes'` — a Linux runner cannot create that path, and a test
+    // fixture must not require one machine's volume layout.
+    //
+    // Keeping the fixture INSIDE the repo also bounds the escape this file
+    // guards against: the worst a stray git call can reach is a directory the
+    // repo already ignores, rather than an arbitrary path on the volume.
+    const scratch = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "_scratch",
+      "verify-lane-deps",
+    );
     mkdirSync(scratch, { recursive: true });
-    repo = mkdtempSync(join(scratch, "verify-lane-deps-test-"));
+    repo = mkdtempSync(join(scratch, "fixture-"));
 
     // A branch that is deliberately NOT "main": the operator's global
     // protected-branch hook refuses commits there, including in a throwaway
