@@ -23,7 +23,20 @@ const CLAUDE_PROJECTS_DIR =
 
 const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
 
-const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "http://localhost:4000";
+// No local default -- see scripts/curate.ts for the same rule. A localhost
+// fallback silently works on a developer Mac and silently fails in a
+// container. Resolved at the CALL site, not at import: a module-level exit
+// would take down every test that merely imports this file.
+function requireLlmBaseUrl(): string {
+  const url = process.env.LLM_BASE_URL;
+  if (!url) {
+    throw new Error(
+      "LLM_BASE_URL is required: point it at the fleet inference endpoint. " +
+        "There is no local default.",
+    );
+  }
+  return url;
+}
 const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
 
 /** Failed sessions queue -- persisted locally for retry on next session-start/wrap */
@@ -303,7 +316,7 @@ ${conversation}`;
     const apiKey = process.env.LLM_API_KEY;
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
-    const response = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${requireLlmBaseUrl()}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -403,16 +416,14 @@ function startsLikeLabeledSecret(fragment: string): boolean {
 }
 
 function hasPlausibleLabeledSecretValue(fragment: string): boolean {
-  const match = /^(?:mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]\s*(.+)$/i.exec(
-    fragment,
-  );
+  const match =
+    /^(?:mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]\s*(.+)$/i.exec(
+      fragment,
+    );
   const value = match?.[1] ?? "";
-  const characterClassCount = [
-    /[a-z]/,
-    /[A-Z]/,
-    /[0-9]/,
-    /[_~+/=.-]/,
-  ].filter((pattern) => pattern.test(value)).length;
+  const characterClassCount = [/[a-z]/, /[A-Z]/, /[0-9]/, /[_~+/=.-]/].filter(
+    (pattern) => pattern.test(value),
+  ).length;
   return (
     (value.length >= 12 && characterClassCount >= 2) ||
     (value.length >= 6 && /[A-Za-z]/.test(value) && /[0-9]/.test(value))
@@ -433,7 +444,11 @@ function containsBoundarylessSecretAcrossSeparator(
 }
 
 function hasAwsSecretWindow(compacted: string): boolean {
-  for (let start = 0; start <= compacted.length - AWS_SECRET_WIDTH; start += 1) {
+  for (
+    let start = 0;
+    start <= compacted.length - AWS_SECRET_WIDTH;
+    start += 1
+  ) {
     const window = compacted.slice(start, start + AWS_SECRET_WIDTH);
     if (
       /[A-Z]/.test(window) &&
@@ -498,7 +513,10 @@ function containsWrappedAwsSecret(text: string): boolean {
   let sawSeparator = false;
 
   const flush = (): boolean => {
-    const compacted = run.replace(new RegExp(WRAPPED_SECRET_SEPARATOR_RE, "g"), "");
+    const compacted = run.replace(
+      new RegExp(WRAPPED_SECRET_SEPARATOR_RE, "g"),
+      "",
+    );
     const matched =
       sawSeparator &&
       compacted.length >= AWS_SECRET_WIDTH &&
@@ -551,7 +569,8 @@ function containsWhitespaceReformedSecret(text: string): boolean {
     );
     for (let end = start + 1; end < maxEnd; end += 1) {
       const next = fragments[end] ?? "";
-      if (startsUrl && (isPlainWordFragment(next) || startsLikeUrl(next))) break;
+      if (startsUrl && (isPlainWordFragment(next) || startsLikeUrl(next)))
+        break;
       joined += next;
       if (joined.length > MAX_REFORMED_SECRET_LENGTH) break;
       const secretMatch =
@@ -562,7 +581,9 @@ function containsWhitespaceReformedSecret(text: string): boolean {
       }
     }
   }
-  return containsWrappedAwsSecret(text) || containsWrappedBoundarylessSecret(text);
+  return (
+    containsWrappedAwsSecret(text) || containsWrappedBoundarylessSecret(text)
+  );
 }
 
 export function sanitize(text: string): string {
@@ -602,7 +623,10 @@ function sanitizeStructuralField(text: string): string {
   return sanitize(text).slice(0, 200);
 }
 
-export function buildDecisionLogParams(decision: string, project: string): {
+export function buildDecisionLogParams(
+  decision: string,
+  project: string,
+): {
   title: string;
   rationale: string;
   tags: string[];
@@ -695,9 +719,7 @@ async function pushToOB(
 
   // Log decisions
   for (const decision of extract.key_decisions) {
-    const dParams = JSON.stringify(
-      buildDecisionLogParams(decision, project),
-    );
+    const dParams = JSON.stringify(buildDecisionLogParams(decision, project));
     const dProc = Bun.spawn(
       ["mcp2cli", "open-brain", "log_decision", "--params", dParams],
       { stdout: "pipe", stderr: "pipe" },
