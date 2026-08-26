@@ -202,6 +202,27 @@ configs, and a commit or push that violates a rule cannot complete.
 2026-08-26 05:10Z — The backlog the gate exposes is expected and is not grounds
 for softening the gate.
 
+### The lint debt is paid one file at a time, each file finished before the next
+
+> Ruling (Rico, 2026-08-26): O1. Pay the debt one file at a time, each file brought fully to standard and passing before the next, lane after lane, until the whole app passes the standards. Order: the files blocking L2 first (server/main.ts, search-brain.ts, search-all.ts, search-engine.ts, langfuse-tracing.ts), then every remaining server/ file with findings. Each lane: one file, behavior-preserving, existing tests unmodified and green, done-means = oxlint --deny-warnings on that file exits 0 (RED on main).
+
+2026-08-26 15:42Z — https://github.com/rodaddy/open-brain/issues/780
+
+Once L1 armed the gate (#771, `c73a7f7`), the pre-existing violations blocked
+L2's own commits — draft PR #779 could not land. This ruling settles how the
+debt is paid: per FILE, sequentially, each one finished before the next starts,
+rather than per rule or per rung. Consequence for the ladder: for
+`server/tools/search-engine.ts` and `server/observability/langfuse-tracing.ts`,
+`max-lines` is among their findings, so their L4 split is pulled FORWARD into
+their lint lane. 142 findings across non-test `server/`, measured at `49ecfbe`;
+the per-file checklist lives in the issue.
+
+`UNVERIFIED` as a character-for-character operator quote. Unlike every other
+blockquote in this file, the text above is the ruling AS RECORDED in the #780
+comment posted under the operator's account, not a transcript line — the
+underlying spoken wording is not preserved in an artifact this file can cite.
+It is quoted exactly as #780 states it, and #780 is the authority.
+
 ### Better git hygiene: branches and PRs pushed, committed, merged
 
 > well you need to do better git hygiene and make sure that all of your fucking PRs and branches are pushed committed and merged and then we won't have this problem will we
