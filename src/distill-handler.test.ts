@@ -581,7 +581,9 @@ describe("makeMemoryDistillHandler", () => {
   });
 
   it("emits a trace with stage spans and row ids read and written", async () => {
-    const source = rawTurn({ content: "we are going with traced distillation" });
+    const source = rawTurn({
+      content: "we are going with traced distillation",
+    });
     const corpus = fakeCorpus([source]);
     const tracing = recordingTracing();
     const handler = makeMemoryDistillHandler({
@@ -642,7 +644,13 @@ describe("makeMemoryDistillHandler", () => {
       s.text.includes("due_sessions"),
     )!;
     // No namespace parameter was bound: the sweep is deliberately global.
-    expect(claim.values).toHaveLength(2);
+    // The three bound values are the query's limits only -- maxSessions,
+    // maxTurns, and the contextWindow reach added by #747
+    // (src/distill-window.ts:239-250). None of them is a namespace, which is
+    // what makes this sweep global; the scoped sibling below binds one at $1.
+    expect(claim.values).toHaveLength(3);
+    expect(claim.values).not.toContain("rico");
+    expect(claim.values.every((v) => typeof v === "number")).toBe(true);
   });
 
   it("a scoped job binds its namespace on the claim", async () => {
