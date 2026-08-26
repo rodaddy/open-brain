@@ -24,7 +24,12 @@ import {
   type NamespacePredicate,
 } from "../auth/namespace-policy.ts";
 import type { ResourceTable } from "../auth/types.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import {
   ALL_TABLES,
   PREVIEW_WIDTH,
@@ -73,6 +78,63 @@ interface TierCandidate {
   reasoning: string;
 }
 
+const tierRecommendationsInputSchema = {
+  action: z.enum(["promote", "demote"]),
+  threshold_days: z.number().int().min(1).max(365).optional(),
+  candidates: z.number().int().min(1).max(100).optional(),
+};
+
+const tierRecommendationsAnnotations = {
+  title: "Tier Recommendations",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+const listStaleInputSchema = {
+  table: tableEnum.optional().describe("Optional: filter to a specific table"),
+  days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe(
+      "Entries not accessed in this many days are considered stale (default 30)",
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe("Maximum entries to return (default 50, max 500)"),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Number of entries to skip for pagination (default 0)"),
+  tier: tierEnum
+    .optional()
+    .describe(
+      "Optional: filter to a specific tier (e.g. 'hot' to find hot entries that should decay to warm)",
+    ),
+  response_format: z
+    .enum(["envelope", "array"])
+    .optional()
+    .describe(
+      "Response format: 'envelope' (default) returns {entries, total_count, has_more}; 'array' returns raw array for backwards compatibility",
+    ),
+};
+
+const listStaleAnnotations = {
+  title: "List Stale",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
 export function registerTieringTools(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -82,45 +144,65 @@ export function registerTieringTools(
     {
       description:
         "Get tier change recommendations based on access patterns. Suggests entries to promote (cold/warm -> hot) or demote (warm -> cold).",
-      inputSchema: {
-        action: z.enum(["promote", "demote"]),
-        threshold_days: z.number().int().min(1).max(365).optional(),
-        candidates: z.number().int().min(1).max(100).optional(),
-      },
-      annotations: {
-        title: "Tier Recommendations",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: tierRecommendationsInputSchema,
+      annotations: tierRecommendationsAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-      const accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
-      if (accessible.length === 0) return errorResult("Permission denied: no readable tables");
+    async (args, extra) => handleTierRecommendations(dependencies, args, extra),
+  );
 
-      const wanted = args.candidates ?? 20;
-      const thresholdDays = args.threshold_days ?? (args.action === "demote" ? 30 : 7);
-      const candidates: TierCandidate[] = [];
+  server.registerTool(
+    "list_stale",
+    {
+      description:
+        "Find brain entries not accessed recently -- candidates for tier demotion (hot->warm->cold). " +
+        "Queries by last_accessed_at (falls back to created_at for never-accessed entries). " +
+        "Returns {entries, total_count, has_more} envelope by default, or raw array with response_format='array'. " +
+        "Resilient parsing: const entries = Array.isArray(result) ? result : result.entries ?? [];",
+      inputSchema: listStaleInputSchema,
+      annotations: listStaleAnnotations,
+    },
+    async (args, extra) => handleListStale(dependencies, args, extra),
+  );
+}
 
-      for (const table of accessible) {
-        if (candidates.length >= wanted) break;
-        const remaining = wanted - candidates.length;
-        const alias = TABLE_ALIAS[table];
-        const preview = ALIASED_PREVIEW[table];
-        const predicate = namespacePredicate(identity, "read", 3);
-        const scoped = qualifyNamespacePredicate(predicate, `${alias}.namespace`, 3);
-        const params = [thresholdDays, remaining, ...predicate.values];
+/** Minimal shape of the handler `extra` argument these tools read. */
+interface HandlerExtra {
+  authInfo?: Parameters<typeof authIdentity>[0];
+}
 
-        if (args.action === "demote") {
-          const { rows } = await dependencies.pool.query(
-            `SELECT ${alias}.id,
+/** One table's worth of recommendation scan inputs. */
+interface TierScan {
+  readonly dependencies: MemoryToolDependencies;
+  readonly table: ResourceTable;
+  readonly thresholdDays: number;
+  readonly remaining: number;
+  readonly predicate: NamespacePredicate;
+}
+
+/**
+ * Demotion arm: warm entries that have gone quiet.
+ *
+ * Kept apart from the promotion arm because the two read different sources --
+ * this one uses the stored counter for a coarse "barely touched" signal, while
+ * promotion must go to the access LOG for real recency.
+ */
+async function collectDemotionCandidates(
+  scan: TierScan,
+): Promise<TierCandidate[]> {
+  const alias = TABLE_ALIAS[scan.table];
+  const preview = ALIASED_PREVIEW[scan.table];
+  const scoped = qualifyNamespacePredicate(
+    scan.predicate,
+    `${alias}.namespace`,
+    3,
+  );
+  const { rows } = await scan.dependencies.pool.query(
+    `SELECT ${alias}.id,
                     LEFT(${preview}, ${PREVIEW_WIDTH}) AS content_preview,
                     COALESCE(${alias}.tier, 'warm') AS tier,
                     COALESCE(${alias}.access_count, 0) AS access_count,
                     ${alias}.last_accessed_at
-               FROM ${table} ${alias}
+               FROM ${scan.table} ${alias}
               WHERE ${alias}.archived_at IS NULL
                 AND COALESCE(${alias}.tier, 'warm') = 'warm'
                 AND (${alias}.last_accessed_at IS NULL
@@ -129,24 +211,28 @@ export function registerTieringTools(
                 ${scoped}
               ORDER BY COALESCE(${alias}.access_count, 0) ASC, ${alias}.created_at ASC
               FETCH FIRST $2 ROWS ONLY`,
-            params,
-          );
-          for (const row of rows) {
-            candidates.push({
-              id: row.id,
-              table,
-              content_preview: row.content_preview,
-              current_tier: row.tier,
-              suggested_tier: "cold",
-              access_count: Number(row.access_count),
-              last_accessed_at: row.last_accessed_at,
-              reasoning: `Warm entry with ${row.access_count} accesses, not accessed in ${thresholdDays}+ days`,
-            });
-          }
-        } else {
-          // Recency/frequency come from the access LOG, not a lossy counter.
-          const { rows } = await dependencies.pool.query(
-            `SELECT sub.id, sub.content_preview, sub.tier, sub.access_count,
+    [scan.thresholdDays, scan.remaining, ...scan.predicate.values],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    table: scan.table,
+    content_preview: row.content_preview,
+    current_tier: row.tier,
+    suggested_tier: "cold",
+    access_count: Number(row.access_count),
+    last_accessed_at: row.last_accessed_at,
+    reasoning: `Warm entry with ${row.access_count} accesses, not accessed in ${scan.thresholdDays}+ days`,
+  }));
+}
+
+/** Promotion arm: recency/frequency come from the access LOG, not a lossy counter. */
+async function collectPromotionCandidates(
+  scan: TierScan,
+): Promise<TierCandidate[]> {
+  const alias = TABLE_ALIAS[scan.table];
+  const preview = ALIASED_PREVIEW[scan.table];
+  const { rows } = await scan.dependencies.pool.query(
+    `SELECT sub.id, sub.content_preview, sub.tier, sub.access_count,
                     sub.last_accessed_at, sub.recent_accesses
                FROM (
                  SELECT ${alias}.id,
@@ -158,165 +244,198 @@ export function registerTieringTools(
                           WHERE eal.entry_id = ${alias}.id
                             AND eal.source_table = $3
                             AND eal.accessed_at >= NOW() - INTERVAL '1 day' * $1) AS recent_accesses
-                   FROM ${table} ${alias}
+                   FROM ${scan.table} ${alias}
                   WHERE ${alias}.archived_at IS NULL
                     AND COALESCE(${alias}.tier, 'warm') IN ('warm', 'cold')
-                    ${qualifyNamespacePredicate(predicate, `${alias}.namespace`, 4)}
+                    ${qualifyNamespacePredicate(scan.predicate, `${alias}.namespace`, 4)}
                ) sub
               WHERE sub.recent_accesses > 5
               ORDER BY sub.recent_accesses DESC
               FETCH FIRST $2 ROWS ONLY`,
-            [thresholdDays, remaining, table, ...predicate.values],
-          );
-          for (const row of rows) {
-            candidates.push({
-              id: row.id,
-              table,
-              content_preview: row.content_preview,
-              current_tier: row.tier,
-              suggested_tier: "hot",
-              access_count: Number(row.access_count),
-              recent_accesses: Number(row.recent_accesses),
-              last_accessed_at: row.last_accessed_at,
-              reasoning: `${row.tier} entry with ${row.recent_accesses} accesses in last ${thresholdDays} days`,
-            });
-          }
-        }
-      }
-
-      dependencies.logger.info(
-        { tool: "tier_recommendations", action: args.action, candidatesFound: candidates.length },
-        "tool_result",
-      );
-      return textResult({
-        action: args.action,
-        threshold_days: thresholdDays,
-        candidates_found: candidates.length,
-        candidates,
-      });
-    },
+    [scan.thresholdDays, scan.remaining, scan.table, ...scan.predicate.values],
   );
+  return rows.map((row) => ({
+    id: row.id,
+    table: scan.table,
+    content_preview: row.content_preview,
+    current_tier: row.tier,
+    suggested_tier: "hot",
+    access_count: Number(row.access_count),
+    recent_accesses: Number(row.recent_accesses),
+    last_accessed_at: row.last_accessed_at,
+    reasoning: `${row.tier} entry with ${row.recent_accesses} accesses in last ${scan.thresholdDays} days`,
+  }));
+}
 
-  server.registerTool(
-    "list_stale",
+async function handleTierRecommendations(
+  dependencies: MemoryToolDependencies,
+  args: {
+    action: "promote" | "demote";
+    threshold_days?: number;
+    candidates?: number;
+  },
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  if (!identity) return errorResult("Permission denied: not authenticated");
+  const accessible = ALL_TABLES.filter((table) =>
+    canRead(identity.role, table),
+  );
+  if (accessible.length === 0)
+    return errorResult("Permission denied: no readable tables");
+
+  const wanted = args.candidates ?? 20;
+  const thresholdDays =
+    args.threshold_days ?? (args.action === "demote" ? 30 : 7);
+  const collect =
+    args.action === "demote"
+      ? collectDemotionCandidates
+      : collectPromotionCandidates;
+  const candidates: TierCandidate[] = [];
+
+  for (const table of accessible) {
+    if (candidates.length >= wanted) break;
+    const found = await collect({
+      dependencies,
+      table,
+      thresholdDays,
+      remaining: wanted - candidates.length,
+      predicate: namespacePredicate(identity, "read", 3),
+    });
+    candidates.push(...found);
+  }
+
+  dependencies.logger.info(
     {
-      description:
-        "Find brain entries not accessed recently -- candidates for tier demotion (hot->warm->cold). " +
-        "Queries by last_accessed_at (falls back to created_at for never-accessed entries). " +
-        "Returns {entries, total_count, has_more} envelope by default, or raw array with response_format='array'. " +
-        "Resilient parsing: const entries = Array.isArray(result) ? result : result.entries ?? [];",
-      inputSchema: {
-        table: tableEnum.optional().describe("Optional: filter to a specific table"),
-        days: z
-          .number()
-          .int()
-          .min(1)
-          .max(365)
-          .optional()
-          .describe(
-            "Entries not accessed in this many days are considered stale (default 30)",
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe("Maximum entries to return (default 50, max 500)"),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Number of entries to skip for pagination (default 0)"),
-        tier: tierEnum
-          .optional()
-          .describe(
-            "Optional: filter to a specific tier (e.g. 'hot' to find hot entries that should decay to warm)",
-          ),
-        response_format: z
-          .enum(["envelope", "array"])
-          .optional()
-          .describe(
-            "Response format: 'envelope' (default) returns {entries, total_count, has_more}; 'array' returns raw array for backwards compatibility",
-          ),
-      },
-      annotations: {
-        title: "List Stale",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      tool: "tier_recommendations",
+      action: args.action,
+      candidatesFound: candidates.length,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: no readable tables");
+    "tool_result",
+  );
+  return textResult({
+    action: args.action,
+    threshold_days: thresholdDays,
+    candidates_found: candidates.length,
+    candidates,
+  });
+}
 
-      // A named table the caller cannot read is a distinct refusal from having
-      // no readable tables at all, matching observed current-src wording.
-      let accessible: readonly ResourceTable[];
-      if (args.table) {
-        if (!canRead(identity.role, args.table)) {
-          return errorResult(`Permission denied: cannot read ${args.table}`);
-        }
-        accessible = [args.table];
-      } else {
-        accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
-      }
-      if (accessible.length === 0) {
-        return errorResult("Permission denied: no readable tables");
-      }
+/**
+ * Resolve which tables a stale scan reads, or the refusal that stops it.
+ *
+ * A named table the caller cannot read is a distinct refusal from having no
+ * readable tables at all, matching observed current-src wording.
+ */
+function resolveStaleTables(
+  role: Parameters<typeof canRead>[0],
+  named: ResourceTable | undefined,
+):
+  | { readonly tables: readonly ResourceTable[]; readonly refusal?: undefined }
+  | {
+      readonly tables?: undefined;
+      readonly refusal: ReturnType<typeof errorResult>;
+    } {
+  if (named) {
+    if (!canRead(role, named)) {
+      return {
+        refusal: errorResult(`Permission denied: cannot read ${named}`),
+      };
+    }
+    return { tables: [named] };
+  }
+  const tables = ALL_TABLES.filter((table) => canRead(role, table));
+  if (tables.length === 0) {
+    return { refusal: errorResult("Permission denied: no readable tables") };
+  }
+  return { tables };
+}
 
-      const days = args.days ?? 30;
-      const rowCap = args.limit ?? 50;
-      const offset = args.offset ?? 0;
-      const useArray = args.response_format === "array";
+interface StaleArgs {
+  table?: ResourceTable;
+  days?: number;
+  limit?: number;
+  offset?: number;
+  tier?: Tier;
+  response_format?: "envelope" | "array";
+}
 
-      // The data query binds $1..$3 before the namespace values; the count
-      // query binds only $1, so its namespace values start one slot later.
-      const dataPredicate = namespacePredicate(identity, "read", 4);
-      const countPredicate = namespacePredicate(identity, "read", 2);
+/** The stale-scan defaults, in one place so the handler reads as one path. */
+function staleWindow(args: StaleArgs): {
+  readonly days: number;
+  readonly rowCap: number;
+  readonly offset: number;
+} {
+  return {
+    days: args.days ?? 30,
+    rowCap: args.limit ?? 50,
+    offset: args.offset ?? 0,
+  };
+}
 
-      const selects = accessible.map((table) =>
-        buildStaleSelect(table, args.tier, dataPredicate, 4),
-      );
-      const sql = `${selects.join("\nUNION ALL\n")}
+async function handleListStale(
+  dependencies: MemoryToolDependencies,
+  args: StaleArgs,
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  if (!identity) return errorResult("Permission denied: no readable tables");
+
+  const scope = resolveStaleTables(identity.role, args.table);
+  if (scope.refusal) return scope.refusal;
+  const accessible = scope.tables;
+
+  const { days, rowCap, offset } = staleWindow(args);
+  const useArray = args.response_format === "array";
+
+  // The data query binds $1..$3 before the namespace values; the count
+  // query binds only $1, so its namespace values start one slot later.
+  const dataPredicate = namespacePredicate(identity, "read", 4);
+  const countPredicate = namespacePredicate(identity, "read", 2);
+
+  const selects = accessible.map((table) =>
+    buildStaleSelect(table, args.tier, dataPredicate, 4),
+  );
+  const sql = `${selects.join("\nUNION ALL\n")}
         ORDER BY effective_last_access ASC
         LIMIT $2 OFFSET $3`;
 
-      const countSelects = accessible.map((table) =>
-        buildStaleCountSelect(table, args.tier, countPredicate, 2),
-      );
-      const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
+  const countSelects = accessible.map((table) =>
+    buildStaleCountSelect(table, args.tier, countPredicate, 2),
+  );
+  const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
-      const [dataResult, countResult] = await Promise.all([
-        dependencies.pool.query(sql, [days, rowCap, offset, ...dataPredicate.values]),
-        dependencies.pool
-          .query(countSql, [days, ...countPredicate.values])
-          .catch(() => null),
-      ]);
+  const [dataResult, countResult] = await Promise.all([
+    dependencies.pool.query(sql, [
+      days,
+      rowCap,
+      offset,
+      ...dataPredicate.values,
+    ]),
+    dependencies.pool
+      .query(countSql, [days, ...countPredicate.values])
+      .catch(() => null),
+  ]);
 
-      const totalCount = countResult?.rows[0]?.total_count ?? null;
-      const hasMore =
-        totalCount !== null ? offset + dataResult.rows.length < totalCount : false;
+  const totalCount = countResult?.rows[0]?.total_count ?? null;
+  const hasMore =
+    totalCount !== null ? offset + dataResult.rows.length < totalCount : false;
 
-      dependencies.logger.info(
-        { tool: "list_stale", tables: accessible.length, days },
-        "tool_result",
-      );
+  dependencies.logger.info(
+    { tool: "list_stale", tables: accessible.length, days },
+    "tool_result",
+  );
 
-      return textResult(
-        useArray
-          ? dataResult.rows
-          : {
-              entries: dataResult.rows,
-              total_count: totalCount,
-              offset,
-              limit: rowCap,
-              has_more: hasMore,
-            },
-      );
-    },
+  return textResult(
+    useArray
+      ? dataResult.rows
+      : {
+          entries: dataResult.rows,
+          total_count: totalCount,
+          offset,
+          limit: rowCap,
+          has_more: hasMore,
+        },
   );
 }
 
