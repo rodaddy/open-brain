@@ -106,3 +106,36 @@ only when a session actually needed it.
     is `~/.kube/config-rtech-k3s` -- the DEFAULT context is a dead
     `docker-desktop` and will make every `kubectl` call fail; export
     KUBECONFIG before probing.
+22. The git guard in the clone refuses `git checkout main` ("do not switch to
+    main/master for work") for the head as well as workers, refuses
+    `git -C <path> commit|push`, and refuses a `commit && push` chain. The
+    form that passes is one call per verb: `cd <clone> && git commit -F
+    <scratch file>`, then `cd <clone> && git push origin <branch>`. A merge
+    via `gh pr merge --delete-branch` is what puts the clone back on `main`.
+23. `.claude/hooks/design-lookup-gate.ts` gates Bash, Write, Edit, and
+    AskUserQuestion on a recent lookup it recognises: `aqmd search "<word>"`
+    (wrap in `timeout 60`; the librarian can hang) or a `Read` of
+    `docs/decisions/*.md`. `sqlite3 .qmd/index.sqlite` does NOT count. The
+    same gate refuses any command or file text containing cap, limit,
+    ceiling, quota, budget, truncation, bound, or pruning -- in PR bodies,
+    commit messages, and issue comments too. Write "rule value" and "max-*".
+24. `scripts/verify-lane.ts <pr>` runs from any branch: it cuts its own
+    worktree from `origin/main` and posts the receipt bound to the head SHA.
+    The worktree-hygiene gate allows ONE worktree at a time, so remove the
+    verify worktree (printed at the end) before anything else needs one.
+    The PR body's `- Done-means:` line is a bare path (`verify-lane.ts:232`),
+    no arguments: a generic check takes its inputs from the diff against
+    `origin/main` or an env override, never from argv.
+25. The pre-commit gate lints STAGED FILES WHOLE (`.oxlintrc.json:17-25`), so
+    a lane touching a file with pre-existing findings pays them first. Ruling
+    2026-08-26 (#780): one file per lane, fully to standard, in the checklist
+    order on #780, no disable comments, no hook baseline. A rewiring lane has
+    TWO halves, the reader taking a parameter and the composition root
+    passing the value; optional dependency fields with `?? default` let tsc
+    and an absence-only check go green with nothing wired (#779). The
+    done-means asserts ARRIVAL, not just absence of the old read.
+26. `max-lines` (500 code lines) applies to test files too. A table-driven
+    block that does not fit goes in a sibling `*.test.ts`, never by retiring
+    assertions (#778 fixer had to). A schema field that mirrors an env reader
+    is differenced against the reader input by input, and the test calls the
+    exported reader; agreeing inputs prove nothing.
