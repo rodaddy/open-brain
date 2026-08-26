@@ -508,7 +508,7 @@ export async function startServer(
   // set all four OPENBRAIN_TRACING_* variables; `createTracingRuntime` never
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
-  const tracing = createTracingRuntime();
+  const tracing = createTracingRuntime({ config: config.tracing });
   logger.info(
     { enabled: tracing.sink !== undefined },
     "mcp_tracing_configured",

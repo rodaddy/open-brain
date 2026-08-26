@@ -382,6 +382,23 @@ export function traceRetrievalSpanSync<T>(input: RetrievalSpanInput<T, T>): T {
 type RegisterTool = McpServer["registerTool"];
 
 /**
+ * The ONE place tracing configuration is resolved for this module.
+ *
+ * `installMcpTracing` and `createTracingRuntime` both need it, and each having
+ * its own `deps.config ?? …` expression is two composition paths that can
+ * disagree. The composition root (`server/main.ts`) passes `config.tracing`
+ * from the single validated parse, so `deps.config` is the normal path there.
+ *
+ * The fallback exists only for the legacy root `src/index.ts:318`, which has no
+ * `ServerConfig` and still calls with no arguments. `readMcpTracingConfig` no
+ * longer defaults its parameter (#825, L2b-2), so the environment is named
+ * HERE, once, instead of hiding inside the reader's signature.
+ */
+function resolveTracingConfig(deps: McpTracingDeps): McpTracingConfig {
+  return deps.config ?? readMcpTracingConfig(process.env);
+}
+
+/**
  * Install content-ful tracing on every tool registered after this call.
  *
  * ORDER MATTERS, exactly as it does for `installMcpAudit`: this works by
@@ -399,7 +416,7 @@ export function installMcpTracing(
   server: McpServer,
   deps: McpTracingDeps = {},
 ): McpTracingHandle {
-  const config = deps.config ?? readMcpTracingConfig();
+  const config = resolveTracingConfig(deps);
   if (!config.enabled) return INACTIVE_HANDLE;
   if (tracingInstalledServers.has(server)) return INACTIVE_HANDLE;
 
@@ -503,7 +520,7 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
   readonly background?: BackgroundTraceEmitter;
   shutdown(): Promise<void>;
 } {
-  const config = deps.config ?? readMcpTracingConfig();
+  const config = resolveTracingConfig(deps);
   if (!config.enabled) return { config, shutdown: () => Promise.resolve() };
   const built = deps.sink ?? createSinkSafely(config, deps.createSink);
   if (!built) return { config, shutdown: () => Promise.resolve() };

@@ -264,21 +264,32 @@ fi
 #       `?? resolveQmdPath()` fallback at the consumer, because either one reads
 #       as injected and behaves as a direct read.
 #
-#   (d) server/observability/langfuse-tracing.ts  `readMcpTracingConfig(config.`
-#       TO SATISFY: drop the `= process.env` default from `readMcpTracingConfig`
-#       (server/observability/trace-config.ts:33) and pass the validated group at
-#       its only two non-test call sites (langfuse-tracing.ts:402,506, both
-#       currently `readMcpTracingConfig()` with no argument).
-#       `ServerConfig.tracing` is server/config.ts:246,367, built by
-#       `tracingGroup` at server/config/env-groups.ts:359. The count of exactly 1
-#       is deliberate even though there are two call sites: the two must resolve
-#       through ONE shared `deps.config ?? …` expression rather than each
-#       building its own, which is the same "two composition paths" defect the
-#       exact-1 rule catches everywhere else in this file.
+#   (d) server/main.ts  `createTracingRuntime({ config: config.tracing })`
+#       SATISFIED by L2b-2 (#825). The `= process.env` default is gone from
+#       `readMcpTracingConfig` (server/observability/trace-config.ts:32), and
+#       the composition root now hands the validated group down at
+#       server/main.ts:505. `ServerConfig.tracing` is server/config.ts:246,367,
+#       built by `tracingGroup` at server/config/env-groups.ts:359.
+#
+#       PATTERN CHANGED, and here is why. This entry originally asserted
+#       `readMcpTracingConfig(config.` in langfuse-tracing.ts. That string
+#       cannot exist alongside the correct wiring: `TracingConfigGroup` is
+#       already field-for-field `McpTracingConfig`, so the validated value is
+#       handed straight to `deps.config` and the reader is never called on the
+#       wired path at all. Asserting the old string would have forced a pointless
+#       re-derivation from an env record `ServerConfig` does not even expose.
+#       The arrival being proven is the same one: ONE validated parse reaching
+#       the tracing lane, exactly once, from the composition root.
+#
+#       Both langfuse-tracing.ts call sites (:404, :508) now go through one
+#       module-private `resolveTracingConfig(deps)`, so the two-composition-paths
+#       defect the exact-1 rule catches is closed inside that file too. Its
+#       `readMcpTracingConfig(process.env)` fallback serves only the legacy root
+#       `src/index.ts:318`, which has no `ServerConfig` to pass.
 ARRIVALS="server/main.ts|searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs
 server/main.ts|sharedNamespaceNames: config.sharedNamespaceNames
 server/main.ts|qmdPath: config.qmd.path
-server/observability/langfuse-tracing.ts|readMcpTracingConfig(config."
+server/main.ts|createTracingRuntime({ config: config.tracing })"
 
 ARRIVAL_BAD=""
 ARRIVAL_OK=0
