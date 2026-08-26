@@ -92,7 +92,22 @@ function realtimeResult(
   };
 }
 
+/**
+ * Each tool gets its own registration function. They were one block, which
+ * grew past the point where a reader could see where one tool ended and the
+ * next began; the schemas and handlers are unchanged by the split.
+ */
 export function registerRealtimeAppendTools(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  registerWorkingSetAppendTool(server, dependencies);
+  registerRecoveryWalAppendTool(server, dependencies);
+  registerRecoveryWalMarkTool(server, dependencies);
+}
+
+/** RAM-only scoped working-set append. */
+function registerWorkingSetAppendTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {
@@ -166,7 +181,13 @@ export function registerRealtimeAppendTools(
       );
     },
   );
+}
 
+/** Quarantined recovery WAL append. */
+function registerRecoveryWalAppendTool(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "recovery_wal_append",
     {
@@ -228,7 +249,13 @@ export function registerRealtimeAppendTools(
       );
     },
   );
+}
 
+/** Review decision or purge on one quarantined record. */
+function registerRecoveryWalMarkTool(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "recovery_wal_mark",
     {
@@ -269,9 +296,11 @@ export function registerRealtimeAppendTools(
       const result = recoveryWalStoreFor(dependencies).mark(
         storeScope(auth.namespace, args),
         args.id,
-        args.action,
-        args.status,
-        { purge: args.purge ?? false },
+        {
+          action: args.action,
+          status: args.status,
+          purge: args.purge ?? false,
+        },
       );
 
       return realtimeResult(
