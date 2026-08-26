@@ -1,4 +1,4 @@
-# Handoff — land everything unmerged, then move Open Brain off the Mac (2026-08-25)
+# Handoff — land everything unmerged, then start the move off the Mac (2026-08-25)
 
 ## State 0 — BASE
 Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
@@ -9,30 +9,29 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
   before acting.
 - Output discipline: minimum verbosity, only the context needed, output
   tokens low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (73 lines). It
-  overrides the base; this document overrides it. Its rule 13 (core01 out of
-  scope) is SUPERSEDED by Rico's ruling 2026-08-25 evening: the service leaves
-  the Mac, to core01 at minimum, likely to a new Postgres box in k3s.
-- Run this session from a clean clone on a cc-* box (Rico ruling 2026-08-25),
-  temp workspace `/mnt/collab/tmp_space/open-brain/`. The live clone and its
-  database stay on the Mac (10.71.1.20) until State 7; anything that restarts
-  the clone runs there over ssh.
-- Rico is not a robot: every issue number in chat gets one plain sentence of
-  what it is. Workers: Opus 5 low effort or Luna max; the repo's standard
-  gauntlet (`review` skill) on every PR before merge.
+- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (88 lines). It
+  overrides the base; this document overrides it. Rules 13, 17, 18 are new
+  today: core01 in scope only for #762, push from a clean clone, embedder is
+  a fleet service.
+- Run from a clean clone on a cc-* box (Rico ruling 2026-08-25), temp
+  workspace `/mnt/collab/tmp_space/open-brain/`. The live clone and its
+  database stay on the Mac (10.71.1.20) until #762 executes; anything that
+  restarts the clone runs there over ssh.
+- Workers: Opus 5 low effort or Luna max. The repo's standard gauntlet
+  (`review` skill) on every PR before merge. Every issue number spoken to
+  Rico gets one plain sentence of what it is.
 
 ## State 1 — ORIENT
-- Local clone serves `ad3b59c` (head of `deploy/local-clone-20260825`), embedder `embed-gemma-dense` on k3s `ai/llama-swap` at `https://llama-swap.rodaddy.live/v1` — RUNNING (`curl -s http://10.71.1.20:3100/health` → embedding connected true)
-- `main` = `99a293b` (#759 merged); `fix/757-embedding-host-allow` retired — MERGED (`git log -1 origin/main`)
-- `fix/recall-serves-durable-memory` carries 9 commits over main: #744 recall fix (`e174f06`, `8f1f2a8`), #747 queue/distill fixes (`36a0b6e`, `a61b99d`, `acca7d7`), capture/maintenance fixes (`684b3a8`, `2a0eab1`), done-means (`b5a5f1d`), a handoff doc (`9466a3b`); origin has only up to `684b3a8` — WRITTEN (`git log --oneline origin/main..fix/recall-serves-durable-memory`)
+- Local clone serves `ad3b59c` (head of `deploy/local-clone-20260825`), embedder `embed-gemma-dense` on k3s `ai/llama-swap` at `https://llama-swap.rodaddy.live/v1` — RUNNING (`curl -s http://10.71.1.20:3100/health` → embedding connected true; `/v1/models` → 200)
+- `main` = `99a293b` (#759 merged); no worktrees; `git branch --merged origin/main` → main only — MERGED (`git log -1 origin/main`)
+- `fix/757-agents-embedder-host` @ `ba4cf03` (origin/main + AGENTS.md embedder amendment + this handoff + HANDOFF-RULES 13/17/18) exists on the Mac only; PR body `_scratch/pr-body-agents-embedder.md` passes `scripts/validate-pr-body.ts` — WRITTEN (`git ls-remote --heads origin fix/757-agents-embedder-host` → empty)
+- Push from the Mac is refused by `_githooks/pre-push:493` (tests the dirty working tree) — RUNNING (#761); a clean checkout is unaffected
+- `fix/recall-serves-durable-memory` carries 9 commits over main: #744 recall fix (`e174f06`, `8f1f2a8`), #747 queue/distill fixes (`36a0b6e`, `a61b99d`, `acca7d7`), capture/maintenance fixes (`684b3a8`, `2a0eab1`), done-means (`b5a5f1d`), handoff doc (`9466a3b`); origin has it only up to `684b3a8` — WRITTEN (`git log --oneline origin/main..fix/recall-serves-durable-memory`)
 - That branch fails 3 tests under `test:isolated`: distill null-namespace sweep, context-pack `requested_sections` receipt, migration 026 idempotent enqueue — WRITTEN (`_scratch/test-isolated-tn01.txt`)
-- `fix/757-agents-embedder-host` @ `75ea217` (origin/main + `AGENTS.md` embedder amendment) plus this handoff and the session report; PR body at `_scratch/pr-body-agents-embedder.md` validates — WRITTEN, unpushed
-- Push from the Mac is refused by `_githooks/pre-push:493` (tests the dirty working tree, not the tip) — RUNNING (#761); a clean checkout is not affected
-- core01 (10.71.1.21:3100) is degraded: both workers 503, database not connected; cutover blockers #674 (serves `src/index.ts`, not `server/main.ts`) and #675 (deploy has no revision proof) are OPEN — RUNNING (`curl -s http://10.71.1.21:3100/health`)
-- No plan exists for a k3s Postgres for Open Brain; CNPG clusters exist for authentik, listmonk, vaultwarden, webtier — RUNNING (`kubectl get svc -A | rg cnpg`)
-- Last database backup on record is `core01-20260724`; the Mac's dogfood DB `open_brain_local_20260724` (178,282 vectors) has none newer — WRITTEN (`ls /Volumes/ThunderBolt/open-brain-local/backups`)
+- core01 (10.71.1.21:3100) degraded, both workers 503, database not connected; blockers #674 (serves `src/index.ts`, not `server/main.ts`), #675 (deploy has no revision proof) OPEN — RUNNING (`curl -s http://10.71.1.21:3100/health`)
+- No k3s Postgres exists for Open Brain; last database backup on record `core01-20260724`; the Mac's `open_brain_local_20260724` (178,282 vectors) has none newer — WRITTEN (`ls /Volumes/ThunderBolt/open-brain-local/backups`)
 - CI: runner-resident bun 1.4.0 leaks into `check` (#760); re-run if observability tests fail — RUNNING
-- Sprint #750 (coding standards) ON HOLD by Rico; dev checkout on the Mac is its dirty `sprint/standards-fmt` — leave it — WRITTEN
+- Sprint #750 (coding standards) ON HOLD by Rico; the Mac dev checkout is its dirty `sprint/standards-fmt` (35 paths) — leave it — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/*.sh` → 61)
 Re-probe before dispatching anything (live state beats this doc):
 - `curl -s -m 5 http://10.71.1.20:3100/health` → expect revision ad3b59c, embedding connected true
@@ -40,25 +39,29 @@ Re-probe before dispatching anything (live state beats this doc):
 - `bun run test:isolated src/local-clone-mode.test.ts` on the cc box → proves the box has Postgres for the suite
 
 ## State 2 — LAND THE PAPERWORK
-Branch: `fix/757-agents-embedder-host` — if origin lacks it, recreate from
-`origin/main`: apply the two `AGENTS.md` lines from #757 comment 5419043410,
-add this handoff and `_reports/2026-08/2026-08-25_E8241A16_embedding-cutover-session-2.md`,
-push. Never the Mac's `sprint/standards-fmt`.
-Retire: nothing until the PRs below merge; then `git branch -d` each merged branch.
+Branch: `fix/757-agents-embedder-host` from `origin/main` — if origin lacks it,
+recreate from `origin/main`: apply the AGENTS.md lines from #757 comment
+5419043410, HANDOFF-RULES rules 13/17/18 from #757 comment 5419315526's
+follow-up, and this handoff; push. If the checkout is `main` or the branch is
+merged, switch first, never work there. Never the Mac's `sprint/standards-fmt`.
+Retire: none (`git branch --merged origin/main` → main; no worktrees).
+Commit this handoff: branch `fix/757-agents-embedder-host`, path
+`_DOCS/_handoff/2026-08-25-embedder-agents-push.md`, explicit-path staging,
+`git commit -F` message file.
 Scribe: #757 — started: `gh issue comment 757 --body-file <file>`
 Done-check: `git log -1 --stat`
 
-## State 3 — AGENTS.md PR through the gauntlet
+## State 3 — AGENTS.md + rules PR through the gauntlet
 Tier: T1 — repo law every session reads
 Deliverable: PR from `fix/757-agents-embedder-host` merged
-Scope: that branch, `gh pr create --body-file _scratch/pr-body-agents-embedder.md`
+Scope: that branch; `gh pr create --body-file _scratch/pr-body-agents-embedder.md`; fold the stale `10.71.1.11` example in `docs/local-clone-dogfood.md` into it
 Must NOT: `--no-verify`; merge without the gauntlet
 Record: #757
-Done-check: `rg -n 'llama-swap.rodaddy.live' AGENTS.md` on `origin/main` → 2 lines (RED: not yet run)
+Done-check: `rg -n 'llama-swap.rodaddy.live' AGENTS.md _DOCS/HANDOFF-RULES.md` on `origin/main` → 3 lines (RED: not yet run)
 
 ## State 4 — #744 + #747: make the branch green, PR, merge
 Tier: T2 — changes what a bare recall and the maintenance queue do on main
-Deliverable: `fix/recall-serves-durable-memory` at 0 fail on `test:isolated`, one PR per issue if the commits split cleanly (else one PR naming both), gauntlet, merged
+Deliverable: `fix/recall-serves-durable-memory` at 0 fail on `test:isolated`; one PR per issue if the commits split cleanly, else one PR naming both; gauntlet; merged
 Scope: that branch; `src/distill-handler.ts`, `src/maintenance-queue.ts`, `server/tools/agent-context-pack.ts`, `src/tools/agent-context-pack.ts`, their tests, `src/db/migrations/026_maintenance_queue.test.ts`
 Must NOT: weaken or skip the 3 failing tests; touch #750's lint edits; deploy
 Record: #744, #747
@@ -80,9 +83,9 @@ Must NOT: deploy before State 4 merges
 Record: #757
 Done-check: `curl -s http://10.71.1.20:3100/health` → revision = `origin/main` short SHA, embedding connected true (RED: not yet run)
 
-## State 7 — Move off the Mac: backup, target, plan
+## State 7 — #762: backup first, then the cutover checklist
 Tier: T2 — data and a live service change hosts
-Deliverable: (1) a fresh `pg_dump` of `open_brain_local_20260724` under `/Volumes/ThunderBolt/open-brain-local/backups/` with a restore receipt; (2) epic #762 updated with the target Rico picks (core01 now, k3s Postgres later) and a cutover checklist; (3) nothing executed against core01 or k3s
+Deliverable: (1) a fresh `pg_dump` of `open_brain_local_20260724` under `/Volumes/ThunderBolt/open-brain-local/backups/` with a `pg_restore --list` receipt; (2) the cutover checklist on #762 with the target Rico picks (core01 now, k3s Postgres later); (3) nothing executed against core01 or k3s
 Scope: backup script under `scripts/`, epic #762
 Must NOT: move data, point config at a new host, or drop anything without a backup receipt and Rico's go per step
 Record: #762
@@ -93,8 +96,9 @@ Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - Which cc-* box hosts the session and whether it has Postgres for `test:isolated`. Re-probe in State 1.
+- Whether Rico pushes `fix/757-agents-embedder-host` from the Mac himself before the session starts; State 2 covers both cases.
 - Whether the 9 commits on `fix/recall-serves-durable-memory` split into two clean PRs. State 4 decides.
-- Cause of the embedder ingress 503 windows (20:57Z, 22:03–04Z, 22:19Z today). Infra; on #757.
-- Bifrost's `tn01-llama` provider still targets dead `10.71.1.11:8080` (rtech-infra). Not this repo.
-- `docs/local-clone-dogfood.md` example still shows `OPEN_BRAIN_EMBEDDING_HOST_ALLOW=10.71.1.11`; fold into State 3.
-- Three untracked `.env.bak-20260825-*` in the Mac repo root; Rico's call.
+- Target for the move (core01 first, or straight to a k3s CNPG cluster): Rico's call on #762 before State 7's checklist is final.
+- Embedder ingress 503 windows and Bifrost's stale `tn01-llama` provider: rtech-infra#1110, not this repo.
+- Two untracked `.env.bak-20260825-{1035,1103}` in the Mac repo root belong to the prior session; Rico's call.
+- Open Brain capture event for today's lessons was NOT written: the direct provider's `--event capture` command could not be located from the SessionStart context this session. Lessons live in HANDOFF-RULES 13/17/18, #760, #761, #762, rtech-infra#1110, and Development `9c91d01c`.
