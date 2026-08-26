@@ -42,6 +42,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   createShadowApplication,
   type ShadowApplication,
+  type ShadowApplicationInput,
 } from "./application/index.ts";
 import {
   createNatsBridgeHealth,
@@ -198,11 +199,275 @@ function handlerLogger(logger: Logger): {
 }
 
 /**
+ * The live pieces a started process owns, in the order startup produced them.
+ *
+ * Named as one type because shutdown needs exactly this set and nothing else,
+ * and because a five-argument `shutdown(application, database, server, logger,
+ * tracing)` is a struct that has not been named yet — every caller has to
+ * remember the order, and the compiler cannot help when two of the five are
+ * transposed.
+ */
+interface RunningProcess {
+  readonly application: ShadowApplication;
+  readonly database: Database<pg.Pool>;
+  readonly server: Server;
+  readonly logger: Logger;
+  readonly tracing: ReturnType<typeof createTracingRuntime>;
+}
+
+/**
+ * Apply migrations, or record that they were deliberately skipped.
+ *
+ * The skip is `OPEN_BRAIN_RUN_MIGRATIONS=0`'s shape for extra workers: exactly
+ * one process in a multi-worker deployment applies schema, and the others say
+ * so in the log rather than staying silent, because a worker that ran no
+ * migrations and never mentioned it is indistinguishable from one whose
+ * migration step failed to be reached.
+ */
+async function applyMigrations(input: {
+  database: Database<pg.Pool>;
+  config: ServerConfig;
+  logger: Logger;
+  enabled: boolean;
+}): Promise<void> {
+  const { database, config, logger } = input;
+  if (!input.enabled) {
+    logger.info({}, "migrations_skipped");
+    return;
+  }
+  const applied = await runMigrations(
+    database.pool,
+    config.database.migrationsDirectory,
+    logger,
+  );
+  logger.info({ applied: applied.length }, "migrations_complete");
+}
+
+/** The NATS phase's outputs, all of which the composition step consumes. */
+interface NatsPhase {
+  readonly boundary: ReturnType<typeof natsRuntimeBoundaryFromConfig>;
+  readonly health: ReturnType<typeof createNatsBridgeHealth>;
+  readonly bridge: Awaited<ReturnType<typeof startNatsBridgeRuntime>>;
+}
+
+/**
+ * Bring up the NATS ingress: boundary, health counters, and the bridge runtime.
+ *
+ * The token map the bridge needs is the `src/` shape. It is derived from the
+ * SAME parsed config the HTTP middleware uses, not from a second env read, so
+ * the two ingresses cannot end up honoring different tokens.
+ */
+async function startNatsPhase(input: {
+  database: Database<pg.Pool>;
+  config: ServerConfig;
+  logger: Logger;
+  tracing: ReturnType<typeof createTracingRuntime>;
+}): Promise<NatsPhase> {
+  const { database, config, logger, tracing } = input;
+  const boundary = natsRuntimeBoundaryFromConfig(config.nats);
+  const health = createNatsBridgeHealth(config.nats.availability);
+  const deps: ToolDeps = {
+    pool: database.pool,
+    embedFn: generateEmbedding,
+    natsRuntimeBoundary: boundary,
+    natsBridgeHealth: health,
+  };
+
+  const tokenMap = new Map<string, AuthInfo>(
+    config.authTokens.map((entry) => [
+      entry.token,
+      { role: entry.role, clientId: entry.clientId },
+    ]),
+  );
+
+  const bridge = await startNatsBridgeRuntime({
+    config: config.nats,
+    logger: logger.child({ component: "nats" }),
+    tokenMap,
+    deps,
+    health,
+    ...(tracing.background ? { tracing: tracing.background } : {}),
+  });
+
+  return { boundary, health, bridge };
+}
+
+/**
+ * The background runtimes the application shuts down in order.
+ *
+ * The capture observer owns a refresh interval, which makes it a background
+ * runtime and not a value: `server/application/index.ts` already owns ordered
+ * shutdown through this port, so the timer stops on the same path as the NATS
+ * bridge and the maintenance runner rather than through a second hand-rolled
+ * teardown. A runtime that is running but absent from `backgroundRuntimes` is
+ * the abandoned-lease bug (index.ts:127-131).
+ */
+function backgroundRuntimesFor(input: {
+  bridge: NatsPhase["bridge"];
+  captureHealth: ReturnType<typeof createCaptureHealthRuntime>;
+}): ShadowApplicationInput["backgroundRuntimes"] {
+  const { bridge, captureHealth } = input;
+  return [
+    ...(bridge.runtime ? [bridge.runtime] : []),
+    ...(captureHealth.captureObserver
+      ? [
+          {
+            name: "capture-health-observer",
+            stop: async (): Promise<void> => captureHealth.stop(),
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
+ * Compose the application: auth, REST, MCP sessions, health, and the shutdown
+ * order. Binds no socket — the listener is the caller's next step.
+ */
+function composeApplication(input: {
+  options: StartServerOptions;
+  config: ServerConfig;
+  logger: Logger;
+  database: Database<pg.Pool>;
+  tracing: ReturnType<typeof createTracingRuntime>;
+  nats: NatsPhase;
+  captureHealth: ReturnType<typeof createCaptureHealthRuntime>;
+}): ShadowApplication {
+  const { options, config, logger, database, tracing, nats, captureHealth } =
+    input;
+  const authenticate = createAuthMiddleware(config.authTokens);
+  const restSurface = createRestSurface({
+    pool: database.pool,
+    embedFn: generateEmbedding,
+    authenticate,
+    logger: logger.child({ component: "rest" }),
+    operatorDoctor: () =>
+      getOperatorDoctorStatus(database.pool, nats.boundary, nats.health),
+  });
+
+  return createShadowApplication({
+    config,
+    logger,
+    database,
+    authenticate,
+    parseRequestBody: express.json({ limit: "1mb" }),
+    serverFactory: createServerFactory({
+      pool: database.pool,
+      logger,
+      config,
+      tracing,
+    }),
+    // CORS and request logging run ahead of EVERY route, `/health` included:
+    // an unauthenticated probe is still traffic, and a deployment that cannot
+    // see its own health requests cannot tell a dead monitor from a healthy
+    // service.
+    beforeRoutes: installHttpMiddleware({
+      allowedOrigins:
+        options.allowedOrigins ??
+        parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
+      logger: logger.child({ component: "http" }),
+    }),
+    routers: [{ path: "/api/v1", handler: restSurface }],
+    // Absent when no namespace is configured, and absence is the composition
+    // publishing NOTHING rather than a neutral value: a deployment that runs
+    // no capture lane must not report itself broken for a job it was never
+    // given (`docs/lane-contract.md` Tightenings rounds 8 and 13).
+    ...(captureHealth.captureObserver
+      ? { captureObserver: captureHealth.captureObserver }
+      : {}),
+    backgroundRuntimes: backgroundRuntimesFor({
+      bridge: nats.bridge,
+      captureHealth,
+    }),
+    // The maintenance handler map is what makes the runner exist at all; the
+    // application composes it from `config.maintenance` and puts it last in
+    // the shutdown order, so "maintenance runs" and "maintenance drains"
+    // remain one decision rather than two that can disagree.
+    maintenanceHandlers: composeMaintenanceHandlers({
+      pool: database.pool,
+      logger: handlerLogger(logger.child({ component: "maintenance" })),
+      embedFn: generateEmbeddingWithMetadata,
+      graphAuth: MAINTENANCE_GRAPH_AUTH,
+      ...(tracing.background ? { tracing: tracing.background } : {}),
+    }),
+    // A LIVE bridge knows its own failure counters; config cannot. Health
+    // therefore reads the running health object, falling back to the parsed
+    // config for the static half of the block.
+    natsHealth: () =>
+      natsHealthFromConfig(config.nats, {
+        consecutiveFailures: nats.health.consecutiveFailures,
+        lastError: Boolean(nats.health.lastError),
+      }),
+  });
+}
+
+/**
+ * Open the socket and report the port that was actually bound.
+ *
+ * `address()` rather than the requested port, because `0` asks the kernel for
+ * an ephemeral one and the requested value is then a lie in the log and in the
+ * returned handle.
+ */
+async function openListener(input: {
+  application: ShadowApplication;
+  options: StartServerOptions;
+  logger: Logger;
+}): Promise<{ server: Server; boundPort: number }> {
+  const { application, options, logger } = input;
+  const port = options.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
+  const bindHost = options.bindHost ?? process.env.OPEN_BRAIN_BIND_HOST?.trim();
+  const server = await new Promise<Server>((resolve, reject) => {
+    const listener = bindHost
+      ? application.app.listen(port, bindHost, () => resolve(listener))
+      : application.app.listen(port, () => resolve(listener));
+    listener.once("error", reject);
+  });
+  const address = server.address();
+  const boundPort =
+    typeof address === "object" && address !== null ? address.port : port;
+  logger.info(
+    { port: boundPort, bind_host: bindHost ?? "all" },
+    "server_started",
+  );
+  return { server, boundPort };
+}
+
+/**
+ * Release everything a partial startup allocated, so the CAUSE can be rethrown.
+ *
+ * The application may or may not have been composed; both it and the pool are
+ * released here. The tracing client owns a background flush timer, so leaving
+ * it running after a failed start keeps the process alive with nothing to
+ * serve. Every failure in here is swallowed deliberately: the startup error is
+ * the one the operator needs, and a cleanup error that replaced it would hide
+ * the reason the process could not start.
+ */
+async function releaseAfterFailedStart(input: {
+  application: ShadowApplication | undefined;
+  database: Database<pg.Pool>;
+  tracing: ReturnType<typeof createTracingRuntime>;
+}): Promise<void> {
+  try {
+    await input.application?.close();
+  } catch {
+    // Already reported by closeInOrder's own logging; the startup failure is
+    // the one the operator needs, so it wins.
+  }
+  await input.tracing.shutdown().catch(() => undefined);
+  await input.database.close().catch(() => undefined);
+}
+
+/**
  * Compose and start the whole process. Throws on any fatal startup failure.
  *
  * Returns the handle rather than installing signal handlers, so a test can
  * start and stop it without touching process-global state; `main()` below is
  * the part that owns signals and exit codes.
+ *
+ * THE PHASES ARE THE HELPERS ABOVE, CALLED IN STARTUP ORDER. This function is
+ * deliberately a sequence rather than a place where work happens: the file's
+ * header says order is its content, so the order has to be readable on one
+ * screen instead of inferred from interleaved composition.
  */
 export async function startServer(
   options: StartServerOptions = {},
@@ -229,44 +494,14 @@ export async function startServer(
   logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
   let application: ShadowApplication | undefined;
   try {
-    if (options.runMigrations !== false) {
-      const applied = await runMigrations(
-        database.pool,
-        config.database.migrationsDirectory,
-        logger,
-      );
-      logger.info({ applied: applied.length }, "migrations_complete");
-    } else {
-      logger.info({}, "migrations_skipped");
-    }
-
-    const natsBoundary = natsRuntimeBoundaryFromConfig(config.nats);
-    const natsHealth = createNatsBridgeHealth(config.nats.availability);
-    const toolDeps: ToolDeps = {
-      pool: database.pool,
-      embedFn: generateEmbedding,
-      natsRuntimeBoundary: natsBoundary,
-      natsBridgeHealth: natsHealth,
-    };
-
-    // The token map the NATS bridge needs is the `src/` shape. It is derived
-    // from the SAME parsed config the HTTP middleware uses, not from a second
-    // env read, so the two ingresses cannot end up honoring different tokens.
-    const tokenMap = new Map<string, AuthInfo>(
-      config.authTokens.map((entry) => [
-        entry.token,
-        { role: entry.role, clientId: entry.clientId },
-      ]),
-    );
-
-    const bridge = await startNatsBridgeRuntime({
-      config: config.nats,
-      logger: logger.child({ component: "nats" }),
-      tokenMap,
-      deps: toolDeps,
-      health: natsHealth,
-      ...(tracing.background ? { tracing: tracing.background } : {}),
+    await applyMigrations({
+      database,
+      config,
+      logger,
+      enabled: options.runMigrations !== false,
     });
+
+    const nats = await startNatsPhase({ database, config, logger, tracing });
 
     // The capture-health observer this process runs, from REQUIRED config
     // (operator ruling 2026-08-08, ledger item 28 in `docs/issue-graph.md`).
@@ -281,101 +516,22 @@ export async function startServer(
       logger: logger.child({ component: "capture-health" }),
     });
 
-    const authenticate = createAuthMiddleware(config.authTokens);
-    const restSurface = createRestSurface({
-      pool: database.pool,
-      embedFn: generateEmbedding,
-      authenticate,
-      logger: logger.child({ component: "rest" }),
-      operatorDoctor: () =>
-        getOperatorDoctorStatus(database.pool, natsBoundary, natsHealth),
-    });
-
-    application = createShadowApplication({
+    application = composeApplication({
+      options,
       config,
       logger,
       database,
-      authenticate,
-      parseRequestBody: express.json({ limit: "1mb" }),
-      serverFactory: createServerFactory({
-        pool: database.pool,
-        logger,
-        config,
-        tracing,
-      }),
-      // CORS and request logging run ahead of EVERY route, `/health` included:
-      // an unauthenticated probe is still traffic, and a deployment that cannot
-      // see its own health requests cannot tell a dead monitor from a healthy
-      // service.
-      beforeRoutes: installHttpMiddleware({
-        allowedOrigins:
-          options.allowedOrigins ??
-          parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
-        logger: logger.child({ component: "http" }),
-      }),
-      routers: [{ path: "/api/v1", handler: restSurface }],
-      // Absent when no namespace is configured, and absence is the composition
-      // publishing NOTHING rather than a neutral value: a deployment that runs
-      // no capture lane must not report itself broken for a job it was never
-      // given (`docs/lane-contract.md` Tightenings rounds 8 and 13).
-      ...(captureHealth.captureObserver
-        ? { captureObserver: captureHealth.captureObserver }
-        : {}),
-      // The observer owns a refresh interval, which makes it a background
-      // runtime and not a value: `server/application/index.ts` already owns
-      // ordered shutdown through this port, so the timer stops on the same
-      // path as the NATS bridge and the maintenance runner rather than through
-      // a second hand-rolled teardown. A runtime that is running but absent
-      // from `backgroundRuntimes` is the abandoned-lease bug (index.ts:127-131).
-      backgroundRuntimes: [
-        ...(bridge.runtime ? [bridge.runtime] : []),
-        ...(captureHealth.captureObserver
-          ? [
-              {
-                name: "capture-health-observer",
-                stop: async () => captureHealth.stop(),
-              },
-            ]
-          : []),
-      ],
-      // The maintenance handler map is what makes the runner exist at all; the
-      // application composes it from `config.maintenance` and puts it last in
-      // the shutdown order, so "maintenance runs" and "maintenance drains"
-      // remain one decision rather than two that can disagree.
-      maintenanceHandlers: composeMaintenanceHandlers({
-        pool: database.pool,
-        logger: handlerLogger(logger.child({ component: "maintenance" })),
-        embedFn: generateEmbeddingWithMetadata,
-        graphAuth: MAINTENANCE_GRAPH_AUTH,
-        ...(tracing.background ? { tracing: tracing.background } : {}),
-      }),
-      // A LIVE bridge knows its own failure counters; config cannot. Health
-      // therefore reads the running health object, falling back to the parsed
-      // config for the static half of the block.
-      natsHealth: () =>
-        natsHealthFromConfig(config.nats, {
-          consecutiveFailures: natsHealth.consecutiveFailures,
-          lastError: Boolean(natsHealth.lastError),
-        }),
+      tracing,
+      nats,
+      captureHealth,
     });
 
-    const port = options.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
-    const bindHost =
-      options.bindHost ?? process.env.OPEN_BRAIN_BIND_HOST?.trim();
     const composed = application;
-    const server = await new Promise<Server>((resolve, reject) => {
-      const listener = bindHost
-        ? composed.app.listen(port, bindHost, () => resolve(listener))
-        : composed.app.listen(port, () => resolve(listener));
-      listener.once("error", reject);
+    const { server, boundPort } = await openListener({
+      application: composed,
+      options,
+      logger,
     });
-    const address = server.address();
-    const boundPort =
-      typeof address === "object" && address !== null ? address.port : port;
-    logger.info(
-      { port: boundPort, bind_host: bindHost ?? "all" },
-      "server_started",
-    );
 
     return {
       application: composed,
@@ -383,23 +539,14 @@ export async function startServer(
       server,
       port: boundPort,
       logger,
-      shutdown: () => shutdown(composed, database, server, logger, tracing),
+      shutdown: () =>
+        shutdown({ application: composed, database, server, logger, tracing }),
     };
   } catch (error: unknown) {
-    // A failure anywhere after the pool exists must not leak it. The
-    // application may or may not have been composed; both are released here,
-    // and the original failure is rethrown so the caller sees the CAUSE rather
-    // than a cleanup error.
-    try {
-      await application?.close();
-    } catch {
-      // Already reported by closeInOrder's own logging; the startup failure is
-      // the one the operator needs, so it wins.
-    }
-    // The tracing client owns a background flush timer; leaving it running
-    // after a failed start keeps the process alive with nothing to serve.
-    await tracing.shutdown().catch(() => undefined);
-    await database.close().catch(() => undefined);
+    // A failure anywhere after the pool exists must not leak it. Everything
+    // allocated so far is released, and the original failure is rethrown so the
+    // caller sees the CAUSE rather than a cleanup error.
+    await releaseAfterFailedStart({ application, database, tracing });
     throw error;
   }
 }
@@ -418,13 +565,8 @@ export async function startServer(
  * rethrown: a partial shutdown must not be readable as a clean one, or a
  * supervisor restarts on top of leases that are still live.
  */
-async function shutdown(
-  application: ShadowApplication,
-  database: Database<pg.Pool>,
-  server: Server,
-  logger: Logger,
-  tracing: ReturnType<typeof createTracingRuntime>,
-): Promise<void> {
+async function shutdown(running: RunningProcess): Promise<void> {
+  const { application, database, server, logger, tracing } = running;
   logger.info({}, "server_shutdown_started");
   await new Promise<void>((resolve) => server.close(() => resolve()));
   let firstFailure: unknown;
@@ -470,6 +612,7 @@ async function shutdown(
   logger.info({}, "server_shutdown_complete");
   if (firstFailure !== undefined) throw firstFailure;
 }
+
 
 /**
  * The launchd-facing process wrapper: signals, exit codes, nothing else.
