@@ -9,13 +9,24 @@
  * admin-tier role. Planning never mutates: that is the exact call shape the
  * dream-cycle design depends on, because a planning pass that silently archived
  * would make the whole cycle unreviewable and irreversible.
+ *
+ * The three scan modes share one helper, `collectScan`, because they differ
+ * only in their query and how a row becomes a finding. The dry-run decision
+ * itself is NOT part of that shared code: each caller passes its own
+ * `onArchive`, and the `vague` mode passes none at all, so report-only stays a
+ * property of the call site rather than a flag the shared helper interprets.
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canDelete, canRead } from "../auth/permissions.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { authorize } from "./memory-helpers.ts";
 import {
   ALL_TABLES,
@@ -67,7 +78,199 @@ async function archiveRow(
   );
 }
 
-export function registerCurationTools(
+/** One scan mode's query and the shape it turns a row into. */
+interface ScanSpec<Finding> {
+  dependencies: MemoryToolDependencies;
+  /** SQL to run, and the values its placeholders bind. */
+  query: { text: string; values: readonly unknown[] };
+  /**
+   * The row's id, when the mode may archive it. Omitted by report-only modes,
+   * which is what keeps `vague` non-mutating without a flag.
+   */
+  archiveId?: (row: Record<string, unknown>) => string;
+  /** Runs only when the mode may archive AND the caller opted into mutation. */
+  onArchive?: (id: string) => Promise<void>;
+  /** Builds the finding, given the action label the archive decision produced. */
+  toFinding: (row: Record<string, unknown>, action: string) => Finding;
+  /** Label used when nothing was archived for this row. */
+  reportAction: string;
+}
+
+/**
+ * Run one scan mode and collect its findings.
+ *
+ * @returns The findings, and how many rows were archived while collecting them.
+ */
+async function collectScan<Finding>(
+  spec: ScanSpec<Finding>,
+): Promise<{ findings: Finding[]; archived: number; scanned: number }> {
+  const { rows } = await spec.dependencies.pool.query(spec.query.text, [
+    ...spec.query.values,
+  ]);
+  const findings: Finding[] = [];
+  let archived = 0;
+  for (const row of rows) {
+    let action = spec.reportAction;
+    const id = spec.archiveId?.(row);
+    if (spec.onArchive && id !== undefined) {
+      await spec.onArchive(id);
+      action = "archived";
+      archived++;
+    }
+    findings.push(spec.toFinding(row, action));
+  }
+  return { findings, archived, scanned: rows.length };
+}
+
+/** Inputs every per-table scan shares. */
+interface ScanContext {
+  dependencies: MemoryToolDependencies;
+  identity: AuthIdentity;
+  table: ResourceTable;
+  rowsPerTable: number;
+  /** Present only when the caller opted into mutation AND is admin-tier. */
+  archive?: (id: string) => Promise<void>;
+}
+
+/** Detect near-identical pairs in one table, archiving the older on opt-in. */
+async function scanDuplicates(
+  context: ScanContext,
+): Promise<{
+  findings: CurateResult["duplicates"];
+  archived: number;
+  scanned: number;
+}> {
+  const readPredicate = namespacePredicate(context.identity, "read", 3);
+  return collectScan({
+    dependencies: context.dependencies,
+    query: {
+      text: `SELECT a.id AS id_a, b.id AS id_b, a.embedding <=> b.embedding AS distance
+               FROM ${context.table} a
+               JOIN ${context.table} b ON a.id < b.id
+                AND b.archived_at IS NULL AND b.embedding IS NOT NULL
+                AND b.namespace = a.namespace
+              WHERE a.archived_at IS NULL AND a.embedding IS NOT NULL
+                AND a.embedding <=> b.embedding < $1
+                ${qualifyNamespacePredicate(readPredicate, "a.namespace", 3)}
+              ORDER BY distance ASC
+              FETCH FIRST $2 ROWS ONLY`,
+      values: [
+        DUPLICATE_THRESHOLD,
+        context.rowsPerTable,
+        ...readPredicate.values,
+      ],
+    },
+    archiveId: (row) => String(row.id_a),
+    onArchive: context.archive,
+    reportAction: "would_archive_older",
+    toFinding: (row, action) => ({
+      table: context.table,
+      entry_a: String(row.id_a),
+      entry_b: String(row.id_b),
+      distance: Number(row.distance),
+      action,
+    }),
+  });
+}
+
+/** Flag entries never accessed and older than the stale window. */
+async function scanStale(
+  context: ScanContext,
+): Promise<{
+  findings: CurateResult["stale"];
+  archived: number;
+  scanned: number;
+}> {
+  const readPredicate = namespacePredicate(context.identity, "read", 3);
+  return collectScan({
+    dependencies: context.dependencies,
+    query: {
+      text: `SELECT id, ${CONTENT_PREVIEW[context.table]} AS content_preview
+               FROM ${context.table}
+              WHERE archived_at IS NULL
+                AND created_at < NOW() - INTERVAL '1 day' * $1
+                AND COALESCE(access_count, 0) = 0
+                ${readPredicate.clause}
+              FETCH FIRST $2 ROWS ONLY`,
+      values: [STALE_DAYS, context.rowsPerTable, ...readPredicate.values],
+    },
+    archiveId: (row) => String(row.id),
+    onArchive: context.archive,
+    reportAction: "would_flag",
+    toFinding: (row, action) => ({
+      table: context.table,
+      id: String(row.id),
+      preview: previewOf(row.content_preview),
+      action,
+    }),
+  });
+}
+
+/**
+ * Flag low-value untagged entries.
+ *
+ * Passes no `onArchive`, so vague entries are ALWAYS report-only even when
+ * `dry_run` is false -- the same guarantee the previous inline branch made by
+ * simply having no mutation path.
+ */
+async function scanVague(
+  context: ScanContext,
+): Promise<{
+  findings: CurateResult["vague"];
+  archived: number;
+  scanned: number;
+}> {
+  const readPredicate = namespacePredicate(context.identity, "read", 2);
+  return collectScan({
+    dependencies: context.dependencies,
+    query: {
+      text: `SELECT id, ${CONTENT_PREVIEW[context.table]} AS content_preview
+               FROM ${context.table}
+              WHERE archived_at IS NULL
+                AND (usefulness_score IS NULL OR usefulness_score < 0.3)
+                AND (tags IS NULL OR array_length(tags, 1) IS NULL)
+                ${readPredicate.clause}
+              FETCH FIRST $1 ROWS ONLY`,
+      values: [context.rowsPerTable, ...readPredicate.values],
+    },
+    reportAction: "flagged_for_review",
+    toFinding: (row) => ({
+      table: context.table,
+      id: String(row.id),
+      preview: previewOf(row.content_preview),
+      action: "flagged_for_review",
+    }),
+  });
+}
+
+/** Run every mode the request selected across one table, folding into `result`. */
+async function curateTable(
+  context: ScanContext,
+  mode: string,
+  result: CurateResult,
+): Promise<void> {
+  if (mode === "duplicates" || mode === "all") {
+    const scan = await scanDuplicates(context);
+    result.duplicates.push(...scan.findings);
+    result.summary.duplicates_found += scan.scanned;
+    result.summary.archived += scan.archived;
+  }
+  if (mode === "stale" || mode === "all") {
+    const scan = await scanStale(context);
+    result.stale.push(...scan.findings);
+    result.summary.stale_found += scan.scanned;
+    result.summary.archived += scan.archived;
+  }
+  if (mode === "vague" || mode === "all") {
+    const scan = await scanVague(context);
+    result.vague.push(...scan.findings);
+    result.summary.vague_found += scan.scanned;
+    result.summary.archived += scan.archived;
+  }
+}
+
+/** Register `curate_entries`: the dry-run-by-default discovery surface. */
+function registerCurateEntries(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {
@@ -98,13 +301,24 @@ export function registerCurationTools(
       const rowsPerTable = args.rows_per_table ?? 20;
 
       // The mutating wrapper is admin-only. Planning callers never reach here.
-      if (!dryRun && identity.role !== "admin" && identity.role !== "ob-admin") {
-        return errorResult("Permission denied: admin permission required for dry_run=false");
+      if (
+        !dryRun &&
+        identity.role !== "admin" &&
+        identity.role !== "ob-admin"
+      ) {
+        return errorResult(
+          "Permission denied: admin permission required for dry_run=false",
+        );
       }
 
-      const requested: readonly ResourceTable[] = args.table ? [args.table] : ALL_TABLES;
-      const accessible = requested.filter((table) => canRead(identity.role, table));
-      if (accessible.length === 0) return errorResult("Permission denied: no readable tables");
+      const requested: readonly ResourceTable[] = args.table
+        ? [args.table]
+        : ALL_TABLES;
+      const accessible = requested.filter((table) =>
+        canRead(identity.role, table),
+      );
+      if (accessible.length === 0)
+        return errorResult("Permission denied: no readable tables");
 
       const result: CurateResult = {
         mode: args.mode,
@@ -113,97 +327,30 @@ export function registerCurationTools(
         duplicates: [],
         stale: [],
         vague: [],
-        summary: { duplicates_found: 0, stale_found: 0, vague_found: 0, archived: 0 },
+        summary: {
+          duplicates_found: 0,
+          stale_found: 0,
+          vague_found: 0,
+          archived: 0,
+        },
       };
 
       for (const table of accessible) {
-        const preview = CONTENT_PREVIEW[table];
-
-        if (args.mode === "duplicates" || args.mode === "all") {
-          const readPredicate = namespacePredicate(identity, "read", 3);
-          const { rows } = await dependencies.pool.query(
-            `SELECT a.id AS id_a, b.id AS id_b, a.embedding <=> b.embedding AS distance
-               FROM ${table} a
-               JOIN ${table} b ON a.id < b.id
-                AND b.archived_at IS NULL AND b.embedding IS NOT NULL
-                AND b.namespace = a.namespace
-              WHERE a.archived_at IS NULL AND a.embedding IS NOT NULL
-                AND a.embedding <=> b.embedding < $1
-                ${qualifyNamespacePredicate(readPredicate, "a.namespace", 3)}
-              ORDER BY distance ASC
-              FETCH FIRST $2 ROWS ONLY`,
-            [DUPLICATE_THRESHOLD, rowsPerTable, ...readPredicate.values],
-          );
-          for (const row of rows) {
-            let action = "would_archive_older";
-            if (!dryRun) {
-              await archiveRow(dependencies, identity, table, row.id_a);
-              action = "archived";
-              result.summary.archived++;
-            }
-            result.duplicates.push({
-              table,
-              entry_a: row.id_a,
-              entry_b: row.id_b,
-              distance: Number(row.distance),
-              action,
-            });
-          }
-          result.summary.duplicates_found += rows.length;
-        }
-
-        if (args.mode === "stale" || args.mode === "all") {
-          const readPredicate = namespacePredicate(identity, "read", 3);
-          const { rows } = await dependencies.pool.query(
-            `SELECT id, ${preview} AS content_preview
-               FROM ${table}
-              WHERE archived_at IS NULL
-                AND created_at < NOW() - INTERVAL '1 day' * $1
-                AND COALESCE(access_count, 0) = 0
-                ${readPredicate.clause}
-              FETCH FIRST $2 ROWS ONLY`,
-            [STALE_DAYS, rowsPerTable, ...readPredicate.values],
-          );
-          for (const row of rows) {
-            let action = "would_flag";
-            if (!dryRun) {
-              await archiveRow(dependencies, identity, table, row.id);
-              action = "archived";
-              result.summary.archived++;
-            }
-            result.stale.push({
-              table,
-              id: row.id,
-              preview: previewOf(row.content_preview),
-              action,
-            });
-          }
-          result.summary.stale_found += rows.length;
-        }
-
-        if (args.mode === "vague" || args.mode === "all") {
-          const readPredicate = namespacePredicate(identity, "read", 2);
-          const { rows } = await dependencies.pool.query(
-            `SELECT id, ${preview} AS content_preview
-               FROM ${table}
-              WHERE archived_at IS NULL
-                AND (usefulness_score IS NULL OR usefulness_score < 0.3)
-                AND (tags IS NULL OR array_length(tags, 1) IS NULL)
-                ${readPredicate.clause}
-              FETCH FIRST $1 ROWS ONLY`,
-            [rowsPerTable, ...readPredicate.values],
-          );
-          for (const row of rows) {
-            // Vague entries are ALWAYS report-only, even when dry_run is false.
-            result.vague.push({
-              table,
-              id: row.id,
-              preview: previewOf(row.content_preview),
-              action: "flagged_for_review",
-            });
-          }
-          result.summary.vague_found += rows.length;
-        }
+        await curateTable(
+          {
+            dependencies,
+            identity,
+            table,
+            rowsPerTable,
+            // The ONLY place mutation is wired in. Dry-run leaves it undefined,
+            // so no scan below has an archive path to take at all.
+            archive: dryRun
+              ? undefined
+              : (id: string) => archiveRow(dependencies, identity, table, id),
+          },
+          args.mode,
+          result,
+        );
       }
 
       dependencies.logger.info(
@@ -213,7 +360,13 @@ export function registerCurationTools(
       return textResult(result);
     },
   );
+}
 
+/** Register `archive_entry`: explicit single-row soft delete. */
+function registerArchiveEntry(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "archive_entry",
     {
@@ -243,7 +396,10 @@ export function registerCurationTools(
         [args.id, ...predicate.values],
       );
       if (rows.length === 0) {
-        dependencies.logger.info({ tool: "archive_entry", table: args.table }, "tool_noop");
+        dependencies.logger.info(
+          { tool: "archive_entry", table: args.table },
+          "tool_noop",
+        );
         return textResult("Already archived or not found");
       }
       dependencies.logger.info(
@@ -253,7 +409,13 @@ export function registerCurationTools(
       return textResult({ id: rows[0].id, table: args.table, archived: true });
     },
   );
+}
 
+/** Register `rate_entry`: usefulness scoring under the write predicate. */
+function registerRateEntry(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "rate_entry",
     {
@@ -273,7 +435,12 @@ export function registerCurationTools(
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
-      const auth = authorize(identity, "write", args.table, `cannot write to ${args.table}`);
+      const auth = authorize(
+        identity,
+        "write",
+        args.table,
+        `cannot write to ${args.table}`,
+      );
       if (!auth.ok) return auth.response;
       const predicate = namespacePredicate(auth.identity, "write", 3);
       const { rows } = await dependencies.pool.query(
@@ -283,7 +450,10 @@ export function registerCurationTools(
         [args.score, args.id, ...predicate.values],
       );
       if (rows.length === 0) {
-        dependencies.logger.info({ tool: "rate_entry", table: args.table }, "tool_noop");
+        dependencies.logger.info(
+          { tool: "rate_entry", table: args.table },
+          "tool_noop",
+        );
         return errorResult("Cannot rate archived entry");
       }
       dependencies.logger.info(
@@ -297,4 +467,13 @@ export function registerCurationTools(
       });
     },
   );
+}
+
+export function registerCurationTools(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  registerCurateEntries(server, dependencies);
+  registerArchiveEntry(server, dependencies);
+  registerRateEntry(server, dependencies);
 }
