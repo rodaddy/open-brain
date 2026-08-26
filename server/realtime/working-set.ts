@@ -265,6 +265,85 @@ export interface WorkingSetStoreOptions {
   logger?: Logger;
 }
 
+/**
+ * The accepted shape of an append candidate: the trimmed content and the
+ * metadata object the item will carry, once every rejection has been ruled out.
+ */
+interface AcceptedWorkingSetInput {
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
+type ScreenedWorkingSetInput =
+  | { rejection: NonNullable<WorkingSetAppendResult["reason"]> }
+  | { rejection: null; accepted: AcceptedWorkingSetInput };
+
+interface ScreenWorkingSetInputOptions {
+  input: WorkingSetItemInput;
+  budget: WorkingSetBudget;
+  logger: Logger | undefined;
+}
+
+/**
+ * Every reason an append is refused, in the order the store has always checked
+ * them: kind, then empty content, then content size, then metadata. The order is
+ * observable — a call that is both an invalid kind and oversized reports
+ * `invalid_kind` — so it is preserved exactly rather than regrouped.
+ */
+function screenWorkingSetInput(
+  options: ScreenWorkingSetInputOptions,
+): ScreenedWorkingSetInput {
+  const { input, budget, logger } = options;
+  if (!WORKING_SET_ITEM_KIND_SET.has(input.kind)) {
+    return { rejection: "invalid_kind" };
+  }
+
+  const content = input.content.trim();
+  if (content.length === 0) {
+    return { rejection: "empty_content" };
+  }
+  if (content.length > budget.max_item_chars) {
+    return { rejection: "content_too_large" };
+  }
+
+  const metadata = input.metadata ?? {};
+  const metadataChars = serializedJsonLength(metadata, logger);
+  if (metadataChars === null || metadataChars > budget.max_metadata_chars) {
+    return { rejection: "metadata_too_large" };
+  }
+
+  return { rejection: null, accepted: { content, metadata } };
+}
+
+interface BuildWorkingSetItemOptions {
+  input: WorkingSetItemInput;
+  accepted: AcceptedWorkingSetInput;
+  id: string;
+  now: Date;
+  ttlMs: number;
+}
+
+/** Field-for-field materialization of the stored item; no policy lives here. */
+function buildWorkingSetItem(
+  options: BuildWorkingSetItemOptions,
+): WorkingSetItem {
+  const { input, accepted, id, now, ttlMs } = options;
+  return {
+    id,
+    kind: input.kind,
+    label: WORKING_SET_LABEL,
+    content: accepted.content,
+    confidence: input.confidence ?? null,
+    stale_at: input.stale_at ?? null,
+    trace_id: input.trace_id ?? null,
+    source_ref: input.source_ref ?? null,
+    durable_ref: input.durable_ref ?? null,
+    metadata: accepted.metadata,
+    created_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + ttlMs).toISOString(),
+  };
+}
+
 export class WorkingSetStore {
   readonly budget: WorkingSetBudget;
   private readonly logger: Logger | undefined;
@@ -284,28 +363,14 @@ export class WorkingSetStore {
   ): WorkingSetAppendResult {
     this.purgeExpired(now);
 
-    if (!WORKING_SET_ITEM_KIND_SET.has(input.kind)) {
+    const screened = screenWorkingSetInput({
+      input,
+      budget: this.budget,
+      logger: this.logger,
+    });
+    if (screened.rejection !== null) {
       this.counters.dropped += 1;
-      return this.rejected("invalid_kind");
-    }
-
-    const content = input.content.trim();
-    if (content.length === 0) {
-      this.counters.dropped += 1;
-      return this.rejected("empty_content");
-    }
-    if (content.length > this.budget.max_item_chars) {
-      this.counters.dropped += 1;
-      return this.rejected("content_too_large");
-    }
-    const metadata = input.metadata ?? {};
-    const metadataChars = serializedJsonLength(metadata, this.logger);
-    if (
-      metadataChars === null ||
-      metadataChars > this.budget.max_metadata_chars
-    ) {
-      this.counters.dropped += 1;
-      return this.rejected("metadata_too_large");
+      return this.rejected(screened.rejection);
     }
 
     const normalizedScope = normalizeWorkingSetScope(scope);
@@ -317,20 +382,13 @@ export class WorkingSetStore {
       updated_at_ms: nowMs,
     };
 
-    const item: WorkingSetItem = {
+    const item = buildWorkingSetItem({
+      input,
+      accepted: screened.accepted,
       id: input.id ?? `ws-${this.nextId++}`,
-      kind: input.kind,
-      label: WORKING_SET_LABEL,
-      content,
-      confidence: input.confidence ?? null,
-      stale_at: input.stale_at ?? null,
-      trace_id: input.trace_id ?? null,
-      source_ref: input.source_ref ?? null,
-      durable_ref: input.durable_ref ?? null,
-      metadata,
-      created_at: now.toISOString(),
-      expires_at: new Date(nowMs + this.budget.ttl_ms).toISOString(),
-    };
+      now,
+      ttlMs: this.budget.ttl_ms,
+    });
 
     session.items.push(item);
     session.updated_at_ms = nowMs;
