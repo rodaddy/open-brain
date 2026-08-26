@@ -44,16 +44,10 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { tableEnum } from "./curation-helpers.ts";
-
-/**
- * The pre-rename shared namespace.
- *
- * Refused as a promotion TARGET unconditionally, matching `promotion.ts` and
- * `server/auth/namespace-policy.ts`. `legacySharedNamespace` is empty by
- * default, so a config-gated check would permit `collab` in exactly the default
- * deployment -- the rule is about the name, not the setting.
- */
-const LEGACY_SHARED_NAMESPACE = "collab";
+import {
+  isPromotionIdentity,
+  legacyTargetRefusal,
+} from "./promotion-shared.ts";
 
 /**
  * Convert the server identity into the promotion service's shape.
@@ -69,15 +63,6 @@ function promotionAuth(identity: AuthIdentity): AuthInfo {
     namespaceSource:
       identity.namespaceSource === "delegated" ? "header" : "token",
   } as AuthInfo;
-}
-
-/** @returns Whether this identity may promote entries between namespaces. */
-function isPromotionIdentity(identity: AuthIdentity): boolean {
-  return (
-    identity.role === "admin" ||
-    identity.role === "ob-admin" ||
-    identity.role === "promoter"
-  );
 }
 
 /** Input schema for `promote_entry`. */
@@ -130,18 +115,12 @@ function resolvePromotionTarget(
   requested: string | undefined,
 ): { target: string } | { refusal: string } {
   const shared = sharedNamespaceConfig();
+  // The default is the PHYSICAL shared namespace here, where `promote_shared`
+  // defaults to the canonical one; the two differ under a split config and
+  // that difference is behavior, so each tool keeps its own default.
   const target = requested ?? shared.sharedNamespace;
-  // The legacy name is a migration SOURCE, never a write target: accepting
-  // it would recreate the two-names-for-one-lane split the canonical
-  // namespace decision exists to end.
-  if (
-    target === LEGACY_SHARED_NAMESPACE ||
-    target === shared.legacySharedNamespace
-  ) {
-    return {
-      refusal: `Permission denied: '${target}' is a legacy migration source and cannot be a promotion target; use '${shared.canonicalSharedNamespace}'`,
-    };
-  }
+  const refusal = legacyTargetRefusal(target, shared);
+  if (refusal) return { refusal };
   return { target };
 }
 
