@@ -127,4 +127,137 @@ if ! gitleaks git --pre-commit --staged --redact=100 --no-banner .; then
 fi
 echo "  ✓ gitleaks found no secrets in the staged changes"
 
+# ---------------------------------------------------------------------------
+# CONTROL 3 — STAGED-CONTENT lint / format / typecheck.
+# ---------------------------------------------------------------------------
+# Ported from /Volumes/ThunderBolt/Development/_DOCS/typescript-exemplar/_githooks/pre-commit.
+#
+# Runs against STAGED CONTENT ONLY, via a temporary index checkout. Checking the
+# working tree instead is the single most common way a hook lies: you stage a
+# fix, leave a broken edit unstaged, and the hook passes on code that is not
+# what you are committing.
+#
+# `git stash --keep-index` is the usual trick and it is dangerous here: it
+# touches the working tree, and an interrupted hook can leave the user's
+# uncommitted work in a stash they did not ask for. Checking the index out into
+# a scratch tree is read-only with respect to what the developer has open.
+fail=0
+step() { printf '\n[pre-commit] %s\n' "$*"; }
+note() { printf '  %s\n' "$*"; }
+
+# FAIL CLOSED on a missing tool. A gate that exits 0 because it could not find
+# its runner is indistinguishable from one that ran and passed — the same
+# absent-looks-like-passed confusion that made #719 survive.
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    step "MISSING TOOL: $1"
+    note "This hook fails closed. Install it, do not bypass."
+    note "  brew install oven-sh/bun/bun"
+    exit 1
+  fi
+}
+require bun
+require bunx
+
+# Staged TypeScript files, filtered to those that still exist (a delete stages a
+# path that is gone; running a linter on it errors out for the wrong reason).
+# A read loop rather than `mapfile`: macOS may resolve bash 3.2, which has none.
+staged_ts=()
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  [ -f "$f" ] && staged_ts+=("$f")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' '*.mts' '*.cts')
+
+if [ ${#staged_ts[@]} -eq 0 ]; then
+  echo "  (no staged TypeScript files — lint/typecheck skipped)"
+  echo "pre-commit: all checks passed ✓"
+  exit 0
+fi
+
+# WHERE THE STAGED CHECKOUT LIVES, AND WHY NOT UNDER .git/
+#
+# Prettier HARD-SKIPS any path containing a `.git/` segment, and no flag turns
+# that off. It then prints "No matching files" and exits 2, which a hook reads
+# as a formatting failure — so every clean commit is blocked by a check that
+# examined zero files. The checkout therefore goes into the temp workspace.
+# /tmp is deliberately not the default: it is sandbox-local, so a failed run's
+# evidence would be invisible to whoever is debugging it.
+scratch_root="${HOOK_SCRATCH_ROOT:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}"
+scratch="$scratch_root/pre-commit-staged-$$"
+
+# A FRESH scratch each run: the staged checkout must not inherit files from a
+# previous commit, or a path deleted in THIS commit lingers and gets linted.
+# The $$ suffix also makes concurrent commits safe.
+#
+# Cleanup is `mv` into _archive, never a recursive delete — the rule in
+# AGENTS.md has no carve-out, and a hook is exactly the kind of place a
+# convenient `rm -rf` gets added and then inherited by fifty repos.
+cleanup_scratch() {
+  archive="$scratch_root/../_archive"
+  mkdir -p "$archive" 2>/dev/null || return 0
+  mv "$scratch" "$archive/$(basename "$scratch")-$(date +%s)" 2>/dev/null || true
+}
+trap cleanup_scratch EXIT
+
+mkdir -p "$scratch" || exit 1
+git checkout-index --prefix="$scratch/" -af || exit 1
+
+# Tools are INVOKED from the repo root (that is where node_modules, tsconfig.json
+# and the config files live) but POINTED AT the staged copies under $scratch.
+# Running them with cwd inside $scratch means the runner finds no node_modules
+# there and either fails to resolve the binary or silently downloads a different
+# version — and the hook then reports that as a code violation.
+staged_paths=()
+for f in "${staged_ts[@]}"; do
+  staged_paths+=("$scratch/$f")
+done
+
+cd "$ROOT" || exit 1
+
+# CONFIG-GUARDED. .oxlintrc.json and .prettierrc.json are landing in a separate
+# lane; until one exists there is no rule set to enforce, so the step announces
+# the skip rather than pretending to have checked. An absent CONFIG is a skip;
+# an absent TOOL is a failure (see require above) — the two are not the same.
+if [ -f "$ROOT/.oxlintrc.json" ]; then
+  # --no-ignore because the staged copies live outside the repo, where oxlint's
+  # ignore rules and .gitignore-awareness would exclude them. Without it the
+  # linter reports "no files to lint" and exits 0 — a check that examines
+  # nothing and calls it a pass.
+  step "oxlint (staged content)"
+  if ! bunx oxlint --no-ignore --deny-warnings --config "$ROOT/.oxlintrc.json" "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+    note "FAILED. Some are auto-fixable: bunx oxlint --fix"
+    fail=1
+  fi
+else
+  step "oxlint — SKIPPED: no .oxlintrc.json in the repo root"
+fi
+
+if [ -f "$ROOT/.prettierrc.json" ]; then
+  # --ignore-path /dev/null so a local .prettierignore cannot silently exempt a
+  # staged file from the check that is supposed to gate it.
+  step "prettier --check (staged content)"
+  if ! bunx prettier --check --config "$ROOT/.prettierrc.json" --ignore-path /dev/null "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+    note "FAILED. Fix with: bunx prettier --write <files>"
+    fail=1
+  fi
+else
+  step "prettier — SKIPPED: no .prettierrc.json in the repo root"
+fi
+
+# tsc runs over the whole project, not just staged files: a change in one module
+# breaks type contracts in its callers, and per-file checking cannot see that.
+# tsconfig.json governs the scope.
+step "tsc --noEmit (whole project)"
+if ! bunx tsc --noEmit 2>&1 | sed 's/^/  /'; then
+  note "FAILED. Type errors block the commit."
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  printf '\n[pre-commit] BLOCKED. Nothing was committed.\n' >&2
+  printf '  Fix the above, re-stage, and commit again.\n' >&2
+  printf '  --no-verify is not an approved workaround in a durable repo.\n\n' >&2
+  exit 1
+fi
+
 echo "pre-commit: all checks passed ✓"

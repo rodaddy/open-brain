@@ -13,6 +13,8 @@
     "test": "bun test",
     "test:isolated": "bun run scripts/test-isolated.ts",
     "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx oxlint --deny-warnings src server",
+    "lint:fix": "bunx oxlint --fix src server",
     "backfill": "bun run scripts/backfill.ts",
     "codex-memory-smoke": "bun run scripts/codex-memory-smoke.ts",
     "eval:memory": "bun run scripts/eval-open-brain-memory.ts",
@@ -37,7 +39,8 @@
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/pg": "^8.18.0"
+    "@types/pg": "^8.18.0",
+    "oxlint": "^1.76.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
