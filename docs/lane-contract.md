@@ -87,6 +87,45 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 35) — harvest of the L2a config-schema lane (PR #778)
+
+- **A schema field that "mirrors" a reader is differenced against the reader
+  input by input, and the test calls the reader.** L2a declared 23 env names
+  with parsers that reproduced the readers' fallbacks, and every test picked
+  inputs where reader and schema agreed, so 65 green tests could not falsify
+  the PR's own start-equivalence claim. The Light-tier reviewer ran a 15-input
+  differencing set (`"3000ms"`, `"1e3"`, `"0x10"`, `"10.5"`, `""`, `"   "`,
+  `"-1"`, `"Infinity"`, ...) and found three P1 divergences: `PORT` is read
+  with `Number()` (`server/main.ts:362`) and the schema used `parseInt`, so a
+  value that crashes `listen` today silently became 3100; the capture-health
+  integers are read with `Number(raw.trim())` + `isInteger`
+  (`server/capture/liveness-observer.ts:535-550`), not `parseInt`; and the
+  shared-namespace canonical precedence was inverted against `envString`
+  (`server/tools/shared-namespace.ts:79-82`). Where the reader is exported,
+  the equivalence test calls it and compares; where the reader would crash the
+  process, the schema rejects with a named issue, never a substitute value.
+- **Cite the parse, not the constant.** The PR body cited
+  `liveness-observer.ts:404-408`, which is where the env NAMES are declared;
+  the parse is at `:535`. A citation to the name constant reads as "checked"
+  while the semantics were never opened.
+- **`??` is not "blank falls through".** `process.env.A ?? process.env.B`
+  keeps `A=""`; a blank-as-absent preprocessor makes it fall through to `B`.
+  Two readers with different blank handling cannot share one preprocessor.
+- **`GROUPS` is a bash builtin** holding the user's numeric group IDs;
+  assigning it in a done-means script silently yields that list and fails as
+  `but 20 is missing`, which reads like a broken check rather than a name
+  collision.
+- **Tooling:** the Codex git guard refuses `git checkout main` in the clone
+  for the head as well as for workers ("do not switch to main/master for
+  work"); verify-lane runs fine from a feature-branch checkout because it cuts
+  its own worktree from `origin/main`. Two CI runs on one SHA inverted their
+  flakes (`db-integration` vs `python-capture`, #614/#764); every job has a
+  green run on the SHA, which is the evidence, not a re-run to all-green.
+- **`max-lines` at 500 on a test file changes how a table-driven block is
+  added.** The fixer retired five hand-constant assertions the reader-driven
+  table subsumes so `server/config.test.ts` still passed the rule; the next
+  rung adds a sibling `*.test.ts` per group instead of removing assertions.
+
 ### 2026-08-26 (round 34) — harvest of the verify-lane deps-at-head lane (PR #776, #775)
 
 - **verify-lane installed dependencies at `origin/main` and then verified the
