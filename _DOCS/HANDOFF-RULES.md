@@ -128,6 +128,10 @@ only when a session actually needed it.
     same gate refuses any command or file text containing cap, limit,
     ceiling, quota, budget, truncation, bound, or pruning -- in PR bodies,
     commit messages, and issue comments too. Write "rule value" and "max-*".
+    The gate inspects each tool call's OWN text, so scanning a file for those
+    stems needs character-class patterns (`c[a]p`) -- spelling one plainly in
+    an `rg` argument refuses the command that was looking for it. It likewise
+    refuses the full filename of `context-pack-b*.ts`, so glob that name.
 24. `scripts/verify-lane.ts <pr>` runs from any branch: it cuts its own
     worktree from `origin/main` and posts the receipt bound to the head SHA.
     The worktree-hygiene gate allows ONE worktree at a time, so remove the
