@@ -24,9 +24,17 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { namespacePredicate } from "../auth/namespace-policy.ts";
+import {
+  namespacePredicate,
+  type NamespacePredicate,
+} from "../auth/namespace-policy.ts";
 import type { ResourceTable } from "../auth/types.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { SOURCE_LABELS, tableEnum } from "./curation-helpers.ts";
 
 /** Observed current-src default preview width for the compact envelope. */
@@ -73,7 +81,152 @@ const COMPACT_CONTENT: Readonly<Record<ResourceTable, string>> = {
 };
 
 /** Tables whose rows carry no `updated_at`, observed from the live schema. */
-const WITHOUT_UPDATED_AT = new Set<ResourceTable>(["relationships", "projects"]);
+const WITHOUT_UPDATED_AT = new Set<ResourceTable>([
+  "relationships",
+  "projects",
+]);
+
+/** Frozen `get_entry` argument contract: the names and rule values are the API. */
+const getEntryInputSchema = {
+  table: tableEnum.describe(
+    "Which table the entry is in (from search result source_type + 's')",
+  ),
+  id: z.string().uuid().describe("Entry UUID from search results"),
+  render: z
+    .enum(["full", "compact"])
+    .optional()
+    .describe(
+      "Response shape: full returns the complete row (default); compact returns a bounded preview envelope.",
+    ),
+  max_chars: z
+    .number()
+    .int()
+    .min(80)
+    .max(2000)
+    .optional()
+    .describe(
+      "Maximum compact content_preview length in characters (default 500, max 2000). Ignored for full render.",
+    ),
+};
+
+/** Tool annotations; `get_entry` reads and never mutates. */
+const getEntryAnnotations = {
+  title: "Get Entry",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+const GET_ENTRY_DESCRIPTION =
+  "Fetch a readable entry by table and ID. Defaults to full content; use render=compact for a bounded exact-UUID preview.";
+
+/**
+ * Found-but-unreadable and genuinely-absent collapse to ONE error string, so a
+ * caller cannot use this tool to probe which UUIDs exist in a namespace it has
+ * no read authority over.
+ */
+const NOT_FOUND = "Entry not found or archived";
+
+/** One resolved read: the table, the id, and the caller's read predicate. */
+interface EntryRead {
+  table: ResourceTable;
+  id: string;
+  predicate: NamespacePredicate;
+}
+
+/** Compact-render request: a resolved read plus the observed preview width. */
+interface CompactRead extends EntryRead {
+  maxChars: number;
+}
+
+/**
+ * Shape the compact envelope from one fetched row.
+ *
+ * Kept apart from the query so the payload's field order -- which clients parse
+ * -- is readable in one place rather than interleaved with SQL construction.
+ */
+function compactEnvelope(
+  row: Record<string, unknown>,
+  request: CompactRead,
+): Record<string, unknown> {
+  const namespace = typeof row.namespace === "string" ? row.namespace : null;
+  const sourceType = SOURCE_LABELS[request.table];
+  return {
+    id: row.id,
+    table: request.table,
+    source_type: sourceType,
+    namespace,
+    render: "compact",
+    max_chars: request.maxChars,
+    content_preview: row.content_preview,
+    content_length: Number(row.content_length ?? 0),
+    content_truncated: Boolean(row.content_truncated),
+    created_by: row.created_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    tier: row.tier,
+    tags: row.tags,
+    source_ref: { source: "brain", type: sourceType, id: row.id, namespace },
+    full_available: true,
+    fetch_path: {
+      tool: "get_entry",
+      arguments: { table: request.table, id: row.id, render: "full" },
+    },
+  };
+}
+
+/**
+ * Fetch one row as the bounded compact preview envelope.
+ *
+ * The namespace predicate is applied to the SELECT itself, inside the same
+ * statement that resolves the id, so an id alone can never reach a row the
+ * identity has no read authority over.
+ */
+async function fetchCompact(
+  dependencies: MemoryToolDependencies,
+  request: CompactRead,
+): Promise<Record<string, unknown> | null> {
+  const { table, id, predicate, maxChars } = request;
+  const parameters: unknown[] = [id, ...predicate.values];
+  parameters.push(maxChars);
+  const maxCharsParameter = `$${parameters.length}`;
+  const updatedAt = WITHOUT_UPDATED_AT.has(table)
+    ? "NULL::timestamptz"
+    : "updated_at";
+  const contentExpression = `regexp_replace(COALESCE((${COMPACT_CONTENT[table]})::text, ''), '[[:space:]]+', ' ', 'g')`;
+
+  const { rows } = await dependencies.pool.query(
+    `SELECT entry.id, entry.namespace, entry.created_by, entry.created_at,
+            entry.updated_at, entry.tier, entry.tags,
+            LEFT(entry.content_text, ${maxCharsParameter}) AS content_preview,
+            length(entry.content_text) AS content_length,
+            length(entry.content_text) > ${maxCharsParameter} AS content_truncated
+       FROM (
+         SELECT id, namespace, created_by, created_at, ${updatedAt} AS updated_at,
+                tier, tags, ${contentExpression} AS content_text
+           FROM ${table}
+          WHERE id = $1 AND archived_at IS NULL${predicate.clause}
+       ) entry`,
+    parameters,
+  );
+  if (rows.length === 0) return null;
+  return compactEnvelope(rows[0] as Record<string, unknown>, request);
+}
+
+/** Fetch one row as the table's own full projection, under the read predicate. */
+async function fetchFull(
+  dependencies: MemoryToolDependencies,
+  request: EntryRead,
+): Promise<unknown | null> {
+  const { table, id, predicate } = request;
+  const { rows } = await dependencies.pool.query(
+    `SELECT ${TABLE_COLUMNS[table]} FROM ${table}
+      WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
+    [id, ...predicate.values],
+  );
+  if (rows.length === 0) return null;
+  return rows[0];
+}
 
 export function registerGetEntryTool(
   server: McpServer,
@@ -82,35 +235,9 @@ export function registerGetEntryTool(
   server.registerTool(
     "get_entry",
     {
-      description:
-        "Fetch a readable entry by table and ID. Defaults to full content; use render=compact for a bounded exact-UUID preview.",
-      inputSchema: {
-        table: tableEnum.describe(
-          "Which table the entry is in (from search result source_type + 's')",
-        ),
-        id: z.string().uuid().describe("Entry UUID from search results"),
-        render: z
-          .enum(["full", "compact"])
-          .optional()
-          .describe(
-            "Response shape: full returns the complete row (default); compact returns a bounded preview envelope.",
-          ),
-        max_chars: z
-          .number()
-          .int()
-          .min(80)
-          .max(2000)
-          .optional()
-          .describe(
-            "Maximum compact content_preview length in characters (default 500, max 2000). Ignored for full render.",
-          ),
-      },
-      annotations: {
-        title: "Get Entry",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      description: GET_ENTRY_DESCRIPTION,
+      inputSchema: getEntryInputSchema,
+      annotations: getEntryAnnotations,
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
@@ -119,72 +246,32 @@ export function registerGetEntryTool(
         return errorResult(`Permission denied: cannot read ${table}`);
       }
 
-      // Found-but-unreadable and genuinely-absent collapse to ONE error string,
-      // so a caller cannot use this tool to probe which UUIDs exist in a
-      // namespace it has no read authority over.
-      const notFound = errorResult("Entry not found or archived");
-      const predicate = namespacePredicate(identity, "read", 2);
+      const read: EntryRead = {
+        table,
+        id: args.id,
+        predicate: namespacePredicate(identity, "read", 2),
+      };
 
       if ((args.render ?? "full") === "compact") {
-        const maxChars = args.max_chars ?? DEFAULT_COMPACT_MAX_CHARS;
-        const parameters: unknown[] = [args.id, ...predicate.values];
-        parameters.push(maxChars);
-        const maxCharsParameter = `$${parameters.length}`;
-        const updatedAt = WITHOUT_UPDATED_AT.has(table)
-          ? "NULL::timestamptz"
-          : "updated_at";
-        const contentExpression =
-          `regexp_replace(COALESCE((${COMPACT_CONTENT[table]})::text, ''), '[[:space:]]+', ' ', 'g')`;
-
-        const { rows } = await dependencies.pool.query(
-          `SELECT entry.id, entry.namespace, entry.created_by, entry.created_at,
-                  entry.updated_at, entry.tier, entry.tags,
-                  LEFT(entry.content_text, ${maxCharsParameter}) AS content_preview,
-                  length(entry.content_text) AS content_length,
-                  length(entry.content_text) > ${maxCharsParameter} AS content_truncated
-             FROM (
-               SELECT id, namespace, created_by, created_at, ${updatedAt} AS updated_at,
-                      tier, tags, ${contentExpression} AS content_text
-                 FROM ${table}
-                WHERE id = $1 AND archived_at IS NULL${predicate.clause}
-             ) entry`,
-          parameters,
-        );
-        if (rows.length === 0) return notFound;
-
-        const row = rows[0] as Record<string, unknown>;
-        const namespace = typeof row.namespace === "string" ? row.namespace : null;
-        const sourceType = SOURCE_LABELS[table];
-        dependencies.logger.info({ tool: "get_entry", render: "compact" }, "tool_result");
-        return textResult({
-          id: row.id,
-          table,
-          source_type: sourceType,
-          namespace,
-          render: "compact",
-          max_chars: maxChars,
-          content_preview: row.content_preview,
-          content_length: Number(row.content_length ?? 0),
-          content_truncated: Boolean(row.content_truncated),
-          created_by: row.created_by,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
-          tier: row.tier,
-          tags: row.tags,
-          source_ref: { source: "brain", type: sourceType, id: row.id, namespace },
-          full_available: true,
-          fetch_path: { tool: "get_entry", arguments: { table, id: row.id, render: "full" } },
+        const envelope = await fetchCompact(dependencies, {
+          ...read,
+          maxChars: args.max_chars ?? DEFAULT_COMPACT_MAX_CHARS,
         });
+        if (envelope === null) return errorResult(NOT_FOUND);
+        dependencies.logger.info(
+          { tool: "get_entry", render: "compact" },
+          "tool_result",
+        );
+        return textResult(envelope);
       }
 
-      const { rows } = await dependencies.pool.query(
-        `SELECT ${TABLE_COLUMNS[table]} FROM ${table}
-          WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-        [args.id, ...predicate.values],
+      const row = await fetchFull(dependencies, read);
+      if (row === null) return errorResult(NOT_FOUND);
+      dependencies.logger.info(
+        { tool: "get_entry", render: "full" },
+        "tool_result",
       );
-      if (rows.length === 0) return notFound;
-      dependencies.logger.info({ tool: "get_entry", render: "full" }, "tool_result");
-      return textResult(rows[0]);
+      return textResult(row);
     },
   );
 }
