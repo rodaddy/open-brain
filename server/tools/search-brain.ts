@@ -33,6 +33,7 @@ import {
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
+import { respondToSearchFailure } from "./tool-failure.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
 import { ALL_TABLES, type Tier } from "./search-constants.ts";
@@ -43,6 +44,7 @@ import {
 import { setActiveMcpTraceMetadata } from "../observability/langfuse-tracing.ts";
 import {
   DEFAULT_FTS_CONFIG,
+  type FtsConfig,
   requestFtsConfig,
   SUPPORTED_FTS_CONFIGS,
 } from "./fts-config.ts";
@@ -74,6 +76,136 @@ function resolveTables(
   return { tables: [...tables] };
 }
 
+/** Frozen `search_brain` argument contract: the names, types, and rule values are the API. */
+const searchBrainInputSchema = {
+  query: z.string().min(1).describe("Natural language search query"),
+  table: z
+    .enum(["thoughts", "decisions", "relationships", "projects", "sessions"])
+    .optional()
+    .describe("Optional: limit search to a specific table"),
+  namespace: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe(
+      "Optional: filter results to a specific namespace (e.g. clientId or 'shared-kb')",
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(250)
+    .optional()
+    .describe("Maximum results to return (default 10)"),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Number of results to skip for pagination (default 0)"),
+  search_mode: z
+    .enum(["hybrid", "vector", "keyword"])
+    .optional()
+    .describe(
+      "Search mode: hybrid (default) = vector + keyword with RRF fusion, vector = semantic only, keyword = full-text only",
+    ),
+  tier: z
+    .enum(["hot", "warm", "cold"])
+    .optional()
+    .describe("Optional: filter results to a specific cognitive tier"),
+  fts_config: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      `Optional: keyword full-text-search language configuration for this request. ` +
+        `Accepts a supported Postgres regconfig (${SUPPORTED_FTS_CONFIGS.join(", ")}) ` +
+        `or a language token (e.g. 'de', 'de-DE', 'spanish'). Unrecognized values ` +
+        `fall back to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english). ` +
+        `An explicitly requested effective non-English config requires admin or ob-admin ` +
+        `for keyword/hybrid searches; vector mode performs no FTS, so fts_config is ` +
+        `ignored there. For ordinary roles, a non-English deployment env default ` +
+        `degrades to english rather than denying. ` +
+        `Affects keyword/hybrid stemming only; english is byte-identical to prior behavior.`,
+    ),
+};
+
+/** Tool annotations; `search_brain` reads and never mutates. */
+const searchBrainAnnotations = {
+  title: "Search Brain",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+/** The request-shaped arguments after defaults are applied. */
+interface NormalizedSearchArgs {
+  limit: number;
+  offset: number;
+  mode: SearchMode;
+  tier: Tier | undefined;
+  requestedNamespace: string | undefined;
+  requestedFtsConfig: string | undefined;
+}
+
+/**
+ * Apply the documented argument defaults.
+ *
+ * @returns The normalized arguments; the defaults are part of the frozen contract.
+ */
+function normalizeSearchArgs(args: {
+  limit?: number;
+  offset?: number;
+  search_mode?: string;
+  tier?: string;
+  namespace?: string;
+  fts_config?: string;
+}): NormalizedSearchArgs {
+  return {
+    limit: args.limit ?? 10,
+    offset: args.offset ?? 0,
+    mode: (args.search_mode as SearchMode | undefined) ?? "hybrid",
+    tier: args.tier as Tier | undefined,
+    requestedNamespace: args.namespace,
+    requestedFtsConfig: args.fts_config,
+  };
+}
+
+/**
+ * Resolve the effective FTS configuration under the non-English privilege boundary.
+ *
+ * The boundary applies to the EFFECTIVE configuration for arms that actually run
+ * FTS, regardless of where it came from: both an explicit argument and the
+ * deployment env default select the same unindexed on-the-fly `to_tsvector` path
+ * (#368 finding 1).
+ *
+ * @returns The resolved config, or a denial when an ordinary role explicitly
+ *   requested a non-English config for an arm that runs FTS.
+ */
+function resolveCallerFtsConfig(options: {
+  role: string;
+  mode: SearchMode;
+  requestedFtsConfig: string | undefined;
+}): { ftsConfig: FtsConfig } | { denial: string } {
+  const { role, mode, requestedFtsConfig } = options;
+  const ftsPrivileged = role === "admin" || role === "ob-admin";
+  const ftsConfig = requestFtsConfig(requestedFtsConfig);
+  if (ftsConfig === DEFAULT_FTS_CONFIG || ftsPrivileged) return { ftsConfig };
+  if (mode !== "vector" && requestedFtsConfig !== undefined) {
+    return { denial: NON_ENGLISH_FTS_DENIED };
+  }
+  // Reached only when the non-English config came from the operator env
+  // default, or the mode is vector and performs no FTS at all (#368
+  // finding 2). Degrade to the GIN-indexed english path instead of
+  // denying: an ordinary role keeps exactly the pre-#341 availability and
+  // cost, and an argument that cannot influence execution must not deny.
+  return { ftsConfig: DEFAULT_FTS_CONFIG };
+}
+
 export function registerSearchBrainTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -83,74 +215,8 @@ export function registerSearchBrainTool(
     {
       description:
         "Search across all brain tables. Supports hybrid (vector + keyword), pure vector, or keyword-only modes.",
-      inputSchema: {
-        query: z.string().min(1).describe("Natural language search query"),
-        table: z
-          .enum([
-            "thoughts",
-            "decisions",
-            "relationships",
-            "projects",
-            "sessions",
-          ])
-          .optional()
-          .describe("Optional: limit search to a specific table"),
-        namespace: z
-          .string()
-          .trim()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe(
-            "Optional: filter results to a specific namespace (e.g. clientId or 'shared-kb')",
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(250)
-          .optional()
-          .describe("Maximum results to return (default 10)"),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Number of results to skip for pagination (default 0)"),
-        search_mode: z
-          .enum(["hybrid", "vector", "keyword"])
-          .optional()
-          .describe(
-            "Search mode: hybrid (default) = vector + keyword with RRF fusion, vector = semantic only, keyword = full-text only",
-          ),
-        tier: z
-          .enum(["hot", "warm", "cold"])
-          .optional()
-          .describe("Optional: filter results to a specific cognitive tier"),
-        fts_config: z
-          .string()
-          .trim()
-          .min(1)
-          .max(64)
-          .optional()
-          .describe(
-            `Optional: keyword full-text-search language configuration for this request. ` +
-              `Accepts a supported Postgres regconfig (${SUPPORTED_FTS_CONFIGS.join(", ")}) ` +
-              `or a language token (e.g. 'de', 'de-DE', 'spanish'). Unrecognized values ` +
-              `fall back to the deployment corpus default (OPENBRAIN_FTS_CONFIG, else english). ` +
-              `An explicitly requested effective non-English config requires admin or ob-admin ` +
-              `for keyword/hybrid searches; vector mode performs no FTS, so fts_config is ` +
-              `ignored there. For ordinary roles, a non-English deployment env default ` +
-              `degrades to english rather than denying. ` +
-              `Affects keyword/hybrid stemming only; english is byte-identical to prior behavior.`,
-          ),
-      },
-      annotations: {
-        title: "Search Brain",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: searchBrainInputSchema,
+      annotations: searchBrainAnnotations,
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
@@ -162,31 +228,16 @@ export function registerSearchBrainTool(
       );
       if ("denial" in resolved) return errorResult(resolved.denial);
 
-      const limit = args.limit ?? 10;
-      const offset = args.offset ?? 0;
-      const mode = (args.search_mode as SearchMode | undefined) ?? "hybrid";
-      const tier = args.tier as Tier | undefined;
-      const requestedNamespace = args.namespace;
-      const requestedFtsConfig = args.fts_config;
+      const { limit, offset, mode, tier, requestedNamespace, requestedFtsConfig } =
+        normalizeSearchArgs(args);
 
-      // The non-English privilege boundary applies to the EFFECTIVE configuration
-      // for arms that actually run FTS, regardless of where it came from: both an
-      // explicit argument and the deployment env default select the same
-      // unindexed on-the-fly to_tsvector path (#368 finding 1).
-      const ftsPrivileged =
-        identity.role === "admin" || identity.role === "ob-admin";
-      let ftsConfig = requestFtsConfig(requestedFtsConfig);
-      if (ftsConfig !== DEFAULT_FTS_CONFIG && !ftsPrivileged) {
-        if (mode !== "vector" && requestedFtsConfig !== undefined) {
-          return errorResult(NON_ENGLISH_FTS_DENIED);
-        }
-        // Reached only when the non-English config came from the operator env
-        // default, or the mode is vector and performs no FTS at all (#368
-        // finding 2). Degrade to the GIN-indexed english path instead of
-        // denying: an ordinary role keeps exactly the pre-#341 availability and
-        // cost, and an argument that cannot influence execution must not deny.
-        ftsConfig = DEFAULT_FTS_CONFIG;
-      }
+      const fts = resolveCallerFtsConfig({
+        role: identity.role,
+        mode,
+        requestedFtsConfig,
+      });
+      if ("denial" in fts) return errorResult(fts.denial);
+      const ftsConfig = fts.ftsConfig;
 
       if (
         requestedNamespace &&
@@ -216,19 +267,14 @@ export function registerSearchBrainTool(
         // The one place the driver's diagnostic fields still exist. By the time
         // this is a text response they are gone, and an empty array would be
         // indistinguishable from a genuine no-match.
-        dependencies.logger.error(
-          {
-            namespace,
-            mode,
-            tier,
-            error_message:
-              error instanceof Error ? error.message : String(error),
-          },
-          "search_brain_failed",
-        );
-        return errorResult(
-          error instanceof Error ? error.message : String(error),
-        );
+        return respondToSearchFailure({
+          logger: dependencies.logger,
+          event: "search_brain_failed",
+          error,
+          namespace,
+          mode,
+          tier,
+        });
       }
     },
   );
