@@ -18,15 +18,12 @@
  * never SILENT about it: a corrupt WAL and a clean one used to produce
  * identical startups, which made vanished recovery items indistinguishable from
  * an empty journal. Skipped rows are counted and logged.
+ *
+ * The vocabulary lives in `recovery-wal-types.ts`, the journal-row validators
+ * in `recovery-wal-records.ts`, and the pure session-map operations in
+ * `recovery-wal-store-parts.ts`. This file is the store that sequences them and
+ * owns every journal write.
  */
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
 import type { Logger } from "pino";
 import {
   compareWorkingSetScope,
@@ -37,140 +34,83 @@ import {
   type WorkingSetScope,
   type WorkingSetScopeDenial,
 } from "./working-set.ts";
+import {
+  DEFAULT_RECOVERY_WAL_BUDGET,
+  RECOVERY_WAL_ACTIONS,
+  RECOVERY_WAL_LABEL,
+  RECOVERY_WAL_SCHEMA,
+  RECOVERY_WAL_STATUSES,
+  type RecoveryWalAction,
+  type RecoveryWalBudget,
+  type RecoveryWalContextItem,
+  type RecoveryWalCounters,
+  type RecoveryWalItem,
+  type RecoveryWalItemInput,
+  type RecoveryWalRecord,
+  type RecoveryWalStatus,
+} from "./recovery-wal-types.ts";
+import {
+  appendJournalRecord,
+  journalExists,
+  readJournalRows,
+  rewriteJournal,
+} from "./recovery-wal-journal.ts";
+import {
+  isRecoveryWalAction,
+  isRecoveryWalStatus,
+  parseWalRecord,
+} from "./recovery-wal-records.ts";
+import type {
+  RecoveryWalAppendResult,
+  RecoveryWalContextPackFragment,
+  RecoveryWalContextSection,
+  RecoveryWalMarkResult,
+} from "./recovery-wal-results.ts";
+import {
+  contextItemFor,
+  deleteIfEmpty,
+  serializedJsonLength,
+  enforceReplayBudgets,
+  globalItemCount,
+  isPendingAt,
+  oldestSession,
+  type RecoveryWalSession,
+  type RecoveryWalSessions,
+} from "./recovery-wal-store-parts.ts";
 
-export const RECOVERY_WAL_LABEL = "quarantined_recovery" as const;
-export const RECOVERY_WAL_SCHEMA = "openbrain.recovery_wal.v1" as const;
-
-export const RECOVERY_WAL_STATUSES = [
-  "active",
-  "wrapped",
-  "recovery_pending",
-  "reviewed",
-  "compacted",
-  "discarded",
-  "expired",
-] as const;
-
-export type RecoveryWalStatus = (typeof RECOVERY_WAL_STATUSES)[number];
-
-export const RECOVERY_WAL_ACTIONS = [
-  "review",
-  "use_for_current_session",
-  "compact_to_wrap",
-  "promote_candidates",
-  "discard",
-  "defer",
-] as const;
-
-export type RecoveryWalAction = (typeof RECOVERY_WAL_ACTIONS)[number];
-
-export interface RecoveryWalBudget {
-  ttl_ms: number;
-  max_sessions: number;
-  max_items_per_session: number;
-  max_global_items: number;
-  max_content_chars: number;
-  max_metadata_chars: number;
-  max_preview_chars: number;
-}
-
-export interface RecoveryWalCounters {
-  dropped: number;
-  expired: number;
-  trimmed: number;
-  marked: number;
-  purged: number;
-}
-
-export interface RecoveryWalItemInput {
-  id?: string;
-  content: string;
-  status?: RecoveryWalStatus;
-  trace_id?: string | null;
-  source_ref?: string | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface RecoveryWalItem {
-  id: string;
-  label: typeof RECOVERY_WAL_LABEL;
-  status: RecoveryWalStatus;
-  content: string;
-  trace_id: string | null;
-  source_ref: string | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-  expires_at: string;
-  reviewed_at: string | null;
-  last_action: RecoveryWalAction | null;
-}
-
-export interface RecoveryWalAppendResult {
-  accepted: boolean;
-  reason?:
-    | "content_too_large"
-    | "empty_content"
-    | "invalid_status"
-    | "metadata_too_large";
-  item?: RecoveryWalItem;
-  counters: RecoveryWalCounters;
-}
-
-export interface RecoveryWalMarkResult {
-  accepted: boolean;
-  reason?: "invalid_action" | "invalid_status" | "not_found";
-  item?: RecoveryWalItem;
-  purged?: boolean;
-  counters: RecoveryWalCounters;
-}
+export {
+  DEFAULT_RECOVERY_WAL_BUDGET,
+  RECOVERY_WAL_ACTIONS,
+  RECOVERY_WAL_LABEL,
+  RECOVERY_WAL_SCHEMA,
+  RECOVERY_WAL_STATUSES,
+};
+export type {
+  RecoveryWalAppendResult,
+  RecoveryWalContextPackFragment,
+  RecoveryWalContextSection,
+  RecoveryWalMarkResult,
+};
+export type {
+  RecoveryWalAction,
+  RecoveryWalBudget,
+  RecoveryWalContextItem,
+  RecoveryWalCounters,
+  RecoveryWalItem,
+  RecoveryWalItemInput,
+  RecoveryWalStatus,
+};
 
 /**
- * The read shape. Note it carries a bounded `content_preview`, never the full
- * body: the context pack surfaces enough to decide whether the record is worth
- * reviewing, and review is where the whole body belongs.
+ * What `mark` is being asked to record. Action and status travel with `purge`
+ * and `now` in one object so a call site reads as named fields rather than a
+ * run of same-typed positional strings.
  */
-export interface RecoveryWalContextItem {
-  id: string;
-  label: typeof RECOVERY_WAL_LABEL;
+export interface RecoveryWalMarkDecision {
+  action: RecoveryWalAction;
   status: RecoveryWalStatus;
-  content_preview: string;
-  content_length: number;
-  content_truncated: boolean;
-  trace_id: string | null;
-  source_ref: string | null;
-  created_at: string;
-  updated_at: string;
-  expires_at: string;
-  reviewed_at: string | null;
-  last_action: RecoveryWalAction | null;
-  metadata: Record<string, unknown>;
-}
-
-export interface RecoveryWalContextSection {
-  schema: typeof RECOVERY_WAL_SCHEMA;
-  label: typeof RECOVERY_WAL_LABEL;
-  exact_scope_required: true;
-  not_durable_memory: true;
-  not_searchable_recall: true;
-  unreviewed_quarantine: true;
-  scope: NormalizedWorkingSetScope;
-  pending_count: number;
-  items: RecoveryWalContextItem[];
-  item_count: number;
-  budget: RecoveryWalBudget;
-  counters: RecoveryWalCounters;
-  wal_path_configured: boolean;
-}
-
-export interface RecoveryWalContextPackFragment {
-  recovery: RecoveryWalContextSection;
-  warnings: {
-    scope_denials: WorkingSetScopeDenial[];
-  };
-  budget: {
-    recovery: RecoveryWalBudget;
-  };
+  purge?: boolean;
+  now?: Date;
 }
 
 export interface RecoveryWalStoreOptions {
@@ -179,72 +119,11 @@ export interface RecoveryWalStoreOptions {
   logger?: Logger;
 }
 
-interface RecoveryWalSession {
-  scope: NormalizedWorkingSetScope;
-  items: RecoveryWalItem[];
-  updated_at_ms: number;
-}
-
-type RecoveryWalRecord =
-  | { op: "append"; scope: NormalizedWorkingSetScope; item: RecoveryWalItem }
-  | {
-      op: "mark";
-      scope: NormalizedWorkingSetScope;
-      id: string;
-      action: RecoveryWalAction;
-      status: RecoveryWalStatus;
-      reviewed_at: string | null;
-      updated_at: string;
-    }
-  | { op: "purge"; scope: NormalizedWorkingSetScope; id?: string };
-
-const RECOVERY_WAL_STATUS_SET = new Set<string>(RECOVERY_WAL_STATUSES);
-const RECOVERY_WAL_ACTION_SET = new Set<string>(RECOVERY_WAL_ACTIONS);
-
-/** Only these two statuses are "still awaiting review" and therefore emitted. */
-const PENDING_STATUSES = new Set<RecoveryWalStatus>([
-  "active",
-  "recovery_pending",
-]);
-
-export const DEFAULT_RECOVERY_WAL_BUDGET: RecoveryWalBudget = {
-  ttl_ms: 24 * 60 * 60 * 1000,
-  max_sessions: 128,
-  max_items_per_session: 50,
-  max_global_items: 2048,
-  max_content_chars: 8000,
-  max_metadata_chars: 2000,
-  max_preview_chars: 1000,
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/** See the identical note in working-set.ts: null means "unserializable", not "big". */
-function serializedJsonLength(
-  value: unknown,
-  logger: Logger | undefined,
-): number | null {
-  try {
-    return JSON.stringify(value).length;
-  } catch (error) {
-    logger?.warn(
-      {
-        value_type: typeof value,
-        error_name: error instanceof Error ? error.name : typeof error,
-      },
-      "recovery_wal_metadata_unserializable",
-    );
-    return null;
-  }
-}
-
 export class RecoveryWalStore {
   readonly budget: RecoveryWalBudget;
   readonly walPath: string | null;
   private readonly logger: Logger | undefined;
-  private sessions = new Map<string, RecoveryWalSession>();
+  private sessions: RecoveryWalSessions = new Map();
   private counters: RecoveryWalCounters = {
     dropped: 0,
     expired: 0,
@@ -268,29 +147,10 @@ export class RecoveryWalStore {
   ): RecoveryWalAppendResult {
     this.purgeExpired(now);
 
-    const status = input.status ?? "active";
-    if (!RECOVERY_WAL_STATUS_SET.has(status)) {
+    const rejection = this.rejectionFor(input);
+    if (rejection) {
       this.counters.dropped += 1;
-      return this.rejectedAppend("invalid_status");
-    }
-
-    const content = input.content.trim();
-    if (content.length === 0) {
-      this.counters.dropped += 1;
-      return this.rejectedAppend("empty_content");
-    }
-    if (content.length > this.budget.max_content_chars) {
-      this.counters.dropped += 1;
-      return this.rejectedAppend("content_too_large");
-    }
-    const metadata = input.metadata ?? {};
-    const metadataChars = serializedJsonLength(metadata, this.logger);
-    if (
-      metadataChars === null ||
-      metadataChars > this.budget.max_metadata_chars
-    ) {
-      this.counters.dropped += 1;
-      return this.rejectedAppend("metadata_too_large");
+      return this.rejectedAppend(rejection);
     }
 
     const normalizedScope = normalizeWorkingSetScope(scope);
@@ -301,20 +161,7 @@ export class RecoveryWalStore {
       items: [],
       updated_at_ms: nowMs,
     };
-    const item: RecoveryWalItem = {
-      id: input.id ?? `rw-${this.nextId++}`,
-      label: RECOVERY_WAL_LABEL,
-      status,
-      content,
-      trace_id: input.trace_id ?? null,
-      source_ref: input.source_ref ?? null,
-      metadata,
-      created_at: now.toISOString(),
-      updated_at: now.toISOString(),
-      expires_at: new Date(nowMs + this.budget.ttl_ms).toISOString(),
-      reviewed_at: null,
-      last_action: null,
-    };
+    const item = this.newItem(input, now);
 
     session.items.push(item);
     session.updated_at_ms = nowMs;
@@ -328,6 +175,52 @@ export class RecoveryWalStore {
   }
 
   /**
+   * The one place an append is refused, so the reason a record is turned away
+   * is a single readable list rather than a run of early returns interleaved
+   * with the construction of the record that is not going to exist.
+   */
+  private rejectionFor(
+    input: RecoveryWalItemInput,
+  ): NonNullable<RecoveryWalAppendResult["reason"]> | null {
+    const status = input.status ?? "active";
+    if (!isRecoveryWalStatus(status)) return "invalid_status";
+
+    const content = input.content.trim();
+    if (content.length === 0) return "empty_content";
+    if (content.length > this.budget.max_content_chars) {
+      return "content_too_large";
+    }
+
+    const metadataChars = serializedJsonLength(
+      input.metadata ?? {},
+      this.logger,
+    );
+    if (metadataChars === null) return "metadata_too_large";
+    if (metadataChars > this.budget.max_metadata_chars) {
+      return "metadata_too_large";
+    }
+    return null;
+  }
+
+  private newItem(input: RecoveryWalItemInput, now: Date): RecoveryWalItem {
+    const timestamp = now.toISOString();
+    return {
+      id: input.id ?? `rw-${this.nextId++}`,
+      label: RECOVERY_WAL_LABEL,
+      status: input.status ?? "active",
+      content: input.content.trim(),
+      trace_id: input.trace_id ?? null,
+      source_ref: input.source_ref ?? null,
+      metadata: input.metadata ?? {},
+      created_at: timestamp,
+      updated_at: timestamp,
+      expires_at: new Date(now.getTime() + this.budget.ttl_ms).toISOString(),
+      reviewed_at: null,
+      last_action: null,
+    };
+  }
+
+  /**
    * Record a review decision, or purge the record outright. `mark` is the ONLY
    * way a quarantined record leaves the pending set, and it never writes durable
    * memory — promotion, if it happens at all, is a separate authorized path.
@@ -335,18 +228,15 @@ export class RecoveryWalStore {
   mark(
     scope: WorkingSetScope,
     id: string,
-    action: RecoveryWalAction,
-    status: RecoveryWalStatus,
-    options: { purge?: boolean; now?: Date } = {},
+    decision: RecoveryWalMarkDecision,
   ): RecoveryWalMarkResult {
-    this.purgeExpired(options.now ?? new Date());
+    const { action, status } = decision;
+    this.purgeExpired(decision.now ?? new Date());
 
-    if (!RECOVERY_WAL_ACTION_SET.has(action)) {
+    if (!isRecoveryWalAction(action))
       return this.rejectedMark("invalid_action");
-    }
-    if (!RECOVERY_WAL_STATUS_SET.has(status)) {
+    if (!isRecoveryWalStatus(status))
       return this.rejectedMark("invalid_status");
-    }
 
     const normalizedScope = normalizeWorkingSetScope(scope);
     const key = workingSetScopeKey(normalizedScope);
@@ -354,15 +244,40 @@ export class RecoveryWalStore {
     const item = session?.items.find((candidate) => candidate.id === id);
     if (!session || !item) return this.rejectedMark("not_found");
 
-    if (options.purge) {
-      session.items = session.items.filter((candidate) => candidate.id !== id);
-      if (session.items.length === 0) this.sessions.delete(key);
-      this.counters.purged += 1;
-      this.writeWal({ op: "purge", scope: normalizedScope, id });
-      return { accepted: true, purged: true, counters: this.getCounters() };
-    }
+    if (decision.purge) return this.purgeMarked(session, item, normalizedScope);
+    return this.applyDecision(session, item, {
+      action,
+      status,
+      scope: normalizedScope,
+      now: decision.now ?? new Date(),
+    });
+  }
 
-    const now = options.now ?? new Date();
+  private purgeMarked(
+    session: RecoveryWalSession,
+    item: RecoveryWalItem,
+    scope: NormalizedWorkingSetScope,
+  ): RecoveryWalMarkResult {
+    session.items = session.items.filter(
+      (candidate) => candidate.id !== item.id,
+    );
+    deleteIfEmpty(this.sessions, session);
+    this.counters.purged += 1;
+    this.writeWal({ op: "purge", scope, id: item.id });
+    return { accepted: true, purged: true, counters: this.getCounters() };
+  }
+
+  private applyDecision(
+    session: RecoveryWalSession,
+    item: RecoveryWalItem,
+    decision: {
+      action: RecoveryWalAction;
+      status: RecoveryWalStatus;
+      scope: NormalizedWorkingSetScope;
+      now: Date;
+    },
+  ): RecoveryWalMarkResult {
+    const { action, status, scope, now } = decision;
     item.status = status;
     item.last_action = action;
     item.updated_at = now.toISOString();
@@ -376,8 +291,8 @@ export class RecoveryWalStore {
     this.counters.marked += 1;
     this.writeWal({
       op: "mark",
-      scope: normalizedScope,
-      id,
+      scope,
+      id: item.id,
       action,
       status,
       reviewed_at: item.reviewed_at,
@@ -396,7 +311,7 @@ export class RecoveryWalStore {
     const normalizedScope = normalizeWorkingSetScope(scope);
     const key = workingSetScopeKey(normalizedScope);
     const items = (this.sessions.get(key)?.items ?? []).filter((item) =>
-      this.isPendingAt(item, nowMs),
+      isPendingAt(item, nowMs),
     );
 
     return {
@@ -409,7 +324,7 @@ export class RecoveryWalStore {
         unreviewed_quarantine: true,
         scope: normalizedScope,
         pending_count: items.length,
-        items: items.map((item) => this.contextItemFor(item)),
+        items: items.map((item) => contextItemFor(item, this.budget)),
         item_count: items.length,
         budget: this.budget,
         counters: this.getCounters(),
@@ -434,29 +349,6 @@ export class RecoveryWalStore {
     reason: NonNullable<RecoveryWalMarkResult["reason"]>,
   ): RecoveryWalMarkResult {
     return { accepted: false, reason, counters: this.getCounters() };
-  }
-
-  private contextItemFor(item: RecoveryWalItem): RecoveryWalContextItem {
-    const preview =
-      item.content.length > this.budget.max_preview_chars
-        ? item.content.slice(0, this.budget.max_preview_chars)
-        : item.content;
-    return {
-      id: item.id,
-      label: item.label,
-      status: item.status,
-      content_preview: preview,
-      content_length: item.content.length,
-      content_truncated: item.content.length > preview.length,
-      trace_id: item.trace_id,
-      source_ref: item.source_ref,
-      created_at: item.created_at,
-      updated_at: item.updated_at,
-      expires_at: item.expires_at,
-      reviewed_at: item.reviewed_at,
-      last_action: item.last_action,
-      metadata: item.metadata,
-    };
   }
 
   /**
@@ -500,44 +392,26 @@ export class RecoveryWalStore {
   }
 
   private trimGlobal(): void {
-    while (this.globalItemCount() > this.budget.max_global_items) {
-      const oldest = this.oldestSession();
+    while (globalItemCount(this.sessions) > this.budget.max_global_items) {
+      const oldest = oldestSession(this.sessions);
       if (!oldest) return;
       const removed = oldest.items.shift();
       if (removed) {
         this.counters.trimmed += 1;
         this.writeWal({ op: "purge", scope: oldest.scope, id: removed.id });
       }
-      if (oldest.items.length === 0) {
-        this.sessions.delete(workingSetScopeKey(oldest.scope));
-      }
+      deleteIfEmpty(this.sessions, oldest);
     }
   }
 
   private trimSessions(): void {
     while (this.sessions.size > this.budget.max_sessions) {
-      const oldest = this.oldestSession();
+      const oldest = oldestSession(this.sessions);
       if (!oldest) return;
       this.counters.trimmed += oldest.items.length;
       this.writeWal({ op: "purge", scope: oldest.scope });
       this.sessions.delete(workingSetScopeKey(oldest.scope));
     }
-  }
-
-  private oldestSession(): RecoveryWalSession | null {
-    let oldest: RecoveryWalSession | null = null;
-    for (const session of this.sessions.values()) {
-      if (!oldest || session.updated_at_ms < oldest.updated_at_ms) {
-        oldest = session;
-      }
-    }
-    return oldest;
-  }
-
-  private globalItemCount(): number {
-    let count = 0;
-    for (const session of this.sessions.values()) count += session.items.length;
-    return count;
   }
 
   /** Same-namespace near misses only, and only lanes that actually hold pending work. */
@@ -550,7 +424,7 @@ export class RecoveryWalStore {
     for (const [key, session] of this.sessions.entries()) {
       if (key === requestedKey) continue;
       if (session.scope.namespace !== requestedScope.namespace) continue;
-      if (!session.items.some((item) => this.isPendingAt(item, nowMs))) continue;
+      if (!session.items.some((item) => isPendingAt(item, nowMs))) continue;
       const reasons = compareWorkingSetScope(requestedScope, session.scope);
       if (reasons.length > 0) {
         denials.push({
@@ -560,12 +434,6 @@ export class RecoveryWalStore {
       }
     }
     return denials;
-  }
-
-  private isPendingAt(item: RecoveryWalItem, nowMs: number): boolean {
-    return (
-      PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs
-    );
   }
 
   /**
@@ -579,12 +447,20 @@ export class RecoveryWalStore {
    * representative cause (the rest are nearly always the same fault).
    */
   private loadWal(): void {
-    if (!this.walPath || !existsSync(this.walPath)) return;
-    const rows = readFileSync(this.walPath, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    if (!this.walPath || !journalExists(this.walPath)) return;
+    const rows = readJournalRows(this.walPath);
 
+    this.logReplay(rows.length, this.replayRows(rows));
+    this.enforceReplayBudgets();
+    this.compactWal();
+  }
+
+  /** Apply every row, tallying the two ways a row can fail to land. */
+  private replayRows(rows: string[]): {
+    unparseable: number;
+    unapplicable: number;
+    firstApplyError: unknown;
+  } {
     let unparseable = 0;
     let unapplicable = 0;
     let firstApplyError: unknown;
@@ -601,53 +477,42 @@ export class RecoveryWalStore {
         if (firstApplyError === undefined) firstApplyError = error;
       }
     }
-    if (unparseable > 0 || unapplicable > 0) {
-      this.logger?.warn(
-        {
-          rows_total: rows.length,
-          rows_unparseable: unparseable,
-          rows_unapplicable: unapplicable,
-          error_name:
-            firstApplyError instanceof Error
-              ? firstApplyError.name
-              : firstApplyError === undefined
-                ? null
-                : typeof firstApplyError,
-        },
-        "recovery_wal_rows_skipped",
-      );
-    } else {
-      this.logger?.debug({ rows_total: rows.length }, "recovery_wal_replayed");
+    return { unparseable, unapplicable, firstApplyError };
+  }
+
+  private logReplay(
+    rowsTotal: number,
+    outcome: {
+      unparseable: number;
+      unapplicable: number;
+      firstApplyError: unknown;
+    },
+  ): void {
+    const { unparseable, unapplicable, firstApplyError } = outcome;
+    if (unparseable === 0 && unapplicable === 0) {
+      this.logger?.debug({ rows_total: rowsTotal }, "recovery_wal_replayed");
+      return;
     }
-    this.enforceReplayBudgets();
-    this.compactWal();
+    this.logger?.warn(
+      {
+        rows_total: rowsTotal,
+        rows_unparseable: unparseable,
+        rows_unapplicable: unapplicable,
+        error_name: replayErrorName(firstApplyError),
+      },
+      "recovery_wal_rows_skipped",
+    );
   }
 
   private writeWal(record: RecoveryWalRecord): void {
     if (!this.walPath) return;
-    mkdirSync(dirname(this.walPath), { recursive: true });
-    appendFileSync(this.walPath, `${JSON.stringify(record)}\n`, "utf8");
+    appendJournalRecord(this.walPath, record);
   }
 
   private applyWalRecord(record: RecoveryWalRecord): void {
     const key = workingSetScopeKey(record.scope);
     if (record.op === "append") {
-      // A record that exceeds the CURRENT budget is dropped on replay rather
-      // than admitted: the live budget is authoritative, not the one in force
-      // when the row was written.
-      if (!this.isReplayItemWithinBudget(record.item)) {
-        this.counters.dropped += 1;
-        return;
-      }
-      const session = this.sessions.get(key) ?? {
-        scope: record.scope,
-        items: [],
-        updated_at_ms: Date.parse(record.item.updated_at),
-      };
-      session.items.push(record.item);
-      session.updated_at_ms = Date.parse(record.item.updated_at);
-      this.sessions.set(key, session);
-      this.trackNextId(record.item.id);
+      this.applyAppendRecord(key, record.scope, record.item);
       return;
     }
     const session = this.sessions.get(key);
@@ -668,6 +533,30 @@ export class RecoveryWalStore {
     session.updated_at_ms = Date.parse(record.updated_at);
   }
 
+  private applyAppendRecord(
+    key: string,
+    scope: NormalizedWorkingSetScope,
+    item: RecoveryWalItem,
+  ): void {
+    // A record that exceeds the CURRENT budget is dropped on replay rather
+    // than admitted: the live budget is authoritative, not the one in force
+    // when the row was written.
+    if (!this.isReplayItemWithinBudget(item)) {
+      this.counters.dropped += 1;
+      return;
+    }
+    const updatedAtMs = Date.parse(item.updated_at);
+    const session = this.sessions.get(key) ?? {
+      scope,
+      items: [],
+      updated_at_ms: updatedAtMs,
+    };
+    session.items.push(item);
+    session.updated_at_ms = updatedAtMs;
+    this.sessions.set(key, session);
+    this.trackNextId(item.id);
+  }
+
   private isReplayItemWithinBudget(item: RecoveryWalItem): boolean {
     const metadataChars = serializedJsonLength(item.metadata, this.logger);
     return (
@@ -679,29 +568,7 @@ export class RecoveryWalStore {
 
   /** Apply the live size budgets to a replayed state that predates them. */
   private enforceReplayBudgets(): void {
-    for (const [key, session] of this.sessions.entries()) {
-      const overflow = session.items.length - this.budget.max_items_per_session;
-      if (overflow > 0) {
-        session.items.splice(0, overflow);
-        this.counters.trimmed += overflow;
-      }
-      if (session.items.length === 0) this.sessions.delete(key);
-    }
-    while (this.globalItemCount() > this.budget.max_global_items) {
-      const oldest = this.oldestSession();
-      if (!oldest) return;
-      const removed = oldest.items.shift();
-      if (removed) this.counters.trimmed += 1;
-      if (oldest.items.length === 0) {
-        this.sessions.delete(workingSetScopeKey(oldest.scope));
-      }
-    }
-    while (this.sessions.size > this.budget.max_sessions) {
-      const oldest = this.oldestSession();
-      if (!oldest) return;
-      this.counters.trimmed += oldest.items.length;
-      this.sessions.delete(workingSetScopeKey(oldest.scope));
-    }
+    this.counters.trimmed += enforceReplayBudgets(this.sessions, this.budget);
   }
 
   /** Keep generated ids monotonic across a replay so a new item cannot collide. */
@@ -714,104 +581,17 @@ export class RecoveryWalStore {
   /** Rewrite the journal as the current live state: bounded growth, same result on replay. */
   compactWal(): void {
     if (!this.walPath) return;
-    mkdirSync(dirname(this.walPath), { recursive: true });
     const records: RecoveryWalRecord[] = [];
     for (const session of this.sessions.values()) {
       for (const item of session.items) {
         records.push({ op: "append", scope: session.scope, item });
       }
     }
-    writeFileSync(
-      this.walPath,
-      records.map((record) => JSON.stringify(record)).join("\n") +
-        (records.length > 0 ? "\n" : ""),
-      "utf8",
-    );
+    rewriteJournal(this.walPath, records);
   }
 }
 
-function parseWalRecord(row: string): RecoveryWalRecord | null {
-  try {
-    const record: unknown = JSON.parse(row);
-    if (isRecoveryWalRecord(record)) return record;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-/**
- * Structural validation of a journal row. This is the trust boundary for a file
- * on disk: every field is checked before it becomes live state, so a hand-edited
- * or torn WAL cannot inject an item with an unknown status or a broken scope.
- */
-function isRecoveryWalRecord(record: unknown): record is RecoveryWalRecord {
-  if (!isRecord(record)) return false;
-  if (!isNormalizedScope(record.scope)) return false;
-  if (record.op === "append") return isRecoveryWalItem(record.item);
-  if (record.op === "mark") {
-    return (
-      typeof record.id === "string" &&
-      typeof record.action === "string" &&
-      RECOVERY_WAL_ACTION_SET.has(record.action) &&
-      typeof record.status === "string" &&
-      RECOVERY_WAL_STATUS_SET.has(record.status) &&
-      (record.reviewed_at === null ||
-        (typeof record.reviewed_at === "string" &&
-          Number.isFinite(Date.parse(record.reviewed_at)))) &&
-      typeof record.updated_at === "string" &&
-      Number.isFinite(Date.parse(record.updated_at))
-    );
-  }
-  if (record.op === "purge") {
-    return record.id === undefined || typeof record.id === "string";
-  }
-  return false;
-}
-
-function isRecoveryWalItem(value: unknown): value is RecoveryWalItem {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    value.label === RECOVERY_WAL_LABEL &&
-    typeof value.status === "string" &&
-    RECOVERY_WAL_STATUS_SET.has(value.status) &&
-    typeof value.content === "string" &&
-    (value.trace_id === null || typeof value.trace_id === "string") &&
-    (value.source_ref === null || typeof value.source_ref === "string") &&
-    isRecord(value.metadata) &&
-    typeof value.created_at === "string" &&
-    Number.isFinite(Date.parse(value.created_at)) &&
-    typeof value.updated_at === "string" &&
-    Number.isFinite(Date.parse(value.updated_at)) &&
-    typeof value.expires_at === "string" &&
-    Number.isFinite(Date.parse(value.expires_at)) &&
-    (value.reviewed_at === null ||
-      (typeof value.reviewed_at === "string" &&
-        Number.isFinite(Date.parse(value.reviewed_at)))) &&
-    (value.last_action === null ||
-      (typeof value.last_action === "string" &&
-        RECOVERY_WAL_ACTION_SET.has(value.last_action)))
-  );
-}
-
-function isNormalizedScope(value: unknown): value is NormalizedWorkingSetScope {
-  return (
-    isRecord(value) &&
-    typeof value.namespace === "string" &&
-    value.namespace.trim().length > 0 &&
-    typeof value.agent === "string" &&
-    value.agent.trim().length > 0 &&
-    typeof value.platform === "string" &&
-    value.platform.trim().length > 0 &&
-    typeof value.server_id === "string" &&
-    value.server_id.trim().length > 0 &&
-    typeof value.channel_id === "string" &&
-    value.channel_id.trim().length > 0 &&
-    (value.thread_id === null ||
-      (typeof value.thread_id === "string" &&
-        value.thread_id.trim().length > 0)) &&
-    typeof value.session_key === "string" &&
-    value.session_key.trim().length > 0
-  );
+function replayErrorName(error: unknown): string | null {
+  if (error === undefined) return null;
+  return error instanceof Error ? error.name : typeof error;
 }
