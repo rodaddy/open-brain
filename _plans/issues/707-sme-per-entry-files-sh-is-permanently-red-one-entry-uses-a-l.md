@@ -3,11 +3,12 @@
 
 # #707 — sme-per-entry-files.sh is permanently RED: one entry uses a level-1 undated heading, so its finding is invisible to the index
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T01:24:51Z
-Updated: 2026-08-10T01:24:51Z
+Updated: 2026-08-18T13:06:41Z
+Closed: 2026-08-18T13:06:41Z
 
 ---
 
@@ -74,3 +75,22 @@ recorded.
 
 State: WRITTEN (both measurements above reproduced this session); no fix
 proposed in code.
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-18T13:06:41Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-18T13:06:40Z.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-18T13:06:40Z
+
+Closed by the #738 rotation merge (squash c7bf1b9, member commit 19df066): the level-1 undated heading became a dated finding heading, pin 241 -> 242 same commit, and sme-per-entry-files.sh now reports GREEN — all clauses — for the first time since filing (receipts on PR #738).

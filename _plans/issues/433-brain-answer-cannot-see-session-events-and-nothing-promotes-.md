@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-07-27T06:12:53Z
-Updated: 2026-08-08T03:07:31Z
+Updated: 2026-08-25T05:37:43Z
 
 ---
 
@@ -112,7 +112,7 @@ them.
 
 ---
 
-## Discussion (2)
+## Discussion (3)
 
 ### rodaddy — 2026-07-27T06:16:43Z
 
@@ -241,3 +241,62 @@ Remaining on this issue:
 - Post-merge rollout steps: deploy core01, re-run the read-only canary expecting `session_events` accepted, one `brain_answer` returning `source_type: "session_event"`.
 
 Flagged during rollout (pre-existing, not from this PR): rtech-hermes `openbrain/contract.py:50` pins schema v20 / `4df9c742…` while live serves v23 / `4b69e9b4…` — needs its own ticket in that repo.
+
+---
+
+### rodaddy — 2026-08-25T05:37:43Z
+
+Re-measured 2026-08-25 on `fix/recall-serves-durable-memory` (9466a3b). **Both
+defects still stand, and defect 2 has degraded 4x.** RUNNING.
+
+## Defect 1 — `ob_session_events` still absent from `ALL_TABLES`
+
+`src/tools/table-constants.ts:10-16` reads exactly as filed:
+
+```ts
+export const ALL_TABLES: Table[] = [
+  "thoughts", "decisions", "relationships", "projects", "sessions",
+];
+```
+
+Unchanged. `brain_answer` still cannot select a session event.
+
+## Defect 2 — promotion is still undriven, and staleness went 4 days -> 17
+
+```
+thoughts             26453 rows, newest 2026-08-08
+decisions            18048 rows, newest 2026-08-08
+sessions             23737 rows, newest 2026-08-25
+ob_session_events    11647 rows, newest 2026-08-25
+```
+
+When this issue was filed the two durable tables were ~4 days stale. They are
+now **17 days** stale (2026-08-08 to 2026-08-25) while 11,647 session events
+accumulate beside them.
+
+A background runner now exists that did not when this was filed —
+`scripts/tier-lane-durable.ts` ("Background runner for lane -> own-durable
+memory tiering (Issue #160)"). **Nothing schedules it.** `launchctl list`
+shows only:
+
+```
+com.rico.open-brain-local-clone
+com.rico.open-brain-nats
+com.rico.open-brain-local-nats-worker   (exit status 1)
+com.rico.qmd-sync
+```
+
+No tiering label. So the mechanism was built and never given a driver — the
+same shape as the original finding, one layer further along.
+
+## Relation to #744
+
+#744 D1 (recall serves `working_set` only, `item_count: 0`) is very likely the
+same root cause seen from the client side: even if recall reached durable
+memory, `thoughts`/`decisions` have had nothing new since 08-08 and
+`ob_session_events` is unreachable by table selection. A #744 lane is tracing
+the server-side deciding branch now; that result will say whether they are one
+defect or two.
+
+Side observation, not this issue's scope: `com.rico.open-brain-local-nats-worker`
+is reporting exit status 1 — relevant to #735.

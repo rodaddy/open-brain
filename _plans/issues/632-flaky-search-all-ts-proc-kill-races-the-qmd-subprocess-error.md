@@ -3,11 +3,12 @@
 
 # #632 — flaky: search-all.ts proc.kill() races the qmd subprocess, erroring between tests with 0 fail
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-08T05:29:09Z
-Updated: 2026-08-08T18:56:13Z
+Updated: 2026-08-26T09:16:55Z
+Closed: 2026-08-26T09:16:55Z
 
 ---
 
@@ -40,6 +41,124 @@ Suggested fix direction: guard the timeout callback (`proc?.kill()`), and clear 
 ## Why this matters beyond the noise
 
 A suite that exits non-zero with `0 fail` teaches readers to discount red CI, which is how a real failure gets waved through later. It also makes every lane pay a re-run tax on an unrelated diff.
+
+---
+
+## Resolution
+
+Closed by **PR #777** — fix(search-all): clear the qmd timeout when the process exits first
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `8fcf0ae1c2ee91a7f9b97405edefda2755c56da6`
+- Merged at: 2026-08-26T09:16:54Z
+- PR state: MERGED
+- Issue closed: 2026-08-26T09:16:55Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #777 body
+
+> Closes #608. Closes #632.
+>
+> `searchQmdInternal` races the qmd subprocess against a `setTimeout` that calls
+> `proc.kill()`. Nothing cancelled the timer when the subprocess won, so the
+> callback stayed armed and fired later, against an already-settled race --
+> typically after the test that started it had ended.
+>
+> Under a mocked `Bun.spawn`, the handle carries only the fields the happy path
+> reads (`stdout`/`stderr`/`exited`) and has no `kill`, so the late callback threw
+> `TypeError: proc.kill is not a function`. Bun cannot attribute an error raised
+> between tests to any test, so it printed `# Unhandled error between tests` and
+> exited 1 while reporting `0 fail`.
+>
+> That is the shape that made this expensive rather than merely noisy: a red run
+> that looks green in the test list. It read as a flake, it cost every lane a
+> re-run tax on diffs touching nothing in `src/`, and a suite that exits non-zero
+> with `0 fail` teaches readers to discount red CI.
+>
+> **The fix, at the owning boundary.** The timer handle is held outside the race
+> and `clearTimeout`d once the race settles, so the loser cannot fire at all. The
+> `proc.kill` call is additionally guarded with a `typeof` check, since a partial
+> spawn handle legitimately may not provide one -- belt and braces, because the
+> cancellation is the actual fix.
+>
+> **Applied to both twins.** `src/tools/search-all.ts:101` and
+> `server/tools/search-all.ts:156` ship byte-equivalent copies of this race, and
+> the server copy has no test file of its own to notice a half-fix. Both are
+> corrected in the same commit, and done-means clause d asserts structurally that
+> neither can regress alone.
+>
+> **Nothing else shares this shape.** `rg -n 'setTimeout\(' src server --type ts`
+> over non-test files returns 23 sites; the only other `Promise.race`-with-kill is
+> `src/rem-terra-transport.ts:134`, which already clears its timer in a `finally`
+> block (line 152). It is correct and untouched.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/608-qmd-timeout-does-not-fire-after-exit.sh
+>   -> VERDICT: PASS, 5 clauses passed, 0 failed.
+> - RED-proven against the pre-fix tree with the regression test present: the
+>   done-means script exits 1 with clauses a, c and d failing. Clause a reports
+>   `Expected: 1 / Received: 0` on `cleared` -- the timer was never cancelled --
+>   and firing the captured callback throws the verbatim
+>   `TypeError: proc.kill is not a function. (In 'proc.kill()', 'proc.kill' is
+>   undefined)` from #632. Clause z passes on both sides, as a control must.
+> - The gate checks the run OUTPUT for `Unhandled error between tests`, not the
+>   exit status, because the two disagree by design in exactly this failure mode:
+>   on the broken code the test list can report every test passing.
+> - Clause c is a mutation: it removes the `clearTimeout` and requires the test
+>   file to go red. The mutation is killed. It is gated on a green baseline, so
+>   an already-red tree reports INCONCLUSIVE rather than banking a free pass.
+> - `bun run test:isolated src/tools/__tests__/get-stats.test.ts
+>   src/tools/__tests__/search-all.test.ts` -> 42 pass, 0 fail across 2 files,
+>   exit 0, zero `Unhandled error` lines. `get-stats.test.ts` is the file CI
+>   reported the leak against.
+> - `bun test src/tools/__tests__/search-all.test.ts` -> 38 pass, 0 fail.
+> - `bunx tsc --noEmit` -> clean, exit 0.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the timeout path itself. If `clearTimeout` were placed
+>   where the timeout branch also reached it, a genuinely hung qmd would no longer
+>   be killed. It sits after the race settles and before the `timedOut` branch is
+>   read, so the kill still runs on a real timeout; done-means clause z asserts
+>   both twins still bound the subprocess with `QMD_TIMEOUT_MS`, and would fail if
+>   a future change "fixed" the race by deleting the timeout.
+> - Assumptions that could be wrong: that the mocked-spawn handle is the only way
+>   `proc.kill` goes missing. The `typeof` guard does not depend on that being
+>   true -- it holds for any partial handle -- and the `clearTimeout` removes the
+>   late-fire path regardless of what the handle carries.
+> - Missing/weak tests: the server twin has no test file, so its fix is covered
+>   structurally (clause d greps both files) rather than behaviorally. Writing a
+>   server-side harness is larger than this defect warrants; the structural check
+>   is what stops a half-fix landing.
+> - Security/permission risk: none. No auth, namespace, predicate, or SQL touched.
+> - Migration/deploy risk: none. No schema, no migration, no config.
+> - Downstream client/runtime risk: none. `search_all`'s tool contract, arguments,
+>   and result shape are unchanged; this only affects whether an already-lost
+>   timer fires.
+> - Rollback/cleanup concern: none. Single commit, revertible in isolation.
+> - Fixes made before PR: the regression's first form asserted
+>   `expect(cleared).toBeGreaterThan(0)`, which passed on the BROKEN code --
+>   unrelated timers in the MCP client path were being counted. Tightened to track
+>   only the qmd timer by its `QMD_TIMEOUT_MS` delay and assert `toBe(1)`, then
+>   re-RED-proven. A test that passes pre-fix proves nothing.
+> - Known residual risk: the regression stubs `globalThis.setTimeout` to capture
+>   the callback rather than waiting out the real 10s delay, and identifies the
+>   qmd timer by matching that delay value. If `QMD_TIMEOUT_MS` changes, the
+>   mirrored constant in the test must change with it; the test asserts
+>   `captured.length === 1`, so a drifted value fails loudly rather than silently
+>   measuring nothing.
+> - SME review-memory update: [x] not applicable because: #608 and #632 already
+>   record this pattern with the evidence, and the done-means check is the durable
+>   artifact that prevents its return.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled
+> - [x] MEDIUM+ review findings were captured
+> - Live Open Brain checks: [x] not applicable because: this changes only timer
+>   cancellation inside a subprocess race; no tool contract, transport, schema, or
+>   client-facing surface moves, so there is nothing for a live canary to observe.
+>
 
 ---
 

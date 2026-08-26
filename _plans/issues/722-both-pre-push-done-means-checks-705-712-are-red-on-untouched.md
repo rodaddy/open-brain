@@ -3,11 +3,12 @@
 
 # #722 — Both pre-push done-means checks (705, 712) are RED on untouched main: unpinned fixture core.hooksPath trips #711's assertion, misreported as substantive regressions
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T14:21:04Z
-Updated: 2026-08-10T14:21:57Z
+Updated: 2026-08-18T02:12:49Z
+Closed: 2026-08-18T02:12:49Z
 
 ---
 
@@ -99,7 +100,18 @@ Generalisable: any done-means fixture that runs a git hook must pin
 
 ---
 
-## Discussion (1)
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-18T02:12:49Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-18T02:12:49Z.
+
+---
+
+## Discussion (2)
 
 ### rodaddy — 2026-08-10T14:21:56Z
 
@@ -162,3 +174,9 @@ Apply the fix to BOTH checks, and add the class guard:
 3. Shared helper, not two copies (the round-28 duplication lesson): one fixture
    constructor that pins hooksPath and asserts the effective value is
    `_githooks` before any clause runs, HARNESS-ERROR (exit 3) on mismatch.
+
+---
+
+### rodaddy — 2026-08-18T02:12:49Z
+
+Closed by the #731 merge. Receipts: independent verify-lane receipt on the PR; 705/712/722 done-means all green in the operator's real environment where all three were red (fixtures now pin core.hooksPath=_githooks; re-blind negative control proves the pin is load-bearing); CI 8/8; harvested round 31 (a5adda8).

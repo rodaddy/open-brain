@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-03T02:26:29Z
-Updated: 2026-08-04T23:27:50Z
+Updated: 2026-08-23T20:58:33Z
 
 ---
 
@@ -33,10 +33,21 @@ Refs: #443 (map — "Claude first, then adapters for Claudex, Codex, and Pi"), P
 
 ---
 
-## Discussion (1)
+## Discussion (2)
 
 ### rodaddy — 2026-08-04T23:27:50Z
 
 Sequencing decision, operator, 2026-08-04: the Codex adapter is to be done pretty soon if not next; then Pi, which is expected to be easy because it is the same shape and fully operator-controlled.
 
 Recorded for ordering only — this is NOT yet a go-ahead to start.
+
+---
+
+### rodaddy — 2026-08-23T20:58:33Z
+
+<!-- scribe:begin -->
+**Scribe** — 1 event(s) for `rodaddy/open-brain#511`
+
+- **RUNNING** (note) Pi Graph Mode connector landed: Development PR #292 merged at f3e0260; live Pi commit 298a09f installs extensions/graph-mode. Fresh default discovery, no-extensions override, event translation, fail-closed, and Stop release proof passed 7/7. hashes: gate=7a95ed8a gate-test=9461cd1e pi=9bd0b97a pi-test=4c481c59. — `rico-cli`
+
+<!-- scribe:end -->

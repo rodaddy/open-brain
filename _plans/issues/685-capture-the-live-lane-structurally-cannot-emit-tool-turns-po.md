@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-09T16:13:12Z
-Updated: 2026-08-09T16:13:12Z
+Updated: 2026-08-25T06:43:33Z
 
 ---
 
@@ -52,3 +52,197 @@ Recommend A, but explicitly NOT deciding it here — resolving a parked decision
 Also relevant to #680: 5 of the 15 quarantined turns were `role:tool`, but those were quarantined 2026-07-30 — before the port cut — so they are a coincident symptom of the same era, not this mechanism. The two issues are independent.
 
 Truth grammar: RUNNING — the frozen role is confirmed in the live DB this session; the parser branches and the port commit date are read from source at `78b740b`. The remedy is PROPOSED.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-25T06:23:36Z
+
+## This blocks every deploy, and the issue's framing needs one correction
+
+Hit while deploying the #747 distill fix, 2026-08-25. The deploy passed its
+revision proof, ran correctly in production for ~80 seconds, then auto-rolled
+back on the health gate. RUNNING.
+
+### The chain
+
+1. `tool` is dead in the live lane. Newest `tool` row is **2026-08-01
+   00:42:47** — 24 days ago. Zero in any recent window:
+
+   ```
+   role      | last_10m | last_60m | newest
+   assistant |       57 |      534 | 2026-08-25 02:18:31
+   tool      |        0 |        0 | 2026-08-01 00:42:47
+   user      |        5 |       38 | 2026-08-25 02:17:48
+   ```
+
+2. `server/capture/liveness-observer.ts:194` flags any expected role with zero
+   arrivals, seeded from `RAW_TURN_ROLES` (`server/domain/raw-turn-roles.ts:53`
+   = user/assistant/tool).
+
+3. `/health` returns **503** when status is `degraded`
+   (`server/transport/http-app.ts:98`).
+
+4. `scripts/local-clone-deploy.sh` health-checks with `curl -fsS`, which fails
+   on 503, so the deploy rolls back.
+
+Observed verbatim during the window:
+
+```
+capture_lane_health_degraded  reason="role(s) delivered nothing: tool"
+  sessions_observed=24 turns_delivered=3401 silent_roles="tool"
+local-clone-deploy: health check FAILED
+local-clone-deploy: deploy verification FAILED; rolling back
+```
+
+15 degraded events, all inside the 30s deploy window.
+
+### The correction to this issue's framing
+
+This issue reads as "the live lane cannot emit tool turns — port regression."
+The regression half is right. What is missing is that **the observer requires a
+role no live producer is supposed to emit**, and that is the half that breaks
+deploys.
+
+`RAW_TURN_ROLES` is documented as the set the boundary ACCEPTS, and the
+observer derives its expected-role seed from it (`raw-turn-roles.ts:47-51`).
+That conflates two different sets:
+
+- roles the ingest boundary may ACCEPT — correctly includes `tool`, because the
+  bulk importer emits it (`python/openbrain/src/openbrain/apps/bulk/formats.py:345`)
+- roles the live capture lane must PRODUCE — cannot include `tool`, because
+  `records.py` has exactly two branches and `else: return None`, and that is
+  DELIBERATE per `docs/decisions/capture-never-drops-a-turn.md:213`:
+  *"Do not resolve this by inference, and do not let it be resolved by
+  accident."*
+
+So the observer is permanently correct that `tool` delivered nothing, and
+permanently wrong to call that a fault. Adding a TOOL branch to `records.py` to
+make health green would resolve by accident precisely what the operator parked
+— the failure mode that decision doc names.
+
+### Why it looked intermittent
+
+`silent_roles` only evaluates when `sessionsObserved >= MIN_SESSIONS_FOR_SILENCE`
+(`liveness-observer.ts:189`). Below that threshold the fault is suppressed, so
+whether a given restart lands green is a race against session activity in the
+observation window. The rollback restart happened to land under it; the deploy
+restart did not. **Every future deploy is the same coin flip**, which is why
+this is worth fixing before the next one rather than retried.
+
+### Two fixes that do NOT touch the parked decision
+
+1. **Separate the two sets.** Give the observer its own
+   `EXPECTED_LIVE_ROLES = ["user", "assistant"]`, derived from what the live
+   lane actually produces, and keep `RAW_TURN_ROLES` as the accept set. The
+   drift test then pins live-expected as a subset of accepted. This keeps the
+   #681 lesson intact (one declared source, no hand-maintained literal beside
+   an enum) while fixing the category error.
+2. **Make the observer expect roles that have EVER arrived** in the namespace,
+   rather than a static seed. Self-correcting, no second edit when a role is
+   added or retired — but it would go quiet on a role that dies before the
+   window, which is the exact #447 failure this module exists to catch. Weaker;
+   noted for completeness, not recommended.
+
+Option 1 is the smaller correct change and preserves every invariant #681
+established. Not implementing either without a ruling, because both touch the
+boundary this issue's parked decision guards.
+
+### State of the #747 fix meanwhile
+
+MERGED to `fix/recall-serves-durable-memory` (2a0eab1), pushed, RED-then-GREEN
+verified. It ran live for 80 seconds and behaved correctly —
+`selected_batches: 1, deferred_turns_in_selected_lanes: 188396` — before the
+unrelated rollback. The serving tree is back on bf5e4d3 and distillation is
+still stopped.
+
+---
+
+### rodaddy — 2026-08-25T06:43:33Z
+
+## Deploy-blocking half FIXED and DEPLOYED - RUNNING
+
+Commit 684b3a8 on `fix/recall-serves-durable-memory`, deployed to the serving
+tree 2026-08-25 06:42. Health check passed on its own merits this time.
+
+```
+status: healthy | revision: 684b3a8
+capture silent_roles: []
+producer: {"stale": false, "completed_ticks": 4}
+```
+
+### What changed
+
+`EXPECTED_LIVE_ROLES = ["user", "assistant"]`, declared beside `RAW_TURN_ROLES`
+in `server/domain/raw-turn-roles.ts` and consumed by the observer.
+`raw-turn-roles.test.ts` pins it as a STRICT subset of the accept set, so the
+two cannot silently converge again.
+
+The accept set is unchanged: ingest still accepts `tool`, the column constraint
+still admits it, and the bulk importer's tool turns are still counted in
+`turns_delivered`. Only the LIVENESS EXPECTATION narrowed.
+
+### Why this is not a return to the #681 literal
+
+#681's lesson is that a role set must be DECLARED ONCE rather than retyped
+beside an enum, so a role the boundary learns to accept cannot escape liveness.
+That holds: the set is declared, derived, and drift-tested. What changed is
+which QUESTION the set answers, not where it lives.
+
+The category error was conflating "what may arrive" with "what must be
+arriving." Correct for user and assistant; wrong for `tool`, which the live
+parser cannot emit by design.
+
+### Operator ruling that settled it (Rico, 2026-08-25)
+
+Three streams, and the split is his: person talking to screen (`user`), screen
+responding (`assistant`), and third - "thoughts and shit that thing responding
+to screen did that didn't respond to screen." That third stream ships to
+Langfuse, and he asked whether it still does. **Verified live**: traces
+`session_start`, `claude-code-exchange`, `ingest_raw_turn` arriving at the
+configured endpoint 2026-08-25 06:32. It does.
+
+That matches `capture-never-drops-a-turn.md:244`, which named Langfuse as the
+plausible home for execution traces, and `:253` - "Storage and use are different
+questions" - which is what made this fixable without resolving the parked
+question. Nothing here decides where the third stream ultimately belongs.
+
+He also ruled explicitly that this must be right for every user, not just his
+namespace: "it should be users because I'm not the only user."
+
+### Tests rescoped, not weakened
+
+- The dead-speaker clause keeps its mechanism with `assistant` as the specimen
+  - a role that DOES have a live producer, so its silence is real evidence.
+  The original used `tool`, and that specimen was the bug.
+- New clause: a silent `tool` raises no fault.
+- The control proving accepted-but-unexpected roles are still COUNTED is
+  retained, so a fix that filtered arrivals instead of narrowing expectations
+  would fail it.
+- The `["assistant", "tool"]` assertion narrowed to `["assistant"]`. Its history
+  is in the comment: it read `["assistant"]` originally, #681 widened it because
+  an unseeded role could not be judged at all, #685 narrowed it back for a
+  different and correct reason.
+
+22 pass / 0 fail across both suites, 30 pass / 0 fail across health and capture.
+`bunx tsc --noEmit` clean.
+
+### Gate
+
+`scripts/done-means/685-live-roles-not-accept-roles.sh`, three clauses: expects
+only produced roles / live is a strict subset of accept / a healthy lane is not
+degraded. It drives the real judgement function with a synthetic observation, so
+it needs no database and cannot be perturbed by live traffic - which matters,
+because the defect was that the verdict DID depend on traffic timing. Verified
+RED (exit 1) before, GREEN (exit 0) after.
+
+### Still open in this issue
+
+The port regression itself. The live lane still cannot emit `tool` turns, and
+the parked decision at `capture-never-drops-a-turn.md:242-253` still stands
+undecided. This comment fixes only the half that broke deploys. Whether tool
+capture returns to `ob_raw_turns`, stays in Langfuse, or lands somewhere else is
+the operator's call and needs the evidence the decision doc asks for - grade a
+real batch, then look at whether the useful exchanges depended on surrounding
+tool output.
