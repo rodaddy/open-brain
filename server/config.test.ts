@@ -268,8 +268,305 @@ describe("loadServerConfig against a real process.env", () => {
     // The empty-as-absent rule must not have turned the boundary into one that
     // accepts anything: a missing REQUIRED field still has to stop startup, and
     // the message still has to say which field.
-    expect(() => withEnv({ DB_HOST: "" }, () => loadServerConfig())).toThrow(
+    // `load` is named rather than inlined so this stays inside the
+    // max-nested-callbacks limit: describe > it > expect-thunk > withEnv-thunk
+    // is four deep, and the last two say the same thing.
+    const load = () => loadServerConfig();
+    expect(() => withEnv({ DB_HOST: "" }, load)).toThrow(
       /server_configuration_invalid.*DB_HOST/,
     );
+  });
+});
+
+/**
+ * The env groups added by #750 lane L2a.
+ *
+ * Design authority: `_plans/463-server-rewrite-charter.md:108` — `server/config/`
+ * owns ALL env parsing and startup validation. Field-by-field scope and the
+ * reader each one mirrors are in `_plans/l2-composition-root-inventory.md`.
+ *
+ * The bar every case below holds to is START-EQUIVALENCE, not tidiness: the
+ * assertion is that the schema answers what the CURRENT reader answers for the
+ * same input, including the inputs the current reader shrugs off. That is why
+ * the "rejection" cases assert a FALLBACK rather than `ok: false` — several of
+ * these readers deliberately ignore an unusable value (`abc` → 3000 at
+ * `server/tools/search-engine.ts:148`; `-1` → 5 at
+ * `server/tools/shared-namespace.ts:52`), and turning that into a startup
+ * rejection here would stop a deployment that boots today. A test asserting
+ * `ok: false` would be asserting a behavior change nobody asked for.
+ */
+/**
+ * A valid configuration with `overrides` applied, or a failure naming the
+ * issues. Shared by every group block below.
+ */
+function extendedConfig(overrides: Record<string, string> = {}) {
+  const result = parseServerConfig({ ...REQUIRED, ...overrides });
+  if (!result.ok) {
+    throw new Error(`expected valid configuration: ${JSON.stringify(result.issues)}`);
+  }
+  return result.config;
+}
+
+describe("extended env — search", () => {
+  it("defaults the embedding timeout to 3000ms", () => {
+    expect(extendedConfig().search.embeddingTimeoutMs).toBe(3_000);
+  });
+
+  it("takes an explicit timeout", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "750" }).search.embeddingTimeoutMs,
+    ).toBe(750);
+  });
+
+  it("falls back to the legacy name when the preferred one is absent", () => {
+    expect(
+      extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: "900" }).search.embeddingTimeoutMs,
+    ).toBe(900);
+  });
+
+  it("prefers the current name over the legacy one when both are set", () => {
+    expect(
+      extendedConfig({
+        OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "100",
+        SEARCH_EMBEDDING_TIMEOUT_MS: "900",
+      }).search.embeddingTimeoutMs,
+    ).toBe(100);
+  });
+
+  it("ignores a non-integer timeout rather than failing startup", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "abc" }).search.embeddingTimeoutMs,
+    ).toBe(3_000);
+  });
+
+  it("ignores a below-minimum timeout, and does NOT fall through to the legacy name", () => {
+    // The name is chosen before the value is parsed, so an unusable preferred
+    // value lands on the DEFAULT, not on whatever the legacy name holds.
+    expect(
+      extendedConfig({
+        OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "0",
+        SEARCH_EMBEDDING_TIMEOUT_MS: "900",
+      }).search.embeddingTimeoutMs,
+    ).toBe(3_000);
+  });
+});
+
+describe("extended env — fts", () => {
+  it("defaults the corpus configuration to english", () => {
+    expect(extendedConfig().fts.corpusConfig).toBe("english");
+  });
+
+  it("takes an explicit supported configuration", () => {
+    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: "simple" }).fts.corpusConfig).toBe("simple");
+  });
+
+  it("maps a language token to its configuration", () => {
+    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig).toBe("spanish");
+  });
+
+  it("falls back to english on an unrecognized token rather than failing startup", () => {
+    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: "klingon" }).fts.corpusConfig).toBe("english");
+  });
+});
+
+describe("extended env — qmd", () => {
+  it("omits the path when unset, so federation is off rather than mis-spawned", () => {
+    expect("path" in extendedConfig().qmd).toBe(false);
+  });
+
+  it("takes an explicit path", () => {
+    expect(extendedConfig({ QMD_PATH: "/usr/local/bin/qmd" }).qmd.path).toBe("/usr/local/bin/qmd");
+  });
+
+  it("treats a blank path as unset, which is the dogfood shape QMD_PATH=", () => {
+    // `docs/qmd-ob-layered-recall.md`: `QMD_PATH=` (empty, not absent) made a
+    // `?? default` resolution spawn `bun "" search …` and fail open forever.
+    expect("path" in extendedConfig({ QMD_PATH: "   " }).qmd).toBe(false);
+  });
+});
+
+describe("extended env — recovery", () => {
+  it("defaults the WAL path to null", () => {
+    expect(extendedConfig().recovery.walPath).toBeNull();
+  });
+
+  it("takes an explicit WAL path", () => {
+    expect(extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "var/wal.log" }).recovery.walPath).toBe(
+      "var/wal.log",
+    );
+  });
+
+  it("treats a blank WAL path as null", () => {
+    expect(extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "" }).recovery.walPath).toBeNull();
+  });
+});
+
+describe("extended env — sharedNamespaceNames", () => {
+  it("defaults physical to the canonical name and legacy to empty", () => {
+    const names = extendedConfig().sharedNamespaceNames;
+    expect(names.physical).toBe("shared-kb");
+    // #167 retired `collab`; an empty legacy name must never match input.
+    expect(names.legacy).toBe("");
+    expect(names.legacyFallbackEnabled).toBe(false);
+    expect(names.fallbackMinResults).toBe(5);
+  });
+
+  it("takes an explicit physical name pointed away from the canonical one", () => {
+    expect(
+      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" }).sharedNamespaceNames.physical,
+    ).toBe("shared-kb-v2");
+  });
+
+  it("takes an explicit legacy name, preferring SHARED_NAMESPACE_LEGACY", () => {
+    const names = extendedConfig({
+      SHARED_NAMESPACE_LEGACY: "collab",
+      OPENBRAIN_LEGACY_SHARED_NAMESPACE: "older",
+    }).sharedNamespaceNames;
+    expect(names.legacy).toBe("collab");
+  });
+
+  it("falls back to OPENBRAIN_LEGACY_SHARED_NAMESPACE", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_LEGACY_SHARED_NAMESPACE: "collab" }).sharedNamespaceNames.legacy,
+    ).toBe("collab");
+  });
+
+  it("enables the legacy fallback on each permissive true token", () => {
+    for (const token of ["1", "true", "YES", " on "]) {
+      expect(
+        extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: token }).sharedNamespaceNames
+          .legacyFallbackEnabled,
+      ).toBe(true);
+    }
+  });
+
+  it("treats an unrecognized flag token as false rather than failing startup", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: "maybe" }).sharedNamespaceNames
+        .legacyFallbackEnabled,
+    ).toBe(false);
+  });
+
+  it("takes an explicit fallback minimum", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: "12" }).sharedNamespaceNames
+        .fallbackMinResults,
+    ).toBe(12);
+  });
+
+  it("ignores a non-positive fallback minimum rather than failing startup", () => {
+    for (const bad of ["0", "-1", "abc"]) {
+      expect(
+        extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: bad }).sharedNamespaceNames
+          .fallbackMinResults,
+      ).toBe(5);
+    }
+  });
+});
+
+describe("extended env — tracing", () => {
+  const COORDINATES = {
+    OPENBRAIN_TRACING_ENDPOINT: "https://langfuse.internal",
+    OPENBRAIN_TRACING_PUBLIC_KEY: "pk-test",
+    OPENBRAIN_TRACING_SECRET_KEY: "sk-test",
+  };
+
+  it("is off by default, with empty coordinates and masking on", () => {
+    const tracing = extendedConfig().tracing;
+    expect(tracing.enabled).toBe(false);
+    expect(tracing.maskingEnabled).toBe(true);
+    expect(tracing.endpoint).toBe("");
+  });
+
+  it("is on only when the flag is set AND all three coordinates are present", () => {
+    const tracing = extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "1" }).tracing;
+    expect(tracing.enabled).toBe(true);
+    expect(tracing.endpoint).toBe("https://langfuse.internal");
+    expect(tracing.publicKey).toBe("pk-test");
+  });
+
+  it("stays off when the coordinates are complete but the flag is not exactly 1", () => {
+    // An external payload-carrying export is opt-in; `true` is not the flag.
+    expect(
+      extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "true" }).tracing.enabled,
+    ).toBe(false);
+  });
+
+  it("stays off when the flag is set but a coordinate is missing", () => {
+    const partial = { ...COORDINATES, OPENBRAIN_TRACING_SECRET_KEY: "" };
+    expect(extendedConfig({ ...partial, OPENBRAIN_TRACING_ENABLED: "1" }).tracing.enabled).toBe(
+      false,
+    );
+  });
+
+  it("disables masking only on an exact 0", () => {
+    expect(extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing.maskingEnabled).toBe(
+      false,
+    );
+    expect(
+      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" }).tracing.maskingEnabled,
+    ).toBe(true);
+  });
+});
+
+describe("extended env — captureHealth", () => {
+  it("omits the namespace when unset — no observer, never a guessed tenant", () => {
+    const capture = extendedConfig().captureHealth;
+    expect("namespace" in capture).toBe(false);
+    expect(capture.windowMinutes).toBe(360);
+    expect(capture.refreshMs).toBe(60_000);
+  });
+
+  it("takes an explicit namespace, window, and refresh", () => {
+    const capture = extendedConfig({
+      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "rico",
+      OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "60",
+      OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "5000",
+    }).captureHealth;
+    expect(capture.namespace).toBe("rico");
+    expect(capture.windowMinutes).toBe(60);
+    expect(capture.refreshMs).toBe(5_000);
+  });
+
+  it("treats a blank namespace as unset, which is what disables the observer", () => {
+    expect("namespace" in extendedConfig({ OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "  " }).captureHealth).toBe(
+      false,
+    );
+  });
+
+  it("ignores an unparseable window or refresh rather than failing startup", () => {
+    const capture = extendedConfig({
+      OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "soon",
+      OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "-5",
+    }).captureHealth;
+    expect(capture.windowMinutes).toBe(360);
+    expect(capture.refreshMs).toBe(60_000);
+  });
+});
+
+describe("extended env — http", () => {
+  it("defaults to port 3100 and an EMPTY origin allowlist, never a wildcard", () => {
+    const http = extendedConfig().http;
+    expect(http.port).toBe(3_100);
+    expect(http.allowedOrigins).toEqual([]);
+  });
+
+  it("takes an explicit port", () => {
+    expect(extendedConfig({ PORT: "7150" }).http.port).toBe(7_150);
+  });
+
+  it("ignores an unusable port rather than failing startup", () => {
+    expect(extendedConfig({ PORT: "not-a-port" }).http.port).toBe(3_100);
+  });
+
+  it("splits, trims, and drops blanks from the origin list", () => {
+    expect(
+      extendedConfig({ ALLOWED_ORIGINS: "https://a.example, ,https://b.example " }).http
+        .allowedOrigins,
+    ).toEqual(["https://a.example", "https://b.example"]);
+  });
+
+  it("yields no origins for a blank list", () => {
+    expect(extendedConfig({ ALLOWED_ORIGINS: "  " }).http.allowedOrigins).toEqual([]);
   });
 });

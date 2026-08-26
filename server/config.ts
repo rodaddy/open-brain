@@ -14,6 +14,25 @@ import {
 } from "./config/maintenance.ts";
 import { parseNatsConfig, type NatsConfig } from "./config/nats.ts";
 import {
+  captureHealthGroup,
+  extendedEnvironmentFields,
+  ftsGroup,
+  httpGroup,
+  qmdGroup,
+  recoveryGroup,
+  searchGroup,
+  sharedNamespaceGroup,
+  tracingGroup,
+  type CaptureHealthGroup,
+  type FtsConfigGroup,
+  type HttpConfigGroup,
+  type QmdConfigGroup,
+  type RecoveryConfigGroup,
+  type SearchConfigGroup,
+  type SharedNamespaceGroup,
+  type TracingConfigGroup,
+} from "./config/env-groups.ts";
+import {
   readDeployedRevision,
   resolveServerIdentity,
 } from "./transport/server-identity.ts";
@@ -22,6 +41,16 @@ export type { MaintenanceConfig } from "./config/maintenance.ts";
 export { parseMaintenanceConfig } from "./config/maintenance.ts";
 export type { NatsConfig } from "./config/nats.ts";
 export { natsHealthFromConfig, parseNatsConfig } from "./config/nats.ts";
+export type {
+  CaptureHealthGroup,
+  FtsConfigGroup,
+  HttpConfigGroup,
+  QmdConfigGroup,
+  RecoveryConfigGroup,
+  SearchConfigGroup,
+  SharedNamespaceGroup,
+  TracingConfigGroup,
+} from "./config/env-groups.ts";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const ROLE_NAMES = [
@@ -142,6 +171,11 @@ const environmentSchema = z
     AUTH_TOKEN_OB_ADMIN: optionalSecret,
     AUTH_TOKEN_PROMOTER: optionalSecret,
     AUTH_TOKEN_READONLY: optionalSecret,
+    // Every remaining variable any non-test `server/` module reads, typed here
+    // so a consumer can be handed a value instead of reaching for
+    // `process.env`. Declarations and the reasoning behind each parser live in
+    // `./config/env-groups.ts`; the readers themselves are rewired by L2b/L2c.
+    ...extendedEnvironmentFields,
   })
   .catchall(z.string().optional());
 
@@ -199,6 +233,19 @@ export interface ServerConfig {
   readonly nats: NatsConfig;
   readonly maintenance: MaintenanceConfig;
   readonly sharedNamespace: "shared-kb";
+  readonly search: SearchConfigGroup;
+  readonly fts: FtsConfigGroup;
+  readonly qmd: QmdConfigGroup;
+  readonly recovery: RecoveryConfigGroup;
+  /**
+   * Physical and legacy shared-namespace names. The CANONICAL name is
+   * `sharedNamespace` above and stays there — these are the migration
+   * coordinates that may point away from it.
+   */
+  readonly sharedNamespaceNames: SharedNamespaceGroup;
+  readonly tracing: TracingConfigGroup;
+  readonly captureHealth: CaptureHealthGroup;
+  readonly http: HttpConfigGroup;
 }
 
 export interface ConfigIssue {
@@ -301,6 +348,17 @@ function buildConfig(
       parsed as Record<string, string | undefined>,
     ),
     sharedNamespace: parsed.SHARED_NAMESPACE_CANONICAL,
+    search: searchGroup(parsed),
+    fts: ftsGroup(parsed),
+    qmd: qmdGroup(parsed),
+    recovery: recoveryGroup(parsed),
+    sharedNamespaceNames: sharedNamespaceGroup(
+      parsed,
+      parsed.SHARED_NAMESPACE_CANONICAL,
+    ),
+    tracing: tracingGroup(parsed),
+    captureHealth: captureHealthGroup(parsed),
+    http: httpGroup(parsed),
   };
 }
 
