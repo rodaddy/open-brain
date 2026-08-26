@@ -197,8 +197,14 @@ export function registerSearchBrainTool(
       );
       if ("denial" in resolved) return errorResult(resolved.denial);
 
-      const { limit, offset, mode, tier, requestedNamespace, requestedFtsConfig } =
-        normalizeSearchArgs(args);
+      const {
+        limit,
+        offset,
+        mode,
+        tier,
+        requestedNamespace,
+        requestedFtsConfig,
+      } = normalizeSearchArgs(args);
 
       const fts = resolveCallerFtsConfig({
         role: identity.role,
@@ -211,11 +217,20 @@ export function registerSearchBrainTool(
 
       if (
         requestedNamespace &&
-        !canReadNamespace(identity, requestedNamespace)
+        !canReadNamespace(
+          identity,
+          requestedNamespace,
+          dependencies.sharedNamespaceNames,
+        )
       ) {
         return errorResult(NAMESPACE_DENIED);
       }
-      const namespace = namespaceFilterFor(identity, requestedNamespace);
+      const namespace = namespaceFilterFor(
+        identity,
+        requestedNamespace,
+        {},
+        dependencies.sharedNamespaceNames,
+      );
       setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
 
       try {
@@ -230,7 +245,10 @@ export function registerSearchBrainTool(
           namespace,
           { ftsConfig },
           requestedNamespace !== undefined &&
-            isSharedNamespace(requestedNamespace),
+            isSharedNamespace(
+              requestedNamespace,
+              dependencies.sharedNamespaceNames,
+            ),
         );
         return textResult(rows);
       } catch (error) {

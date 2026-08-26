@@ -32,7 +32,10 @@ import {
   namespaceFilterFor,
   type NamespaceFilter,
 } from "./read-scope.ts";
-import { isSharedNamespace } from "./shared-namespace.ts";
+import {
+  isSharedNamespace,
+  type SharedNamespaceConfig,
+} from "./shared-namespace.ts";
 import type { Tier } from "./search-constants.ts";
 import { setActiveMcpTraceMetadata } from "../observability/langfuse-tracing.ts";
 import {
@@ -202,11 +205,15 @@ function citedAnswerResult(options: {
 function resolveRequest(
   args: BrainAnswerArgs,
   identity: ReturnType<typeof authIdentity>,
+  names?: SharedNamespaceConfig,
 ): { request: AnswerRequest } | { denial: string } {
   if (!identity) return { denial: NOT_AUTHENTICATED };
 
   const requestedNamespace = args.namespace;
-  if (requestedNamespace && !canReadNamespace(identity, requestedNamespace)) {
+  if (
+    requestedNamespace &&
+    !canReadNamespace(identity, requestedNamespace, names)
+  ) {
     return { denial: NAMESPACE_DENIED };
   }
 
@@ -220,7 +227,7 @@ function resolveRequest(
       mode: (args.search_mode as SearchMode | undefined) ?? "hybrid",
       tier: args.tier as Tier | undefined,
       maxAgeDays: args.max_age_days ?? DEFAULT_MAX_AGE_DAYS,
-      namespace: namespaceFilterFor(identity, requestedNamespace),
+      namespace: namespaceFilterFor(identity, requestedNamespace, {}, names),
       requestedNamespace,
       tables,
       includeRaw: args.include_raw === true,
@@ -249,6 +256,7 @@ export function registerBrainAnswerTool(
       const resolved = resolveRequest(
         args as BrainAnswerArgs,
         authIdentity(extra.authInfo),
+        dependencies.sharedNamespaceNames,
       );
       if ("denial" in resolved) return errorResult(resolved.denial);
       const { request } = resolved;
@@ -262,7 +270,10 @@ export function registerBrainAnswerTool(
         rows = await retrieveAnswerRows(dependencies, request, {
           shared:
             request.requestedNamespace !== undefined &&
-            isSharedNamespace(request.requestedNamespace),
+            isSharedNamespace(
+              request.requestedNamespace,
+              dependencies.sharedNamespaceNames,
+            ),
         });
       } catch (error) {
         // Retrieval failed. An empty citation list here would read as "the brain

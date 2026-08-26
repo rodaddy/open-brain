@@ -411,7 +411,10 @@ async function searchBrainArm(
       namespace,
       {},
       options.requestedNamespace !== undefined &&
-        isSharedNamespace(options.requestedNamespace),
+        isSharedNamespace(
+          options.requestedNamespace,
+          dependencies.sharedNamespaceNames,
+        ),
     );
     return rows.map(toUnifiedResult);
   } catch (error) {
@@ -540,12 +543,21 @@ export function registerSearchAllTool(
 
       if (
         requestedNamespace &&
-        !canReadNamespace(identity, requestedNamespace)
+        !canReadNamespace(
+          identity,
+          requestedNamespace,
+          dependencies.sharedNamespaceNames,
+        )
       ) {
         return errorResult(NAMESPACE_DENIED);
       }
 
-      const namespace = namespaceFilterFor(identity, requestedNamespace);
+      const namespace = namespaceFilterFor(
+        identity,
+        requestedNamespace,
+        {},
+        dependencies.sharedNamespaceNames,
+      );
       setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
 
       const plan = planFederation(dependencies, sources);
