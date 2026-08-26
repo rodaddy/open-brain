@@ -87,6 +87,79 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 38) — harvest of the #780 wave 2 file lanes (PRs #797-#814)
+
+- **A reuse candidate is only reuse when its defaults AND its failure shape
+  match field for field.** `normalizeSearchArgs` and `respondToSearchFailure`
+  both looked like the obvious extraction target and both would have moved
+  behavior silently — a different default result count (10 vs 50), and a bare
+  driver message where the caller emits a prefixed one. Diff what the helper
+  emits, not what it is named. (PR #800)
+- **Split an authorize step so it returns a union of success-shape or
+  error-result and narrow it with a type predicate.** `tsc` then refuses the
+  forgot-to-check path at compile time; an early-return-only split leaves that
+  safety to reviewer attention. (PR #802)
+- **A helper that does strictly MORE is a behavior change wearing a
+  refactor's clothes.** `memory-helpers.authorize` fit the permission checks in
+  `tier-mutations.ts` by shape, but it resolves and checks a caller-supplied
+  namespace none of those four tools accepts. On a behavior-preserving sweep,
+  read the candidate's full body first: the reuse test is identical semantics,
+  not similar shape. (PR #803)
+- **Two namespace-predicate helpers can emit different SQL.**
+  `read-scope.ts`'s `appendReadNamespacePredicate` takes a caller-named column
+  plus a legacy-shared-fallback option; `namespace-policy.ts`'s
+  `namespacePredicate` does not. Substituting one for the other inside a
+  no-behavior-change lane changes the query. Read the emitted output, not the
+  signature. (PR #804)
+- **A `max-depth` finding inside a filter-then-emit loop means the row-admission
+  DECISION and the row EMISSION are tangled; lift the decision into a named
+  predicate rather than re-indenting.** The trap: the original marked a scope
+  key as seen BEFORE testing the item count, so a deduped-then-refused row still
+  consumes its key. Extracting the predicate makes it easy to move that `add`
+  after the count test unnoticed, which changes which items survive once a
+  maximum applies. Diff the ORDER of side effects against the guards, not just
+  the guards. (PR #805)
+- **Before changing a shared signature, lint the callers at `origin/main`
+  first.** The check's file list is derived from the branch diff, so touching a
+  dirty caller imports its findings into this lane —
+  `loadDurableMemoryContext`'s five-parameter finding was fixable only by
+  editing a caller already carrying three findings of its own (complexity 129
+  across 535 lines) on untouched `main`. If a caller is dirty the signature
+  belongs to whichever lane owns it: leave it, say so in the PR, and let
+  done-means stay honestly red on the one item rather than reach for a disable
+  comment or a silent revert. (PR #806)
+- **An over-complex function is usually held together by its mutable locals,
+  not by its length — name the shared state as one object before extracting.**
+  `buildAgentContextPackPayload` scored 129 because three locals were read and
+  written by nine sections in sequence; introducing `PackAllocator` first made
+  each section a one-argument function and took the file 729 → 425 code lines
+  with no helper over four parameters. Recorded as
+  `docs/sme/entries/2026-08-26-an-over-complex-function-is-usually-held-together-by-mutable-locals-not-by-length.md`
+  (lane: quality). Second lesson in the same entry: the extraction rewrote one
+  boolean predicate into a non-equivalent nested conditional and the 218-test
+  suite stayed green — a refactor claimed behavior-free is verified by reading
+  each extraction back against its original, not only by a green run. (PR #806)
+- **When a split leaves one helper still over the complexity rule value, the
+  leftover is usually a single composite decision, not size.**
+  `storedCitationResult` sat at 13 because the `expandable` disjunction was
+  inlined in the payload literal; extracting that one predicate cleared it.
+  Reach for the decision, not another arbitrary slice of the body. (PR #809)
+- **A near-identical sibling classifier can emit different label strings for the
+  same class.** `src/source-sync.ts`'s SQLSTATE-class table looks like an exact
+  fit for the one in `server/tools/conversation-facts-contract.ts`, but emits
+  `connection_error` where the contract publishes `connection_exception`;
+  importing it would have changed the error classes callers see. The reusable
+  thing was the PATTERN (switch → frozen lookup table), not the table. (PR #810)
+- **When a refactor splits a builder that assembles SQL with positional
+  placeholders, the parameter array is the invariant, not the SET list.** The
+  file numbered each placeholder from `params.length` immediately after pushing,
+  and appended the WHERE id param last. Splitting is safe only while every
+  helper mutates the one shared array in the original order; returning
+  per-helper arrays and concatenating renumbers placeholders silently, and both
+  the typechecker and a schema-level test stay green because the SQL is still
+  valid and the arity still matches. The catching check is reading the emitted
+  SQL and param order against the pre-change file. (PR #811)
+
 ### 2026-08-26 (round 37) — harvest of the L2b-1 config-injection lane (PR #779) and the search-all lint lane (PR #780)
 
 - **A single-file green is not a suite green: `bun test` runs the whole
