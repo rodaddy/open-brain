@@ -366,7 +366,11 @@ export function registerListRecentTool(
       const request = normalizeListRecentArgs(args);
       // `undefined` here means a global read, which is only reachable for a role
       // whose reads are global by design; every other role gets the predicate.
-      const readable = readableNamespaces(identity);
+      const readable = readableNamespaces(
+        identity,
+        {},
+        dependencies.sharedNamespaceNames,
+      );
       const queries = buildListRecentQueries({
         tables: scope.tables,
         request,

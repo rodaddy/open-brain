@@ -68,6 +68,7 @@ import {
 import { canReadNamespace } from "./read-scope.ts";
 import { recoveryWalStoreFor, workingSetStoreFor } from "./realtime-stores.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import { authIdentity, errorResult, textResult } from "./types.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 
@@ -87,6 +88,7 @@ export interface AgentContextPackBuildResult {
 function authorizePack(
   args: AgentContextPackArgs,
   auth: AuthIdentity | undefined,
+  names?: SharedNamespaceConfig,
 ):
   { denial: AgentContextPackBuildResult } | { auth: AuthIdentity; ns: string } {
   if (!auth || !canRead(auth.role, "sessions")) {
@@ -101,7 +103,7 @@ function authorizePack(
   // Gate BEFORE any query runs, so an unauthorized namespace argument is a
   // denial rather than an empty result set — the two are indistinguishable to a
   // caller, and only one of them is honest.
-  if (!canReadNamespace(auth, ns)) {
+  if (!canReadNamespace(auth, ns, names)) {
     return {
       denial: {
         payload: {
@@ -134,16 +136,9 @@ function loadAppendStores(options: {
   };
 }
 
-export async function buildAgentContextPackPayload(
-  args: AgentContextPackArgs,
-  auth: AuthIdentity | undefined,
-  dependencies: MemoryToolDependencies,
-): Promise<AgentContextPackBuildResult> {
-  const authorized = authorizePack(args, auth);
-  if ("denial" in authorized) return authorized.denial;
-  const { auth: identity, ns } = authorized;
-
-  const scope: WorkingSetScope = {
+/** The working-set scope every section of one pack is keyed by. */
+function packScope(args: AgentContextPackArgs, ns: string): WorkingSetScope {
+  return {
     namespace: ns,
     agent: args.agent,
     platform: args.platform,
@@ -152,6 +147,19 @@ export async function buildAgentContextPackPayload(
     thread_id: args.thread_id ?? null,
     session_key: args.session_key,
   };
+}
+
+export async function buildAgentContextPackPayload(
+  args: AgentContextPackArgs,
+  auth: AuthIdentity | undefined,
+  dependencies: MemoryToolDependencies,
+): Promise<AgentContextPackBuildResult> {
+  const names = dependencies.sharedNamespaceNames;
+  const authorized = authorizePack(args, auth, names);
+  if ("denial" in authorized) return authorized.denial;
+  const { auth: identity, ns } = authorized;
+
+  const scope = packScope(args, ns);
   const normalizedScope = normalizeWorkingSetScope(scope);
   const selection = selectSections(args);
 
@@ -161,7 +169,7 @@ export async function buildAgentContextPackPayload(
   // the canonical shared alias to its physical partition exactly as every other
   // isolated read path does, so two namespaces sharing a scope key or repo slug
   // never bleed across the boundary.
-  const readNamespace = physicalNamespace(ns);
+  const readNamespace = physicalNamespace(ns, names);
 
   const allocator = createAllocator(
     wholePackBudgetFor(args.budget?.max_tokens),

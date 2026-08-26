@@ -264,14 +264,25 @@ function authorizeAdjacencyRead(
   }
 
   const requestedNamespace = requestedFromArgs ?? identity.clientId;
-  if (!canReadNamespace(identity, requestedNamespace)) {
+  if (
+    !canReadNamespace(
+      identity,
+      requestedNamespace,
+      dependencies.sharedNamespaceNames,
+    )
+  ) {
     return {
       denied: errorResult(
         `Permission denied: cannot read namespace '${requestedNamespace}'`,
       ),
     };
   }
-  return { namespace: physicalNamespace(requestedNamespace) };
+  return {
+    namespace: physicalNamespace(
+      requestedNamespace,
+      dependencies.sharedNamespaceNames,
+    ),
+  };
 }
 
 /**
