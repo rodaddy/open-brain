@@ -7,6 +7,7 @@ import { createBrainServer } from "../src/server.ts";
 import { registerAllTools } from "../src/tools/index.ts";
 import type { AuthInfo } from "../src/types.ts";
 import { registerMemoryTools } from "../server/tools/index.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "../server/tools/shared-namespace-fixture.ts";
 
 interface FixtureStep {
   tool: string;
@@ -58,18 +59,29 @@ for await (const name of fixtureGlob.scan({
   cwd: fixtureDir.pathname,
   onlyFiles: true,
 })) {
-  fixtures.push((await Bun.file(new URL(name, fixtureDir)).json()) as ServerFixture);
+  fixtures.push(
+    (await Bun.file(new URL(name, fixtureDir)).json()) as ServerFixture,
+  );
 }
 fixtures.sort((a, b) => a.id.localeCompare(b.id));
-const parityManifest = (await Bun.file(new URL("./server/parity-manifest.json", import.meta.url)).json()) as {
-  provider_capability_status: Record<ProviderId, Record<string, CapabilityStatus>>;
+const parityManifest = (await Bun.file(
+  new URL("./server/parity-manifest.json", import.meta.url),
+).json()) as {
+  provider_capability_status: Record<
+    ProviderId,
+    Record<string, CapabilityStatus>
+  >;
 };
 const providers: ProviderId[] = ["current-src", "server-rewrite-scaffold"];
 
-function replacePlaceholders(value: unknown, replacements: Record<string, string>): unknown {
+function replacePlaceholders(
+  value: unknown,
+  replacements: Record<string, string>,
+): unknown {
   if (typeof value === "string") {
     return Object.entries(replacements).reduce(
-      (result, [placeholder, replacement]) => result.replaceAll(placeholder, replacement),
+      (result, [placeholder, replacement]) =>
+        result.replaceAll(placeholder, replacement),
       value,
     );
   }
@@ -102,7 +114,9 @@ function valueAtPath(source: unknown, path: string): unknown {
 function expectObserved(actual: unknown, expected: unknown): void {
   if (expected === "<uuid>") {
     expect(actual).toBeString();
-    expect(actual as string).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(actual as string).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
     return;
   }
   if (expected === "<iso-date>") {
@@ -118,7 +132,9 @@ function expectObserved(actual: unknown, expected: unknown): void {
   if (Array.isArray(expected)) {
     expect(actual).toBeArray();
     expect((actual as unknown[]).length).toBe(expected.length);
-    expected.forEach((item, index) => expectObserved((actual as unknown[])[index], item));
+    expected.forEach((item, index) =>
+      expectObserved((actual as unknown[])[index], item),
+    );
     return;
   }
   if (expected && typeof expected === "object") {
@@ -131,7 +147,10 @@ function expectObserved(actual: unknown, expected: unknown): void {
   expect(actual).toEqual(expected);
 }
 
-async function createClient(provider: ProviderId, auth: AuthInfo): Promise<{
+async function createClient(
+  provider: ProviderId,
+  auth: AuthInfo,
+): Promise<{
   client: Client;
   close: () => Promise<void>;
 }> {
@@ -155,17 +174,17 @@ async function createClient(provider: ProviderId, auth: AuthInfo): Promise<{
       embedFn: async () => Array(768).fill(0.01),
       logger: pino({ level: "silent" }),
       embeddingModel: "parity-fixture",
+      sharedNamespaceNames: isolatedSharedNamespaceNames(),
     });
   }
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
-    originalSend(
-      message,
-      { ...options, authInfo: auth } as unknown as Parameters<
-        typeof originalSend
-      >[1],
-    );
+    originalSend(message, {
+      ...options,
+      authInfo: auth,
+    } as unknown as Parameters<typeof originalSend>[1]);
   const client = new Client({ name: "server-parity", version: "1.0.0" });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
@@ -207,6 +226,25 @@ const priorSharedNamespaceEnv = {
   canonical: process.env.SHARED_NAMESPACE_CANONICAL,
   physical: process.env.SHARED_NAMESPACE_PHYSICAL,
 };
+
+/**
+ * The shared-namespace name set the `server-rewrite-scaffold` provider is wired
+ * with.
+ *
+ * `server/tools/shared-namespace.ts` reads no environment (#857): every name
+ * arrives through `MemoryToolDependencies.sharedNamespaceNames`, exactly as
+ * `server/main.ts` supplies it from `ServerConfig`. The env assignments above
+ * still isolate the `current-src` provider, which resolves those names itself;
+ * this returns the same isolated pair as an explicit dependency so BOTH
+ * providers observe the identical premise.
+ */
+function isolatedSharedNamespaceNames(): typeof DEFAULT_SHARED_NAMESPACE_NAMES {
+  return {
+    ...DEFAULT_SHARED_NAMESPACE_NAMES,
+    canonicalSharedNamespace: SHARED_NAMESPACE_ISOLATION,
+    physicalSharedNamespace: SHARED_NAMESPACE_ISOLATION,
+  };
+}
 
 /** Restore an env var to its pre-suite value, unsetting it when it was absent. */
 function restoreEnv(key: string, value: string | undefined): void {
@@ -267,85 +305,111 @@ async function deleteSeededRows(): Promise<void> {
   if (!pool || seededNamespaces.size === 0) return;
   const namespaces = [...seededNamespaces];
   for (const table of SEEDED_TABLES) {
-    await pool.query(`DELETE FROM ${table} WHERE namespace = ANY($1)`, [namespaces]);
+    await pool.query(`DELETE FROM ${table} WHERE namespace = ANY($1)`, [
+      namespaces,
+    ]);
   }
 }
 
-dbDescribe("server parity fixtures by implemented provider capability (live Postgres)", () => {
-  beforeAll(() => {
-    process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
-    process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
-  });
+dbDescribe(
+  "server parity fixtures by implemented provider capability (live Postgres)",
+  () => {
+    beforeAll(() => {
+      process.env.SHARED_NAMESPACE_CANONICAL = SHARED_NAMESPACE_ISOLATION;
+      process.env.SHARED_NAMESPACE_PHYSICAL = SHARED_NAMESPACE_ISOLATION;
+    });
 
-  afterAll(async () => {
-    // Delete BEFORE restoring the shared-namespace override. The deletes are
-    // plain namespace-predicated SQL and do not read that config, so the order
-    // is not load-bearing today — but keeping cleanup inside the isolated
-    // window means it stays correct if a future teardown ever routes through
-    // application code that resolves the shared namespace.
-    await deleteSeededRows();
-    restoreEnv("SHARED_NAMESPACE_CANONICAL", priorSharedNamespaceEnv.canonical);
-    restoreEnv("SHARED_NAMESPACE_PHYSICAL", priorSharedNamespaceEnv.physical);
-  });
+    afterAll(async () => {
+      // Delete BEFORE restoring the shared-namespace override. The deletes are
+      // plain namespace-predicated SQL and do not read that config, so the order
+      // is not load-bearing today — but keeping cleanup inside the isolated
+      // window means it stays correct if a future teardown ever routes through
+      // application code that resolves the shared namespace.
+      await deleteSeededRows();
+      restoreEnv(
+        "SHARED_NAMESPACE_CANONICAL",
+        priorSharedNamespaceEnv.canonical,
+      );
+      restoreEnv("SHARED_NAMESPACE_PHYSICAL", priorSharedNamespaceEnv.physical);
+    });
 
-  for (const provider of providers) {
-    for (const fixture of fixtures) {
-      if (parityManifest.provider_capability_status[provider][fixture.capability] !== "implemented") continue;
-      test(`${provider}: ${fixture.id}`, async () => {
-        const providerSlug = provider.replaceAll("-", "_");
-        const namespace = `${fixture.auth.client_id}-${providerSlug}-${process.pid}`;
-        const otherNamespace = `${namespace}-other`;
-        // Recorded BEFORE the steps run, not after. A fixture that throws
-        // partway has still written rows, and those are exactly the ones most
-        // worth cleaning up; registering on the way in makes teardown cover the
-        // failure path too.
-        seededNamespaces.add(namespace);
-        seededNamespaces.add(otherNamespace);
-        // Captured ids are added to this same map as steps run, so a fixture
-        // substitutes namespace tokens and prior-step ids through one mechanism.
-        const replacements: Record<string, string> = {
-          "{{namespace}}": namespace,
-          "{{other_namespace}}": otherNamespace,
-        };
-        const auth: AuthInfo = {
-          role: fixture.auth.role,
-          clientId: namespace,
-          namespaceSource: fixture.auth.namespace_source ?? "token",
-        };
-        const { client, close } = await createClient(provider, auth);
-        try {
-          for (const step of fixture.steps) {
-            const args = replacePlaceholders(step.arguments, replacements) as Record<string, unknown>;
-            const expected = replacePlaceholders(step.expectation, replacements) as FixtureStep["expectation"];
-            const result = await client.callTool({ name: step.tool, arguments: args });
-            const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-            if (process.env.PARITY_OBSERVE === "1") {
-              process.stdout.write(`${provider} ${fixture.id} ${step.tool}: ${JSON.stringify({ is_error: result.isError === true, text })}\n`);
+    for (const provider of providers) {
+      for (const fixture of fixtures) {
+        if (
+          parityManifest.provider_capability_status[provider][
+            fixture.capability
+          ] !== "implemented"
+        )
+          continue;
+        test(`${provider}: ${fixture.id}`, async () => {
+          const providerSlug = provider.replaceAll("-", "_");
+          const namespace = `${fixture.auth.client_id}-${providerSlug}-${process.pid}`;
+          const otherNamespace = `${namespace}-other`;
+          // Recorded BEFORE the steps run, not after. A fixture that throws
+          // partway has still written rows, and those are exactly the ones most
+          // worth cleaning up; registering on the way in makes teardown cover the
+          // failure path too.
+          seededNamespaces.add(namespace);
+          seededNamespaces.add(otherNamespace);
+          // Captured ids are added to this same map as steps run, so a fixture
+          // substitutes namespace tokens and prior-step ids through one mechanism.
+          const replacements: Record<string, string> = {
+            "{{namespace}}": namespace,
+            "{{other_namespace}}": otherNamespace,
+          };
+          const auth: AuthInfo = {
+            role: fixture.auth.role,
+            clientId: namespace,
+            namespaceSource: fixture.auth.namespace_source ?? "token",
+          };
+          const { client, close } = await createClient(provider, auth);
+          try {
+            for (const step of fixture.steps) {
+              const args = replacePlaceholders(
+                step.arguments,
+                replacements,
+              ) as Record<string, unknown>;
+              const expected = replacePlaceholders(
+                step.expectation,
+                replacements,
+              ) as FixtureStep["expectation"];
+              const result = await client.callTool({
+                name: step.tool,
+                arguments: args,
+              });
+              const text =
+                (result.content as Array<{ text: string }>)[0]?.text ?? "";
+              if (process.env.PARITY_OBSERVE === "1") {
+                process.stdout.write(
+                  `${provider} ${fixture.id} ${step.tool}: ${JSON.stringify({ is_error: result.isError === true, text })}\n`,
+                );
+              }
+              expect(result.isError === true).toBe(expected.is_error);
+              if (expected.text !== undefined) expect(text).toBe(expected.text);
+              if (expected.json !== undefined)
+                expectObserved(JSON.parse(text), expected.json);
+
+              for (const [name, path] of Object.entries(step.capture ?? {})) {
+                const captured = valueAtPath(JSON.parse(text), path);
+                // A capture that silently resolved to undefined would substitute
+                // the literal string "undefined" into the next step's arguments,
+                // turning a broken fixture into a confusing validation error
+                // several steps later. Fail here, where the cause is visible.
+                expect(
+                  typeof captured === "string" && captured.length > 0,
+                  `${fixture.id} step ${step.tool}: capture '${name}' found nothing at '${path}'`,
+                ).toBe(true);
+                replacements[`{{${name}}}`] = captured as string;
+              }
             }
-            expect(result.isError === true).toBe(expected.is_error);
-            if (expected.text !== undefined) expect(text).toBe(expected.text);
-            if (expected.json !== undefined) expectObserved(JSON.parse(text), expected.json);
-
-            for (const [name, path] of Object.entries(step.capture ?? {})) {
-              const captured = valueAtPath(JSON.parse(text), path);
-              // A capture that silently resolved to undefined would substitute
-              // the literal string "undefined" into the next step's arguments,
-              // turning a broken fixture into a confusing validation error
-              // several steps later. Fail here, where the cause is visible.
-              expect(
-                typeof captured === "string" && captured.length > 0,
-                `${fixture.id} step ${step.tool}: capture '${name}' found nothing at '${path}'`,
-              ).toBe(true);
-              replacements[`{{${name}}}`] = captured as string;
-            }
+          } finally {
+            await close();
           }
-        } finally {
-          await close();
-        }
-      });
+        });
+      }
     }
-  }
-});
+  },
+);
 
 afterAll(async () => {
   await pool?.end();
