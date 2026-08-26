@@ -204,9 +204,9 @@ for softening the gate.
 
 ### The lint debt is paid one file at a time, each file finished before the next
 
-> Ruling (Rico, 2026-08-26): O1. Pay the debt one file at a time, each file brought fully to standard and passing before the next, lane after lane, until the whole app passes the standards. Order: the files blocking L2 first (server/main.ts, search-brain.ts, search-all.ts, search-engine.ts, langfuse-tracing.ts), then every remaining server/ file with findings. Each lane: one file, behavior-preserving, existing tests unmodified and green, done-means = oxlint --deny-warnings on that file exits 0 (RED on main).
+> option one is also what I would say. And just go through them one at a time until everything is proper and passing and then go to the next file, the next file, the next file, until we have an app that passes proper through the standards.
 
-2026-08-26 15:42Z — https://github.com/rodaddy/open-brain/issues/780
+2026-08-26 15:57Z — https://github.com/rodaddy/open-brain/issues/780#issuecomment-5427728743
 
 Once L1 armed the gate (#771, `c73a7f7`), the pre-existing violations blocked
 L2's own commits — draft PR #779 could not land. This ruling settles how the
@@ -215,13 +215,9 @@ rather than per rule or per rung. Consequence for the ladder: for
 `server/tools/search-engine.ts` and `server/observability/langfuse-tracing.ts`,
 `max-lines` is among their findings, so their L4 split is pulled FORWARD into
 their lint lane. 142 findings across non-test `server/`, measured at `49ecfbe`;
-the per-file checklist lives in the issue.
-
-`UNVERIFIED` as a character-for-character operator quote. Unlike every other
-blockquote in this file, the text above is the ruling AS RECORDED in the #780
-comment posted under the operator's account, not a transcript line — the
-underlying spoken wording is not preserved in an artifact this file can cite.
-It is quoted exactly as #780 states it, and #780 is the authority.
+the per-file checklist lives in the issue. The head’s paraphrase of this
+ruling (file order, per-lane conditions) is the first comment on #780; the
+blockquote above is the operator’s own wording as posted in the third.
 
 ### Better git hygiene: branches and PRs pushed, committed, merged
 
