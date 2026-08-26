@@ -36,7 +36,8 @@ import {
 import { respondToSearchFailure } from "./tool-failure.ts";
 import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
-import { ALL_TABLES, type Tier } from "./search-constants.ts";
+import { ALL_TABLES } from "./search-constants.ts";
+import { normalizeSearchArgs } from "./search-request.ts";
 import {
   executeSearchWithSharedFallback,
   type SearchMode,
@@ -141,39 +142,6 @@ const searchBrainAnnotations = {
   destructiveHint: false,
   idempotentHint: true,
 };
-
-/** The request-shaped arguments after defaults are applied. */
-interface NormalizedSearchArgs {
-  limit: number;
-  offset: number;
-  mode: SearchMode;
-  tier: Tier | undefined;
-  requestedNamespace: string | undefined;
-  requestedFtsConfig: string | undefined;
-}
-
-/**
- * Apply the documented argument defaults.
- *
- * @returns The normalized arguments; the defaults are part of the frozen contract.
- */
-function normalizeSearchArgs(args: {
-  limit?: number;
-  offset?: number;
-  search_mode?: string;
-  tier?: string;
-  namespace?: string;
-  fts_config?: string;
-}): NormalizedSearchArgs {
-  return {
-    limit: args.limit ?? 10,
-    offset: args.offset ?? 0,
-    mode: (args.search_mode as SearchMode | undefined) ?? "hybrid",
-    tier: args.tier as Tier | undefined,
-    requestedNamespace: args.namespace,
-    requestedFtsConfig: args.fts_config,
-  };
-}
 
 /**
  * Resolve the effective FTS configuration under the non-English privilege boundary.
