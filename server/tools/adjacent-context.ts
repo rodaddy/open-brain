@@ -26,19 +26,22 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { canReadNamespace } from "./read-scope.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import { LINK_RELATIONS } from "./search-constants.ts";
 
 const DIRECTIONS = ["outgoing", "incoming", "both"] as const;
+type Direction = (typeof DIRECTIONS)[number];
 const GRAPH_READ_DENIED = "Permission denied: cannot read link graph";
 
 /** UUID shape accepted for the source node id. */
-const graphUuid = z
-  .string()
-  .uuid()
-  .describe("UUID of the source node");
+const graphUuid = z.string().uuid().describe("UUID of the source node");
 
 interface LinkRow {
   id: string;
@@ -56,99 +59,129 @@ interface LinkRow {
   to_canonical_id: string | null;
 }
 
-export function registerAdjacentContextTool(
-  server: McpServer,
-  dependencies: MemoryToolDependencies,
-): void {
-  server.registerTool(
-    "adjacent_context",
-    {
-      description:
-        "Find entities and entries linked to a given node. " +
-        "Traverses the knowledge graph from a source node in one or both directions.",
-      inputSchema: {
-        type: z.string().min(1).max(200).describe("Type of the source node"),
-        id: graphUuid,
-        namespace: z
-          .string()
-          .max(500)
-          .optional()
-          .describe("Namespace for isolation (defaults to agent's clientId)"),
-        relation: z
-          .enum(LINK_RELATIONS)
-          .optional()
-          .describe("Filter by relation type"),
-        direction: z
-          .enum(DIRECTIONS)
-          .optional()
-          .describe(
-            'Traversal direction: "outgoing", "incoming", or "both" (default)',
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(200)
-          .optional()
-          .describe("Maximum links to return (default 50)"),
-      },
-      annotations: {
-        title: "Adjacent Context",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
-    },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      // The link graph spans every table, so the broadest read permission gates
-      // it: a role that cannot read sessions cannot traverse edges into them.
-      if (!identity || !canRead(identity.role, "sessions")) {
-        dependencies.logger.warn(
-          { role: identity?.role ?? "none" },
-          "adjacent_context_denied",
-        );
-        return errorResult(GRAPH_READ_DENIED);
-      }
+/** One returned edge, already restated from the source node's perspective. */
+interface AdjacentLink {
+  id: string;
+  direction: string;
+  relation: string;
+  weight: number;
+  linked_type: string;
+  linked_id: string;
+  linked_name: string | null;
+  canonical_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
 
-      const requestedNamespace = args.namespace ?? identity.clientId;
-      if (!canReadNamespace(identity, requestedNamespace)) {
-        return errorResult(
-          `Permission denied: cannot read namespace '${requestedNamespace}'`,
-        );
-      }
-      const namespace = physicalNamespace(requestedNamespace);
-      const direction = args.direction ?? "both";
-      const limit = args.limit ?? 50;
+/** Frozen `adjacent_context` argument contract: the names, types, and rule values are the API. */
+const adjacentContextInputSchema = {
+  type: z.string().min(1).max(200).describe("Type of the source node"),
+  id: graphUuid,
+  namespace: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Namespace for isolation (defaults to agent's clientId)"),
+  relation: z
+    .enum(LINK_RELATIONS)
+    .optional()
+    .describe("Filter by relation type"),
+  direction: z
+    .enum(DIRECTIONS)
+    .optional()
+    .describe(
+      'Traversal direction: "outgoing", "incoming", or "both" (default)',
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Maximum links to return (default 50)"),
+};
 
-      // $1/$2 are the source node; every later index is assigned in bind order
-      // so an optional filter cannot shift a predicate onto the wrong parameter.
-      const params: unknown[] = [args.type, args.id];
-      const edgeCondition =
-        direction === "outgoing"
-          ? "l.from_type = $1 AND l.from_id = $2"
-          : direction === "incoming"
-            ? "l.to_type = $1 AND l.to_id = $2"
-            : "(l.from_type = $1 AND l.from_id = $2) OR (l.to_type = $1 AND l.to_id = $2)";
+/** Tool annotations; `adjacent_context` reads and never mutates. */
+const adjacentContextAnnotations = {
+  title: "Adjacent Context",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
 
-      params.push(namespace);
-      const namespaceCondition = `l.namespace = $${params.length}`;
+/** The handler's arguments after the documented defaults are applied. */
+interface AdjacentContextRequest {
+  type: string;
+  id: string;
+  relation: string | undefined;
+  direction: Direction;
+  limit: number;
+}
 
-      let relationCondition = "";
-      if (args.relation) {
-        params.push(args.relation);
-        relationCondition = ` AND l.relation = $${params.length}`;
-      }
+/**
+ * Apply the documented argument defaults.
+ *
+ * @returns The normalized request; the defaults are part of the frozen contract.
+ */
+function normalizeAdjacentArgs(args: {
+  type: string;
+  id: string;
+  relation?: string;
+  direction?: Direction;
+  limit?: number;
+}): AdjacentContextRequest {
+  return {
+    type: args.type,
+    id: args.id,
+    relation: args.relation,
+    direction: args.direction ?? "both",
+    limit: args.limit ?? 50,
+  };
+}
 
-      params.push(limit);
-      const limitRef = `$${params.length}`;
+/** A parameterized statement: the SQL text and the values bound to it, in order. */
+interface AdjacencyQuery {
+  sql: string;
+  params: unknown[];
+}
 
-      // The entity joins are LEFT joins plus an IS NOT NULL guard rather than
-      // inner joins: an edge whose endpoint is a non-entity row (a thought, a
-      // decision) has no ob_entities match and must still be returned, while an
-      // edge pointing at an archived or deleted ENTITY must be filtered out.
-      // An inner join would silently drop the first case along with the second.
-      const sql = `SELECT
+/**
+ * Build the one-hop adjacency statement for a request.
+ *
+ * @returns The SQL and its bind values, in the order the placeholders were assigned.
+ */
+function buildAdjacencyQuery(
+  request: AdjacentContextRequest,
+  namespace: string,
+): AdjacencyQuery {
+  // $1/$2 are the source node; every later index is assigned in bind order
+  // so an optional filter cannot shift a predicate onto the wrong parameter.
+  const params: unknown[] = [request.type, request.id];
+  const edgeCondition =
+    request.direction === "outgoing"
+      ? "l.from_type = $1 AND l.from_id = $2"
+      : request.direction === "incoming"
+        ? "l.to_type = $1 AND l.to_id = $2"
+        : "(l.from_type = $1 AND l.from_id = $2) OR (l.to_type = $1 AND l.to_id = $2)";
+
+  params.push(namespace);
+  const namespaceCondition = `l.namespace = $${params.length}`;
+
+  let relationCondition = "";
+  if (request.relation) {
+    params.push(request.relation);
+    relationCondition = ` AND l.relation = $${params.length}`;
+  }
+
+  params.push(request.limit);
+  const limitRef = `$${params.length}`;
+
+  // The entity joins are LEFT joins plus an IS NOT NULL guard rather than
+  // inner joins: an edge whose endpoint is a non-entity row (a thought, a
+  // decision) has no ob_entities match and must still be returned, while an
+  // edge pointing at an archived or deleted ENTITY must be filtered out.
+  // An inner join would silently drop the first case along with the second.
+  const sql = `SELECT
   l.id,
   l.from_type,
   l.from_id,
@@ -181,39 +214,126 @@ WHERE (${edgeCondition})
 ORDER BY l.weight DESC, l.created_at DESC
 LIMIT ${limitRef}`;
 
-      try {
-        const { rows } = await dependencies.pool.query<LinkRow>(sql, params);
-        const links = rows.map((row) => {
-          // Reported from the CALLER's perspective, not the row's storage order.
-          const isOutgoing =
-            row.from_type === args.type && row.from_id === args.id;
-          return {
-            id: row.id,
-            direction: isOutgoing ? "outgoing" : "incoming",
-            relation: row.relation,
-            weight: row.weight,
-            linked_type: isOutgoing ? row.to_type : row.from_type,
-            linked_id: isOutgoing ? row.to_id : row.from_id,
-            linked_name: isOutgoing ? row.to_name : row.from_name,
-            canonical_id: isOutgoing ? row.to_canonical_id : row.from_canonical_id,
-            metadata: row.metadata ?? {},
-            created_at: row.created_at,
-          };
-        });
+  return { sql, params };
+}
 
-        dependencies.logger.info(
-          { namespace, direction, count: links.length },
-          "adjacent_context_ok",
-        );
-        return textResult({ links, count: links.length });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        dependencies.logger.error(
-          { namespace, direction, error_message: message },
-          "adjacent_context_db_error",
-        );
-        return errorResult(`Database error during adjacency lookup: ${message}`);
-      }
+/**
+ * Restate one stored edge from the perspective of the node that was asked about.
+ *
+ * @returns The link with `direction` and `linked_*` fields relative to the source node.
+ */
+function linkFromSourcePerspective(
+  row: LinkRow,
+  request: AdjacentContextRequest,
+): AdjacentLink {
+  // Reported from the CALLER's perspective, not the row's storage order.
+  const isOutgoing =
+    row.from_type === request.type && row.from_id === request.id;
+  return {
+    id: row.id,
+    direction: isOutgoing ? "outgoing" : "incoming",
+    relation: row.relation,
+    weight: row.weight,
+    linked_type: isOutgoing ? row.to_type : row.from_type,
+    linked_id: isOutgoing ? row.to_id : row.from_id,
+    linked_name: isOutgoing ? row.to_name : row.from_name,
+    canonical_id: isOutgoing ? row.to_canonical_id : row.from_canonical_id,
+    metadata: row.metadata ?? {},
+    created_at: row.created_at,
+  };
+}
+
+/**
+ * Resolve the namespace this request may read, or the denial that stops it.
+ *
+ * @returns The physical namespace to bind, or the error response to return instead.
+ */
+function authorizeAdjacencyRead(
+  identity: ReturnType<typeof authIdentity>,
+  dependencies: MemoryToolDependencies,
+  requestedFromArgs: string | undefined,
+): { namespace: string } | { denied: ReturnType<typeof errorResult> } {
+  // The link graph spans every table, so the broadest read permission gates
+  // it: a role that cannot read sessions cannot traverse edges into them.
+  if (!identity || !canRead(identity.role, "sessions")) {
+    dependencies.logger.warn(
+      { role: identity?.role ?? "none" },
+      "adjacent_context_denied",
+    );
+    return { denied: errorResult(GRAPH_READ_DENIED) };
+  }
+
+  const requestedNamespace = requestedFromArgs ?? identity.clientId;
+  if (!canReadNamespace(identity, requestedNamespace)) {
+    return {
+      denied: errorResult(
+        `Permission denied: cannot read namespace '${requestedNamespace}'`,
+      ),
+    };
+  }
+  return { namespace: physicalNamespace(requestedNamespace) };
+}
+
+/**
+ * Run the adjacency statement and shape its rows into the tool response.
+ *
+ * @returns The link payload, or the error response when the query fails.
+ */
+async function runAdjacencyLookup(options: {
+  dependencies: MemoryToolDependencies;
+  request: AdjacentContextRequest;
+  namespace: string;
+}): Promise<ReturnType<typeof textResult>> {
+  const { dependencies, request, namespace } = options;
+  const { sql, params } = buildAdjacencyQuery(request, namespace);
+  const { direction } = request;
+
+  try {
+    const { rows } = await dependencies.pool.query<LinkRow>(sql, params);
+    const links = rows.map((row) => linkFromSourcePerspective(row, request));
+
+    dependencies.logger.info(
+      { namespace, direction, count: links.length },
+      "adjacent_context_ok",
+    );
+    return textResult({ links, count: links.length });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    dependencies.logger.error(
+      { namespace, direction, error_message: message },
+      "adjacent_context_db_error",
+    );
+    return errorResult(`Database error during adjacency lookup: ${message}`);
+  }
+}
+
+export function registerAdjacentContextTool(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  server.registerTool(
+    "adjacent_context",
+    {
+      description:
+        "Find entities and entries linked to a given node. " +
+        "Traverses the knowledge graph from a source node in one or both directions.",
+      inputSchema: adjacentContextInputSchema,
+      annotations: adjacentContextAnnotations,
+    },
+    async (args, extra) => {
+      const identity = authIdentity(extra.authInfo);
+      const scope = authorizeAdjacencyRead(
+        identity,
+        dependencies,
+        args.namespace,
+      );
+      if ("denied" in scope) return scope.denied;
+
+      return await runAdjacencyLookup({
+        dependencies,
+        request: normalizeAdjacentArgs(args),
+        namespace: scope.namespace,
+      });
     },
   );
 }
