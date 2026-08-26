@@ -47,21 +47,44 @@ export const UNKNOWN_SERVER_IP = "unknown";
  * RFC1918 plus RFC3927 link-local and RFC6598 carrier-grade NAT, which are the
  * ranges this fleet actually appears on.
  */
-function isPrivateIpv4(address: string): boolean {
+/**
+ * The accepted ranges as data, first octet exact and second octet inclusive.
+ *
+ * A `secondMin`/`secondMax` spanning the whole octet is how a /8 is written, so
+ * every range is checked by one expression rather than a per-range branch.
+ */
+const PRIVATE_IPV4_RANGES: ReadonlyArray<{
+  readonly first: number;
+  readonly secondMin: number;
+  readonly secondMax: number;
+}> = [
+  { first: 10, secondMin: 0, secondMax: 255 }, // RFC1918 10/8
+  { first: 172, secondMin: 16, secondMax: 31 }, // RFC1918 172.16/12
+  { first: 192, secondMin: 168, secondMax: 168 }, // RFC1918 192.168/16
+  { first: 169, secondMin: 254, secondMax: 254 }, // RFC3927 link-local
+  { first: 100, secondMin: 64, secondMax: 127 }, // RFC6598 carrier-grade NAT
+];
+
+function parseIpv4Octets(address: string): [number, number] | undefined {
   const octets = address.split(".").map((part) => Number(part));
   if (
     octets.length !== 4 ||
     octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
   ) {
-    return false;
+    return undefined;
   }
   const [a, b] = octets as [number, number, number, number];
-  if (a === 10) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
+  return [a, b];
+}
+
+function isPrivateIpv4(address: string): boolean {
+  const parsed = parseIpv4Octets(address);
+  if (parsed === undefined) return false;
+  const [a, b] = parsed;
+  return PRIVATE_IPV4_RANGES.some(
+    (range) =>
+      a === range.first && b >= range.secondMin && b <= range.secondMax,
+  );
 }
 
 /**
@@ -173,25 +196,41 @@ function detectLanIpv4(
  *   3. Detected private LAN interfaces.
  *   4. `"unknown"` — only when the host genuinely has no private address.
  */
+/**
+ * The machine hostname, degraded to `"unknown"` rather than thrown.
+ *
+ * Fail open for the same reason `detectLanIpv4` does: a host that cannot name
+ * itself still has a `/health` answer to give.
+ */
+function resolveHostname(hostnameFn: () => string): string {
+  try {
+    return hostnameFn().trim() || UNKNOWN_SERVER_IP;
+  } catch {
+    return UNKNOWN_SERVER_IP;
+  }
+}
+
+/**
+ * The first configured value that names a concrete machine — precedence steps 1
+ * and 2, in order. `undefined` means configuration named nothing usable and
+ * detection is next.
+ */
+function configuredServerIp(input: ServerIdentityInput): string | undefined {
+  for (const candidate of [input.configuredServerIp, input.bindHost]) {
+    const value = normalize(candidate);
+    if (value && isConcreteHost(value)) return value;
+  }
+  return undefined;
+}
+
 export function resolveServerIdentity(
   input: ServerIdentityInput = {},
 ): ServerIdentity {
-  const hostnameFn = input.hostname ?? (() => os.hostname());
-  let hostname: string;
-  try {
-    hostname = hostnameFn().trim() || UNKNOWN_SERVER_IP;
-  } catch {
-    hostname = UNKNOWN_SERVER_IP;
-  }
+  const hostname = resolveHostname(input.hostname ?? (() => os.hostname()));
 
-  const configured = normalize(input.configuredServerIp);
-  if (configured && isConcreteHost(configured)) {
+  const configured = configuredServerIp(input);
+  if (configured !== undefined) {
     return { hostname, serverIp: configured, serverIps: [configured] };
-  }
-
-  const bindHost = normalize(input.bindHost);
-  if (bindHost && isConcreteHost(bindHost)) {
-    return { hostname, serverIp: bindHost, serverIps: [bindHost] };
   }
 
   const detected = detectLanIpv4(
