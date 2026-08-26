@@ -43,7 +43,7 @@ export function recoveryWalStoreFor(
 ): RecoveryWalStore {
   if (dependencies.recoveryWalStore) return dependencies.recoveryWalStore;
   fallbackRecoveryWalStore ??= new RecoveryWalStore({
-    walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
+    walPath: dependencies.recoveryWalPath ?? null,
     logger: dependencies.logger,
   });
   return fallbackRecoveryWalStore;
