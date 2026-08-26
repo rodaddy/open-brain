@@ -58,8 +58,8 @@ function isGlobalReader(identity: AuthIdentity): boolean {
  *   namespace when the operator has explicitly set one. It is empty by default
  *   (#167 retired `collab`), so this normally changes nothing.
  * @param names When supplied, the already-validated shared-namespace set from
- *   `ServerConfig` is used verbatim instead of the environment. Omitting it
- *   preserves the historical environment-derived behavior exactly.
+ *   `ServerConfig`, the only source for these names. Omitting it
+ *   makes the shared-namespace helpers throw rather than resolve a default.
  * @returns The readable namespaces, or `undefined` when the read is global.
  */
 export function readableNamespaces(
@@ -94,7 +94,7 @@ export function readableNamespaces(
  * @param identity Token-derived identity.
  * @param namespace The caller-supplied namespace argument.
  * @param names When supplied, the already-validated shared-namespace set from
- *   `ServerConfig` is used verbatim instead of the environment.
+ *   `ServerConfig`, the only source for these names.
  * @returns Whether the identity may read that namespace.
  */
 export function canReadNamespace(
@@ -136,7 +136,7 @@ export function canReadNamespace(
  *   it, which is exactly why the gate runs first at every call site.
  * @param options Forwarded to {@link readableNamespaces}.
  * @param names When supplied, the already-validated shared-namespace set from
- *   `ServerConfig` is used verbatim instead of the environment.
+ *   `ServerConfig`, the only source for these names.
  * @returns One namespace, the readable list, or `undefined` for a global read.
  */
 export function namespaceFilterFor(

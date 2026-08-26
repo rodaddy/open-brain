@@ -22,40 +22,13 @@
  * operator sets one. An empty legacy name must never match caller input, so every
  * legacy check below tests for non-empty FIRST — otherwise an unset config would
  * make `""` "legacy" and match unnamespaced input.
+ *
+ * Every name here arrives from the validated `ServerConfig`; this module reads no
+ * environment of its own, so a call site that forgets to pass the set gets an
+ * error naming the function rather than a default that quietly mis-binds.
  */
 
 import type { SharedNamespaceGroup } from "../config/env-groups.ts";
-
-/** Public name for shared truth when no operator override is configured. */
-const DEFAULT_SHARED_NAMESPACE = "shared-kb";
-/** No namespace is legacy by default; #167 retired `collab`. */
-const DEFAULT_LEGACY_SHARED_NAMESPACE = "";
-/** Shared hits below this count let the legacy fallback top up a result set. */
-const DEFAULT_FALLBACK_MIN_RESULTS = 5;
-
-/** First non-empty environment value among `names`, else `defaultValue`. */
-function envString(names: readonly string[], defaultValue: string): string {
-  for (const name of names) {
-    const raw = process.env[name]?.trim();
-    if (raw) return raw;
-  }
-  return defaultValue;
-}
-
-/** Parse a permissive boolean environment flag. */
-function envBoolean(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === "") return defaultValue;
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
-}
-
-/** Parse a positive-integer environment value, falling back when unusable. */
-function envPositiveInteger(name: string, defaultValue: number): number {
-  const raw = process.env[name];
-  if (!raw) return defaultValue;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : defaultValue;
-}
 
 /**
  * The shared-namespace name set.
@@ -68,52 +41,53 @@ function envPositiveInteger(name: string, defaultValue: number): number {
 export type { SharedNamespaceGroup as SharedNamespaceConfig };
 
 /**
- * Resolve the shared-namespace configuration from the environment.
+ * Assert that the composition root supplied the validated name set.
  *
- * Read on every call rather than cached at module load: tests and operators
- * both repoint these values at runtime, and a cached copy would silently serve
- * a stale namespace to the predicate that enforces isolation.
+ * The names arrive from `ServerConfig` and nowhere else — this module reads no
+ * environment. A missing set is a wiring defect at the call site, so it fails
+ * loudly here rather than resolving to a default that would silently point an
+ * isolation predicate at the wrong partition.
  *
- * @param names When supplied, the already-validated set from `ServerConfig` is
- * used verbatim and the environment is not consulted. Omitting it preserves the
- * historical environment-derived behavior exactly; the reads below go away in a
- * later rung, once every caller passes the value down.
+ * @param names The set handed down from the composition root, if any.
+ * @param caller Name of the function whose call site is wired wrong.
+ * @returns The same set, now known to be present.
+ */
+function requireNames(
+  names: SharedNamespaceGroup | undefined,
+  caller: string,
+): SharedNamespaceGroup {
+  if (names) return names;
+  throw new Error(
+    `${caller}: shared-namespace names are missing. The composition root must ` +
+      `supply sharedNamespaceNames from the validated ServerConfig.`,
+  );
+}
+
+/**
+ * Pass through the validated shared-namespace name set.
+ *
+ * Kept as a named accessor so existing call sites read the same way; it adds no
+ * resolution of its own and throws when the names were never wired through.
+ *
+ * @param names The set handed down from the composition root.
+ * @returns The same set.
  */
 export function sharedNamespaceConfig(
   names?: SharedNamespaceGroup,
 ): SharedNamespaceGroup {
-  if (names) return names;
-  const canonicalSharedNamespace = envString(
-    ["SHARED_NAMESPACE_CANONICAL", "OPENBRAIN_SHARED_NAMESPACE"],
-    DEFAULT_SHARED_NAMESPACE,
-  );
-  return {
-    canonicalSharedNamespace,
-    physicalSharedNamespace: envString(
-      ["SHARED_NAMESPACE_PHYSICAL", "OPENBRAIN_SHARED_NAMESPACE"],
-      canonicalSharedNamespace,
-    ),
-    legacySharedNamespace: envString(
-      ["SHARED_NAMESPACE_LEGACY", "OPENBRAIN_LEGACY_SHARED_NAMESPACE"],
-      DEFAULT_LEGACY_SHARED_NAMESPACE,
-    ),
-    legacyFallbackEnabled: envBoolean(
-      "OPENBRAIN_LEGACY_SHARED_FALLBACK",
-      false,
-    ),
-    fallbackMinResults: envPositiveInteger(
-      "OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS",
-      DEFAULT_FALLBACK_MIN_RESULTS,
-    ),
-  };
+  return requireNames(names, "sharedNamespaceConfig");
 }
 
-/** @returns Whether the name refers to shared truth, canonical or physical. */
+/**
+ * @param namespace Caller-supplied or stored namespace name.
+ * @param names Validated set from the composition root.
+ * @returns Whether the name refers to shared truth, canonical or physical.
+ */
 export function isSharedNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): boolean {
-  const config = sharedNamespaceConfig(names);
+  const config = requireNames(names, "isSharedNamespace");
   return (
     namespace === config.canonicalSharedNamespace ||
     namespace === config.physicalSharedNamespace
@@ -125,12 +99,16 @@ export function isSharedNamespace(
  *
  * Applied to emitted rows so a result never exposes the physical partition or
  * the retired legacy name.
+ *
+ * @param namespace Stored namespace name.
+ * @param names Validated set from the composition root.
+ * @returns The canonical name callers should see.
  */
 export function canonicalNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): string {
-  const config = sharedNamespaceConfig(names);
+  const config = requireNames(names, "canonicalNamespace");
   if (
     config.legacySharedNamespace !== "" &&
     namespace === config.legacySharedNamespace
@@ -147,12 +125,16 @@ export function canonicalNamespace(
  *
  * Applied before building SQL so an authorized canonical name matches the rows
  * that physically carry the partition name.
+ *
+ * @param namespace Caller-supplied namespace name.
+ * @param names Validated set from the composition root.
+ * @returns The physical name a predicate binds.
  */
 export function physicalNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): string {
-  const config = sharedNamespaceConfig(names);
+  const config = requireNames(names, "physicalNamespace");
   return namespace === config.canonicalSharedNamespace
     ? config.physicalSharedNamespace
     : namespace;

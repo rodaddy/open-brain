@@ -36,6 +36,7 @@ import { readNatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import { resetOperatorDoctorCache } from "../../src/operator-doctor.ts";
 import { registerMemoryTools } from "./index.ts";
 import type { MemoryToolDependencies } from "./types.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
 interface CapturedQuery {
   readonly sql: string;
@@ -67,6 +68,7 @@ async function clientFor(
   registerMemoryTools(server, {
     embedFn: async () => Array(768).fill(0.01),
     logger: pino({ level: "silent" }),
+    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
     ...dependencies,
   });
   const [clientTransport, serverTransport] =
