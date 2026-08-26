@@ -138,6 +138,76 @@ function queueLogger(logger: Logger): MaintenanceQueueLogger {
   };
 }
 
+/** The exact option object `MaintenanceQueueRunner` is constructed from. */
+type RunnerOptions = ConstructorParameters<typeof MaintenanceQueueRunner>[0];
+
+/** The exact option object `startRecurringMaintenanceSweep` is called with. */
+type SweepOptions = Parameters<typeof startRecurringMaintenanceSweep>[0];
+
+/**
+ * Wire the runner's option object.
+ *
+ * The three tuning values are forwarded ONLY when the config supplies them.
+ * `MaintenanceConfig` deliberately leaves them `undefined` rather than
+ * defaulting, so that the runner stays the single owner of its own defaults;
+ * passing an explicit `undefined` through would be equivalent here, but spelling
+ * it as omission keeps that ownership visible. The runner re-validates whatever
+ * it receives against its own rules regardless.
+ *
+ * Extracted from the composition root so the conditional wiring lives in one
+ * named place: every read below is the same config field it has always been,
+ * and nothing acquires a default here that the runner did not already own.
+ */
+function runnerOptions(
+  config: MaintenanceConfig,
+  handlers: MaintenanceRuntimeInput["handlers"],
+  queue: MaintenanceQueue,
+  logger: MaintenanceQueueLogger,
+): RunnerOptions {
+  return {
+    queue,
+    handlers,
+    logger,
+    ...(config.concurrency !== undefined
+      ? { concurrency: config.concurrency }
+      : {}),
+    ...(config.pollIntervalMs !== undefined
+      ? { pollIntervalMs: config.pollIntervalMs }
+      : {}),
+    ...(config.leaseMs !== undefined ? { leaseMs: config.leaseMs } : {}),
+  };
+}
+
+/**
+ * Wire the producer's option object.
+ *
+ * The cadence is the poll interval, and the sweep's own default stands in when
+ * the config leaves it unset, matching how the runner knobs are forwarded. Each
+ * value is re-validated inside `runMaintenanceSweep`.
+ */
+function sweepOptions(
+  config: MaintenanceConfig,
+  pool: MaintenanceRuntimeInput["pool"],
+  queue: MaintenanceQueue,
+  logger: MaintenanceQueueLogger,
+): SweepOptions {
+  return {
+    pool,
+    queue,
+    logger,
+    intervalMs: config.pollIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
+    ...(config.distillBatchSize !== undefined
+      ? { distillBatchSize: config.distillBatchSize }
+      : {}),
+    ...(config.maxDistillBatchesPerTick !== undefined
+      ? { maxDistillBatchesPerTick: config.maxDistillBatchesPerTick }
+      : {}),
+    ...(config.graphDerivationLimit !== undefined
+      ? { graphDerivationLimit: config.graphDerivationLimit }
+      : {}),
+  };
+}
+
 /**
  * Compose the maintenance queue runner as a background runtime.
  *
@@ -148,12 +218,8 @@ function queueLogger(logger: Logger): MaintenanceQueueLogger {
  * so "disabled" and "absent from the shutdown order" are the same state and
  * cannot disagree.
  *
- * The three tuning values are forwarded ONLY when the config supplies them.
- * `MaintenanceConfig` deliberately leaves them `undefined` rather than
- * defaulting, so that the runner stays the single owner of its own defaults;
- * passing an explicit `undefined` through would be equivalent here, but spelling
- * it as omission keeps that ownership visible at the call site. The runner
- * clamps whatever it receives to its own safe bounds regardless.
+ * The two option objects are wired by `runnerOptions` and `sweepOptions`, which
+ * carry the forwarding rules for the tuning values.
  */
 export function createMaintenanceRuntime(
   input: MaintenanceRuntimeInput,
@@ -168,20 +234,9 @@ export function createMaintenanceRuntime(
 
   const logger = queueLogger(input.logger);
   const queue = new MaintenanceQueue(input.pool);
-  const runner = new MaintenanceQueueRunner({
-    queue,
-    handlers: input.handlers,
-    logger,
-    ...(input.config.concurrency !== undefined
-      ? { concurrency: input.config.concurrency }
-      : {}),
-    ...(input.config.pollIntervalMs !== undefined
-      ? { pollIntervalMs: input.config.pollIntervalMs }
-      : {}),
-    ...(input.config.leaseMs !== undefined
-      ? { leaseMs: input.config.leaseMs }
-      : {}),
-  });
+  const runner = new MaintenanceQueueRunner(
+    runnerOptions(input.config, input.handlers, queue, logger),
+  );
 
   // `start()` throws on an empty handler map rather than polling a queue whose
   // every claim would dead-letter as `unsupported_job_kind`. Let it throw: a
@@ -205,26 +260,12 @@ export function createMaintenanceRuntime(
   // runner will claim would grow the backlog rather than turn the loop, and a
   // test driving `runOnce()` deterministically must not race a live timer.
   //
-  // The cadence is the poll interval, and `undefined` here means the sweep's
-  // own default, matching how the runner knobs above are forwarded. Every bound
-  // is re-clamped inside `runMaintenanceSweep`.
+  // The cadence and the forwarded knobs are wired in `sweepOptions` above.
   const sweep =
     input.autoStart !== false
-      ? startRecurringMaintenanceSweep({
-          pool: input.pool,
-          queue,
-          logger,
-          intervalMs: input.config.pollIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
-          ...(input.config.distillBatchSize !== undefined
-            ? { distillBatchSize: input.config.distillBatchSize }
-            : {}),
-          ...(input.config.maxDistillBatchesPerTick !== undefined
-            ? { maxDistillBatchesPerTick: input.config.maxDistillBatchesPerTick }
-            : {}),
-          ...(input.config.graphDerivationLimit !== undefined
-            ? { graphDerivationLimit: input.config.graphDerivationLimit }
-            : {}),
-        })
+      ? startRecurringMaintenanceSweep(
+          sweepOptions(input.config, input.pool, queue, logger),
+        )
       : undefined;
 
   let stopped = false;
