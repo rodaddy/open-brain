@@ -14,9 +14,11 @@ only when a session actually needed it.
    wrong, not slow. Re-cut until it fits. Expect MANY lanes landed per round;
    a round that produces one lane was under-dispatched.
 3. **At most FIVE lanes in flight, each its own agent** (Rico ruling
-   2026-08-26 evening, superseding the 5-10 batch from earlier that day). A
-   nine-node Workflow is one swarm: Rico sees "3 of 9" and cannot open a
-   lane. Dispatch every lane as its own Workflow with a single `agent()`
+   2026-08-26 evening). Ten is the normal ceiling; five is the number while
+   Rico has his own work running on the Mac, which is the default assumption
+   unless he says the machine is free — ten lanes on a loaded machine had it
+   "howling like a jet engine". A nine-node Workflow is one swarm: Rico sees
+   "3 of 9" and cannot open a lane. Dispatch every lane as its own Workflow with a single `agent()`
    node so each is its own visible row he can enter, never more than five
    running. Keep the QUEUE full instead: up to five batches of five briefs
    written and ready, and a lane launches the moment a slot frees. Scopes
