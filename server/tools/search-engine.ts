@@ -27,119 +27,95 @@
  * SQL discipline. Query text, namespaces, tiers, and every caller value are
  * bound parameters. The only interpolated strings are compile-time literals
  * selected by a validated key — table names via the Zod-validated
- * {@link ResourceTable} union, and the FTS regconfig via the `SUPPORTED_FTS_CONFIGS`
- * allowlist re-asserted at the interpolation point by `ftsConfigLiteral`.
+ * `ResourceTable` union, and the FTS regconfig via the `SUPPORTED_FTS_CONFIGS`
+ * allowlist re-asserted at the interpolation point by `ftsConfigLiteral`. The
+ * fragments themselves live in `search-engine-sql.ts`; this file owns the arms,
+ * the fusion, and the dispatch between them.
+ *
+ * WHY THE TWO PUBLIC ENTRIES STILL TAKE POSITIONAL ARGUMENTS. Everything
+ * internal to the engine now threads one options object, but {@link executeSearch}
+ * and {@link executeSearchWithSharedFallback} are called positionally from
+ * `server/tools/` consumers and from tests that this change does not touch.
+ * Their shapes are the compatibility surface; internally they immediately
+ * collapse to {@link SearchRequest}.
  */
 import { toSql } from "pgvector/pg";
-import type { Logger } from "pino";
-import type { Pool } from "pg";
-import type { ResourceTable } from "../auth/types.ts";
 import { canRead } from "../auth/permissions.ts";
 import {
   ALL_TABLES,
-  CONTENT_PREVIEW,
-  FTS_SOURCE_TEXT,
-  HAS_EXTRACTED_METADATA,
   RRF_K,
-  SOURCE_LABELS,
-  TABLE_ALIAS,
   TABLE_WEIGHT,
   TIER_BOOST,
-  VALID_TIERS,
   type Tier,
 } from "./search-constants.ts";
-import {
-  DEFAULT_FTS_CONFIG,
-  ftsConfigLiteral,
-  type FtsConfig,
-} from "./fts-config.ts";
-import {
-  canonicalNamespace,
-  sharedNamespaceConfig,
-} from "./shared-namespace.ts";
+import { DEFAULT_FTS_CONFIG, type FtsConfig } from "./fts-config.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 import type { NamespaceFilter } from "./read-scope.ts";
 import {
   traceRetrievalSpan,
   traceRetrievalSpanSync,
 } from "../observability/langfuse-tracing.ts";
+import {
+  AGE_WEIGHT,
+  DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS,
+  HYBRID_FETCH_MULTIPLIER,
+  USEFULNESS_WEIGHT,
+  VECTOR_WEIGHT,
+  rowEvidence,
+  rowIdsEvidence,
+  rowsEvidence,
+  type ExecuteSearchOptions,
+  type SearchDependencies,
+  type SearchMode,
+  type SearchRow,
+  type SearchSource,
+  type SourceRef,
+} from "./search-engine-types.ts";
+import {
+  appendNamespaceParam,
+  buildFtsCTE,
+  buildSessionEventsFtsCTE,
+  buildSessionEventsVectorCTE,
+  buildVectorCTE,
+  type CteContext,
+} from "./search-engine-sql.ts";
+import {
+  withCanonicalNamespaces,
+  withSourceRefs,
+} from "./search-engine-rows.ts";
+import { mergeFallbackRows } from "./search-engine-fallback.ts";
 
-export type SearchMode = "hybrid" | "vector" | "keyword";
+export type {
+  ExecuteSearchOptions,
+  SearchDependencies,
+  SearchMode,
+  SearchRow,
+  SearchSource,
+  SourceRef,
+};
+export { mergeFallbackRows };
 
-/** Over-fetch factor per arm in hybrid mode; fusion needs depth to reorder. */
-const HYBRID_FETCH_MULTIPLIER = 3;
-/** Default ceiling on how long the embedding provider may hold up a search. */
-const DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS = 3000;
-
-/** Vector-mode ranking weights: similarity dominates, usefulness and age nudge. */
-const VECTOR_WEIGHT = 0.7;
-const USEFULNESS_WEIGHT = 0.15;
-const AGE_WEIGHT = 0.0001;
-
-export interface SourceRef {
-  source: "brain";
-  type: string;
-  id: string;
-  namespace?: string;
-  created_by?: string | null;
-  created_at?: string;
-  last_updated_at?: string;
-  label: string;
-  preview: string;
+/**
+ * One search, as the engine's internals carry it.
+ *
+ * The two exported entries build this from their positional arguments and
+ * nothing below them takes a loose parameter list again.
+ */
+interface SearchRequest {
+  readonly tables: readonly SearchSource[];
+  readonly query: string;
+  readonly limit: number;
+  readonly mode: SearchMode;
+  readonly tier: Tier | undefined;
+  readonly offset: number;
+  readonly namespace: NamespaceFilter | undefined;
+  readonly ftsConfig: FtsConfig;
 }
 
-export interface SearchRow {
-  source_type: string;
-  id: string;
-  namespace?: string;
-  content_preview: string | null;
-  tags: string[] | null;
-  created_by?: string | null;
-  created_at: string;
-  updated_at?: string | null;
-  usefulness: number;
-  tier?: string;
-  distance?: number;
-  fts_rank?: number;
-  access_count?: number;
-  source_ref?: SourceRef;
-  extracted_metadata?: Record<string, unknown>;
-}
-
-export interface SearchDependencies {
-  readonly pool: Pool;
-  readonly embedFn: (text: string) => Promise<number[] | null>;
-  readonly logger: Logger;
-}
-
-export interface ExecuteSearchOptions {
-  /** Text-search configuration for the lexical arm; english when unset. */
-  readonly ftsConfig?: FtsConfig;
-}
-
-function rowEvidence(row: SearchRow): Record<string, unknown> {
-  return {
-    row_id: row.id,
-    source_type: row.source_type,
-    namespace: row.namespace ?? null,
-    content_preview: row.content_preview ?? null,
-    distance: row.distance ?? null,
-    similarity: row.distance === undefined ? null : 1 - row.distance,
-    bm25_score: row.fts_rank ?? null,
-    usefulness: row.usefulness,
-    tier: row.tier ?? null,
-  };
-}
-
-function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
-  return {
-    count: rows.length,
-    row_ids: rows.map((row) => row.id),
-    candidates: rows.map(rowEvidence),
-  };
-}
-
-function rowIdsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
-  return { count: rows.length, row_ids: rows.map((row) => row.id) };
+/** One arm's window into a request: how many rows, skipping how many. */
+interface ArmWindow {
+  readonly fetchLimit: number;
+  readonly offset: number;
 }
 
 /** Resolve the embedding timeout, ignoring an unusable environment value. */
@@ -211,80 +187,6 @@ function recencyFactor(createdAt: string): number {
   return 1 / (1 + Math.max(0, ageDays) * 0.001);
 }
 
-/** Render a bound-parameter reference, rejecting an out-of-range index. */
-function paramRef(index: number): string {
-  if (!Number.isInteger(index) || index < 1) {
-    throw new Error(`Invalid SQL parameter index: ${index}`);
-  }
-  return `$${index}`;
-}
-
-/** Push the namespace filter and return its parameter index, or `undefined`. */
-function appendNamespaceParam(
-  params: unknown[],
-  namespace?: NamespaceFilter,
-): number | undefined {
-  if (namespace === undefined) return undefined;
-  params.push(namespace);
-  return params.length;
-}
-
-/**
- * Build the namespace predicate for one aliased table.
- *
- * The VALUE is always bound; only the alias and column name — both compile-time
- * literals — are inlined. An absent filter yields `""`, which is a global read
- * and is only ever reachable for a role whose reads are global by design.
- */
-function namespaceFilterSql(
-  alias: string,
-  paramIndex: number | undefined,
-  isArray: boolean,
-): string {
-  if (!paramIndex) return "";
-  return isArray
-    ? ` AND ${alias}.namespace = ANY(${paramRef(paramIndex)}::text[])`
-    : ` AND ${alias}.namespace = ${paramRef(paramIndex)}`;
-}
-
-/** Reject a tier that is not on the allowlist before it can reach SQL. */
-function assertTier(tier: Tier | undefined): void {
-  if (tier && !VALID_TIERS.has(tier)) throw new Error(`Invalid tier: ${tier}`);
-}
-
-/** Per-table SELECT list shared by the vector and lexical CTEs. */
-function selectColumns(table: ResourceTable, rankExpression: string): string {
-  const alias = TABLE_ALIAS[table];
-  const metadata = HAS_EXTRACTED_METADATA.has(table)
-    ? `${alias}.extracted_metadata`
-    : "NULL::jsonb AS extracted_metadata";
-  return `'${SOURCE_LABELS[table]}' AS source_type,
-    ${alias}.id,
-    ${alias}.namespace,
-    ${CONTENT_PREVIEW[table]} AS content_preview,
-    ${alias}.tags,
-    ${alias}.created_by,
-    ${alias}.created_at,
-    ${alias}.updated_at,
-    ${alias}.tier,
-    ${rankExpression},
-    COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
-    COALESCE(${alias}.access_count, 0) AS access_count,
-    ${metadata}`;
-}
-
-/**
- * A source the search arms can read.
- *
- * `ResourceTable` is the PHYSICAL-table union: it drives `PERMISSIONS`, the
- * REST enum, and every write path, so widening it would demand a permission
- * row and a write contract for a corpus that has neither. `session_events` is
- * a read-only retrieval source instead -- searchable here, never written
- * through this surface -- and carries its own CTE builders below because its
- * columns do not match the shared shape.
- */
-export type SearchSource = ResourceTable | "session_events";
-
 /**
  * The recall sources a role may read, in one place.
  *
@@ -310,258 +212,39 @@ export function readableSearchSources(
   return sources;
 }
 
-/**
- * Session events are namespaced INDIRECTLY.
- *
- * `ob_session_events` has no `namespace` column at all (verified against
- * information_schema on the dogfood DB, 2026-08-07); scope lives on
- * `ob_session_lanes` and is reachable only through
- * `ob_session_events.lane_id`. Both builders below therefore JOIN the lane
- * table and apply the auth-derived namespace predicate to `sl.namespace`.
- * Omitting that join would not merely widen results -- it would expose every
- * agent's session history to every other namespace.
- *
- * The corpus also lacks `archived_at`, `tier`, `tags`, `usefulness_score`,
- * `access_count`, and `search_vector`. Those slots are filled with typed
- * literals so the UNION arms stay type-compatible, and two consequences are
- * deliberate:
- *   - no stored `search_vector` -> the lexical arm matches `content` with
- *     ILIKE, so it is substring matching, not stemming. That is the honest
- *     capability of a column that does not exist, and it is why `ftsConfig`
- *     has nothing to configure for this source.
- *   - no `tier` -> `importance` carries the same hot/warm/cold vocabulary
- *     under the same CHECK constraint, so it fills the tier slot.
- */
-const SESSION_EVENTS_LABEL = "session_event";
-
-/** Shared SELECT list for the session-event arms; `rank` differs per arm. */
-function sessionEventColumns(rankExpression: string): string {
-  return `'${SESSION_EVENTS_LABEL}' AS source_type,
-    se.id,
-    sl.namespace,
-    se.content AS content_preview,
-    NULL::text[] AS tags,
-    se.created_by,
-    se.created_at,
-    se.created_at AS updated_at,
-    se.importance AS tier,
-    ${rankExpression},
-    0.5 AS usefulness,
-    0 AS access_count,
-    se.metadata AS extracted_metadata`;
-}
-
-/** Build the session-event vector-similarity CTE. */
-function buildSessionEventsVectorCTE(
-  perTableLimit: number,
-  tier: Tier | undefined,
+/** Resolve the per-CTE scope for one arm over one request window. */
+function cteContextFor(
+  request: SearchRequest,
+  window: ArmWindow,
   namespaceParamIndex: number | undefined,
-  namespaceIsArray: boolean,
-): string {
-  assertTier(tier);
-  const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(
-    "sl",
-    namespaceParamIndex,
-    namespaceIsArray,
-  );
-  const distance = `se.embedding <=> (SELECT emb FROM query_embedding)`;
-  return `session_events_results AS (
-  SELECT ${sessionEventColumns(`${distance} AS distance`)}
-  FROM ob_session_events se
-  JOIN ob_session_lanes sl ON sl.id = se.lane_id
-  WHERE se.embedding IS NOT NULL${tierFilter}${nsFilter}
-  ORDER BY ${distance} ASC
-  LIMIT ${perTableLimit}
-)`;
-}
-
-/** Build the session-event lexical CTE. */
-function buildSessionEventsFtsCTE(
-  perTableLimit: number,
-  tier: Tier | undefined,
-  namespaceParamIndex: number | undefined,
-  namespaceIsArray: boolean,
-): string {
-  assertTier(tier);
-  const tierFilter = tier ? ` AND se.importance = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(
-    "sl",
-    namespaceParamIndex,
-    namespaceIsArray,
-  );
-  return `session_events_fts AS (
-  SELECT ${sessionEventColumns("1.0 AS fts_rank")}
-  FROM ob_session_events se
-  JOIN ob_session_lanes sl ON sl.id = se.lane_id
-  WHERE se.content ILIKE '%' || (SELECT q FROM fts_query) || '%'${tierFilter}${nsFilter}
-  ORDER BY se.created_at DESC
-  LIMIT ${perTableLimit}
-)`;
-}
-
-/** Build one table's vector-similarity CTE. */
-function buildVectorCTE(
-  table: ResourceTable,
-  perTableLimit: number,
-  tier: Tier | undefined,
-  namespaceParamIndex: number | undefined,
-  namespaceIsArray: boolean,
-): string {
-  assertTier(tier);
-  const alias = TABLE_ALIAS[table];
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(
-    alias,
-    namespaceParamIndex,
-    namespaceIsArray,
-  );
-  const distance = `${alias}.embedding <=> (SELECT emb FROM query_embedding)`;
-  return `${table}_results AS (
-  SELECT ${selectColumns(table, `${distance} AS distance`)}
-  FROM ${table} ${alias}
-  WHERE ${alias}.embedding IS NOT NULL
-    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
-  ORDER BY ${distance} ASC
-  LIMIT ${perTableLimit}
-)`;
-}
-
-/**
- * Build the lexical match and rank expressions for one table under a chosen
- * text-search configuration (#341).
- *
- * `english` reads the stored, GIN-indexed `search_vector` column and is
- * byte-identical to the pre-#341 behavior. Any other allowlisted configuration
- * recomputes `to_tsvector(<config>, <same source columns>)` on the fly, so the
- * query arm and the analyzed text always share one configuration — no per-row
- * language column and no migration, at the cost of losing the index.
- *
- * `ftsConfigLiteral` re-asserts the allowlist HERE, at the one place a
- * configuration becomes SQL text, so the guarantee holds even for a future
- * caller that reaches this function without passing the schema first.
- */
-function ftsMatchExpressions(
-  table: ResourceTable,
-  config: FtsConfig,
-): { vectorSql: string; querySql: string } {
-  const literal = ftsConfigLiteral(config);
-  const querySql = `plainto_tsquery('${literal}', (SELECT q FROM fts_query))`;
-  if (config === DEFAULT_FTS_CONFIG) {
-    return { vectorSql: `${TABLE_ALIAS[table]}.search_vector`, querySql };
-  }
+): CteContext {
   return {
-    vectorSql: `to_tsvector('${literal}', ${FTS_SOURCE_TEXT[table]})`,
-    querySql,
-  };
-}
-
-/** Build one table's full-text-search CTE. */
-function buildFtsCTE(
-  table: ResourceTable,
-  perTableLimit: number,
-  ftsConfig: FtsConfig,
-  tier: Tier | undefined,
-  namespaceParamIndex: number | undefined,
-  namespaceIsArray: boolean,
-): string {
-  assertTier(tier);
-  const alias = TABLE_ALIAS[table];
-  const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
-  const nsFilter = namespaceFilterSql(
-    alias,
+    perTableLimit: window.fetchLimit,
+    tier: request.tier,
     namespaceParamIndex,
-    namespaceIsArray,
-  );
-  const { vectorSql, querySql } = ftsMatchExpressions(table, ftsConfig);
-  return `${table}_fts AS (
-  SELECT ${selectColumns(table, `ts_rank_cd(${vectorSql}, ${querySql}) AS fts_rank`)}
-  FROM ${table} ${alias}
-  WHERE ${vectorSql} @@ ${querySql}
-    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
-  ORDER BY fts_rank DESC
-  LIMIT ${perTableLimit}
-)`;
-}
-
-/** Convert a timestamp-ish value to an ISO string, or `undefined`. */
-function toIsoString(value: unknown): string | undefined {
-  if (typeof value !== "string" && !(value instanceof Date)) return undefined;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
-/**
- * Attach the resolvable `source_ref` every consumer cites from.
- *
- * Built once here rather than in each consumer so a citation emitted by
- * `brain_answer`, a pointer emitted by the context pack, and a row emitted by
- * `search_brain` all address the same record identically.
- */
-function withSourceRefs(rows: SearchRow[]): SearchRow[] {
-  return rows.map((row) => ({
-    ...row,
-    source_ref: {
-      source: "brain" as const,
-      type: row.source_type,
-      id: row.id,
-      namespace: row.namespace,
-      created_by: row.created_by,
-      created_at: toIsoString(row.created_at),
-      last_updated_at:
-        toIsoString(row.updated_at) ?? toIsoString(row.created_at),
-      label: (row.content_preview ?? "").slice(0, 120),
-      preview: (row.content_preview ?? "").slice(0, 300),
-    },
-  }));
-}
-
-/** Report the canonical shared name on emitted rows and their source refs. */
-function withCanonicalNamespaces(rows: SearchRow[]): SearchRow[] {
-  return rows.map((row) => ({
-    ...row,
-    namespace: row.namespace
-      ? canonicalNamespace(row.namespace)
-      : row.namespace,
-    source_ref: row.source_ref
-      ? {
-          ...row.source_ref,
-          namespace: row.source_ref.namespace
-            ? canonicalNamespace(row.source_ref.namespace)
-            : row.source_ref.namespace,
-        }
-      : row.source_ref,
-  }));
+    namespaceIsArray: Array.isArray(request.namespace),
+  };
 }
 
 /** Run the vector arm across every accessible table. */
 async function vectorSearch(
   dependencies: SearchDependencies,
-  tables: readonly SearchSource[],
+  request: SearchRequest,
   embedding: number[],
-  fetchLimit: number,
-  tier: Tier | undefined,
-  offset: number,
-  namespace: NamespaceFilter | undefined,
+  window: ArmWindow,
 ): Promise<SearchRow[]> {
+  const { tables, tier, namespace } = request;
+  const { fetchLimit, offset } = window;
   const params: unknown[] = [toSql(embedding), fetchLimit, offset];
-  const namespaceParamIndex = appendNamespaceParam(params, namespace);
-  const namespaceIsArray = Array.isArray(namespace);
+  const context = cteContextFor(
+    request,
+    window,
+    appendNamespaceParam(params, namespace),
+  );
   const ctes = tables.map((table) =>
     table === "session_events"
-      ? buildSessionEventsVectorCTE(
-          fetchLimit,
-          tier,
-          namespaceParamIndex,
-          namespaceIsArray,
-        )
-      : buildVectorCTE(
-          table,
-          fetchLimit,
-          tier,
-          namespaceParamIndex,
-          namespaceIsArray,
-        ),
+      ? buildSessionEventsVectorCTE(context)
+      : buildVectorCTE(table, context),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_results`)
@@ -597,33 +280,21 @@ LIMIT $2 OFFSET $3`;
 /** Run the lexical arm across every accessible table. */
 async function ftsSearch(
   dependencies: SearchDependencies,
-  tables: readonly SearchSource[],
-  query: string,
-  fetchLimit: number,
-  tier: Tier | undefined,
-  offset: number,
-  namespace: NamespaceFilter | undefined,
-  ftsConfig: FtsConfig,
+  request: SearchRequest,
+  window: ArmWindow,
 ): Promise<SearchRow[]> {
+  const { tables, query, tier, namespace, ftsConfig } = request;
+  const { fetchLimit, offset } = window;
   const params: unknown[] = [query, fetchLimit, offset];
-  const namespaceParamIndex = appendNamespaceParam(params, namespace);
-  const namespaceIsArray = Array.isArray(namespace);
+  const context = cteContextFor(
+    request,
+    window,
+    appendNamespaceParam(params, namespace),
+  );
   const ctes = tables.map((table) =>
     table === "session_events"
-      ? buildSessionEventsFtsCTE(
-          fetchLimit,
-          tier,
-          namespaceParamIndex,
-          namespaceIsArray,
-        )
-      : buildFtsCTE(
-          table,
-          fetchLimit,
-          ftsConfig,
-          tier,
-          namespaceParamIndex,
-          namespaceIsArray,
-        ),
+      ? buildSessionEventsFtsCTE(context)
+      : buildFtsCTE(table, ftsConfig, context),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_fts`)
@@ -662,6 +333,33 @@ LIMIT $2 OFFSET $3`;
   });
 }
 
+/** Post-fusion score for one record: tier boost, table weight, recency decay. */
+function fusedScore(row: SearchRow, rrf: number): number {
+  return Math.max(
+    0,
+    (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
+      (TABLE_WEIGHT[row.source_type] ?? 1) *
+      recencyFactor(row.created_at),
+  );
+}
+
+/** Sum reciprocal-rank contributions across both arms, keyed by record. */
+function accumulateRrf(
+  arms: ReadonlyArray<readonly SearchRow[]>,
+): Map<string, { row: SearchRow; rrf: number }> {
+  const scored = new Map<string, { row: SearchRow; rrf: number }>();
+  for (const rows of arms) {
+    rows.forEach((row, index) => {
+      const key = `${row.source_type}:${row.id}`;
+      const contribution = 1 / (RRF_K + index + 1);
+      const existing = scored.get(key);
+      if (existing) existing.rrf += contribution;
+      else scored.set(key, { row, rrf: contribution });
+    });
+  }
+  return scored;
+}
+
 /**
  * Reciprocal Rank Fusion (Cormack et al. 2009).
  *
@@ -691,28 +389,8 @@ function rrfMerge(
     },
     metadata: { stage: "scoring_ranking", filter_names: ["rrf_limit"] },
     run: () => {
-      const scored = new Map<string, { row: SearchRow; rrf: number }>();
-      const accumulate = (rows: readonly SearchRow[]): void => {
-        rows.forEach((row, index) => {
-          const key = `${row.source_type}:${row.id}`;
-          const contribution = 1 / (RRF_K + index + 1);
-          const existing = scored.get(key);
-          if (existing) existing.rrf += contribution;
-          else scored.set(key, { row, rrf: contribution });
-        });
-      };
-      accumulate(vectorRows);
-      accumulate(ftsRows);
-      ranked = Array.from(scored.values())
-        .map(({ row, rrf }) => ({
-          row,
-          rrf: Math.max(
-            0,
-            (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
-              (TABLE_WEIGHT[row.source_type] ?? 1) *
-              recencyFactor(row.created_at),
-          ),
-        }))
+      ranked = Array.from(accumulateRrf([vectorRows, ftsRows]).values())
+        .map(({ row, rrf }) => ({ row, rrf: fusedScore(row, rrf) }))
         .sort((a, b) => b.rrf - a.rrf);
       return ranked.slice(0, limit).map(({ row }) => row);
     },
@@ -737,12 +415,87 @@ function rrfMerge(
 }
 
 /**
+ * Hybrid: both arms in parallel, over-fetched so fusion has depth to reorder,
+ * then sliced to the requested window AFTER merging. Slicing before the merge
+ * would page through each arm independently and produce an order no consumer
+ * could reproduce.
+ */
+async function hybridSearch(
+  dependencies: SearchDependencies,
+  request: SearchRequest,
+  embedding: number[],
+): Promise<SearchRow[]> {
+  const totalNeeded = request.offset + request.limit;
+  const window: ArmWindow = {
+    fetchLimit: totalNeeded * HYBRID_FETCH_MULTIPLIER,
+    offset: 0,
+  };
+  const [vectorRows, ftsRows] = await Promise.all([
+    vectorSearch(dependencies, request, embedding, window),
+    ftsSearch(dependencies, request, window),
+  ]);
+  return rrfMerge(vectorRows, ftsRows, totalNeeded).slice(request.offset);
+}
+
+/**
  * Run one search across the caller's accessible tables.
  *
  * @param dependencies Pool, embedder, and logger.
+ * @param request The resolved request; `tables` comes from the caller's
+ *   permission matrix, so an empty list means "no readable tables" and is the
+ *   caller's error to report, not this function's.
+ * @throws When `mode` is `vector` and the embedding could not be generated.
+ */
+async function executeSearchInternal(
+  dependencies: SearchDependencies,
+  request: SearchRequest,
+): Promise<SearchRow[]> {
+  if (request.tables.length === 0) return [];
+  const window: ArmWindow = {
+    fetchLimit: request.limit,
+    offset: request.offset,
+  };
+
+  if (request.mode === "keyword") {
+    return ftsSearch(dependencies, request, window);
+  }
+
+  const embedding = await generateSearchEmbedding(dependencies, request.query);
+  if (!embedding) {
+    if (request.mode === "vector") {
+      // No lexical result to degrade to. Returning [] here would report
+      // "nothing matched" for what is actually a provider outage.
+      throw new Error("Failed to generate query embedding");
+    }
+    dependencies.logger.warn(
+      { query_chars: request.query.length },
+      "embedding_failed_fallback_fts",
+    );
+    return ftsSearch(dependencies, request, window);
+  }
+
+  if (request.mode === "vector") {
+    return vectorSearch(dependencies, request, embedding, window);
+  }
+
+  return hybridSearch(dependencies, request, embedding);
+}
+
+/**
+ * The positional argument list {@link executeSearch} accepts.
+ *
+ * A LABELLED TUPLE, not a loose parameter list, and the distinction is the
+ * whole reason this compiles clean. Every existing call site passes these
+ * positionally and this change does not touch those files, so the order and the
+ * optionality are the compatibility contract. Expressing that contract as a
+ * named tuple keeps each position's type checked exactly as before — passing a
+ * `Tier` where `mode` belongs is still a compile error — while letting the
+ * engine carry one argument internally instead of nine.
+ *
+ * @param dependencies Pool, embedder, and logger.
  * @param tables Tables the caller may read; the caller resolves this from the
- *   permission matrix, so an empty list here means "no readable tables" and is
- *   the caller's error to report, not this function's.
+ *   permission matrix, so an empty list means "no readable tables" and is the
+ *   caller's error to report, not this function's.
  * @param query Natural-language query text; always a bound parameter.
  * @param limit Maximum rows to return.
  * @param mode Which arm to run.
@@ -751,111 +504,67 @@ function rrfMerge(
  * @param namespace Auth-derived namespace filter; `undefined` is a global read
  *   and is only reachable for a role whose reads are global by design.
  * @param options Lexical-arm configuration.
- * @throws When `mode` is `vector` and the embedding could not be generated.
  */
-async function executeSearchInternal(
+type ExecuteSearchArgs = [
   dependencies: SearchDependencies,
   tables: readonly SearchSource[],
   query: string,
   limit: number,
-  mode: SearchMode = "hybrid",
+  mode?: SearchMode,
   tier?: Tier,
-  offset = 0,
+  offset?: number,
   namespace?: NamespaceFilter,
-  options: ExecuteSearchOptions = {},
-): Promise<SearchRow[]> {
-  const ftsConfig = options.ftsConfig ?? DEFAULT_FTS_CONFIG;
-  if (tables.length === 0) return [];
+  options?: ExecuteSearchOptions,
+];
 
-  if (mode === "keyword") {
-    return ftsSearch(
-      dependencies,
-      tables,
-      query,
-      limit,
-      tier,
-      offset,
-      namespace,
-      ftsConfig,
-    );
-  }
+/** The same list for {@link executeSearchWithSharedFallback}, which adds one. */
+type SharedFallbackArgs = [
+  dependencies: SearchDependencies,
+  tables: readonly SearchSource[],
+  query: string,
+  limit: number,
+  mode: SearchMode,
+  tier: Tier | undefined,
+  offset: number,
+  namespace: NamespaceFilter | undefined,
+  options?: ExecuteSearchOptions,
+  requestedShared?: boolean,
+];
 
-  const embedding = await generateSearchEmbedding(dependencies, query);
-  if (!embedding) {
-    if (mode === "vector") {
-      // No lexical result to degrade to. Returning [] here would report
-      // "nothing matched" for what is actually a provider outage.
-      throw new Error("Failed to generate query embedding");
-    }
-    dependencies.logger.warn(
-      { query_chars: query.length },
-      "embedding_failed_fallback_fts",
-    );
-    return ftsSearch(
-      dependencies,
-      tables,
-      query,
-      limit,
-      tier,
-      offset,
-      namespace,
-      ftsConfig,
-    );
-  }
-
-  if (mode === "vector") {
-    return vectorSearch(
-      dependencies,
-      tables,
-      embedding,
-      limit,
-      tier,
-      offset,
-      namespace,
-    );
-  }
-
-  // Hybrid: both arms in parallel, over-fetched so fusion has depth to reorder,
-  // then sliced to the requested window AFTER merging. Slicing before the merge
-  // would page through each arm independently and produce an order no consumer
-  // could reproduce.
-  const totalNeeded = offset + limit;
-  const fetchLimit = totalNeeded * HYBRID_FETCH_MULTIPLIER;
-  const [vectorRows, ftsRows] = await Promise.all([
-    vectorSearch(
-      dependencies,
-      tables,
-      embedding,
-      fetchLimit,
-      tier,
-      0,
-      namespace,
-    ),
-    ftsSearch(
-      dependencies,
-      tables,
-      query,
-      fetchLimit,
-      tier,
-      0,
-      namespace,
-      ftsConfig,
-    ),
-  ]);
-  return rrfMerge(vectorRows, ftsRows, totalNeeded).slice(offset);
+/** Collapse the positional compatibility surface into one request. */
+function toSearchRequest(
+  args: ExecuteSearchArgs | SharedFallbackArgs,
+): SearchRequest {
+  const [
+    ,
+    tables,
+    query,
+    limit,
+    mode = "hybrid",
+    tier,
+    offset = 0,
+    namespace,
+    options = {},
+  ] = args;
+  return {
+    tables,
+    query,
+    limit,
+    mode,
+    tier,
+    offset,
+    namespace,
+    ftsConfig: options.ftsConfig ?? DEFAULT_FTS_CONFIG,
+  };
 }
 
 export function executeSearch(
-  dependencies: SearchDependencies,
-  tables: readonly SearchSource[],
-  query: string,
-  limit: number,
-  mode: SearchMode = "hybrid",
-  tier?: Tier,
-  offset = 0,
-  namespace?: NamespaceFilter,
-  options: ExecuteSearchOptions = {},
+  ...args: ExecuteSearchArgs
 ): Promise<SearchRow[]> {
+  const [dependencies, tables, query, limit] = args;
+  const request = toSearchRequest(args);
+  const { mode, tier, offset, namespace } = request;
+  const options = args[8] ?? {};
   return traceRetrievalSpan({
     name: "retrieval.execute",
     input: { query, tables, limit, mode, tier, offset, namespace, options },
@@ -870,139 +579,54 @@ export function executeSearch(
         "pagination",
       ],
     },
-    run: () =>
-      executeSearchInternal(
-        dependencies,
-        tables,
-        query,
-        limit,
-        mode,
-        tier,
-        offset,
-        namespace,
-        options,
-      ),
+    run: () => executeSearchInternal(dependencies, request),
     output: rowsEvidence,
   });
 }
 
-/** Dedupe key used when topping up from the legacy namespace. */
-function fallbackDedupeKey(row: SearchRow): string {
-  const preview = row.content_preview?.replace(/\s+/g, " ").trim();
-  // Migrated rows carry NEW ids in the canonical namespace, so identity cannot
-  // dedupe them against their legacy originals. Content does.
-  return preview
-    ? `${row.source_type}:content:${preview}`
-    : `${row.source_type}:id:${row.id}`;
-}
-
-/** Drop repeats, keeping the highest-ranked occurrence of each record. */
-function dedupeFallbackRows(rows: readonly SearchRow[]): SearchRow[] {
-  const seen = new Set<string>();
-  const deduped: SearchRow[] = [];
-  for (const row of rows) {
-    const key = fallbackDedupeKey(row);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(row);
-  }
-  return deduped;
-}
-
 /**
- * Merge canonical results with legacy top-up results.
+ * Whether the legacy top-up is reachable for this request at all.
  *
- * Canonical rows always win a content collision. When canonical already fills
- * the limit but legacy found something canonical did not, one canonical row is
- * displaced so the caller can SEE that unmigrated content exists — a silent
- * omission is what makes a stalled migration invisible.
+ * It is skipped when no migration source is configured, when `offset !== 0`
+ * (paginating a two-source merge cannot produce a stable window — the legacy
+ * top-up depends on how many canonical rows the CURRENT page found, so pages
+ * would overlap or skip rows), and when the request is not actually scoped to
+ * the shared namespace.
  */
-type FallbackClassification = {
-  row: SearchRow;
-  chosen: boolean;
-  filtered_by: "fallback_duplicate" | "fallback_limit" | null;
-};
-
-function selectedFallbackRows(
-  primary: SearchRow[],
-  legacy: SearchRow[],
-  limit: number,
-): SearchRow[] {
-  if (legacy.length === 0) return primary.slice(0, limit);
-  const firstLegacy = legacy[0];
-  if (!firstLegacy) return primary.slice(0, limit);
-  if (primary.length >= limit) {
-    return [...primary.slice(0, Math.max(0, limit - 1)), firstLegacy];
+function sharedFallbackApplies(
+  request: SearchRequest,
+  requestedShared: boolean,
+): boolean {
+  const config = sharedNamespaceConfig();
+  if (!config.legacyFallbackEnabled) return false;
+  if (config.legacySharedNamespace === "") return false;
+  if (request.offset !== 0) return false;
+  if (requestedShared) {
+    return request.namespace === config.physicalSharedNamespace;
   }
-  return [...primary, ...legacy.slice(0, limit - primary.length)];
+  const scoped = Array.isArray(request.namespace) ? request.namespace : [];
+  return scoped.includes(config.physicalSharedNamespace);
 }
 
-function fallbackFilteredBy(
-  chosen: boolean,
-  duplicate: boolean,
-): FallbackClassification["filtered_by"] {
-  if (chosen) return null;
-  return duplicate ? "fallback_duplicate" : "fallback_limit";
-}
-
-function computeFallbackRows(
-  primaryRows: readonly SearchRow[],
-  legacyRows: readonly SearchRow[],
-  limit: number,
-): { rows: SearchRow[]; classifications: FallbackClassification[] } {
-  const primary = dedupeFallbackRows(primaryRows);
-  const primaryKeys = new Set(primary.map(fallbackDedupeKey));
-  const legacy = dedupeFallbackRows(
-    legacyRows.filter((row) => !primaryKeys.has(fallbackDedupeKey(row))),
-  );
-  const rows = selectedFallbackRows(primary, legacy, limit);
-  const selectedKeys = new Set(rows.map(fallbackDedupeKey));
-  const seen = new Set<string>();
-  const classifications = [...primaryRows, ...legacyRows].map((row, index) => {
-    const key = fallbackDedupeKey(row);
-    const duplicate =
-      seen.has(key) ||
-      (index >= primaryRows.length && primaryKeys.has(key));
-    seen.add(key);
-    const chosen = !duplicate && selectedKeys.has(key);
-    return {
-      row,
-      chosen,
-      filtered_by: fallbackFilteredBy(chosen, duplicate),
-    } satisfies FallbackClassification;
+/** Run the canonical search, then top it up from the legacy namespace. */
+async function searchWithLegacyTopUp(
+  dependencies: SearchDependencies,
+  request: SearchRequest,
+): Promise<SearchRow[]> {
+  const config = sharedNamespaceConfig();
+  const primaryRows = await executeSearchInternal(dependencies, request);
+  // Enough shared truth was found; the legacy namespace has nothing to add.
+  if (
+    primaryRows.length >= request.limit ||
+    primaryRows.length >= config.fallbackMinResults
+  ) {
+    return primaryRows;
+  }
+  const legacyRows = await executeSearchInternal(dependencies, {
+    ...request,
+    namespace: config.legacySharedNamespace,
   });
-  return { rows, classifications };
-}
-
-export function mergeFallbackRows(
-  primaryRows: readonly SearchRow[],
-  legacyRows: readonly SearchRow[],
-  limit: number,
-): SearchRow[] {
-  const result = traceRetrievalSpanSync({
-    name: "retrieval.fallback_dedupe",
-    input: {
-      limit,
-      primary: rowsEvidence(primaryRows),
-      legacy: rowsEvidence(legacyRows),
-    },
-    metadata: {
-      stage: "filtering",
-      filter_names: ["fallback_duplicate", "fallback_limit"],
-    },
-    run: () => computeFallbackRows(primaryRows, legacyRows, limit),
-    output: ({ rows, classifications }) => ({
-      candidate_count: classifications.length,
-      selected_count: rows.length,
-      selected_row_ids: rows.map((row) => row.id),
-      candidates: classifications.map(({ row, chosen, filtered_by }) => ({
-        ...rowEvidence(row),
-        chosen,
-        filtered_by,
-      })),
-    }),
-  });
-  return result.rows;
+  return mergeFallbackRows(primaryRows, legacyRows, request.limit);
 }
 
 /**
@@ -1013,84 +637,33 @@ export function mergeFallbackRows(
  * call. It exists for the window in which an operator has explicitly configured
  * a migration source and shared results are still thin.
  *
- * It is skipped entirely when `offset !== 0`. Paginating a two-source merge
- * cannot produce a stable window — the legacy top-up depends on how many
- * canonical rows the CURRENT page found — so pages would overlap or skip rows.
- *
  * @param requestedShared Whether the caller explicitly asked for the shared
  *   namespace (as opposed to it merely appearing in their readable list).
  */
 export async function executeSearchWithSharedFallback(
-  dependencies: SearchDependencies,
-  tables: readonly SearchSource[],
-  query: string,
-  limit: number,
-  mode: SearchMode,
-  tier: Tier | undefined,
-  offset: number,
-  namespace: NamespaceFilter | undefined,
-  options: ExecuteSearchOptions = {},
-  requestedShared = false,
+  ...args: SharedFallbackArgs
 ): Promise<SearchRow[]> {
-  const config = sharedNamespaceConfig();
-  const scoped = Array.isArray(namespace) ? namespace : [];
-  const fallbackApplies = requestedShared
-    ? namespace === config.physicalSharedNamespace
-    : scoped.includes(config.physicalSharedNamespace);
-
-  if (
-    !config.legacyFallbackEnabled ||
-    config.legacySharedNamespace === "" ||
-    offset !== 0 ||
-    !fallbackApplies
-  ) {
+  const [dependencies, tables, query, rows, mode, tier, offset, namespace] =
+    args;
+  const request = toSearchRequest(args);
+  const requestedShared = args[9] ?? false;
+  if (!sharedFallbackApplies(request, requestedShared)) {
     return withCanonicalNamespaces(
       await executeSearch(
         dependencies,
         tables,
         query,
-        limit,
+        rows,
         mode,
         tier,
         offset,
         namespace,
-        options,
+        args[8] ?? {},
       ),
     );
   }
-
-  const primaryRows = await executeSearch(
-    dependencies,
-    tables,
-    query,
-    limit,
-    mode,
-    tier,
-    0,
-    namespace,
-    options,
-  );
-  // Enough shared truth was found; the legacy namespace has nothing to add.
-  if (
-    primaryRows.length >= limit ||
-    primaryRows.length >= config.fallbackMinResults
-  ) {
-    return withCanonicalNamespaces(primaryRows);
-  }
-
-  const legacyRows = await executeSearch(
-    dependencies,
-    tables,
-    query,
-    limit,
-    mode,
-    tier,
-    0,
-    config.legacySharedNamespace,
-    options,
-  );
   return withCanonicalNamespaces(
-    mergeFallbackRows(primaryRows, legacyRows, limit),
+    await searchWithLegacyTopUp(dependencies, request),
   );
 }
 
