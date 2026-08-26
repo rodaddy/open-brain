@@ -40,15 +40,6 @@ export interface MemoryToolDependencies {
   readonly workingSetStore?: WorkingSetStore;
   readonly recoveryWalStore?: RecoveryWalStore;
   /**
-   * Milliseconds the query-embedding call may take before the search degrades.
-   *
-   * From `config.search.embeddingTimeoutMs`. Optional with the same default the
-   * reader it replaces used, because a caller that registers tools without a
-   * full composition root — the NATS bridge's `ToolDeps`, a focused test — must
-   * keep working rather than start timing out at zero.
-   */
-  readonly searchEmbeddingTimeoutMs?: number;
-  /**
    * Deployment-wide corpus default for full-text search.
    *
    * From `config.fts.corpusConfig`. Absent means english, which is what

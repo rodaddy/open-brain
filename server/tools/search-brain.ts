@@ -190,10 +190,11 @@ function resolveCallerFtsConfig(options: {
   role: string;
   mode: SearchMode;
   requestedFtsConfig: string | undefined;
+  ftsCorpusConfig: FtsConfig | undefined;
 }): { ftsConfig: FtsConfig } | { denial: string } {
-  const { role, mode, requestedFtsConfig } = options;
+  const { role, mode, requestedFtsConfig, ftsCorpusConfig } = options;
   const ftsPrivileged = role === "admin" || role === "ob-admin";
-  const ftsConfig = requestFtsConfig(requestedFtsConfig);
+  const ftsConfig = requestFtsConfig(requestedFtsConfig, ftsCorpusConfig);
   if (ftsConfig === DEFAULT_FTS_CONFIG || ftsPrivileged) return { ftsConfig };
   if (mode !== "vector" && requestedFtsConfig !== undefined) {
     return { denial: NON_ENGLISH_FTS_DENIED };
@@ -235,6 +236,7 @@ export function registerSearchBrainTool(
         role: identity.role,
         mode,
         requestedFtsConfig,
+        ftsCorpusConfig: dependencies.ftsCorpusConfig,
       });
       if ("denial" in fts) return errorResult(fts.denial);
       const ftsConfig = fts.ftsConfig;

@@ -26,6 +26,14 @@
 # at all, because every value they need now arrives through a parameter or
 # through `MemoryToolDependencies`.
 #
+# ABSENCE ALONE IS NOT THE BAR. A reader that stopped reading `process.env` and
+# whose caller never started passing the value is not wired -- it is silently
+# running on its `?? default` forever, and clauses 1-3 go green on exactly that
+# state (observed on this branch: three of the four readers took parameters and
+# `server/main.ts` passed none of them). So CLAUSE 4 asserts ARRIVAL at the
+# composition root: each value must be handed down from the ONE validated parse
+# at the call site that reaches the tool layer.
+#
 # ---------------------------------------------------------------------------
 # WHAT THIS CHECK DELIBERATELY DOES NOT COVER, AND WHY
 # ---------------------------------------------------------------------------
@@ -86,7 +94,24 @@
 #   clean tree. This is a positive control, deliberately pointed at a file this
 #   lane does not touch and no future lane should empty.
 #
-# Exit 0 only when all three clauses pass. Exit 3 is a harness error (missing
+# CLAUSE 4 -- THE VALUES ARRIVE AT THE COMPOSITION ROOT.
+#   Absence proves the reader stopped guessing; arrival proves someone started
+#   telling it. Four anchored `rg` patterns, each of which must match EXACTLY
+#   once -- zero means unwired, more than once means two composition paths that
+#   can disagree, which is the doubled state this rung exists to end:
+#     server/main.ts       `ftsCorpusConfig: config.fts.corpusConfig`
+#     server/main.ts       `recoveryWalPath: config.recovery.walPath`
+#     server/main.ts       `natsRuntimeBoundary: nats.boundary`  -- the boundary
+#         the NATS phase ALREADY computed (`natsRuntimeBoundaryFromConfig` at
+#         server/main.ts:267, returned as `NatsPhase.boundary`). Calling that
+#         function a second time here would rebuild a second boundary from the
+#         same config, which is a second source of truth by construction.
+#     server/tools/search-brain.ts  `ftsCorpusConfig: dependencies.ftsCorpusConfig`
+#         -- the corpus default threaded into `resolveCallerFtsConfig`, which is
+#         what passes it as `requestFtsConfig`'s second argument. Without this
+#         the branch's new second parameter is never supplied by any caller.
+#
+# Exit 0 only when all four clauses pass. Exit 3 is a harness error (missing
 # tool / wrong repo root), which is NOT a fail of the thing under test.
 set -uo pipefail
 
@@ -119,6 +144,7 @@ CONTROL="server/config.ts"
 CLAUSE1=FAIL; CLAUSE1_EVIDENCE=""
 CLAUSE2=FAIL; CLAUSE2_EVIDENCE=""
 CLAUSE3=FAIL; CLAUSE3_EVIDENCE=""
+CLAUSE4=FAIL; CLAUSE4_EVIDENCE=""
 
 # ---------------------------------------------------------------------------
 # CLAUSE 1 — every target file is present.
@@ -190,6 +216,51 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# CLAUSE 4 — the values ARRIVE at the composition root.
+# ---------------------------------------------------------------------------
+# Each entry is `<file>|<fixed-string pattern>`. `rg -F` so the pattern is read
+# literally, and the count must be exactly 1: 0 is unwired, >1 is two
+# composition paths.
+ARRIVALS="server/main.ts|ftsCorpusConfig: config.fts.corpusConfig
+server/main.ts|recoveryWalPath: config.recovery.walPath
+server/main.ts|natsRuntimeBoundary: nats.boundary
+server/tools/search-brain.ts|ftsCorpusConfig: dependencies.ftsCorpusConfig"
+
+ARRIVAL_BAD=""
+ARRIVAL_OK=0
+N_ARRIVALS=0
+while IFS= read -r entry; do
+  [ -n "$entry" ] || continue
+  N_ARRIVALS=$((N_ARRIVALS + 1))
+  a_file="${entry%%|*}"
+  a_pat="${entry#*|}"
+  if [ ! -f "$REPO_ROOT/$a_file" ]; then
+    ARRIVAL_BAD="${ARRIVAL_BAD}
+    MISSING FILE $a_file (for: $a_pat)"
+    continue
+  fi
+  a_count="$(cd "$REPO_ROOT" && rg -cF -- "$a_pat" "$a_file" 2>/dev/null)"
+  a_count="${a_count:-0}"
+  if [ "$a_count" -eq 1 ]; then
+    ARRIVAL_OK=$((ARRIVAL_OK + 1))
+  else
+    ARRIVAL_BAD="${ARRIVAL_BAD}
+    $a_file: found $a_count, expected 1 — \"$a_pat\""
+  fi
+done <<EOF
+$ARRIVALS
+EOF
+
+if [ "$N_ARRIVALS" -ne 4 ]; then
+  CLAUSE4_EVIDENCE="expected 4 arrival assertions, the list yielded $N_ARRIVALS — the check itself is miswritten"
+elif [ -n "$ARRIVAL_BAD" ]; then
+  CLAUSE4_EVIDENCE="$ARRIVAL_OK/4 values arrive; the rest are not wired:${ARRIVAL_BAD}"
+else
+  CLAUSE4=PASS
+  CLAUSE4_EVIDENCE="all 4 values are passed exactly once from the composition root"
+fi
+
 printf 'CLAUSE 1 (all 4 target files exist):                    %s — %s\n' "$CLAUSE1" "$CLAUSE1_EVIDENCE"
 printf 'CLAUSE 2 (no process.env in any of the 4):              %s — %s\n' "$CLAUSE2" "$CLAUSE2_EVIDENCE"
 if [ "$CLAUSE2" != PASS ] && [ -n "${CLAUSE2_HITS:-}" ]; then
@@ -197,7 +268,9 @@ if [ "$CLAUSE2" != PASS ] && [ -n "${CLAUSE2_HITS:-}" ]; then
 fi
 printf 'CLAUSE 3 (scanner proven to match in %s):   %s — %s\n' "$CONTROL" "$CLAUSE3" "$CLAUSE3_EVIDENCE"
 
-if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ]; then
+printf 'CLAUSE 4 (values arrive at the composition root):        %s — %s\n' "$CLAUSE4" "$CLAUSE4_EVIDENCE"
+
+if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ] && [ "$CLAUSE4" = PASS ]; then
   exit 0
 fi
 exit 1
