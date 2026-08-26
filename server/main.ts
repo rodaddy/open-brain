@@ -182,6 +182,11 @@ function createServerFactory(input: {
       // would give the doctor a boundary object that can drift from the one the
       // bridge and `/health` actually run on.
       ftsCorpusConfig: config.fts.corpusConfig,
+      // `config.qmd.path` is the validated parse of QMD_PATH (blank reads as
+      // absent, `server/config/env-groups.ts:188,304`), so the handler no longer
+      // needs an env record at all. Spread rather than assigned because the key
+      // is optional and must stay ABSENT, not present-and-undefined.
+      ...(config.qmd.path ? { qmdPath: config.qmd.path } : {}),
       recoveryWalPath: config.recovery.walPath,
       natsRuntimeBoundary: nats.boundary,
       ...realtime,
@@ -503,7 +508,10 @@ export async function startServer(
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
   const tracing = createTracingRuntime();
-  logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
+  logger.info(
+    { enabled: tracing.sink !== undefined },
+    "mcp_tracing_configured",
+  );
   let application: ShadowApplication | undefined;
   try {
     await applyMigrations({
@@ -624,7 +632,6 @@ async function shutdown(running: RunningProcess): Promise<void> {
   logger.info({}, "server_shutdown_complete");
   if (firstFailure !== undefined) throw firstFailure;
 }
-
 
 /**
  * The launchd-facing process wrapper: signals, exit codes, nothing else.

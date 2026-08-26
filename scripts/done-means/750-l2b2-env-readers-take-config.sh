@@ -244,14 +244,25 @@ fi
 #       proposed spelling would have gated on a value that cannot carry the
 #       legacy names, the fallback flag, or the minimum result count.
 #
-#   (c) server/main.ts  `searchAllEnv:`
+#   (c) server/main.ts  `qmdPath: config.qmd.path`
+#       AMENDED by the rewiring lane (#825, L2b-2). The pattern was
+#       `searchAllEnv:`, written on the assumption that no validated field held
+#       this value and that main.ts would therefore have to hand down a raw env
+#       slice. That assumption was wrong: `server/config/env-groups.ts:188,304`
+#       already parses QMD_PATH through `blankAsAbsent` into `QmdConfigGroup`,
+#       exposed as `config.qmd` (`server/config.ts:238,361`), and
+#       `server/config.test.ts:657` already proves input by input that
+#       `config.qmd.path` answers exactly what `resolveQmdPath` answers.
+#       Passing an env record beside an equivalent validated field would have
+#       created the very second composition path the exact-1 rule exists to
+#       catch, so the arrival asserts the validated field instead.
 #       TO SATISFY: drop the `= process.env` default from `resolveQmdPath`
-#       (server/tools/search-all.ts:124), add a `searchAllEnv` field to
-#       `MemoryToolDependencies` carrying the env slice that supplies `QMD_PATH`,
-#       and write it into the dependencies literal in server/main.ts. The
-#       pattern is the field name plus its colon, so the lane picks the source
-#       expression; what it may not do is leave the parameter defaulted, because
-#       a defaulted parameter reads as injected and behaves as a direct read.
+#       (server/tools/search-all.ts:124) and write this line into the
+#       dependencies literal in server/main.ts. `MemoryToolDependencies.qmdPath`
+#       (server/tools/types.ts:25) already exists, so no new field is needed.
+#       What the lane may NOT do is leave the parameter defaulted, or leave a
+#       `?? resolveQmdPath()` fallback at the consumer, because either one reads
+#       as injected and behaves as a direct read.
 #
 #   (d) server/observability/langfuse-tracing.ts  `readMcpTracingConfig(config.`
 #       TO SATISFY: drop the `= process.env` default from `readMcpTracingConfig`
@@ -266,7 +277,7 @@ fi
 #       exact-1 rule catches everywhere else in this file.
 ARRIVALS="server/main.ts|searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs
 server/main.ts|sharedNamespaceNames: config.sharedNamespaceNames
-server/main.ts|searchAllEnv:
+server/main.ts|qmdPath: config.qmd.path
 server/observability/langfuse-tracing.ts|readMcpTracingConfig(config."
 
 ARRIVAL_BAD=""

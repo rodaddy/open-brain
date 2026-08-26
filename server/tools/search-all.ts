@@ -121,7 +121,7 @@ interface QmdDocument {
  * @returns The configured path, or `undefined` when none is usable.
  */
 export function resolveQmdPath(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined>,
 ): string | undefined {
   const configured = env.QMD_PATH?.trim();
   return configured ? configured : undefined;
@@ -354,7 +354,11 @@ function planFederation(
   dependencies: MemoryToolDependencies,
   sources: "all" | "brain" | "qmd",
 ): FederationPlan {
-  const qmdPath = dependencies.qmdPath ?? resolveQmdPath();
+  // The ONE source. There is no fallback read here on purpose: a `?? resolveQmdPath()`
+  // tail would let this handler answer from the ambient environment whenever the
+  // composition root failed to hand the value down, which is the doubled state
+  // rung L2 exists to end (#825).
+  const qmdPath = dependencies.qmdPath;
   const qmdRequested = sources === "all" || sources === "qmd";
   if (qmdRequested && qmdPath === undefined) {
     // Say it once, at the boundary. Without this the qmd arm's absence is
