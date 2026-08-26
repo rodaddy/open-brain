@@ -87,6 +87,53 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 37) — harvest of the L2b-1 config-injection lane (PR #779) and the search-all lint lane (PR #780)
+
+- **A single-file green is not a suite green: `bun test` runs the whole
+  directory in ONE process, so module-scope memoization keeps the first value
+  it ever saw.** `recoveryWalStoreFor` (`server/tools/realtime-stores.ts:53`)
+  memoized its fallback store on first touch, so whichever file registered
+  first decided the WAL path for every later file. The new arrival test passed
+  alone and failed in CI job `db-integration`; the fix keys the fallback on the
+  `recoveryWalPath` it was built for (`realtime-stores.ts:59-66`) and the
+  docstring now names the failure mode: "Memoizing on first touch alone made
+  the answer depend on registration order, which is invisible in a single-file
+  run and wrong in a whole-suite one." Run the DIRECTORY before trusting a
+  single-file green.
+- **A test never builds a path under the Mac scratch workspace; it uses
+  `os.tmpdir()` through `mkdtempSync`.** The precedent is
+  `src/rotating-file.test.ts:23` — `mkdtempSync(join(tmpdir(), "ob-rotating-"))`
+  with `tmpdir` imported from `node:os` (`:12`). This is the one place the
+  never-`/tmp` rule does NOT mean "hand-write a workspace path": the workspace
+  is Mac-local and the test also runs on CI and in runner boxes, so the
+  resolved-at-runtime temp directory is the portable answer and the literal is
+  the bug.
+- **An arrival done-means needs a clause that RUNS the arrival test, not only
+  one that greps the call site.** In
+  `scripts/done-means/750-l2b1-tool-readers-take-config.sh`, clause 4 reads the
+  composition root's source and proves the values are passed (`:115-120`) —
+  which stays green while the wiring is merely TYPED. Clause 5 exercises it
+  (`:122`, `server/tools/dependency-arrival.test.ts`), and its failure text
+  says why: "clause 4 asserts the wiring was TYPED; nothing here asserts it
+  WORKS" (`:305`). A static clause and a behavioral clause are two clauses.
+- **The Codex runtime rejects `--effort max`; companion recon lanes ran at
+  xhigh.** Pin the effort the runtime actually accepts when briefing a
+  companion lane, and record the substitution rather than letting the launcher
+  pick silently.
+- **A recon lane that reads the Mac checkout answers for THAT checkout's
+  branch, not `main`** (rule 19, again). The Mac tree is dirty on
+  `sprint/standards-fmt` (`_DOCS/_handoff/2026-08-26-lint-sweep-l2.md:15`), so
+  a "what does main look like" question answered from it is answered about
+  someone else's in-progress work. Point recon at the clone, or at
+  `git show origin/main:<path>`.
+- **Shared extraction across twins happens only after the defaults are
+  confirmed byte-identical.** `normalizeSearchArgs` moved to
+  `server/tools/search-request.ts:33` in `fca45fb (#779)` and is now imported
+  by both `server/tools/search-brain.ts` and `server/tools/search-all.ts`; the
+  legacy `src/tools/search-all.ts` twin was deliberately left untouched. Two
+  callers that merely look alike get differenced first; the extraction is what
+  you do once they are proven the same, not the way you find out.
+
 ### 2026-08-26 (round 36) — harvest of lane 1 of the #780 sweep (PR #782), the #779 review, and the session-2 collection pass
 
 - **A git pathspec `**` must consume a directory.** `git diff --name-only

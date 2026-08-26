@@ -184,3 +184,18 @@ only when a session actually needed it.
     compacting twice in one session (2026-08-26) was caused by head-side
     plumbing output, not by decisions. Rule 1 stays as the principle; this
     rule is the operational list.
+32. **Lanes that do not touch each other run in PARALLEL, 5-10 at once.**
+    Operator ruling 2026-08-26: "if they can be done in parallel, we should be
+    doing that." Sequencing lanes that share no file is wasted wall clock, not
+    caution. Each lane gets its OWN LOCAL CLONE under
+    `{temp_workspace}/open-brain/_worktrees/lane-N` — `git clone`, NOT
+    `git worktree`: the worktree-hygiene gate allows one worktree per checkout,
+    and a clone sits outside it. Each clone is branched from `origin/main`,
+    has `bun install --frozen-lockfile` already done, and has `.env` copied in,
+    so a lane starts on a tree that can already run. Each lane opens its own
+    PR; collectors (receipt runs, CI triage) run per PR as they land, not in
+    one pass at the end. The one sequencing rule: two lanes never create the
+    same helper. Where several lanes want a shared module, ONE owner lane owns
+    it and lands first, then the dependents rebase onto it. This supersedes the
+    one-file-at-a-time sequencing from the 2026-08-26 morning ruling on #780;
+    that ruling's "fully to standard, one file per lane" part still stands.
