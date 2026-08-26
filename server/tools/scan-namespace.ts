@@ -62,6 +62,229 @@ function isScanIdentity(identity: AuthIdentity): boolean {
   );
 }
 
+const scanNamespaceInputSchema = {
+  namespace: z.string().min(1).max(500).describe("Agent namespace to scan"),
+  target_namespace: z
+    .string()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe(
+      "Namespace to check for existing promoted duplicates (default shared-kb)",
+    ),
+  table: tableEnum.optional().describe("Limit scan to a specific table"),
+  since: z
+    .string()
+    .optional()
+    .describe("Only entries created after this ISO date"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      `Max entries to scan per table (default ${DEFAULT_ENTRIES_PER_TABLE})`,
+    ),
+};
+
+const scanNamespaceAnnotations = {
+  title: "Scan Namespace",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+interface ScanScope {
+  readonly tables: readonly ResourceTable[];
+  readonly perTable: number;
+  readonly scanned: string;
+  readonly targetPhysical: string;
+  readonly targetCanonical: string;
+  readonly since: string | undefined;
+}
+
+interface ScanArgs {
+  readonly namespace: string;
+  readonly target_namespace?: string;
+  readonly table?: string;
+  readonly since?: string;
+  readonly limit?: number;
+}
+
+/**
+ * Resolve the read scope for one scan, or the reason the caller may not have it.
+ *
+ * Cross-namespace visibility is the promotion identities' surface. The role
+ * gate runs first so an unprivileged caller never learns whether the namespace
+ * it named exists.
+ *
+ * @returns The resolved scope, or a `denied` message to return verbatim.
+ */
+function resolveScanScope(
+  identity: AuthIdentity | null | undefined,
+  args: ScanArgs,
+): { scope: ScanScope } | { denied: string } {
+  if (!identity || !isScanIdentity(identity)) {
+    return {
+      denied: "Permission denied: admin, ob-admin, or promoter role required",
+    };
+  }
+  if (!canTargetNamespace(identity, "read", args.namespace)) {
+    return { denied: "Permission denied: namespace read access denied" };
+  }
+
+  const shared = sharedNamespaceConfig();
+  const target = args.target_namespace ?? shared.sharedNamespace;
+  if (!canTargetNamespace(identity, "read", target)) {
+    return { denied: "Permission denied: target namespace read access denied" };
+  }
+
+  const targetPhysical = physicalNamespace(target);
+  return {
+    scope: {
+      tables: args.table ? [args.table as ResourceTable] : ALL_TABLES,
+      perTable: args.limit ?? DEFAULT_ENTRIES_PER_TABLE,
+      // The scanned namespace is bound as a PARAMETER on every statement, not
+      // resolved once and trusted: it is the only thing scoping this read, and
+      // the role gate above proves the caller may target it, not that a later
+      // statement stays inside it.
+      scanned: physicalNamespace(args.namespace),
+      targetPhysical,
+      targetCanonical: canonicalNamespace(targetPhysical),
+      since: args.since,
+    },
+  };
+}
+
+/** @returns Nominated rows in one table, newest first, within the scan scope. */
+async function queryNominatedRows(
+  dependencies: MemoryToolDependencies,
+  table: ResourceTable,
+  scope: ScanScope,
+): Promise<Record<string, unknown>[]> {
+  const values: unknown[] = [scope.scanned, scope.perTable];
+  if (scope.since !== undefined) values.push(scope.since);
+  const sinceFilter =
+    scope.since !== undefined ? " AND t.created_at >= $3" : "";
+
+  const { rows } = await dependencies.pool.query(
+    `SELECT t.id, t.content_hash, t.namespace, t.created_at,
+            ${promotionMetadataSelect(table)} AS metadata
+       FROM ${table} t
+      WHERE t.namespace = $1
+        AND t.archived_at IS NULL${explicitSharedNominationSqlPredicate(table)}${sinceFilter}
+      ORDER BY t.created_at DESC
+      LIMIT $2`,
+    values,
+  );
+  return rows;
+}
+
+/**
+ * @returns The id of an entry in the target namespace with the same content, if
+ * one exists.
+ */
+async function findTargetDuplicateId(
+  dependencies: MemoryToolDependencies,
+  table: ResourceTable,
+  contentHash: unknown,
+  targetPhysical: string,
+): Promise<string | undefined> {
+  if (!contentHash) return undefined;
+  const { rows: existing } = await dependencies.pool.query(
+    `SELECT id FROM ${table}
+      WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
+      LIMIT 1`,
+    [contentHash, targetPhysical],
+  );
+  return (existing[0] as { id: string } | undefined)?.id;
+}
+
+/**
+ * Sort one table's rows into candidates and already-promoted duplicates.
+ *
+ * An entry whose content already exists in the target is reported as a
+ * duplicate INSTEAD of a candidate, so a promoter working the list top to
+ * bottom never re-promotes something already there.
+ */
+async function collectTable(options: {
+  dependencies: MemoryToolDependencies;
+  table: ResourceTable;
+  scope: ScanScope;
+  candidates: Candidate[];
+  duplicates: Duplicate[];
+}): Promise<void> {
+  const { dependencies, table, scope, candidates, duplicates } = options;
+  const rows = await queryNominatedRows(dependencies, table, scope);
+
+  for (const row of rows) {
+    const existingId = await findTargetDuplicateId(
+      dependencies,
+      table,
+      row.content_hash,
+      scope.targetPhysical,
+    );
+    if (existingId) {
+      duplicates.push({
+        table,
+        id: row.id as string,
+        target_namespace: scope.targetCanonical,
+        existing_target_id: existingId,
+        created_at: row.created_at,
+      });
+      continue;
+    }
+
+    if (
+      isExplicitSharedNomination(row.metadata as Record<string, unknown> | null)
+    ) {
+      candidates.push({
+        table,
+        id: row.id as string,
+        created_at: row.created_at,
+      });
+    }
+  }
+}
+
+async function handleScanNamespace(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity | null | undefined,
+  args: ScanArgs,
+) {
+  const resolved = resolveScanScope(identity, args);
+  if ("denied" in resolved) return errorResult(resolved.denied);
+  const { scope } = resolved;
+
+  const candidates: Candidate[] = [];
+  const duplicates: Duplicate[] = [];
+  for (const table of scope.tables) {
+    await collectTable({ dependencies, table, scope, candidates, duplicates });
+  }
+
+  dependencies.logger.info(
+    {
+      tool: "scan_namespace",
+      namespace: scope.scanned,
+      targetNamespace: scope.targetCanonical,
+      candidates: candidates.length,
+      duplicates: duplicates.length,
+    },
+    "tool_result",
+  );
+  return textResult({
+    namespace: args.namespace,
+    target_namespace: scope.targetCanonical,
+    candidates,
+    duplicates,
+    summary: {
+      candidates: candidates.length,
+      duplicates: duplicates.length,
+    },
+  });
+}
+
 export function registerScanNamespaceTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -72,143 +295,10 @@ export function registerScanNamespaceTool(
       description:
         "Scan an agent namespace for pending explicit shared-kb nominations. " +
         "Returns nominated candidates and duplicates in the target namespace.",
-      inputSchema: {
-        namespace: z
-          .string()
-          .min(1)
-          .max(500)
-          .describe("Agent namespace to scan"),
-        target_namespace: z
-          .string()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe(
-            "Namespace to check for existing promoted duplicates (default shared-kb)",
-          ),
-        table: tableEnum.optional().describe("Limit scan to a specific table"),
-        since: z
-          .string()
-          .optional()
-          .describe("Only entries created after this ISO date"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe(
-            `Max entries to scan per table (default ${DEFAULT_ENTRIES_PER_TABLE})`,
-          ),
-      },
-      annotations: {
-        title: "Scan Namespace",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: scanNamespaceInputSchema,
+      annotations: scanNamespaceAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      // Cross-namespace visibility is the promotion identities' surface. The
-      // role gate runs first so an unprivileged caller never learns whether the
-      // namespace it named exists.
-      if (!identity || !isScanIdentity(identity)) {
-        return errorResult(
-          "Permission denied: admin, ob-admin, or promoter role required",
-        );
-      }
-      if (!canTargetNamespace(identity, "read", args.namespace)) {
-        return errorResult("Permission denied: namespace read access denied");
-      }
-
-      const shared = sharedNamespaceConfig();
-      const target = args.target_namespace ?? shared.sharedNamespace;
-      if (!canTargetNamespace(identity, "read", target)) {
-        return errorResult(
-          "Permission denied: target namespace read access denied",
-        );
-      }
-      const targetPhysical = physicalNamespace(target);
-      const targetCanonical = canonicalNamespace(targetPhysical);
-
-      const tables = args.table ? [args.table as ResourceTable] : ALL_TABLES;
-      const perTable = args.limit ?? DEFAULT_ENTRIES_PER_TABLE;
-      // The scanned namespace is bound as a PARAMETER on every statement, not
-      // resolved once and trusted: it is the only thing scoping this read, and
-      // the role gate above proves the caller may target it, not that a later
-      // statement stays inside it.
-      const scanned = physicalNamespace(args.namespace);
-
-      const candidates: Candidate[] = [];
-      const duplicates: Duplicate[] = [];
-
-      for (const table of tables) {
-        const values: unknown[] = [scanned, perTable];
-        if (args.since !== undefined) values.push(args.since);
-        const sinceFilter = args.since !== undefined ? " AND t.created_at >= $3" : "";
-
-        const { rows } = await dependencies.pool.query(
-          `SELECT t.id, t.content_hash, t.namespace, t.created_at,
-                  ${promotionMetadataSelect(table)} AS metadata
-             FROM ${table} t
-            WHERE t.namespace = $1
-              AND t.archived_at IS NULL${explicitSharedNominationSqlPredicate(table)}${sinceFilter}
-            ORDER BY t.created_at DESC
-            LIMIT $2`,
-          values,
-        );
-
-        for (const row of rows) {
-          // An entry whose content already exists in the target is reported as a
-          // duplicate INSTEAD of a candidate, so a promoter working the list top
-          // to bottom never re-promotes something already there.
-          if (row.content_hash) {
-            const { rows: existing } = await dependencies.pool.query(
-              `SELECT id FROM ${table}
-                WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
-                LIMIT 1`,
-              [row.content_hash, targetPhysical],
-            );
-            const match = existing[0] as { id: string } | undefined;
-            if (match) {
-              duplicates.push({
-                table,
-                id: row.id,
-                target_namespace: targetCanonical,
-                existing_target_id: match.id,
-                created_at: row.created_at,
-              });
-              continue;
-            }
-          }
-
-          if (isExplicitSharedNomination(row.metadata as Record<string, unknown> | null)) {
-            candidates.push({ table, id: row.id, created_at: row.created_at });
-          }
-        }
-      }
-
-      dependencies.logger.info(
-        {
-          tool: "scan_namespace",
-          namespace: scanned,
-          targetNamespace: targetCanonical,
-          candidates: candidates.length,
-          duplicates: duplicates.length,
-        },
-        "tool_result",
-      );
-      return textResult({
-        namespace: args.namespace,
-        target_namespace: targetCanonical,
-        candidates,
-        duplicates,
-        summary: {
-          candidates: candidates.length,
-          duplicates: duplicates.length,
-        },
-      });
-    },
+    async (args, extra) =>
+      handleScanNamespace(dependencies, authIdentity(extra.authInfo), args),
   );
 }
