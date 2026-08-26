@@ -1,8 +1,20 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
-import { authorize, contentHash, decisionText, embeddingFields } from "./memory-helpers.ts";
-import { writeThoughtChunks, chunkReceiptFields } from "../../src/chunk-write.ts";
+import {
+  authIdentity,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
+import {
+  authorize,
+  contentHash,
+  decisionText,
+  embeddingFields,
+} from "./memory-helpers.ts";
+import {
+  writeThoughtChunks,
+  chunkReceiptFields,
+} from "../../src/chunk-write.ts";
 
 const sourceRefsSchema = z.array(z.record(z.string(), z.unknown())).max(20);
 
@@ -28,22 +40,27 @@ export function registerCaptureTools(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "thoughts",
-        "cannot write to thoughts",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "thoughts",
+        permissionMessage: "cannot write to thoughts",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
-      return writeThought(dependencies, auth.identity.clientId, auth.namespace, args);
+      return writeThought(
+        dependencies,
+        auth.identity.clientId,
+        auth.namespace,
+        args,
+      );
     },
   );
 
   server.registerTool(
     "log_decision",
     {
-      description: "Record a decision with rationale and alternatives considered",
+      description:
+        "Record a decision with rationale and alternatives considered",
       inputSchema: {
         title: z.string().min(1),
         rationale: z.string().min(1),
@@ -61,15 +78,19 @@ export function registerCaptureTools(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "decisions",
-        "cannot write to decisions",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "decisions",
+        permissionMessage: "cannot write to decisions",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
-      return writeDecision(dependencies, auth.identity.clientId, auth.namespace, args);
+      return writeDecision(
+        dependencies,
+        auth.identity.clientId,
+        auth.namespace,
+        args,
+      );
     },
   );
 }
@@ -86,7 +107,9 @@ async function writeThought(
 ) {
   const embedded = await embeddingFields(
     dependencies,
-    args.tags?.length ? `${args.content}\n${args.tags.join(" ")}` : args.content,
+    args.tags?.length
+      ? `${args.content}\n${args.tags.join(" ")}`
+      : args.content,
   );
   const rows = await dependencies.pool.query(
     `INSERT INTO thoughts
@@ -126,7 +149,10 @@ async function writeThought(
     caller: "server/log_thought",
   });
 
-  dependencies.logger.info({ tool: "log_thought", embedded: embedded.embedded }, "tool_result");
+  dependencies.logger.info(
+    { tool: "log_thought", embedded: embedded.embedded },
+    "tool_result",
+  );
   return textResult({
     id: row.id,
     namespace,
@@ -176,7 +202,10 @@ async function writeDecision(
     ],
   );
   const row = rows.rows[0];
-  dependencies.logger.info({ tool: "log_decision", embedded: embedded.embedded }, "tool_result");
+  dependencies.logger.info(
+    { tool: "log_decision", embedded: embedded.embedded },
+    "tool_result",
+  );
   return textResult({
     id: row.id,
     namespace,

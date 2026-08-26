@@ -146,13 +146,12 @@ function registerWorkingSetAppendTool(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write working set",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "sessions",
+        permissionMessage: "cannot write working set",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
 
       const result = workingSetStoreFor(dependencies).append(
@@ -215,13 +214,12 @@ function registerRecoveryWalAppendTool(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write recovery WAL",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "sessions",
+        permissionMessage: "cannot write recovery WAL",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
 
       const result = recoveryWalStoreFor(dependencies).append(
@@ -284,13 +282,12 @@ function registerRecoveryWalMarkTool(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot mark recovery WAL",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "sessions",
+        permissionMessage: "cannot mark recovery WAL",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
 
       const result = recoveryWalStoreFor(dependencies).mark(

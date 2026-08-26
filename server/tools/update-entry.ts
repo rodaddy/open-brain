@@ -411,12 +411,11 @@ export function registerUpdateEntryTool(
       annotations: updateEntryAnnotations,
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        args.table,
-        `cannot write to ${args.table}`,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: args.table,
+        permissionMessage: `cannot write to ${args.table}`,
+      });
       if (!auth.ok) return auth.response;
       const table = args.table;
 

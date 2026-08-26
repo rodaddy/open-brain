@@ -104,13 +104,12 @@ function registerSessionSave(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write to sessions",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "sessions",
+        permissionMessage: "cannot write to sessions",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
       const saved = await saveSession(
         dependencies,
@@ -180,12 +179,11 @@ function registerSessionLoad(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "read",
-        "sessions",
-        "cannot read sessions",
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "read",
+        table: "sessions",
+        permissionMessage: "cannot read sessions",
+      });
       if (!auth.ok) return auth.response;
       const rows = await loadSessions(dependencies, auth.identity, args);
       if (rows.length === 0) {

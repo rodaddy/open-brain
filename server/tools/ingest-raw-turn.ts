@@ -69,13 +69,12 @@ export function registerIngestRawTurnTool(
       },
     },
     async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write raw turns",
-        args.namespace,
-      );
+      const auth = authorize(authIdentity(extra.authInfo), {
+        operation: "write",
+        table: "sessions",
+        permissionMessage: "cannot write raw turns",
+        requestedNamespace: args.namespace,
+      });
       if (!auth.ok) return auth.response;
       const kept = args.turns.filter((turn) => !isHarnessNoise(turn.content));
       const filtered = args.turns.length - kept.length;

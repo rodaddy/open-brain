@@ -143,13 +143,12 @@ async function appendSessionEvent(
   args: EventArgs,
   extra: { authInfo?: unknown },
 ) {
-  const auth = authorize(
-    authIdentity(extra.authInfo),
-    "write",
-    "sessions",
-    "cannot write to session events",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(extra.authInfo), {
+    operation: "write",
+    table: "sessions",
+    permissionMessage: "cannot write to session events",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
 
   const { lane, created: laneCreated } = await resolveLane(
