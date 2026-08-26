@@ -87,6 +87,57 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 34) — harvest of the verify-lane deps-at-head lane (PR #776, #775)
+
+- **verify-lane installed dependencies at `origin/main` and then verified the
+  PR head, so the first dependency-adding PR could not get a receipt.**
+  `lane-bootstrap.ts` cuts the verification worktree from `origin/main` and
+  runs `bun install --frozen-lockfile` THERE; verify-lane then hard-resets the
+  same worktree onto the PR head and never reinstalled. The SOURCE moved and
+  `node_modules` did not. Measured twice on #771, which adds `oxlint`: the
+  check died on `MISSING TOOL: .../node_modules/.bin/oxlint` and NO receipt was
+  posted, while a second install in that same worktree made the identical check
+  pass. Fixed by reinstalling when `package.json`/`bun.lock` differ between the
+  bootstrap ref and the head. `git diff --quiet` answers 0 for "same" and 1 for
+  "differs", so it cannot go through `capture()` (which throws on any non-zero
+  status); every OTHER status fails closed rather than being read as
+  "unchanged", because reading a broken comparison as "unchanged" reintroduces
+  the original defect exactly when git cannot compare.
+- **A test that shells out to git MUST pin `--git-dir` and `--work-tree` on
+  every call, and MUST assert `git init` succeeded before any other git call.**
+  A bare `-C <fixture>` does not fail when the fixture is not a repository — it
+  walks UP to the first enclosing one and operates there. One `mkdtempSync`
+  fixture came back without a `.git` (init did not take, nothing checked), so
+  the fixture's own `base` and `docs only` commits were authored into the
+  surrounding worktree as `verify-lane test <test@example.invalid>`, deleting
+  every tracked file in it, and the fixture's `git config` calls wrote
+  `core.bare=true`, the test identity, and `commit.gpgsign=false` into the
+  CLONE's `.git/config` (the controller restored it). Proven directly rather
+  than argued: against a non-repo directory, `git -C <d> rev-parse HEAD`
+  returns the enclosing worktree's HEAD while the pinned form returns
+  `fatal: not a git repository`. Recovery used `git update-ref` plus a mixed
+  reset, because the guard correctly refuses `git reset --hard` — the guard was
+  right and the workaround is the supported path, not a bypass.
+- **Test scratch is repo-relative `_scratch/`, never a hardcoded Mac path.**
+  Both the test and the done-means check defaulted to
+  `/Volumes/ThunderBolt/_tmp` when `OPENBRAIN_TEMP_WORKSPACE`/`DEV_TMP` were
+  unset. That is the operator's machine, so CI failed in both `check` and
+  `db-integration` with `EACCES: permission denied, mkdir '/Volumes'` on the
+  Linux runner. The repo already had the right shape
+  (`src/operator-doctor.test.ts:29`): a `_scratch/<name>/` directory resolved
+  from the repo root, already excluded by `.gitignore:119`. A fixture that
+  requires one machine's volume layout gates nothing in CI, which is where the
+  check most needs to run. Keeping the fixture inside the repo also bounds the
+  escape above — the worst a stray git call can reach is a directory the repo
+  already ignores.
+- **A check that can mutate the repository it verifies is a worse defect than
+  the one it gates.** Proving such a check is not "it exited 0": it is
+  `git config --list --local` and `git status --short` of the ENCLOSING repo,
+  before and after, plus confirming HEAD is unchanged and no fixture path shows
+  up as untracked. The escape above passed its own clauses green while
+  corrupting the branch it ran on; only inspecting the enclosing repo caught
+  it.
+
 ### 2026-08-26 (round 33) — harvest of the plans lane (PR #772) and the L1 lint-gate lane (PR #771)
 
 - **A docs-only PR still carries an executable done-means.** The merge gate
