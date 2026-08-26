@@ -1,14 +1,14 @@
-# Handoff — #780 lint sweep, the last seven files (2026-08-26)
+# Handover — #780 lint sweep, the last seven files (2026-08-26)
 
 ## State 0 — BASE
-Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
+Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 (181 lines). It is the standing contract for this session.
 - Any question this document does not directly override → the rules layers
   answer it, nearest layer first.
 - Anything neither the base nor this document covers → ask Rico before acting.
 - Output discipline: minimum verbosity, only the context needed, output tokens
   low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (212 lines on
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (212 lines on
   `main`). It overrides the base; this document overrides it. Rules 28-32 bind
   this session: the head consolidates and never works (31), lanes run parallel
   in their own clones (32), at most FIVE in flight, each its own Workflow.
@@ -17,8 +17,8 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
 - `origin/main` is `923126d` (#835 memory-helpers) — MERGED (`git log --oneline origin/main -1`)
 - Session 3 merged 15 PRs (#815-#824, #785, #828-#830, #832, #833, #835), each
   with a verify-lane receipt on the head sha — MERGED (`gh pr list --state merged`)
-- `_DOCS/HANDOFF-RULES.md` on `main` is 212 lines, rules 28-32 live — MERGED
-  (`git show origin/main:_DOCS/HANDOFF-RULES.md | wc -l`)
+- `_DOCS/HANDOVER-RULES.md` on `main` is 212 lines, rules 28-32 live — MERGED
+  (`git show origin/main:_DOCS/HANDOVER-RULES.md | wc -l`)
 - #780 checklist comment `5427622744`: 46 of 54 ticked — RUNNING (`gh api
   repos/rodaddy/open-brain/issues/comments/5427622744 --jq .body | rg -c '^- \[x\]'`)
 - SEVEN files remain, ONE complexity finding each at `923126d` — RUNNING
@@ -43,7 +43,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
 - Rest of the program: `_plans/server-hardening-ladder.md` wave 2 (L2b-2, L2c,
   L3-L6); not in this slice — MERGED
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has
-  `780-touched-files-lint-clean.sh`, `handoff-validates.sh`)
+  `780-touched-files-lint-clean.sh`, `handover-validates.sh`)
 Re-probe before dispatching anything (live state beats this doc):
 - `git log --oneline origin/main -1` → expect `923126d` or later with this PR merged
 - `cd <clone> && ./node_modules/.bin/oxlint --deny-warnings server/logging/sanitize.ts` → expect 1 finding, complexity 11
@@ -54,8 +54,8 @@ document's PR merges; if the checkout is `main` or `docs/780-sweep-session3` is
 merged, switch first, never work there.
 Retire: `docs/780-sweep-session3` after its PR merges — `gh pr merge --squash
 --delete-branch`, then `git branch -D` in lane-11. Worktrees: `none`.
-Commit this handoff: branch `docs/780-sweep-session3`, path
-`_DOCS/_handoff/2026-08-26-lint-sweep-l2-session4.md`, explicit-path staging,
+Commit this handover: branch `docs/780-sweep-session3`, path
+`_DOCS/_handover/2026-08-26-lint-sweep-l2-session4.md`, explicit-path staging,
 `git commit -F` message file. Done by the authoring session.
 Scribe: issue #780 — started: `gh issue comment 780 --body "Scribe, session 4: ..."`
 Done-check: `git log -1 --stat`
@@ -100,7 +100,7 @@ run it as the closing receipt and tick the map checkbox in the same motion.
 Also close #784 if Rico accepts resolved-by-observation (comment `5430102158`).
 
 ## State FINAL — WRAP
-Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
+Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - Q1, new: `.claude/agents/tracking-scribe.md` writes ONLY to the root checkout,

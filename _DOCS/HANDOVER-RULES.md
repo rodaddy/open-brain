@@ -1,7 +1,7 @@
-# HANDOFF RULES — open-brain (layer 0.1)
+# HANDOVER RULES — open-brain (layer 0.1)
 
 Repo-specific rules every handover in this repo needs. Overrides
-HANDOFF-BASE.md; overridden by the handover document. Keep short; add a rule
+HANDOVER-BASE.md; overridden by the handover document. Keep short; add a rule
 only when a session actually needed it.
 
 ## Execution posture (operator ruling 2026-08-25)
@@ -172,7 +172,7 @@ only when a session actually needed it.
     `/opt/homebrew/opt/node@24/bin/node
     /Volumes/ThunderBolt/Development/_ob/scripts/graph-mode-gate.ts --agent
     claude --session-id <session> --cwd <repo> declare T1` (or the tier the
-    handoff names), and every lane carries a `scripts/done-means/` check seen
+    handover names), and every lane carries a `scripts/done-means/` check seen
     RED before GREEN; the checker declares done, never the lane. (Rico,
     2026-08-26: "we should also be running everything in graph mode.")
 30. **A scribe runs from State 0.** Records land as work lands: an issue

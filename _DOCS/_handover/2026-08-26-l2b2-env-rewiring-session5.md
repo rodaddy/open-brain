@@ -1,14 +1,14 @@
-# Handoff — L2b-2 env rewiring, session 5 (2026-08-26)
+# Handover — L2b-2 env rewiring, session 5 (2026-08-26)
 
 ## State 0 — BASE
-Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
+Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 (181 lines). It is the standing contract for this session.
 - Any question this document does not directly override → the rules layers
   answer it, nearest layer first.
 - Anything neither the base nor this document covers → ask Rico before acting.
 - Output discipline: minimum verbosity, only the context needed, output tokens
   low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (212 lines on
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (212 lines on
   `main`). It overrides the base; this document overrides it. Rules 28-32 bind:
   head never works, own clones, at most FIVE lanes, `declare T1` first.
 
@@ -35,7 +35,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session3/{file-lane,collector}.workflow.js` — WRITTEN
 - Rest of the program: ladder L2c, L3-L6; #773, #774, #826, #827, #831, #841 — MERGED
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has
-  `750-l2b1-tool-readers-take-config.sh`, `handoff-validates.sh`)
+  `750-l2b1-tool-readers-take-config.sh`, `handover-validates.sh`)
 Re-probe before dispatching anything (live state beats this doc):
 - `git log --oneline origin/main -1` → expect 3995531 or later with this PR merged
 - `cd <clone> && rg -n 'process\.env' server/tools/search-engine.ts server/tools/shared-namespace.ts` → expect 5 code lines
@@ -45,8 +45,8 @@ Branch: `docs/l2b2-session5` from `origin/main` — cut it once THIS document's
 PR merges; if the checkout is `main` or `docs/780-sweep-session4` is merged,
 switch first, never work there.
 Retire: `docs/780-sweep-session4` via `gh pr merge --squash --delete-branch`. Worktrees: `none`.
-Commit this handoff: branch `docs/780-sweep-session4`, path
-`_DOCS/_handoff/2026-08-26-l2b2-env-rewiring-session5.md`, explicit-path
+Commit this handover: branch `docs/780-sweep-session4`, path
+`_DOCS/_handover/2026-08-26-l2b2-env-rewiring-session5.md`, explicit-path
 staging, `git commit -F` message file. Done by the authoring session.
 Scribe: issue #825 — started: `gh issue comment 825 --body "Scribe, session 5: ..."`
 Done-check: `git log -1 --stat`
@@ -106,7 +106,7 @@ script exits 0 on `origin/main` with State 7 merged; post that receipt as the
 closing comment and tick the map checkbox in the same motion.
 
 ## State FINAL — WRAP
-Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
+Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - Q1, since session 3: `.claude/agents/tracking-scribe.md` writes ONLY to the
