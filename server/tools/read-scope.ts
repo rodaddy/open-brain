@@ -25,7 +25,11 @@
  * predicate that is silently WRONG still returns rows.
  */
 import type { AuthIdentity } from "../auth/types.ts";
-import { sharedNamespaceConfig, physicalNamespace } from "./shared-namespace.ts";
+import {
+  sharedNamespaceConfig,
+  physicalNamespace,
+  type SharedNamespaceConfig,
+} from "./shared-namespace.ts";
 
 /** Namespace value bound by a search arm: one namespace, several, or none. */
 export type NamespaceFilter = string | string[];
@@ -53,13 +57,17 @@ function isGlobalReader(identity: AuthIdentity): boolean {
  * @param options `includeLegacySharedFallback` adds the configured legacy shared
  *   namespace when the operator has explicitly set one. It is empty by default
  *   (#167 retired `collab`), so this normally changes nothing.
+ * @param names When supplied, the already-validated shared-namespace set from
+ *   `ServerConfig` is used verbatim instead of the environment. Omitting it
+ *   preserves the historical environment-derived behavior exactly.
  * @returns The readable namespaces, or `undefined` when the read is global.
  */
 export function readableNamespaces(
   identity: AuthIdentity,
   options: { includeLegacySharedFallback?: boolean } = {},
+  names?: SharedNamespaceConfig,
 ): string[] | undefined {
-  const config = sharedNamespaceConfig();
+  const config = sharedNamespaceConfig(names);
   const shared = [config.physicalSharedNamespace];
   if (
     options.includeLegacySharedFallback === true &&
@@ -85,18 +93,22 @@ export function readableNamespaces(
  *
  * @param identity Token-derived identity.
  * @param namespace The caller-supplied namespace argument.
+ * @param names When supplied, the already-validated shared-namespace set from
+ *   `ServerConfig` is used verbatim instead of the environment.
  * @returns Whether the identity may read that namespace.
  */
 export function canReadNamespace(
   identity: AuthIdentity,
   namespace: string,
+  names?: SharedNamespaceConfig,
 ): boolean {
-  const config = sharedNamespaceConfig();
+  const config = sharedNamespaceConfig(names);
   // The `all` keyword is a global-role-only read; it is never a way for a scoped
   // identity to widen itself, and a delegated identity cannot use it at all.
   if (namespace === "all") {
     return (
-      identity.namespaceSource !== "delegated" && GLOBAL_ROLES.has(identity.role)
+      identity.namespaceSource !== "delegated" &&
+      GLOBAL_ROLES.has(identity.role)
     );
   }
   // The legacy shared name stays reachable only for break-glass admin roles; a
@@ -108,8 +120,11 @@ export function canReadNamespace(
   ) {
     return false;
   }
-  const allowed = readableNamespaces(identity);
-  return allowed === undefined || allowed.includes(physicalNamespace(namespace));
+  const allowed = readableNamespaces(identity, {}, names);
+  return (
+    allowed === undefined ||
+    allowed.includes(physicalNamespace(namespace, names))
+  );
 }
 
 /**
@@ -120,12 +135,15 @@ export function canReadNamespace(
  *   {@link canReadNamespace}. Passing an unauthorized namespace here would bind
  *   it, which is exactly why the gate runs first at every call site.
  * @param options Forwarded to {@link readableNamespaces}.
+ * @param names When supplied, the already-validated shared-namespace set from
+ *   `ServerConfig` is used verbatim instead of the environment.
  * @returns One namespace, the readable list, or `undefined` for a global read.
  */
 export function namespaceFilterFor(
   identity: AuthIdentity,
   namespace?: string,
   options: { includeLegacySharedFallback?: boolean } = {},
+  names?: SharedNamespaceConfig,
 ): NamespaceFilter | undefined {
   if (
     namespace === "all" &&
@@ -134,8 +152,8 @@ export function namespaceFilterFor(
   ) {
     return undefined;
   }
-  if (namespace !== undefined) return physicalNamespace(namespace);
-  return readableNamespaces(identity, options);
+  if (namespace !== undefined) return physicalNamespace(namespace, names);
+  return readableNamespaces(identity, options, names);
 }
 
 /**
@@ -148,16 +166,22 @@ export function namespaceFilterFor(
  * @param identity Token-derived identity.
  * @param params Parameter array, mutated in place with the bound namespaces.
  * @param column Qualified column to constrain, e.g. `t.namespace`.
- * @param options Forwarded to {@link readableNamespaces}.
+ * @param options Forwarded to {@link readableNamespaces}. `names` carries the
+ *   already-validated shared-namespace set from `ServerConfig`; it rides inside
+ *   the options object rather than as a fifth positional parameter because this
+ *   signature is already at the four-parameter maximum the repo lint enforces.
  * @returns The SQL fragment, or `""` when the read is global.
  */
 export function appendReadNamespacePredicate(
   identity: AuthIdentity,
   params: unknown[],
   column = "namespace",
-  options: { includeLegacySharedFallback?: boolean } = {},
+  options: {
+    includeLegacySharedFallback?: boolean;
+    names?: SharedNamespaceConfig;
+  } = {},
 ): string {
-  const namespaces = readableNamespaces(identity, options);
+  const namespaces = readableNamespaces(identity, options, options.names);
   if (namespaces === undefined) return "";
   params.push(namespaces);
   return ` AND ${column} = ANY($${params.length}::text[])`;
