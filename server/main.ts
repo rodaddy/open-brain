@@ -146,12 +146,13 @@ function createServerFactory(input: {
   logger: Logger;
   config: ServerConfig;
   tracing: ReturnType<typeof createTracingRuntime>;
+  nats: NatsPhase;
 }): () => McpServer {
-  const { pool, logger, config } = input;
+  const { pool, logger, config, nats } = input;
   const realtime = {
     workingSetStore: new WorkingSetStore(),
     recoveryWalStore: new RecoveryWalStore({
-      walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
+      walPath: config.recovery.walPath,
     }),
   };
   const toolLogger = logger.child({ component: "tools" });
@@ -173,6 +174,16 @@ function createServerFactory(input: {
       ...(config.transport.embeddingBaseUrl
         ? { embeddingModel: config.transport.embeddingBaseUrl }
         : {}),
+      // The values the tool layer used to read from `process.env` itself, now
+      // handed down from the ONE validated parse (#778 typed them;
+      // `_plans/463-server-rewrite-charter.md:108,119` puts the parsing here).
+      // The NATS boundary is the one the NATS phase already built, not a second
+      // `natsRuntimeBoundaryFromConfig(config.nats)` call: rebuilding it here
+      // would give the doctor a boundary object that can drift from the one the
+      // bridge and `/health` actually run on.
+      ftsCorpusConfig: config.fts.corpusConfig,
+      recoveryWalPath: config.recovery.walPath,
+      natsRuntimeBoundary: nats.boundary,
       ...realtime,
     });
     return server;
@@ -356,6 +367,7 @@ function composeApplication(input: {
       logger,
       config,
       tracing,
+      nats,
     }),
     // CORS and request logging run ahead of EVERY route, `/health` included:
     // an unauthenticated probe is still traffic, and a deployment that cannot
