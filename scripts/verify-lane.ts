@@ -264,9 +264,11 @@ function resolveCheck(body: string, flagCheck: string | null): { path: string; s
  */
 export const DEPENDENCY_MANIFESTS = ["package.json", "bun.lock"] as const;
 
+export type DepsAtHeadOutcome = "reinstall" | "unchanged";
+
 export interface DepsAtHeadDecision {
-  /** true when `bun install --frozen-lockfile` must be re-run at the head. */
-  reinstall: boolean;
+  /** What to do: reinstall the head's dependencies, or leave them alone. */
+  outcome: DepsAtHeadOutcome;
   /** The `deps-at-head` step line, printed on BOTH paths. */
   detail: string;
 }
@@ -275,42 +277,69 @@ export interface DepsAtHeadDecision {
  * Decide whether the verification worktree needs its dependencies reinstalled
  * for the PR head.
  *
- * WHY THIS EXISTS (#775). lane-bootstrap cuts the worktree from `origin/main`
- * and installs deps THERE; this script then hard-resets the same worktree onto
- * the PR head. The SOURCE moves and `node_modules` does not, so any PR that
- * adds or bumps a dependency was verified against origin/main's dependency
- * tree. Measured twice on PR #771 (head 2d67702), which adds `oxlint`: the
- * done-means check died on `MISSING TOOL: .../node_modules/.bin/oxlint` and NO
- * receipt was posted, while a second `bun install --frozen-lockfile` in that
- * same worktree installed the 2 missing packages and the identical check
- * passed.
+ * WHY THIS EXISTS (#775). lane-bootstrap cuts the worktree from a base ref and
+ * installs deps THERE; this script then hard-resets the same worktree onto the
+ * PR head. The SOURCE moves and `node_modules` does not, so any PR that adds or
+ * bumps a dependency was verified against the base's dependency tree. Measured
+ * twice on PR #771 (head 2d67702), which adds `oxlint`: the done-means check
+ * died on `MISSING TOOL: .../node_modules/.bin/oxlint` and NO receipt was
+ * posted, while a second `bun install --frozen-lockfile` in that same worktree
+ * installed the 2 missing packages and the identical check passed.
  *
- * `manifestsDiffer` is the caller's `git diff --quiet <base> <head> --
- * package.json bun.lock` result, inverted: git exits 0 when there is no
- * difference.
+ * THE COMPARISON IS PINNED TO A SHA, NOT A REF (review round 1, P1-a).
+ * `bootstrapSha` is the worktree's HEAD read immediately after lane-bootstrap
+ * returns — the commit whose dependencies are actually installed. Diffing
+ * against the mutable `origin/main` instead would silently skip the install
+ * whenever that ref advanced between bootstrap and this compare (any fetch or
+ * merge in between), because the newly-advanced main could match the head's
+ * manifests while the INSTALLED tree does not.
  *
- * NOTHING IS ADJUSTED SILENTLY (AGENTS.md Coding Standards): both outcomes
- * produce a line, so the transcript always says which path ran.
+ * THIS FUNCTION OWNS THE STATUS HANDLING, deliberately. `diffStatus` is the RAW
+ * exit code of `git diff --quiet <bootstrapSha> <headSha> -- <manifests>`: 0
+ * means identical, 1 means they differ, and anything else means git could not
+ * answer (bad ref, missing object, not a repository). Taking the raw code
+ * rather than a pre-digested boolean is what makes the fail-closed branch
+ * TESTABLE — with a boolean, the `status !== 0 && status !== 1` logic lived at
+ * the call site and a mutant that ignored it passed every test.
+ *
+ * Reading an unusable comparison as "unchanged" would reintroduce the original
+ * defect exactly when git cannot compare, so that case THROWS.
+ *
+ * NOTHING IS ADJUSTED SILENTLY (AGENTS.md Coding Standards): both non-throwing
+ * outcomes produce a line, so the transcript always says which path ran.
  */
 export function decideDepsAtHead(input: {
-  baseRef: string;
+  bootstrapSha: string;
   headSha: string;
-  manifestsDiffer: boolean;
+  diffStatus: number | null;
 }): DepsAtHeadDecision {
   const manifests = DEPENDENCY_MANIFESTS.join(", ");
-  if (input.manifestsDiffer) {
+  const { bootstrapSha, headSha, diffStatus } = input;
+
+  if (diffStatus !== 0 && diffStatus !== 1) {
+    throw new VerifyLaneError(
+      "deps-at-head",
+      `git diff --quiet ${bootstrapSha} ${headSha} -- ${manifests} exited ` +
+        `${diffStatus === null ? "null" : diffStatus}. Refusing to guess whether ` +
+        "the head's dependencies are installed: reading an unusable comparison " +
+        "as \"unchanged\" is the original defect (#775) with an extra step.",
+    );
+  }
+
+  if (diffStatus === 1) {
     return {
-      reinstall: true,
+      outcome: "reinstall",
       detail:
-        `reinstalled: lockfile differs from ${input.baseRef} ` +
-        `(${manifests} changed between ${input.baseRef} and ${input.headSha})`,
+        `reinstalled: lockfile differs from the bootstrap commit ` +
+        `(${manifests} changed between ${bootstrapSha} and ${headSha})`,
     };
   }
   return {
-    reinstall: false,
+    outcome: "unchanged",
     detail:
-      `unchanged: lockfile matches ${input.baseRef} ` +
-      `(${manifests} identical, bootstrap deps describe ${input.headSha})`,
+      `unchanged: lockfile matches the bootstrap commit ` +
+      `(${manifests} identical between ${bootstrapSha} and ${headSha}, so the ` +
+      `deps installed at ${bootstrapSha} already describe ${headSha})`,
   };
 }
 
@@ -468,6 +497,17 @@ function main(): void {
   }
   step("bootstrap", `worktree at ${worktreePath}`);
 
+  // The commit whose dependencies lane-bootstrap ACTUALLY installed, read
+  // before anything moves the worktree (review round 1, P1-a). BOOTSTRAP_REF is
+  // a mutable ref: if it advances between the bootstrap and the compare below,
+  // diffing against the ref can report "identical" while the INSTALLED tree
+  // still differs from the head, silently skipping the install. A SHA cannot
+  // move.
+  const bootstrapSha = capture("bootstrap", "git", ["rev-parse", "HEAD"], {
+    cwd: worktreePath,
+  });
+  step("bootstrap", `deps installed at ${bootstrapSha} (from ${BOOTSTRAP_REF})`);
+
   // Pull the PR head into the fresh worktree. `git fetch origin <sha>` then a
   // hard reset is the shape that works for PRs from forks and for SHAs that no
   // named ref points at any more.
@@ -515,7 +555,7 @@ function main(): void {
   // this never silently decides "unchanged" because git could not compare.
   const diff = spawnSync(
     "git",
-    ["diff", "--quiet", BOOTSTRAP_REF, headSha, "--", ...DEPENDENCY_MANIFESTS],
+    ["diff", "--quiet", bootstrapSha, headSha, "--", ...DEPENDENCY_MANIFESTS],
     { cwd: worktreePath, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
   );
   if (diff.error) {
@@ -524,21 +564,16 @@ function main(): void {
       `could not compare dependency manifests: ${diff.error.message}`,
     );
   }
-  if (diff.status !== 0 && diff.status !== 1) {
-    throw new VerifyLaneError(
-      "deps-at-head",
-      `git diff --quiet ${BOOTSTRAP_REF} ${headSha} exited ${diff.status}. ` +
-        "Refusing to guess whether the head's dependencies are installed.",
-      `${diff.stdout ?? ""}${diff.stderr ?? ""}`.trim(),
-    );
-  }
 
+  // decideDepsAtHead owns the status handling, including the fail-closed branch
+  // for any code outside {0, 1}. Passing the raw status keeps that logic inside
+  // the unit-tested function instead of here (review round 1, P2).
   const depsDecision = decideDepsAtHead({
-    baseRef: BOOTSTRAP_REF,
+    bootstrapSha,
     headSha,
-    manifestsDiffer: diff.status === 1,
+    diffStatus: diff.status,
   });
-  if (depsDecision.reinstall) {
+  if (depsDecision.outcome === "reinstall") {
     note("deps-at-head", `installing the head's dependencies in ${worktreePath}`);
     // Same fail-loud shape lane-bootstrap uses for its own deps step
     // (scripts/lane-bootstrap.ts): a partially-installed environment is not a

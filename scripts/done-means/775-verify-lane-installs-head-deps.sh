@@ -30,13 +30,16 @@
 # ---------------------------------------------------------------------------
 # Four clauses
 # ---------------------------------------------------------------------------
-# CLAUSE 1 — THE STEP EXISTS, BETWEEN THE RESET AND THE CHECK.
-#   Position is the whole fix. A reinstall placed before the hard reset would
-#   install origin/main's deps twice and change nothing; one placed after
-#   run-check would be too late. This clause reads the byte offsets of the
-#   `checkout-head` step line, the `deps-at-head` step, and the `run-check`
-#   note out of scripts/verify-lane.ts and requires that strict ordering,
-#   rather than merely asserting the string is present somewhere.
+# CLAUSE 1 — THE FIX IS PROVEN BY MUTATION, NOT BY BYTE OFFSETS.
+#   The earlier version of this clause located strings in verify-lane.ts by
+#   byte offset and asserted their order. That is structural, and a mutant that
+#   kept the strings while ignoring `diff.status` passed all four clauses
+#   (review round 1). So the status handling now lives INSIDE the exported
+#   `decideDepsAtHead()`, and this clause proves the test can actually kill a
+#   mutant: it copies the repo's verify-lane.ts to a scratch path, flips the
+#   fail-closed comparison (`!== 0 && !== 1` -> a condition that never fires),
+#   points the unit suite at the mutant, and REQUIRES the suite to fail. A
+#   green suite against a mutant means the suite proves nothing.
 #
 # CLAUSE 2 — BOTH PATHS ANNOUNCE THEMSELVES (nothing is adjusted silently).
 #   The unit suite drives decideDepsAtHead() both ways and asserts a
@@ -62,7 +65,17 @@
 #   the fix reintroduces the original defect whenever git cannot compare. This
 #   clause asserts verify-lane rejects any status outside {0, 1}.
 #
-# Exit 0 only when all four clauses pass. Exit 3 is a harness error (missing
+# CLAUSE 5 — NEGATIVE CONTROL: THE FIXTURES CANNOT TOUCH ANOTHER REPOSITORY.
+#   A check that can mutate the repository it verifies is a worse defect than
+#   the one it gates, and this check's own fixtures corrupted the branch under
+#   development while being authored. So it is proven, not asserted: a
+#   throwaway VICTIM repository is created, its `.git/config` and HEAD are
+#   hashed, the fixture work is then run with `GIT_DIR` deliberately POINTED AT
+#   THE VICTIM, and the victim's config and HEAD must be byte-identical
+#   afterwards. If the environment fence or the `--git-dir` pinning ever
+#   regresses, this clause goes red instead of a branch getting eaten.
+#
+# Exit 0 only when all five clauses pass. Exit 3 is a harness error (missing
 # tool / unreadable repo), which is NOT a fail of the thing under test.
 set -uo pipefail
 
@@ -86,32 +99,57 @@ CLAUSE1=FAIL; CLAUSE1_EVIDENCE=""
 CLAUSE2=FAIL; CLAUSE2_EVIDENCE=""
 CLAUSE3=FAIL; CLAUSE3_EVIDENCE=""
 CLAUSE4=FAIL; CLAUSE4_EVIDENCE=""
+# Repo-relative, matching src/operator-doctor.test.ts and this check's own unit
+# test: `_scratch/<name>/` under the repo root, already excluded by
+# .gitignore:119. The previous fallback hardcoded the operator's Mac
+# (`/Volumes/ThunderBolt/_tmp`), so CI died on `EACCES: permission denied,
+# mkdir '/Volumes'` — a Linux runner cannot create that path, and a done-means
+# check that only runs on one machine's volume layout gates nothing in CI.
+#
+# Keeping the fixture INSIDE the repo also bounds the escape guarded against
+# below: the worst a stray git call can reach is a directory the repo already
+# ignores.
+SCRATCH_BASE="$REPO_ROOT/_scratch/verify-lane-deps"
+mkdir -p "$SCRATCH_BASE" || fail_hard "cannot create scratch dir at $SCRATCH_BASE"
+
+CLAUSE5=FAIL; CLAUSE5_EVIDENCE=""
+
+# Pre-declared so the EXIT trap can reference them before they are assigned.
+MUTANT_DIR=""
+VICTIM=""
+FIXTURE=""
 
 # ---------------------------------------------------------------------------
-# CLAUSE 1 — the step sits between the hard reset and run-check.
+# CLAUSE 1 — mutation: flip the fail-closed branch, the unit suite MUST fail.
 # ---------------------------------------------------------------------------
-# `rg -bo` gives a byte offset per match; first match of each anchor is enough
-# because each appears once in main()'s linear flow.
-offset_of() {
-  rg -bo --no-filename "$1" "$SCRIPT" 2>/dev/null | head -n 1 | cut -d: -f1
-}
+# Structural checks (byte offsets of strings) cannot tell a real fix from a
+# mutant that keeps the strings. This runs the suite against a deliberately
+# broken copy of verify-lane.ts and requires it to go red.
+MUTANT_DIR="$SCRATCH_BASE/mutation-$$-$(date +%s)"
+mkdir -p "$MUTANT_DIR" || fail_hard "cannot create mutation dir at $MUTANT_DIR"
+MUTANT_SCRIPT="$MUTANT_DIR/verify-lane.ts"
+MUTANT_TEST="$MUTANT_DIR/verify-lane.test.ts"
 
-OFF_CHECKOUT="$(offset_of 'step\("checkout-head", `worktree at PR head')"
-OFF_DEPS="$(offset_of 'step\("deps-at-head", depsDecision\.detail\)')"
-OFF_RUNCHECK="$(offset_of 'note\("run-check",')"
+# The mutation: make the fail-closed guard unreachable, so any status is
+# treated as a normal answer. This is exactly the defect the guard exists to
+# prevent, expressed as a one-token change.
+sed 's/diffStatus !== 0 \&\& diffStatus !== 1/diffStatus === 999999/' \
+  "$SCRIPT" > "$MUTANT_SCRIPT"
+# The test imports "./verify-lane.ts", so a sibling copy points at the mutant.
+sed 's#"\./verify-lane\.ts"#"./verify-lane.ts"#' \
+  "$REPO_ROOT/$TEST_REL" > "$MUTANT_TEST"
 
-if [ -z "$OFF_CHECKOUT" ] || [ -z "$OFF_DEPS" ] || [ -z "$OFF_RUNCHECK" ]; then
-  CLAUSE1_EVIDENCE="anchor missing in $SCRIPT_REL — checkout-head:${OFF_CHECKOUT:-none} deps-at-head:${OFF_DEPS:-none} run-check:${OFF_RUNCHECK:-none}"
-elif [ "$OFF_CHECKOUT" -lt "$OFF_DEPS" ] && [ "$OFF_DEPS" -lt "$OFF_RUNCHECK" ]; then
-  # It must also actually install, not merely print a line.
-  if rg -q 'capture\("deps-at-head", "bun", \["install", "--frozen-lockfile"\]' "$SCRIPT"; then
-    CLAUSE1=PASS
-    CLAUSE1_EVIDENCE="deps-at-head at byte $OFF_DEPS, strictly between checkout-head ($OFF_CHECKOUT) and run-check ($OFF_RUNCHECK), and it runs bun install --frozen-lockfile through capture() (fail-loud)"
-  else
-    CLAUSE1_EVIDENCE="deps-at-head is ordered correctly but never runs bun install --frozen-lockfile via capture() — a step line with no install is a receipt for work that did not happen"
-  fi
+if ! rg -q 'diffStatus === 999999' "$MUTANT_SCRIPT"; then
+  CLAUSE1_EVIDENCE="the mutation did not apply — no 'diffStatus !== 0 && diffStatus !== 1' guard found in $SCRIPT_REL to flip. Either the guard moved or the fix is absent."
 else
-  CLAUSE1_EVIDENCE="wrong order — checkout-head:$OFF_CHECKOUT deps-at-head:$OFF_DEPS run-check:$OFF_RUNCHECK (required: checkout-head < deps-at-head < run-check)"
+  MUT_OUT="$(cd "$REPO_ROOT" && bun test "$MUTANT_TEST" 2>&1)"
+  MUT_STATUS=$?
+  if [ "$MUT_STATUS" -ne 0 ]; then
+    CLAUSE1=PASS
+    CLAUSE1_EVIDENCE="mutant (fail-closed guard disabled) makes the unit suite exit $MUT_STATUS — the suite can kill it. Mutant kept at $MUTANT_SCRIPT"
+  else
+    CLAUSE1_EVIDENCE="THE SUITE PASSED AGAINST A MUTANT. Disabling the fail-closed guard changed no test outcome, so the tests prove nothing about status handling. Mutant at $MUTANT_SCRIPT"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -130,41 +168,56 @@ fi
 # ---------------------------------------------------------------------------
 # CLAUSE 3 — the comparison fires on a real dependency-adding head.
 # ---------------------------------------------------------------------------
-# Repo-relative, matching src/operator-doctor.test.ts and this check's own unit
-# test: `_scratch/<name>/` under the repo root, already excluded by
-# .gitignore:119. The previous fallback hardcoded the operator's Mac
-# (`/Volumes/ThunderBolt/_tmp`), so CI died on `EACCES: permission denied,
-# mkdir '/Volumes'` — a Linux runner cannot create that path, and a done-means
-# check that only runs on one machine's volume layout gates nothing in CI.
-#
-# Keeping the fixture INSIDE the repo also bounds the escape guarded against
-# below: the worst a stray git call can reach is a directory the repo already
-# ignores.
-SCRATCH_BASE="$REPO_ROOT/_scratch/verify-lane-deps"
-mkdir -p "$SCRATCH_BASE" || fail_hard "cannot create scratch dir at $SCRATCH_BASE"
+
 # NOT mktemp -d (AGENTS.md hard rule: it resolves to a sandbox-local $TMPDIR
 # that no other process can see). An explicit path, unique by pid + epoch so
 # concurrent runs cannot collide.
 FIXTURE="$SCRATCH_BASE/fixture-$$-$(date +%s)"
 mkdir -p "$FIXTURE" || fail_hard "cannot create fixture dir at $FIXTURE"
 
+# Archive on EVERY exit path, with mv — never rm (AGENTS.md: an agent runs no
+# recursive delete). _scratch/ is repo-relative now, so fixtures would otherwise
+# pile up inside the checkout on every run.
+ARCHIVE_DIR="$REPO_ROOT/_scratch/_archive/verify-lane-deps"
+RUN_ID="$$-$(date +%s)"
+archive_scratch() {
+  mkdir -p "$ARCHIVE_DIR/$RUN_ID" 2>/dev/null || return 0
+  for d in "$FIXTURE" "$MUTANT_DIR" "$VICTIM"; do
+    [ -n "${d:-}" ] && [ -d "$d" ] && mv "$d" "$ARCHIVE_DIR/$RUN_ID/" 2>/dev/null
+  done
+  printf '  scratch archived to: %s\n' "$ARCHIVE_DIR/$RUN_ID"
+}
+trap archive_scratch EXIT
+
 # Pin BOTH the git dir and the work tree, never a bare -C. With only -C, git
 # walks UP to the first enclosing repository when the fixture is not one, so a
 # failed init would commit these fixture commits into the surrounding worktree
 # — observed during authoring, and it deleted every tracked file there. With
 # the git dir pinned, that walk cannot happen: git errors instead.
+# Environment fence for EVERY git call below. The --git-dir/--work-tree flags
+# pin the target, but they are only as good as the next person remembering
+# them; these variables would override or redirect a call that lost its flags.
+# GIT_CEILING_DIRECTORIES stops the upward discovery walk at the fixture's
+# parent, so even a fully unflagged `git` cannot reach the enclosing checkout.
+git_fenced() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+      -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR \
+      GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+      git "$@"
+}
 fixture_git() {
-  git --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" >/dev/null 2>&1
+  git_fenced --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" >/dev/null 2>&1
 }
 fixture_git_out() {
-  git --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" 2>/dev/null
+  git_fenced --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" 2>/dev/null
 }
 
-# "fixture", not "main": the operator's global protected-branch hook refuses
-# commits to main even in a throwaway repo, and the branch name proves nothing.
-# `init` predates the repo, so it cannot use the pinned helper. Its success is
-# ASSERTED (exit code AND the resulting .git) before any other git call runs.
-git -C "$FIXTURE" init --quiet -b fixture >/dev/null 2>&1
+# `init` predates the repo, and it was previously the ONE unpinned call here.
+# Unpinned it would re-initialise whatever an inherited GIT_DIR pointed at,
+# BEFORE the missing-.git assertion below could run — so it is pinned and
+# fenced like every other call. Its success is then ASSERTED on both the exit
+# code and the resulting .git; an unchecked init is what enables the escape.
+git_fenced --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" init --quiet -b fixture >/dev/null 2>&1
 INIT_STATUS=$?
 if [ "$INIT_STATUS" -ne 0 ] || [ ! -d "$FIXTURE/.git" ]; then
   fail_hard "git init failed in $FIXTURE (exit $INIT_STATUS, .git present: $([ -d "$FIXTURE/.git" ] && echo yes || echo no)). Refusing to run git here — every later call would walk up to the enclosing repository and commit into it."
@@ -214,27 +267,82 @@ fi
 # ---------------------------------------------------------------------------
 # CLAUSE 4 — any exit code outside {0,1} fails loudly.
 # ---------------------------------------------------------------------------
-if rg -q 'diff\.status !== 0 && diff\.status !== 1' "$SCRIPT" \
-  && rg -q 'Refusing to guess whether the head' "$SCRIPT"; then
+# The guard now lives inside the exported decideDepsAtHead(), which is where
+# the unit suite can reach it (review round 1, P2). Assert the function owns it
+# AND that it takes the RAW status — a boolean parameter would put the branch
+# back at the call site where clause 1's mutant survived.
+if rg -q 'diffStatus !== 0 && diffStatus !== 1' "$SCRIPT" \
+  && rg -q 'diffStatus: number \| null' "$SCRIPT" \
+  && rg -q 'Refusing to guess whether' "$SCRIPT"; then
   CLAUSE4=PASS
-  CLAUSE4_EVIDENCE="verify-lane rejects any git diff status outside {0,1} rather than reading it as 'unchanged'"
+  CLAUSE4_EVIDENCE="decideDepsAtHead() takes the raw git exit code (diffStatus: number | null) and throws on anything outside {0,1} rather than reading it as 'unchanged'"
 else
-  CLAUSE4_EVIDENCE="no fail-closed guard on the git diff exit code — a bad ref or missing object would be read as 'manifests match' and skip the install, which is the original defect"
+  CLAUSE4_EVIDENCE="no fail-closed guard inside decideDepsAtHead(), or it no longer takes the raw status — a bad ref or missing object would be read as 'manifests match' and skip the install, which is the original defect"
+fi
+
+# ---------------------------------------------------------------------------
+# CLAUSE 5 — negative control: a hostile GIT_DIR must not reach another repo.
+# ---------------------------------------------------------------------------
+# Create a VICTIM repository, hash its config and HEAD, then re-run the fixture
+# work with GIT_DIR deliberately pointed at the victim. Byte-identical after is
+# the assertion. This is what proves the fence, rather than asserting it.
+VICTIM="$SCRATCH_BASE/victim-$$-$(date +%s)"
+mkdir -p "$VICTIM" || fail_hard "cannot create victim dir at $VICTIM"
+
+env -u GIT_DIR -u GIT_WORK_TREE GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+  git --git-dir "$VICTIM/.git" --work-tree "$VICTIM" init --quiet -b victim >/dev/null 2>&1
+if [ ! -d "$VICTIM/.git" ]; then
+  CLAUSE5_EVIDENCE="could not create the victim repository at $VICTIM"
+else
+  env -u GIT_DIR -u GIT_WORK_TREE GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+    git --git-dir "$VICTIM/.git" --work-tree "$VICTIM" config user.email "victim@example.invalid" >/dev/null 2>&1
+  env -u GIT_DIR -u GIT_WORK_TREE GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+    git --git-dir "$VICTIM/.git" --work-tree "$VICTIM" config user.name "victim" >/dev/null 2>&1
+  printf 'victim\n' > "$VICTIM/keepme.txt"
+  env -u GIT_DIR -u GIT_WORK_TREE GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+    git --git-dir "$VICTIM/.git" --work-tree "$VICTIM" add . >/dev/null 2>&1
+  env -u GIT_DIR -u GIT_WORK_TREE GIT_CEILING_DIRECTORIES="$SCRATCH_BASE" \
+    git --git-dir "$VICTIM/.git" --work-tree "$VICTIM" commit --quiet -m victim >/dev/null 2>&1
+
+  V_CONFIG_BEFORE="$(shasum "$VICTIM/.git/config" | cut -d" " -f1)"
+  V_HEAD_BEFORE="$(env -u GIT_DIR -u GIT_WORK_TREE git --git-dir "$VICTIM/.git" rev-parse HEAD 2>/dev/null)"
+
+  # The hostile part: GIT_DIR points at the victim while the fixture helpers run.
+  HOSTILE="$SCRATCH_BASE/hostile-$$-$(date +%s)"
+  mkdir -p "$HOSTILE"
+  SAVED_FIXTURE="$FIXTURE"
+  FIXTURE="$HOSTILE"
+  GIT_DIR="$VICTIM/.git" GIT_WORK_TREE="$VICTIM" \
+    git_fenced --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" init --quiet -b fixture >/dev/null 2>&1
+  GIT_DIR="$VICTIM/.git" GIT_WORK_TREE="$VICTIM" fixture_git config user.email "test@example.invalid"
+  GIT_DIR="$VICTIM/.git" GIT_WORK_TREE="$VICTIM" fixture_git config commit.gpgsign false
+  printf 'x\n' > "$FIXTURE/package.json"
+  GIT_DIR="$VICTIM/.git" GIT_WORK_TREE="$VICTIM" fixture_git add .
+  FIXTURE="$SAVED_FIXTURE"
+
+  V_CONFIG_AFTER="$(shasum "$VICTIM/.git/config" | cut -d" " -f1)"
+  V_HEAD_AFTER="$(env -u GIT_DIR -u GIT_WORK_TREE git --git-dir "$VICTIM/.git" rev-parse HEAD 2>/dev/null)"
+
+  if [ "$V_CONFIG_BEFORE" = "$V_CONFIG_AFTER" ] && [ "$V_HEAD_BEFORE" = "$V_HEAD_AFTER" ] && [ -n "$V_HEAD_BEFORE" ]; then
+    CLAUSE5=PASS
+    CLAUSE5_EVIDENCE="victim untouched with GIT_DIR aimed at it — config sha $V_CONFIG_BEFORE and HEAD $V_HEAD_BEFORE identical before/after; victim at $VICTIM"
+  else
+    CLAUSE5_EVIDENCE="VICTIM MUTATED. config $V_CONFIG_BEFORE -> $V_CONFIG_AFTER, HEAD $V_HEAD_BEFORE -> $V_HEAD_AFTER. The fence does not hold; a fixture can reach another repository."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 printf '\n#775 — verify-lane installs the PR head'"'"'s dependencies\n\n'
-printf '  CLAUSE 1 (step ordered between reset and check): %s\n    %s\n' "$CLAUSE1" "$CLAUSE1_EVIDENCE"
+printf '  CLAUSE 1 (mutant killed: suite fails on flipped guard): %s\n    %s\n' "$CLAUSE1" "$CLAUSE1_EVIDENCE"
 printf '  CLAUSE 2 (both paths announce themselves):       %s\n    %s\n' "$CLAUSE2" "$CLAUSE2_EVIDENCE"
 printf '  CLAUSE 3 (comparison fires on a real head):      %s\n    %s\n' "$CLAUSE3" "$CLAUSE3_EVIDENCE"
 printf '  CLAUSE 4 (fail-closed on an unusable compare):   %s\n    %s\n' "$CLAUSE4" "$CLAUSE4_EVIDENCE"
+printf '  CLAUSE 5 (negative control: victim untouched):   %s\n    %s\n' "$CLAUSE5" "$CLAUSE5_EVIDENCE"
 printf '\n'
-printf '  Fixture repositories are LEFT IN PLACE under %s —\n' "$SCRATCH_BASE"
-printf '  teardown is printed, never executed. Remove them yourself when done.\n\n'
 
-if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ] && [ "$CLAUSE4" = PASS ]; then
+if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ] && [ "$CLAUSE4" = PASS ] && [ "$CLAUSE5" = PASS ]; then
   printf 'PASS — verify-lane reinstalls at the PR head and says which path it took.\n\n'
   exit 0
 fi
