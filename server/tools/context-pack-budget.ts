@@ -97,6 +97,104 @@ export function durableLaneContentChars(section: DurableLaneSection): number {
 }
 
 /**
+ * Options for rebuilding a durable-lane section from what survived fitting.
+ */
+type DurableLaneRebuildOptions = {
+  section: Record<string, unknown>;
+  lane: Record<string, unknown> | undefined;
+  keptEvents: DurableLaneEvent[];
+  contextMd: unknown;
+};
+
+/**
+ * Rebuild the section around the events and checkpoint that survived, marking
+ * it truncated and reconciling `event_count` to what remains.
+ */
+function rebuildDurableLaneSection(
+  options: DurableLaneRebuildOptions,
+): Record<string, unknown> {
+  const { section, lane, keptEvents, contextMd } = options;
+  const next: Record<string, unknown> = {
+    ...section,
+    events: keptEvents,
+    event_count: keptEvents.length,
+  };
+  if (lane) next.lane = { ...lane, current_context_md: contextMd };
+  next.truncated = true;
+  return next;
+}
+
+/**
+ * Options for the oldest-first event drop pass.
+ */
+type DurableLaneDropOptions = {
+  section: Record<string, unknown>;
+  lane: Record<string, unknown> | undefined;
+  events: DurableLaneEvent[];
+  contextMd: unknown;
+  remainingChars: number;
+};
+
+/**
+ * Drop the OLDEST event (index 0) until the serialized section fits, so the
+ * freshest lane evidence survives pressure. Returns the surviving events once a
+ * prefix drop fits, or `null` when even an empty event list does not.
+ */
+function dropOldestDurableLaneEvents(
+  options: DurableLaneDropOptions,
+): DurableLaneEvent[] | null {
+  const { section, lane, events, contextMd, remainingChars } = options;
+  const kept = [...events];
+  while (kept.length > 0) {
+    kept.shift();
+    const candidate = rebuildDurableLaneSection({
+      section,
+      lane,
+      keptEvents: kept,
+      contextMd,
+    });
+    if (serializedLength(candidate) <= remainingChars) return kept;
+  }
+  return null;
+}
+
+/**
+ * Options for shrinking the lane checkpoint to the largest prefix that fits.
+ */
+type DurableLaneCheckpointOptions = {
+  section: Record<string, unknown>;
+  lane: Record<string, unknown> | undefined;
+  contextMd: unknown;
+  remainingChars: number;
+};
+
+/**
+ * Binary-search the largest checkpoint prefix that fits, or drop the checkpoint
+ * entirely. Linear shrinking here would be O(n) serializations of a potentially
+ * very large checkpoint.
+ */
+function shrinkDurableLaneCheckpoint(
+  options: DurableLaneCheckpointOptions,
+): unknown {
+  const { section, lane, contextMd, remainingChars } = options;
+  if (typeof contextMd !== "string" || contextMd.length === 0) return contextMd;
+  let low = 0;
+  let high = contextMd.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = rebuildDurableLaneSection({
+      section,
+      lane,
+      keptEvents: [],
+      contextMd: contextMd.slice(0, mid),
+    });
+    if (serializedLength(candidate) <= remainingChars) low = mid;
+    else high = mid - 1;
+  }
+  return low > 0 ? contextMd.slice(0, low) : null;
+}
+
+/**
  * Fit a loaded durable-lane section inside the remaining budget by its
  * SERIALIZED size.
  *
@@ -128,52 +226,42 @@ export function fitDurableLaneSection(
       ? { ...(section.lane as Record<string, unknown>) }
       : undefined;
 
-  const rebuild = (
-    keptEvents: DurableLaneEvent[],
-    contextMd: unknown,
-  ): Record<string, unknown> => {
-    const next: Record<string, unknown> = {
-      ...section,
-      events: keptEvents,
-      event_count: keptEvents.length,
+  const contextMd = lane?.current_context_md ?? null;
+
+  const kept = dropOldestDurableLaneEvents({
+    section,
+    lane,
+    events,
+    contextMd,
+    remainingChars,
+  });
+  if (kept) {
+    return {
+      section: rebuildDurableLaneSection({
+        section,
+        lane,
+        keptEvents: kept,
+        contextMd,
+      }),
+      citations: reconcileDurableCitations(citations, kept),
+      truncated: true,
     };
-    if (lane) next.lane = { ...lane, current_context_md: contextMd };
-    next.truncated = true;
-    return next;
-  };
-
-  let contextMd = lane?.current_context_md ?? null;
-
-  // Drop the oldest event (index 0) until the serialized section fits.
-  const kept = [...events];
-  while (kept.length > 0) {
-    kept.shift();
-    if (serializedLength(rebuild(kept, contextMd)) <= remainingChars) {
-      return {
-        section: rebuild(kept, contextMd),
-        citations: reconcileDurableCitations(citations, kept),
-        truncated: true,
-      };
-    }
   }
 
-  // No events left: binary-search the largest checkpoint prefix that fits, or
-  // drop it entirely. Linear shrinking here would be O(n) serializations of a
-  // potentially very large checkpoint.
-  if (typeof contextMd === "string" && contextMd.length > 0) {
-    let low = 0;
-    let high = contextMd.length;
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      const candidate = rebuild([], contextMd.slice(0, mid));
-      if (serializedLength(candidate) <= remainingChars) low = mid;
-      else high = mid - 1;
-    }
-    contextMd = low > 0 ? (contextMd as string).slice(0, low) : null;
-  }
+  const fittedContextMd = shrinkDurableLaneCheckpoint({
+    section,
+    lane,
+    contextMd,
+    remainingChars,
+  });
 
   return {
-    section: rebuild([], contextMd),
+    section: rebuildDurableLaneSection({
+      section,
+      lane,
+      keptEvents: [],
+      contextMd: fittedContextMd,
+    }),
     citations: reconcileDurableCitations(citations, []),
     truncated: true,
   };
@@ -240,7 +328,11 @@ export function fitItemSection<T extends { items: Array<{ id: string }> }>(
       (candidate as Record<keyof T, unknown>)[countKey] = kept.length;
     }
     if (serializedLength(candidate) <= remainingChars) {
-      return { section: candidate, truncated: true, starved: kept.length === 0 };
+      return {
+        section: candidate,
+        truncated: true,
+        starved: kept.length === 0,
+      };
     }
   }
 
