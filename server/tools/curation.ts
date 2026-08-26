@@ -133,9 +133,7 @@ interface ScanContext {
 }
 
 /** Detect near-identical pairs in one table, archiving the older on opt-in. */
-async function scanDuplicates(
-  context: ScanContext,
-): Promise<{
+async function scanDuplicates(context: ScanContext): Promise<{
   findings: CurateResult["duplicates"];
   archived: number;
   scanned: number;
@@ -174,9 +172,7 @@ async function scanDuplicates(
 }
 
 /** Flag entries never accessed and older than the stale window. */
-async function scanStale(
-  context: ScanContext,
-): Promise<{
+async function scanStale(context: ScanContext): Promise<{
   findings: CurateResult["stale"];
   archived: number;
   scanned: number;
@@ -213,9 +209,7 @@ async function scanStale(
  * `dry_run` is false -- the same guarantee the previous inline branch made by
  * simply having no mutation path.
  */
-async function scanVague(
-  context: ScanContext,
-): Promise<{
+async function scanVague(context: ScanContext): Promise<{
   findings: CurateResult["vague"];
   archived: number;
   scanned: number;
@@ -435,12 +429,11 @@ function registerRateEntry(
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
-      const auth = authorize(
-        identity,
-        "write",
-        args.table,
-        `cannot write to ${args.table}`,
-      );
+      const auth = authorize(identity, {
+        operation: "write",
+        table: args.table,
+        permissionMessage: `cannot write to ${args.table}`,
+      });
       if (!auth.ok) return auth.response;
       const predicate = namespacePredicate(auth.identity, "write", 3);
       const { rows } = await dependencies.pool.query(

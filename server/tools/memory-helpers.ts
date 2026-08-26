@@ -29,7 +29,10 @@ import { errorResult } from "./types.ts";
  * (`server/tools/repo-facts.ts`, `get-contract.ts`, `promotion.ts` all import
  * their builders from `src/`), so it introduces no new coupling direction.
  */
-export { EVENT_TYPES, IMPORTANCE_LEVELS } from "../../src/tools/table-constants.ts";
+export {
+  EVENT_TYPES,
+  IMPORTANCE_LEVELS,
+} from "../../src/tools/table-constants.ts";
 
 export function contentHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -89,8 +92,33 @@ export async function embeddingFields(
  * unresolved namespace.
  */
 export type Authorization =
-  | { readonly ok: true; readonly identity: AuthIdentity; readonly namespace: string }
+  | {
+      readonly ok: true;
+      readonly identity: AuthIdentity;
+      readonly namespace: string;
+    }
   | { readonly ok: false; readonly response: ReturnType<typeof errorResult> };
+
+/**
+ * What a tool is asking permission to do.
+ *
+ * The three permission-matrix fields travel together at every one of the
+ * seventeen call sites -- `operation` selects `canRead`/`canWrite`, `table` is
+ * the row that matrix is indexed by, and `permissionMessage` is the denial
+ * suffix observed in current src for that specific tool. Bundling them keeps
+ * `authorize` at two parameters without splitting a triple that is never
+ * partially supplied.
+ */
+export interface AuthorizationRequest {
+  /** Whether the caller intends to read or write. */
+  readonly operation: "read" | "write";
+  /** Resource table the permission matrix is consulted for. */
+  readonly table: ResourceTable;
+  /** Observed current-src denial suffix for this tool. */
+  readonly permissionMessage: string;
+  /** Caller-supplied namespace; defaults to the token's own. */
+  readonly requestedNamespace?: string;
+}
 
 /**
  * Resolve the auth-derived namespace for a tool call, or deny it.
@@ -103,24 +131,24 @@ export type Authorization =
  * `docs/decisions/privilege-isolation-closed-brain.md` (server-side isolation).
  *
  * @param identity Token-derived identity, or `undefined` when unauthenticated.
- * @param operation Whether the caller intends to read or write.
- * @param table Resource table the permission matrix is consulted for.
- * @param permissionMessage Observed current-src denial suffix for this tool.
- * @param requestedNamespace Caller-supplied namespace; defaults to the token's.
+ * @param request What the caller is asking permission to do.
  * @returns The proven identity and namespace, or the denial envelope to return.
  */
 export function authorize(
   identity: AuthIdentity | undefined,
-  operation: "read" | "write",
-  table: ResourceTable,
-  permissionMessage: string,
-  requestedNamespace?: string,
+  request: AuthorizationRequest,
 ): Authorization {
+  const { operation, table, permissionMessage, requestedNamespace } = request;
   const permitted =
     identity !== undefined &&
-    (operation === "read" ? canRead(identity.role, table) : canWrite(identity.role, table));
+    (operation === "read"
+      ? canRead(identity.role, table)
+      : canWrite(identity.role, table));
   if (!identity || !permitted) {
-    return { ok: false, response: errorResult(`Permission denied: ${permissionMessage}`) };
+    return {
+      ok: false,
+      response: errorResult(`Permission denied: ${permissionMessage}`),
+    };
   }
   const namespace = requestedNamespace ?? identity.clientId;
   if (!canTargetNamespace(identity, operation, namespace)) {

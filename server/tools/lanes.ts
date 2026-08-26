@@ -218,13 +218,12 @@ async function handleLaneUpsert(
   args: LaneUpsertArgs,
   authInfo: unknown,
 ): Promise<ReturnType<typeof textResult>> {
-  const auth = authorize(
-    authIdentity(authInfo),
-    "write",
-    "sessions",
-    "cannot write to session lanes",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(authInfo), {
+    operation: "write",
+    table: "sessions",
+    permissionMessage: "cannot write to session lanes",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
   const context = laneEmbedContext(args);
   const embedded = await embeddingFields(dependencies, context);
@@ -265,13 +264,12 @@ async function handleLaneLoad(
   args: LaneLoadArgs,
   authInfo: unknown,
 ): Promise<ReturnType<typeof textResult>> {
-  const auth = authorize(
-    authIdentity(authInfo),
-    "read",
-    "sessions",
-    "cannot read session lanes",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(authInfo), {
+    operation: "read",
+    table: "sessions",
+    permissionMessage: "cannot read session lanes",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
   const { conditions, values } = laneLoadPredicate(args, auth.namespace);
   const rows = await dependencies.pool.query(

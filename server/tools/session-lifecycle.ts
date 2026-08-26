@@ -75,9 +75,9 @@ type ExactStartScope = {
 /** A prepared `WHERE` fragment plus the positional values it refers to. */
 type SqlFilter = { conditions: string[]; values: unknown[] };
 
-function hasCompleteExactScope(
-  args: ExactStartScope,
-): args is Required<Omit<ExactStartScope, "thread_id">> & {
+function hasCompleteExactScope(args: ExactStartScope): args is Required<
+  Omit<ExactStartScope, "thread_id">
+> & {
   thread_id?: string;
 } {
   return (
@@ -242,13 +242,12 @@ async function startSession(
   args: StartArgs,
   extra: { authInfo?: unknown },
 ) {
-  const auth = authorize(
-    authIdentity(extra.authInfo),
-    "write",
-    "sessions",
-    "cannot write to sessions",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(extra.authInfo), {
+    operation: "write",
+    table: "sessions",
+    permissionMessage: "cannot write to sessions",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
   const existing = await dependencies.pool.query(
     `SELECT ${startLaneFields} FROM ob_session_lanes
@@ -357,13 +356,12 @@ async function loadSessionContext(
   args: ContextArgs,
   extra: { authInfo?: unknown },
 ) {
-  const auth = authorize(
-    authIdentity(extra.authInfo),
-    "read",
-    "sessions",
-    "cannot read session context",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(extra.authInfo), {
+    operation: "read",
+    table: "sessions",
+    permissionMessage: "cannot read session context",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
   if (!args.session_key && !args.channel_id) {
     return errorResult("At least one of session_key or channel_id is required");
@@ -480,13 +478,12 @@ async function wrapSession(
   args: WrapArgs,
   extra: { authInfo?: unknown },
 ) {
-  const auth = authorize(
-    authIdentity(extra.authInfo),
-    "write",
-    "sessions",
-    "cannot write to sessions",
-    args.namespace,
-  );
+  const auth = authorize(authIdentity(extra.authInfo), {
+    operation: "write",
+    table: "sessions",
+    permissionMessage: "cannot write to sessions",
+    requestedNamespace: args.namespace,
+  });
   if (!auth.ok) return auth.response;
   const lanes = await dependencies.pool.query(
     `SELECT id, status, project FROM ob_session_lanes
