@@ -24,7 +24,7 @@
 // STAGED, so the cost is paid per-file as work naturally touches them, and
 // nothing new can enter.
 {
-  "plugins": ["unicorn", "typescript", "oxc"],
+  "plugins": ["unicorn", "typescript", "oxc", "node"],
 
   "categories": {
     "correctness": "error"
@@ -172,6 +172,33 @@
         "**/tests/**/*.ts"
       ],
       "rules": { "no-console": "off" }
+    },
+    // NO DIRECT ENV READS IN server/ -- the L2b rung of
+    // _plans/server-hardening-ladder.md, made self-defending. The composition
+    // root parses the environment once into a validated config and hands it
+    // down; a module that reaches for process.env itself re-reads an unvalidated
+    // string the schema never saw, and nothing at startup can tell you it is
+    // wrong. Once server/ is at zero readers, this rule is what stops the next
+    // one being added.
+    //
+    // SCOPED TO server/ ON PURPOSE (head ruling, #825 State 7). It is NOT
+    // enabled repo-wide: src/ has 19 non-test files reading process.env and is
+    // retired by a later rung, so switching it on there would make the
+    // pre-commit gate refuse every future src/ commit for a debt that lane is
+    // not paying. Scoping the rule to the directory that is actually at zero is
+    // what keeps it enforceable rather than bypassed.
+    {
+      "files": ["server/**/*.ts"],
+      "rules": { "node/no-process-env": "error" }
+    },
+    // THE DOOR. Exactly two files may read the environment: the config module
+    // that parses and validates it, and the entry point that calls that module
+    // before anything else is constructed. Keeping the list at two is the whole
+    // point of the rule -- a third entry here is a rung being reopened, not a
+    // convenience, and belongs in a decision rather than in this array.
+    {
+      "files": ["server/config.ts", "server/main.ts"],
+      "rules": { "node/no-process-env": "off" }
     }
   ],
 
