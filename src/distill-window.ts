@@ -240,10 +240,54 @@ export async function claimDistillBatch(
   const sessionLimit = `$${params.length}`;
   params.push(maxTurns);
   const turnLimit = `$${params.length}`;
+  // The context reach, in session_seq steps, used by the SQL below to pull the
+  // turns preceding each due turn. Mirrors the contextWindow that buildUnits
+  // applies in TypeScript: the query must fetch at least as much as the builder
+  // will read, or units come back with less context than they should have.
+  params.push(
+    Math.min(Math.max(options.contextWindow ?? DEFAULT_CONTEXT_WINDOW, 0), 64),
+  );
+  const contextLimit = `$${params.length}`;
 
-  // Two-step in one statement: pick the oldest sessions that still have
-  // undistilled work, then read those sessions WHOLE (including already
-  // distilled turns, which are needed as context) in canonical order.
+  // Three steps in one statement: pick the oldest sessions that still have
+  // undistilled work, take the DUE turns inside them, then read the context
+  // those specific due turns need.
+  //
+  // WHY THE BOUND SITS ON DUE TURNS AND NOT ON THE COMBINED SET. This query
+  // used to select each due session WHOLE and apply `LIMIT maxTurns` to the
+  // result. Reading whole sessions was and remains correct -- an
+  // already-distilled turn reappearing here is the context that makes a short
+  // current turn interpretable, which is the entire premise of this module. The
+  // defect was applying maxTurns AFTERWARDS: ordered by session_ref then
+  // occurred_at, a long-running session's already-distilled history filled
+  // every one of the 1500 slots and the due turns fell off the end.
+  //
+  // Measured on the dogfood corpus 2026-08-25, namespace rico, with the
+  // production parameters (maxSessions=4, maxTurns=1500):
+  //
+  //     due turns in claim     : 0
+  //     context turns in claim : 1500
+  //     undistilled backlog    : 190,102
+  //
+  // A claim of 1500 turns containing nothing to do. The handler stamps only
+  // `if (consumedTurnIds.length > 0)` (src/distill-handler.ts), so an empty
+  // claim stamped nothing, threw nothing, and completed as `succeeded`; and
+  // because the producer's idempotency key hashes the DUE turns
+  // (src/maintenance-queue.ts) under ON CONFLICT DO NOTHING, that unchanged
+  // hash then silently dropped every later enqueue. 392 succeeded jobs, zero
+  // turns stamped, no error anywhere, 27 days of starvation.
+  //
+  // Same family as the producer-side defect in src/maintenance-sweep.ts, where
+  // already-distilled turns were ranked ahead of due ones and pushed the due
+  // work past the rank cutoff. Both are "the bound was applied to the wrong
+  // set", and fixing either alone yields nothing: the producer enqueues work
+  // the consumer then declines to claim.
+  //
+  // So `due_turns` takes maxTurns, and `context_turns` is derived from
+  // whichever due turns are in it. Context is deliberately NOT counted against
+  // maxTurns -- it is governed by contextWindow per due turn, which is what
+  // decides how much of it is ever read. maxTurns bounds the WORK; the reading
+  // around that work is separate, and conflating the two is what broke this.
   //
   // retention_tier = 'live' matches the sweep's own work-queue index
   // (idx_ob_raw_turns_undistilled, 032_raw_turns.sql:216-218) so an archived
@@ -257,16 +301,50 @@ export async function claimDistillBatch(
         GROUP BY session_ref
         ORDER BY first_due ASC NULLS LAST
         LIMIT ${sessionLimit}
+     ),
+     due_turns AS (
+       SELECT t.*
+         FROM ob_raw_turns t
+         JOIN due_sessions d
+           ON t.session_ref IS NOT DISTINCT FROM d.session_ref
+        WHERE t.distilled_at IS NULL
+          AND t.retention_tier = 'live'${nsPredicate}${outerLanePredicate}
+        ORDER BY ${DISTILL_ORDER_BY}
+        LIMIT ${turnLimit}
+     ),
+     -- The context each due turn needs: the turns immediately preceding it in
+     -- its own session. Expressed as a session_seq range rather than a row
+     -- count so a claim can never pull an unrelated session's tail, and scoped
+     -- to the sessions that actually produced due work. Turns carrying a null
+     -- session_seq (an 036 backfill gap) are reported through
+     -- missingSessionSeq and bring no context of their own.
+     context_bounds AS (
+       SELECT session_ref,
+              min(session_seq) - ${contextLimit}::int AS low_seq,
+              max(session_seq)                        AS high_seq
+         FROM due_turns
+        WHERE session_seq IS NOT NULL
+        GROUP BY session_ref
+     ),
+     context_turns AS (
+       SELECT t.*
+         FROM ob_raw_turns t
+         JOIN context_bounds b
+           ON t.session_ref IS NOT DISTINCT FROM b.session_ref
+        WHERE t.retention_tier = 'live'${nsPredicate}${outerLanePredicate}
+          AND t.session_seq IS NOT NULL
+          AND t.session_seq >= b.low_seq
+          AND t.session_seq <= b.high_seq
      )
      SELECT t.id, t.namespace, t.session_ref, t.session_seq, t.role,
             t.content, t.repo, t.occurred_at, t.is_human_prompt,
             (t.distilled_at IS NULL) AS is_due
-       FROM ob_raw_turns t
-       JOIN due_sessions d
-         ON t.session_ref IS NOT DISTINCT FROM d.session_ref
-      WHERE t.retention_tier = 'live'${nsPredicate}${outerLanePredicate}
-      ORDER BY ${DISTILL_ORDER_BY}
-      LIMIT ${turnLimit}`,
+       FROM (
+         SELECT * FROM due_turns
+         UNION
+         SELECT * FROM context_turns
+       ) t
+      ORDER BY ${DISTILL_ORDER_BY}`,
     params,
   );
 

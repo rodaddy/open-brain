@@ -63,7 +63,8 @@ function isRecallSql(sql: string): boolean {
 /** @returns The count of hybrid recall STACKS run (one per `executeSearch`). */
 function recallStackCount(queries: readonly CapturedQuery[]): number {
   // Count only the vector arm: exactly one is issued per hybrid executeSearch.
-  return queries.filter((query) => query.sql.includes("query_embedding")).length;
+  return queries.filter((query) => query.sql.includes("query_embedding"))
+    .length;
 }
 
 interface HarnessOptions {
@@ -139,7 +140,10 @@ const SCOPE = {
 };
 
 function sectionsOf(payload: Record<string, unknown>) {
-  return payload.sections as Record<string, Record<string, unknown> | undefined>;
+  return payload.sections as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
 }
 
 /**
@@ -272,7 +276,12 @@ describe("pointers carry references, never bodies", () => {
     });
     // The whole value of a pointer is that it is cheap and body-free. Any of
     // these fields appearing is body leakage.
-    for (const forbidden of ["content", "content_preview", "label", "preview"]) {
+    for (const forbidden of [
+      "content",
+      "content_preview",
+      "label",
+      "preview",
+    ]) {
       expect(item).not.toHaveProperty(forbidden);
     }
     // ... including inside the nested source_ref, which the durable item's own
@@ -301,7 +310,10 @@ describe("pointers carry references, never bodies", () => {
       "pointers",
     ).map((item) => item.citation_id);
 
-    expect(durableIds).toEqual(["brain_record:thought:a", "brain_record:thought:b"]);
+    expect(durableIds).toEqual([
+      "brain_record:thought:a",
+      "brain_record:thought:b",
+    ]);
     // Durable owns this evidence; re-listing it would double-count it against
     // the caller's budget and show the same record twice.
     expect(pointerIds).toEqual([]);
@@ -828,9 +840,11 @@ describe("the pack names requested vs served sections in its receipt", () => {
       requested_not_served: string[];
     };
     // `null`, not `[]`: the caller asked for nothing and took the documented
-    // working_set-only default, which is not the same as asking for nothing.
+    // default, which is not the same as asking for nothing. That default
+    // serves working_set AND durable_memory since #744
+    // (docs/agent-context-pack-contract.md:88).
     expect(receipt.requested).toBeNull();
-    expect(receipt.served).toEqual(["working_set"]);
+    expect(receipt.served).toEqual(["working_set", "durable_memory"]);
     expect(receipt.requested_not_served).toEqual([]);
   });
 

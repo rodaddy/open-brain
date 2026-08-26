@@ -98,6 +98,16 @@ export interface DistillSweepSummary {
   embeddings_missing: number;
   /** Turns whose session_seq was NULL -- a 036 backfill gap, surfaced not hidden. */
   missing_session_seq: number;
+  /**
+   * Undistilled turns still outstanding when the claim came back empty.
+   *
+   * Present ONLY on the pathological case: the sweep had nothing to consume
+   * while work remained, which is the shape that starved this pipeline for 27
+   * days while every job reported `succeeded`. Absent on a normal drained
+   * queue, so a caller can treat its presence as the signal rather than
+   * comparing counts.
+   */
+  claim_empty_with_backlog?: number;
 }
 
 export interface DistillSweepDeps {
@@ -312,7 +322,77 @@ export async function runDistillSweep(
   summary.units = batch.units.length;
   summary.missing_session_seq = batch.missingSessionSeq;
 
-  if (batch.consumedTurnIds.length === 0) return summary;
+  if (batch.consumedTurnIds.length === 0) {
+    // An empty claim is the normal terminal state -- the queue is drained and
+    // there is nothing to stamp. It is ALSO exactly what a broken claim looks
+    // like, and that ambiguity is what let this pipeline starve for 27 days in
+    // silence: 392 `memory.distill` jobs completed as `succeeded` having
+    // stamped zero turns, because a claim returning no due work throws nothing
+    // and the handler returned here without a word.
+    //
+    // So the two cases are separated before returning. Asking the database
+    // whether due work still exists costs one indexed count on the terminal
+    // path only, and turns a silent no-op into a named condition an operator
+    // can see. Still not an error: the sweep did not fail, and throwing here
+    // would fail a job whose own behaviour was correct. It is a loud INFO with
+    // the number that makes it unmistakable.
+    let outstanding: number | null = null;
+    try {
+      const params: unknown[] = [];
+      let nsPredicate = "";
+      if (deps.namespace !== undefined) {
+        params.push(deps.namespace);
+        nsPredicate = ` AND namespace = $${params.length}`;
+      }
+      const { rows } = await deps.pool.query(
+        `SELECT count(*)::bigint AS due
+           FROM ob_raw_turns
+          WHERE distilled_at IS NULL
+            AND retention_tier = 'live'${nsPredicate}`,
+        params,
+      );
+      outstanding = Number((rows[0] as { due?: unknown } | undefined)?.due ?? 0);
+    } catch (error: unknown) {
+      // DOCUMENTED FAIL-OPEN. The probe is observability, never a gate: if it
+      // fails, the sweep still returns its summary rather than turning a
+      // diagnostic into an outage.
+      //
+      // Logged rather than swallowed, because a silent fallback here would
+      // recreate in the detector the exact defect the detector exists to
+      // catch. If this probe is failing, the operator is blind to an empty
+      // claim and must know that -- an unreported `outstanding = null` makes
+      // the pathological case indistinguishable from a drained queue all over
+      // again.
+      outstanding = null;
+      deps.logger.warn("distill_backlog_probe_failed", {
+        namespace: deps.namespace ?? "(all)",
+        lane_id:
+          deps.laneId === null || deps.laneId === undefined
+            ? "(none)"
+            : deps.laneId,
+        reason: error instanceof Error ? error.name : "non_error",
+        detail:
+          "could not count outstanding turns; an empty claim this sweep is unclassified, not proven drained",
+      });
+    }
+
+    if (outstanding !== null && outstanding > 0) {
+      deps.logger.warn("distill_claim_empty_with_backlog", {
+        namespace: deps.namespace ?? "(all)",
+        lane_id: deps.laneId === null || deps.laneId === undefined ? "(none)" : deps.laneId,
+        turns_outstanding: outstanding,
+        detail:
+          "claim returned no due turns while undistilled turns remain; the sweep did nothing and would otherwise have reported success",
+      });
+      summary.claim_empty_with_backlog = outstanding;
+    } else {
+      deps.logger.info("distill_queue_drained", {
+        namespace: deps.namespace ?? "(all)",
+        lane_id: deps.laneId === null || deps.laneId === undefined ? "(none)" : deps.laneId,
+      });
+    }
+    return summary;
+  }
 
   const candidates: PreparedCandidate[] = [];
   for (const unit of batch.units) {

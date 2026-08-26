@@ -42,6 +42,16 @@ export interface MaintenanceSweepOptions {
 export interface MaintenanceSweepSummary {
   distillBatchesSelected: number;
   distillJobsEnqueued: number;
+  /**
+   * Enqueue attempts the queue dropped on an existing idempotency key.
+   *
+   * A nonzero value here against a nonzero backlog means the lane is WEDGED,
+   * not busy: the key is unchanged because nothing consumed the work it names,
+   * so no new job can be scheduled under it. This count is the difference
+   * between "the sweep is keeping up" and "the sweep has been shouting into a
+   * dropped insert for 27 days", which were previously the same log line.
+   */
+  distillJobsDeduped: number;
   distillBatchesDeferred: number;
   distillTurnsDeferred: number;
   graphJobsEnqueued: number;
@@ -93,12 +103,28 @@ async function selectDistillLaneBatches(
           AND s.session_rank <= $1
         WHERE t.retention_tier = 'live'
      ),
+     -- RANK ONLY WORK THAT NEEDS DOING (#747). turn_rank is compared against
+     -- the batch bound downstream, so anything ranked here consumes a position
+     -- in that window. Ranking already-distilled turns alongside due ones let
+     -- finished work hold the whole window: measured 2026-08-25 on the dogfood
+     -- corpus, 2,070 already-distilled turns pushed the first due turn to rank
+     -- 1501 -- one past the bound -- so the producer selected 0 batches on
+     -- every tick for 27 days while 189,725 turns waited. Because finished
+     -- turns are re-ranked identically on each pass, the starvation was
+     -- permanent rather than transient, and it worsens as a namespace grows:
+     -- the four namespaces that kept working are simply small enough that all
+     -- their turns fit under the bound.
+     --
+     -- The is_due column stays SELECTed because the FILTER clauses and
+     -- batch_hash below still read it; this changes WHICH ROWS ARE RANKED,
+     -- not the shape of the result.
      ranked_window_turns AS (
        SELECT *, row_number() OVER (
                 PARTITION BY lane_id, namespace
                 ORDER BY ${DISTILL_ORDER_BY}
               ) AS turn_rank
          FROM window_turns
+        WHERE is_due
      ),
      lane_totals AS (
        SELECT lane_id, namespace, count(*)::int AS pending_turns,
@@ -150,30 +176,50 @@ async function enqueueDistillBatches(
   batches: readonly DistillLaneBatch[],
   maxSessions: number,
   maxTurns: number,
-): Promise<{ jobs: MaintenanceJob[]; deferredTurns: number }> {
+): Promise<{
+  jobs: MaintenanceJob[];
+  deferredTurns: number;
+  /** Inserts the queue dropped on the idempotency key: attempted, not scheduled. */
+  dedupedJobs: number;
+}> {
   const jobs: MaintenanceJob[] = [];
   let deferredTurns = 0;
+  let dedupedJobs = 0;
   for (const batch of batches) {
     deferredTurns += Math.max(
       batch.pendingTurns - batch.processableTurns,
       0,
     );
-    jobs.push(
-      await options.queue.enqueue(
-        buildMemoryDistillEnqueue({
-          // The key binds the exact bounded due-turn window the handler can
-          // consume. Unchanged ticks dedupe; consuming any due turn changes the
-          // watermark, so a succeeded job cannot block the lane's next window.
-          sweepLabel: `${batch.batchHash}:s${maxSessions}:t${maxTurns}`,
-          namespace: batch.namespace,
-          laneId: batch.laneId,
-          maxSessions,
-          maxTurns,
-        }),
-      ),
+    const job = await options.queue.enqueue(
+      buildMemoryDistillEnqueue({
+        // The key binds the exact bounded due-turn window the handler can
+        // consume. Unchanged ticks dedupe; consuming any due turn changes the
+        // watermark, so a succeeded job cannot block the lane's next window.
+        //
+        // That reasoning holds ONLY while something actually consumes. When the
+        // claim returned no due turns (fixed in src/distill-window.ts), nothing
+        // was consumed, the watermark never moved, and this key stayed
+        // identical forever -- so every later insert was dropped by ON CONFLICT
+        // DO NOTHING while this loop went on counting them as enqueued.
+        // Observed: `distill_jobs_enqueued: 1` every 5 seconds against a
+        // newest job row six hours old.
+        sweepLabel: `${batch.batchHash}:s${maxSessions}:t${maxTurns}`,
+        namespace: batch.namespace,
+        laneId: batch.laneId,
+        maxSessions,
+        maxTurns,
+      }),
     );
+    // Count what the queue DID, not what was attempted. A deduped insert
+    // scheduled no work, and reporting it as an enqueue is what made a wedged
+    // lane read as a healthy one.
+    if (job.enqueueOutcome === "deduped") {
+      dedupedJobs++;
+      continue;
+    }
+    jobs.push(job);
   }
-  return { jobs, deferredTurns };
+  return { jobs, deferredTurns, dedupedJobs };
 }
 
 async function enqueueGraphBatches(
@@ -249,6 +295,7 @@ export async function runMaintenanceSweep(
   const summary: MaintenanceSweepSummary = {
     distillBatchesSelected: batches.length,
     distillJobsEnqueued: distill.jobs.length,
+    distillJobsDeduped: distill.dedupedJobs,
     distillBatchesDeferred: deferredBatches,
     distillTurnsDeferred: distill.deferredTurns,
     graphJobsEnqueued: graph.jobs.length,
@@ -257,6 +304,7 @@ export async function runMaintenanceSweep(
   options.logger.info("maintenance_sweep_complete", {
     distill_batches_selected: summary.distillBatchesSelected,
     distill_jobs_enqueued: summary.distillJobsEnqueued,
+    distill_jobs_deduped: summary.distillJobsDeduped,
     distill_batches_deferred: summary.distillBatchesDeferred,
     distill_turns_deferred: summary.distillTurnsDeferred,
     graph_jobs_enqueued: summary.graphJobsEnqueued,

@@ -19,7 +19,7 @@ import {
   readCaptureLiveness,
   MIN_SESSIONS_FOR_SILENCE,
 } from "./liveness-observer.ts";
-import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
+import { EXPECTED_LIVE_ROLES } from "../domain/raw-turn-roles.ts";
 
 function poolReturning(rows: ReadonlyArray<Record<string, unknown>>): Pool {
   return { query: async () => ({ rows }) } as unknown as Pool;
@@ -71,10 +71,18 @@ describe("capture liveness observer", () => {
     // report a busy lane. 365 user rows beside an absent assistant is exactly
     // the six-day blind spot (`capture-never-drops-a-turn.md:291`).
     //
-    // `tool` is named alongside it because it is equally absent here and the
-    // seed now covers every accepted role (#681). Before that fix this
-    // assertion read `["assistant"]` — not because `tool` was delivering, but
-    // because a role missing from the seed could not be judged at all.
+    // This assertion has moved twice, and the history is the point. It read
+    // `["assistant"]` originally; #681 widened it to `["assistant", "tool"]`
+    // because a role missing from the seed could not be judged AT ALL; #685
+    // narrowed it back — not by re-shrinking the seed, but by seeding from the
+    // roles the LIVE LANE PRODUCES rather than the roles ingest ACCEPTS. `tool`
+    // is absent here and that is correct and permanent: no live producer emits
+    // it (records.py has no TOOL branch, deliberately), so naming it a fault
+    // returned 503 from /health and rolled back every deploy.
+    //
+    // The #681 lesson is intact. A role that SHOULD arrive and does not is
+    // still named — `assistant` here — and the seed is still derived from a
+    // declared set rather than a literal beside an enum.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "365", sessions: "9", seconds_since_last: "3" },
@@ -84,17 +92,41 @@ describe("capture liveness observer", () => {
     const reading = subject.reading();
 
     expect(reading?.stale).toBe(true);
-    expect(reading?.silent_roles).toEqual(["assistant", "tool"]);
+    expect(reading?.silent_roles).toEqual(["assistant"]);
     expect(reading?.turns_delivered).toBe(365);
     expect(reading?.reason).toContain("assistant");
   });
 
-  it("names a dead `tool` role beside a live user and assistant (#681)", async () => {
-    // The cutover-blocker shape, byte for byte: `tool` frozen since 2026-08-01
-    // at 14,006 rows while `/health` read `stale: false, silent_roles: []` for
-    // eight days. The role was never exercised in this file before #681 —
-    // which is how a health check reported green over a dead speaker on the
-    // very evidence the core01 cutover was to rely on.
+  it("names a dead SPOKEN role beside a live one (#681 mechanism, #685 scope)", async () => {
+    // The #681 mechanism, preserved: a role that SHOULD be arriving and is not
+    // must be named, not silently absent from the GROUP BY. What #685 corrected
+    // is WHICH roles those are. The original of this test used a dead `tool`
+    // role as the specimen, and that specimen was wrong: the live capture
+    // parser has no TOOL branch by design, so `tool` is silent permanently and
+    // correctly. Asserting a fault on it made /health return 503 forever and
+    // rolled back every deploy.
+    //
+    // `assistant` is the right specimen. It has a live producer, so its silence
+    // is real evidence of a broken lane -- which is what this module exists to
+    // catch.
+    const subject = observer(
+      poolReturning([
+        { role: "user", turns: "3780", sessions: "9", seconds_since_last: "12" },
+      ]),
+    );
+    await subject.refresh();
+    const reading = subject.reading();
+
+    expect(reading?.silent_roles).toEqual(["assistant"]);
+    expect(reading?.reason).toContain("assistant");
+  });
+
+  it("does NOT fault on a silent `tool` role, which has no live producer (#685)", async () => {
+    // The regression this issue is about. Both spoken roles delivering and no
+    // tool turns is the NORMAL live state -- verified 2026-08-25, newest tool
+    // row 2026-08-01 with user and assistant flowing -- because the third
+    // stream (reasoning, tool calls, tool output) ships to Langfuse rather than
+    // through this lane. A fault here is a false 503.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "3780", sessions: "9", seconds_since_last: "12" },
@@ -104,15 +136,17 @@ describe("capture liveness observer", () => {
     await subject.refresh();
     const reading = subject.reading();
 
-    expect(reading?.stale).toBe(true);
-    expect(reading?.silent_roles).toEqual(["tool"]);
-    expect(reading?.reason).toContain("tool");
+    expect(reading?.silent_roles).toEqual([]);
+    expect(reading?.stale).toBe(false);
   });
 
-  it("stays green when all three accepted roles deliver", async () => {
-    // The control for the clause above: widening the seed must not make `tool`
-    // permanently silent. An always-degrade implementation passes the test
-    // above and fails this one.
+  it("stays green when an accepted-but-unexpected role also delivers", async () => {
+    // The control for the clauses above. `tool` is ACCEPTED (the bulk importer
+    // emits it), just never EXPECTED of the live lane, so its arrival must be
+    // counted and must not be treated as anomalous. An implementation that
+    // narrowed the seed by filtering arrivals rather than by narrowing
+    // EXPECTATIONS would drop these 900 turns from turns_delivered and fail
+    // here.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "300", sessions: "9", seconds_since_last: "12" },
@@ -128,11 +162,17 @@ describe("capture liveness observer", () => {
     expect(reading?.turns_delivered).toBe(2400);
   });
 
-  it("seeds every role the server accepts, so a new role cannot escape", async () => {
-    // The mechanism, not the instance (#681). The seed derives from
-    // `RAW_TURN_ROLES`, so this asserts the observation's keys ARE that set —
-    // a hardcoded triple would satisfy the behavioural tests above and rebuild
-    // the identical trap for role number four.
+  it("seeds every role the live lane produces, so a new one cannot escape", async () => {
+    // The mechanism, not the instance (#681), rescoped by #685. The seed
+    // derives from `EXPECTED_LIVE_ROLES`, so this asserts the observation's
+    // keys ARE that set — a hardcoded pair would satisfy the behavioural tests
+    // above and rebuild the identical trap for the next role the LIVE LANE
+    // learns to emit.
+    //
+    // Deriving from the ACCEPT set instead is what #685 fixed: it made the
+    // observer demand `tool`, which no live producer sends.
+    // `raw-turn-roles.test.ts` pins live as a strict subset of accept, so the
+    // two cannot silently converge again.
     const subject = observer(
       poolReturning([
         { role: "user", turns: "10", sessions: "9", seconds_since_last: "1" },
@@ -141,7 +181,7 @@ describe("capture liveness observer", () => {
     await subject.refresh();
 
     expect(Object.keys(subject.observation()?.turnsByRole ?? {}).sort()).toEqual(
-      [...RAW_TURN_ROLES].sort(),
+      [...EXPECTED_LIVE_ROLES].sort(),
     );
   });
 

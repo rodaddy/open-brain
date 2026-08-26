@@ -98,14 +98,38 @@ dbDescribe("026 maintenance queue (live Postgres)", () => {
         WHERE conrelid = 'maintenance_jobs'::regclass`,
     );
     expect(rows.map((row) => row.conname)).toContain(
-      "maintenance_jobs_unique_kind_idempotency",
-    );
-    expect(rows.map((row) => row.conname)).toContain(
       "maintenance_jobs_lease_shape",
     );
     expect(rows.map((row) => row.conname)).toContain(
       "maintenance_jobs_terminal_shape",
     );
+
+    // Idempotency uniqueness is a PARTIAL UNIQUE INDEX since 047, not a table
+    // constraint, so it lives in pg_indexes and never appears above. 047
+    // scoped it to live states on purpose: a terminal row must stop reserving
+    // its key, or a recurring batch deadlocks forever (#747).
+    const { rows: indexes } = await pool.query<{
+      indexname: string;
+      indexdef: string;
+    }>(
+      `SELECT indexname, indexdef
+         FROM pg_indexes
+        WHERE tablename = 'maintenance_jobs'`,
+    );
+    const byName = new Map(indexes.map((row) => [row.indexname, row.indexdef]));
+
+    expect([...byName.keys()]).not.toContain(
+      "maintenance_jobs_unique_kind_idempotency",
+    );
+
+    const live = byName.get("maintenance_jobs_live_idempotency");
+    expect(live).toBeDefined();
+    expect(live).toContain("UNIQUE");
+    // Only queued and running reserve the key.
+    expect(live).toContain("'queued'");
+    expect(live).toContain("'running'");
+    expect(live).not.toContain("'succeeded'");
+    expect(live).not.toContain("'dead_letter'");
   });
 
   it("persists the caller-forced terminal category (unsupported kind is not non_error)", async () => {

@@ -19,7 +19,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { RAW_TURN_ROLES } from "./raw-turn-roles.ts";
+import { EXPECTED_LIVE_ROLES, RAW_TURN_ROLES } from "./raw-turn-roles.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -45,6 +45,26 @@ describe("raw turn role set", () => {
       .map((part) => part.trim().replace(/^"|"$/g, ""))
       .filter((part) => part.length > 0);
     expect(roles).toEqual([...RAW_TURN_ROLES]);
+  });
+
+  it("expects only live roles for liveness, and they are all accepted", () => {
+    // #685: the accept set and the live-expected set answer different
+    // questions, and seeding liveness from the accept set demanded `tool` --
+    // a role no live producer emits by design -- which returned 503 from
+    // /health and rolled back every deploy.
+    //
+    // The subset assertion is what keeps #681 fixed. A live role that is not
+    // an accepted role is a contradiction (the observer would demand a turn
+    // the boundary rejects), and a role added to ingest still cannot escape
+    // liveness silently, because adding it here is a deliberate edit to a
+    // declared set rather than a literal drifting beside an enum.
+    expect([...EXPECTED_LIVE_ROLES]).toEqual(["user", "assistant"]);
+    for (const role of EXPECTED_LIVE_ROLES) {
+      expect(RAW_TURN_ROLES).toContain(role);
+    }
+    // Strict subset: if these ever match, the distinction has collapsed and
+    // the defect is back.
+    expect(EXPECTED_LIVE_ROLES.length).toBeLessThan(RAW_TURN_ROLES.length);
   });
 
   it("agrees with the applied CHECK constraint on ob_raw_turns.role", () => {

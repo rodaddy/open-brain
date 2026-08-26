@@ -91,6 +91,23 @@ export interface MaintenanceJob {
   provenance: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * What `enqueue` actually DID: `created` minted this row, `deduped` means the
+   * insert was dropped by ON CONFLICT DO NOTHING and this is the row that
+   * already held the key.
+   *
+   * WHY IT EXISTS. `enqueue` returns a job either way, and for hours the distill
+   * sweep logged `distill_jobs_enqueued: 1` every 5 seconds while the newest
+   * job row in the table stayed six hours old. The caller pushed the returned
+   * object into its jobs array and counted the length, with no way to tell a
+   * job it had just created from one that succeeded long ago. A dropped insert
+   * and a scheduled job were the same value.
+   *
+   * Optional so every existing reader and queue fake keeps compiling; a caller
+   * that reports counts is expected to read it. Absent means "not reported by
+   * this producer", never "created".
+   */
+  enqueueOutcome?: "created" | "deduped";
 }
 
 export interface EnqueueMaintenanceJob {
@@ -367,7 +384,8 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
          job_kind, job_version, payload, idempotency_key, run_after,
          max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (job_kind, idempotency_key) DO NOTHING
+       ON CONFLICT (job_kind, idempotency_key)
+         WHERE state IN ('queued', 'running') DO NOTHING
        RETURNING ${JOB_COLUMNS}`,
       [
         job.kind,
@@ -382,16 +400,57 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
         job.provenance === null ? null : JSON.stringify(job.provenance),
       ],
     );
-    if (inserted.rows[0]) return toJob(inserted.rows[0]);
+    if (inserted.rows[0]) {
+      return { ...toJob(inserted.rows[0]), enqueueOutcome: "created" };
+    }
 
+    // Scoped to LIVE states, matching the partial index the insert conflicts
+    // against (047). An unscoped lookup would now return a terminal row from
+    // any point in history, and enqueue would hand the caller a job that
+    // finished days ago as though it were the one holding the key -- the same
+    // confusion 047 exists to remove, reintroduced one statement later.
     const existing = await this.pool.query<MaintenanceJobRow>(
       `SELECT ${JOB_COLUMNS}
          FROM maintenance_jobs
-        WHERE job_kind = $1 AND idempotency_key = $2`,
+        WHERE job_kind = $1 AND idempotency_key = $2
+          AND state IN ('queued', 'running')`,
       [job.kind, job.idempotencyKey],
     );
     const existingRow = existing.rows[0];
     if (!existingRow) {
+      // The live holder reached a terminal state between the insert and this
+      // lookup, so the key is free again. Under the blanket constraint this
+      // was impossible -- a dropped insert always had a row behind it -- and
+      // throwing was correct. Under the partial index (047) it is an ordinary
+      // race, and the correct response is to insert, which now succeeds.
+      //
+      // Retried exactly once. A second drop means a new live job took the key
+      // in between, which is genuine contention and not this race; falling
+      // through to the throw keeps an unbounded retry loop out of the queue.
+      const retried = await this.pool.query<MaintenanceJobRow>(
+        `INSERT INTO maintenance_jobs (
+           job_kind, job_version, payload, idempotency_key, run_after,
+           max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (job_kind, idempotency_key)
+           WHERE state IN ('queued', 'running') DO NOTHING
+         RETURNING ${JOB_COLUMNS}`,
+        [
+          job.kind,
+          job.version,
+          JSON.stringify(job.payload),
+          job.idempotencyKey,
+          job.runAfter,
+          job.maxAttempts,
+          job.backoffBaseMs,
+          job.backoffMaxMs,
+          job.namespace,
+          job.provenance === null ? null : JSON.stringify(job.provenance),
+        ],
+      );
+      if (retried.rows[0]) {
+        return { ...toJob(retried.rows[0]), enqueueOutcome: "created" };
+      }
       throw new Error("maintenance queue idempotency lookup failed");
     }
     const existingJob = toJob(existingRow);
@@ -405,7 +464,14 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
         "maintenance queue idempotency key reused with divergent job semantics",
       );
     }
-    return existingJob;
+    // The insert was dropped by ON CONFLICT DO NOTHING and this is the row that
+    // already held the key. Returning it bare is what let the distill sweep
+    // report `distill_jobs_enqueued: 1` every 5 seconds for hours while the
+    // newest job row stayed six hours old: the caller pushed this object into
+    // its jobs array and counted it, unable to tell a job it just created from
+    // one that succeeded long ago. The outcome is now on the return value so a
+    // caller cannot count a dropped insert as work scheduled.
+    return { ...existingJob, enqueueOutcome: "deduped" };
   }
 
   async claimDueJobs(input: ClaimMaintenanceJobs): Promise<MaintenanceJob[]> {

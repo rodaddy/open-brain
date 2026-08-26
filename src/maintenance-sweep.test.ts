@@ -104,6 +104,55 @@ function producerPool(graphRows = 1) {
 }
 
 describe("runMaintenanceSweep", () => {
+  it("does not count a deduped insert as an enqueued job", async () => {
+    // THE REGRESSION THIS EXISTS FOR. `enqueue` returns a MaintenanceJob whether
+    // it inserted a row or the insert was dropped by ON CONFLICT DO NOTHING on
+    // an existing idempotency key. The sweep pushed the returned object into
+    // its jobs array either way and reported the array length, so a lane whose
+    // key could never change reported `distill_jobs_enqueued: 1` every 5
+    // seconds while the newest row in maintenance_jobs stayed six hours old.
+    // Observed on the dogfood service 2026-08-25 against a 190,149-turn
+    // backlog: 392 succeeded jobs, zero turns stamped, and a sweep log that
+    // read exactly like a healthy one.
+    const pool = producerPool();
+    const enqueued: EnqueueMaintenanceJob[] = [];
+    const queue = {
+      enqueue: async (input: EnqueueMaintenanceJob) => {
+        enqueued.push(input);
+        // Every insert lands on an existing key: the wedged-lane condition.
+        return {
+          ...maintenanceJob(input, enqueued.length),
+          enqueueOutcome: "deduped" as const,
+        };
+      },
+    };
+    const logs = recordingLogger();
+
+    const summary: MaintenanceSweepSummary = await runMaintenanceSweep({
+      pool: pool as any,
+      queue,
+      logger: logs.logger,
+      distillBatchSize: 5,
+      maxDistillBatchesPerTick: 2,
+      graphDerivationLimit: 1,
+    });
+
+    // The producer still SELECTED work -- the batches are real and due.
+    expect(summary.distillBatchesSelected).toBe(2);
+    // But nothing was scheduled, and the summary says so rather than claiming
+    // two enqueues.
+    expect(summary.distillJobsEnqueued).toBe(0);
+    expect(summary.distillJobsDeduped).toBe(2);
+
+    // And it reaches the log, which is the only place an operator would see it.
+    const complete = logs.info.at(-1);
+    expect(complete?.message).toBe("maintenance_sweep_complete");
+    expect(complete?.fields).toMatchObject({
+      distill_jobs_enqueued: 0,
+      distill_jobs_deduped: 2,
+    });
+  });
+
   it("produces bounded distill batches and drifted graph jobs in one tick", async () => {
     const pool = producerPool();
     const enqueued: EnqueueMaintenanceJob[] = [];
@@ -141,6 +190,7 @@ describe("runMaintenanceSweep", () => {
       distillJobsEnqueued: 2,
       distillBatchesDeferred: 1,
       distillTurnsDeferred: 5,
+      distillJobsDeduped: 0,
       graphJobsEnqueued: 1,
       graphLimitReached: false,
     });

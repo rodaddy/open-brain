@@ -348,8 +348,16 @@ export async function buildAgentContextPackPayload(
     (!args.requested_sections || args.requested_sections.includes("recovery"));
   const includeDurableLaneContext =
     args.requested_sections?.includes("durable_lane_context") === true;
+  // Absent requested_sections includes durable_memory (#744, operator decision
+  // 2026-08-25). Twin of the server tree; see the long note at
+  // server/tools/agent-context-pack.ts for the measurement and reasoning. The
+  // short form: working_set treated an absent requested_sections as INCLUDED
+  // and durable_memory as EXCLUDED one line apart, the Python client never sets
+  // the key, so every bare recall consulted no durable memory and reported
+  // success.
   const includeDurableMemorySection =
-    args.requested_sections?.includes("durable_memory") === true;
+    !args.requested_sections ||
+    args.requested_sections.includes("durable_memory");
   const includeProfileGuidance =
     args.requested_sections?.includes("profile_guidance") === true;
   const includeProcessGuidance =
@@ -1007,6 +1015,27 @@ export async function buildAgentContextPackPayload(
             : requestedSections.filter(
                 (name) => !servedSections.includes(name),
               ),
+        // What a BARE call (no requested_sections) did not consult.
+        //
+        // `requested_not_served` is empty for a bare call and always will be:
+        // nothing was requested, so by its own definition nothing was withheld.
+        // That is truthful and useless. The caller receives an `ok` envelope
+        // listing only `working_set` and cannot distinguish "the durable corpus
+        // was searched and had nothing" from "the durable corpus was never
+        // consulted at all" -- and every default-shaped recall takes the second
+        // path.
+        //
+        // This field states the omission plainly instead. It changes no
+        // selection behaviour: which sections a bare call serves is a contract
+        // decision (docs/agent-context-pack-contract.md), not a receipt
+        // concern. It only stops the receipt from implying a completeness it
+        // never had.
+        not_consulted_by_default:
+          requestedSections === null
+            ? SECTION_NAMES.filter(
+                (name: string) => !servedSections.includes(name),
+              )
+            : [],
       },
       warnings: {
         scope_denials: [
