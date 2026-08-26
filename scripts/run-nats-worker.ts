@@ -16,6 +16,7 @@ import {
 } from "../src/nats-worker.ts";
 import type { AuthInfo } from "../src/types.ts";
 import { createTracingRuntime } from "../server/observability/langfuse-tracing.ts";
+import { readMcpTracingConfig } from "../server/observability/trace-config.ts";
 
 type LoggerLike = Pick<typeof logger, "error" | "info">;
 type HealthServer = { stop(force?: boolean): void };
@@ -323,7 +324,10 @@ export async function startNatsWorkerProcess(
     }
 
     pool = createDbPool();
-    tracing = createTracing();
+    // This worker root has no `ServerConfig`, so it reads its own tracing
+    // configuration from the env record it was handed and passes it down;
+    // the tracing module itself reads no environment (#825, L2b-2).
+    tracing = createTracing({ config: readMcpTracingConfig(env) });
     // NOTHING IS ADJUSTED SILENTLY: read the threshold before composing the
     // observer, so the bound the observer takes its verdict against is the
     // same one announced in the startup summary below.
