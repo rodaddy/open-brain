@@ -139,3 +139,9 @@ only when a session actually needed it.
     assertions (#778 fixer had to). A schema field that mirrors an env reader
     is differenced against the reader input by input, and the test calls the
     exported reader; agreeing inputs prove nothing.
+27. The lint sweep (#780) is not only size. Rico, 2026-08-26: common code
+    becomes a util, "maximum code reusage when proper", so the code reads
+    and maintains easily. A lane that splits a file into private helpers
+    without checking for an existing helper has met the rule value and
+    missed the spec. Decorators (logging, stack traces) are rung L3 of
+    `_plans/server-hardening-ladder.md`, sequenced after L2, not the sweep.

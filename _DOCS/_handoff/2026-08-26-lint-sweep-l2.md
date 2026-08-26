@@ -9,12 +9,17 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
   before acting.
 - Output discipline: minimum verbosity, only the context needed, output
   tokens low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (141 lines). It
+- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (147 lines). It
   overrides the base; this document overrides it. Rules 22-26 are new.
 - Every lane runs in the clone `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/clone-20260825`
   (rule 17); the Mac checkout is dirty on `sprint/standards-fmt` (Rico's, on
   hold). Lanes are sequential: the clone is one checkout, and each file's
   fix lands before the next file starts (ruling on #780).
+- Rico ruling 2026-08-26 on the sweep: maximum reuse. An extraction first
+  looks for the helper that already exists (`rg` the repo, `src/` twin
+  included); shared logic lands in a shared module, never a private copy per
+  file; duplicated code between a touched file and its twin is a finding.
+  Decorators for logging are rung L3, not this sweep (rule 27).
 
 ## State 1 — ORIENT
 - `origin/main` is `49ecfbe` = PR #778, L2a: 23 env names typed on
