@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { OpenBrainContract } from "./contract.ts";
-import { buildContract, contractHash } from "./contract.ts";
+import {
+  buildContract,
+  CONTRACT_CAPABILITIES,
+  contractHash,
+} from "./contract.ts";
+import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
 type ContractPayload = Omit<OpenBrainContract, "generated_at" | "schema_hash">;
 
@@ -13,7 +18,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377",
+      "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.15");
@@ -324,7 +329,7 @@ describe("Open Brain contract manifest", () => {
     expect(
       contract.capabilities.find((item) => item.name === "agent_context_pack")
         ?.version,
-    ).toBe(2);
+    ).toBe(3);
     expect(
       contract.capabilities.find((item) => item.name === "append_session_event")
         ?.version,
@@ -847,5 +852,41 @@ describe("Open Brain contract manifest", () => {
     };
 
     expect(contractHash(changedPayload)).not.toBe(base.schema_hash);
+  });
+});
+
+describe("capabilities and tool_contracts agree on every tool version", () => {
+  // Two hand-maintained blocks advertise the same tool version: the
+  // `capabilities` list in contract.ts and the `tool_contracts` mirror in
+  // contract-schemas.ts. #691 moved one without the other and the Python
+  // client, which requires both (client.py:78), refused every direct capture
+  // for seventeen days while the manifest looked self-consistent. Hand-typed
+  // literals in the tests above cannot catch that recurring -- they agree
+  // because someone typed the same number twice. This does: it derives both
+  // sides from the exported sources and fails the moment they diverge.
+  it("every capability of kind 'tool' has a tool_contracts twin at the same version", () => {
+    const mismatches: string[] = [];
+    for (const capability of CONTRACT_CAPABILITIES) {
+      if (capability.kind !== "tool") continue;
+      const twin = TOOL_CONTRACTS[capability.name];
+      if (!twin) {
+        mismatches.push(`${capability.name}: in capabilities, absent from tool_contracts`);
+        continue;
+      }
+      if (twin.version !== capability.version) {
+        mismatches.push(
+          `${capability.name}: capabilities=${capability.version} tool_contracts=${twin.version}`,
+        );
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it("every tool_contracts entry is advertised as a capability", () => {
+    const advertised = new Set(
+      CONTRACT_CAPABILITIES.filter((c) => c.kind === "tool").map((c) => c.name),
+    );
+    const orphans = Object.keys(TOOL_CONTRACTS).filter((name) => !advertised.has(name));
+    expect(orphans).toEqual([]);
   });
 });

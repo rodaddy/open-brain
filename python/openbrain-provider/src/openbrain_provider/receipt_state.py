@@ -65,7 +65,7 @@ RECEIPT_STATE_SCHEMA: Final[str] = "development.openbrain-memory-receipts.v1"
 MEMORY_CONTRACT: Final[str] = "2026-08-09.memory-tools.v24"
 MEMORY_CONTRACT_SCHEMA_VERSION: Final[int] = 1
 MEMORY_CONTRACT_SCHEMA_HASH: Final[str] = (
-    "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
+    "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c"
 )
 
 #: receipt-state.ts:98 — a compact cycle older than this is not the current one.

@@ -442,9 +442,22 @@ export const CONTRACT_CAPABILITIES: ContractCapability[] = [
     description:
       "Durable session lanes, events, context, wraps, and host-neutral transcript citations.",
   },
+  // v3 since #678, when the published tool contract gained `repo`,
+  // `prior_context`, and `continue_from`. `tool_contracts` moved
+  // (contract-schemas.ts) and this capabilities entry did not, so the
+  // manifest advertised 3 in one block and 2 in the other. The Python client
+  // validates BOTH against FIRST_CLASS_RUNTIME_TOOL_VERSIONS (client.py:78)
+  // and refuses a v2 manifest by design, so every direct capture returned
+  // `status: lost` -- silently, since the runtime receipt reports the failure
+  // and nothing was watching it. That is the same hand-maintained-mirror
+  // drift this file's header comment describes.
+  //
+  // Keep name/version/kind on adjacent lines: the Python client's
+  // test_required_contract_matches_server_source_of_truth parses this file
+  // with a regex that expects them contiguous.
   {
     name: "agent_context_pack",
-    version: 2,
+    version: 3,
     kind: "tool",
     description:
       "First-class realtime context-pack tool for Hermes and future agents. " +

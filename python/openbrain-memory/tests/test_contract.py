@@ -91,7 +91,7 @@ def test_package_pins_reviewed_v23_schema_snapshot() -> None:
     assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v24"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377"
+        "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c"
     )
 
 
