@@ -123,8 +123,12 @@
       "rules": { "no-console": "off" }
     },
     // Entry points report a fatal error when the logger may be what failed.
+    // contracts/check-parity.ts sits here as a CLI whose stdout IS the
+    // contract: it prints the violation list and exits non-zero, or prints the
+    // parity verdict callers read. Routing that through a log sink would
+    // destroy the artifact rather than record it.
     {
-      "files": ["src/index.ts", "server/main.ts"],
+      "files": ["src/index.ts", "server/main.ts", "contracts/check-parity.ts"],
       "rules": { "no-console": "off" }
     },
     // Scripts are CLIs and printing is their job -- this is the one exemption
@@ -152,8 +156,21 @@
     // Measured at landing: 2800 violations in test files, dominated by
     // no-explicit-any (1275) and no-non-null-assertion (1024). Same
     // staged-content rule applies -- paid per-file, as tests are touched.
+    //
+    // `**/tests/**/*.ts` is the third pattern because this repo also keeps
+    // tests in a `tests/` DIRECTORY rather than a `.test.ts` suffix, and those
+    // were being missed. It covers 11 tracked files -- clients/ts/tests/ (6),
+    // docs/standards/typescript-exemplar/tests/ (4), and the parity fixture
+    // python/openbrain-provider/tests/fixtures/ts_gate_parity/record-from-typescript.ts,
+    // a recorder CLI whose console output IS its recording. Every one is a test
+    // or a test fixture; nothing outside a tests/ directory is exempted, and the
+    // repo-root tests/ holds only a JSON fixture, no TypeScript at all.
     {
-      "files": ["**/*.test.ts", "**/__tests__/**/*.ts"],
+      "files": [
+        "**/*.test.ts",
+        "**/__tests__/**/*.ts",
+        "**/tests/**/*.ts"
+      ],
       "rules": { "no-console": "off" }
     }
   ],
