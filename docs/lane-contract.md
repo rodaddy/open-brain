@@ -87,6 +87,31 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 33) — harvest of the plans lane (PR #772) and the L1 lint-gate lane (PR #771)
+
+- **A docs-only PR still carries an executable done-means.** The merge gate
+  has no not-applicable path, and that is the point: "not applicable" was the
+  loophole. For a measurement document the check is one that re-runs the
+  document's own commands and fails on drift
+  (`scripts/done-means/750-server-baseline-holds.sh`); it is EXPECTED to go
+  red when a ladder rung moves the numbers, and the rung updates both.
+- **Cut the branch from the current tip, and check before the PR.**
+  `pr-body.yml` decides Contract Parity with a two-dot diff from the base
+  TIP, so a branch 4 commits behind main tripped it on main's own #768
+  change (#773). `git merge-base --is-ancestor origin/main HEAD`
+  (`STANDARDS-git.md:63`) before `gh pr create`.
+- **Landing a hook is not evidence the hook runs.** The lint step early-exits
+  when no `.ts` file is staged, so the commit that adds `_githooks/pre-commit`
+  never exercises it. The receipt came from a separate `.ts` commit, and the
+  RED probe was committed as a re-runnable check with a negative control on
+  `core.hooksPath` (`750-precommit-lint-gate-fires.sh`), because a global
+  `core.hooksPath` had let an earlier probe pass falsely.
+- **Tooling:** the Codex git guard refuses `git -C <path> commit|push`
+  ("unable to verify the current branch") and accepts `cd <path> && git ...`.
+  A fresh worktree needs `bun install --frozen-lockfile` before pre-push
+  `tsc` can run (`bun-types` ENOENT). `db-integration` still fails on
+  #608/#632 (one defect, two issues); `gh run rerun --failed` clears it.
+
 ### 2026-08-18 (round 32) — harvest of the live-observer completion lane (PR #737)
 
 - **A SURFACE PROVEN ONLY BY INJECTION IS NOT LIVE — assert the DEFAULT
