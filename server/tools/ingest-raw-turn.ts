@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import { authorize, contentHash } from "./memory-helpers.ts";
 import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
 
@@ -37,7 +42,10 @@ const rawTurnSchema = z.object({
 type RawTurn = z.infer<typeof rawTurnSchema>;
 
 function isHarnessNoise(content: string): boolean {
-  return /^\s*$/.test(content) || harnessNoise.some((pattern) => pattern.test(content));
+  return (
+    /^\s*$/.test(content) ||
+    harnessNoise.some((pattern) => pattern.test(content))
+  );
 }
 
 export function registerIngestRawTurnTool(
@@ -47,7 +55,8 @@ export function registerIngestRawTurnTool(
   server.registerTool(
     "ingest_raw_turn",
     {
-      description: "Full-send ingest of raw conversation turns for server-side distillation",
+      description:
+        "Full-send ingest of raw conversation turns for server-side distillation",
       inputSchema: {
         namespace: z.string().max(500).optional(),
         turns: z.array(rawTurnSchema).min(1).max(100),
@@ -71,12 +80,22 @@ export function registerIngestRawTurnTool(
       const kept = args.turns.filter((turn) => !isHarnessNoise(turn.content));
       const filtered = args.turns.length - kept.length;
       if (kept.length === 0) {
-        return textResult({ ingested: 0, duplicates: 0, filtered, namespace: auth.namespace });
+        return textResult({
+          ingested: 0,
+          duplicates: 0,
+          filtered,
+          namespace: auth.namespace,
+        });
       }
       try {
         const values: unknown[] = [];
         const tuples = kept.map((turn, index) => {
-          appendTurnValues(values, auth.namespace, auth.identity.clientId, turn);
+          appendTurnValues(
+            values,
+            auth.namespace,
+            auth.identity.clientId,
+            turn,
+          );
           const first = index * 19 + 1;
           return `(${Array.from({ length: 19 }, (_, offset) => `$${first + offset}`).join(",")})`;
         });
@@ -93,7 +112,12 @@ export function registerIngestRawTurnTool(
         );
         const ingested = rows.rows.length;
         dependencies.logger.info(
-          { tool: "ingest_raw_turn", ingested, duplicates: kept.length - ingested, filtered },
+          {
+            tool: "ingest_raw_turn",
+            ingested,
+            duplicates: kept.length - ingested,
+            filtered,
+          },
           "tool_result",
         );
         return textResult({
@@ -104,27 +128,29 @@ export function registerIngestRawTurnTool(
         });
       } catch (error: unknown) {
         dependencies.logger.error(
-          { tool: "ingest_raw_turn", error_category: error instanceof Error ? error.name : typeof error },
+          {
+            tool: "ingest_raw_turn",
+            error_category: error instanceof Error ? error.name : typeof error,
+          },
           "tool_failure",
         );
-        return errorResult(JSON.stringify({
-          error: "retryable_outage",
-          message: `Database error during raw turn ingest: ${error instanceof Error ? error.message : String(error)}`,
-          retryable: true,
-          namespace: auth.namespace,
-        }));
+        return errorResult(
+          JSON.stringify({
+            error: "retryable_outage",
+            message: `Database error during raw turn ingest: ${error instanceof Error ? error.message : String(error)}`,
+            retryable: true,
+            namespace: auth.namespace,
+          }),
+        );
       }
     },
   );
 }
 
-function appendTurnValues(
-  values: unknown[],
-  namespace: string,
-  createdBy: string,
-  turn: RawTurn,
-): void {
-  values.push(
+// Columns 1-10: namespace and the lineage/routing identifiers that place a turn
+// in its conversation. Order matches the INSERT column list exactly.
+function turnLineageValues(namespace: string, turn: RawTurn): unknown[] {
+  return [
     namespace,
     turn.turn_uuid,
     turn.parent_turn_uuid ?? null,
@@ -135,6 +161,13 @@ function appendTurnValues(
     turn.git_branch ?? null,
     turn.turn_index,
     turn.role,
+  ];
+}
+
+// Columns 11-19: the turn's own payload plus the ingest-side stamps. Order
+// matches the INSERT column list exactly.
+function turnPayloadValues(createdBy: string, turn: RawTurn): unknown[] {
+  return [
     turn.is_human_prompt ?? false,
     turn.content,
     contentHash(turn.content),
@@ -144,5 +177,17 @@ function appendTurnValues(
     JSON.stringify([]),
     createdBy,
     turn.occurred_at ?? null,
+  ];
+}
+
+function appendTurnValues(
+  values: unknown[],
+  namespace: string,
+  createdBy: string,
+  turn: RawTurn,
+): void {
+  values.push(
+    ...turnLineageValues(namespace, turn),
+    ...turnPayloadValues(createdBy, turn),
   );
 }
