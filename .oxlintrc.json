@@ -1,0 +1,168 @@
+// oxlint -- the control-flow and size enforcement STANDARDS-typescript.md names.
+//
+// Derived from the standard's exemplar at
+// _DOCS/typescript-exemplar/.oxlintrc.json. Two deliberate deltas from it are
+// recorded below: max-lines-per-function is 100 here, and the test overrides
+// that disabled rules are NOT carried over. Everything else is the exemplar's
+// reasoning, which was written against observed firings and is not re-argued.
+//
+// This file is JSONC: oxlint parses comments. It rejects unknown KEYS, so every
+// note here is a real comment rather than a "//" pseudo-key.
+//
+// THE HOOK ALREADY ENFORCES THIS. _githooks/pre-commit:221 is config-guarded --
+// it announces "SKIPPED: no .oxlintrc.json" when this file is absent, and lints
+// STAGED CONTENT against it when present. So landing this file is what turns
+// the gate on; no hook edit is required.
+//
+// STAGED CONTENT, NOT THE WHOLE REPO. Measured by full sweep at this file's
+// landing (bunx oxlint --config .oxlintrc.json src/ server/ scripts/):
+// 3605 total, 805 production, 2800 in tests. The number that governs the
+// active lane is server/ production: 142 across 99 files. Most of the
+// production backlog is src/, which L5 retires anyway.
+//
+// That is not a debt owed before the next commit. The hook lints only what is
+// STAGED, so the cost is paid per-file as work naturally touches them, and
+// nothing new can enter.
+{
+  "plugins": ["unicorn", "typescript", "oxc"],
+
+  "categories": {
+    "correctness": "error"
+  },
+
+  "rules": {
+    // CYCLOMATIC COMPLEXITY = decision points + 1. 10 is McCabe's original
+    // threshold and matches ruff C901 on the Python side.
+    //
+    // Complexity N means N independent paths, so full branch coverage needs N
+    // test cases. Above the threshold the uncovered paths are exactly where the
+    // bugs live, and they are invisible because the file has tests.
+    //
+    // Measured at landing: 279 production (62 in server/).
+    "complexity": ["error", { "max": 10 }],
+
+    // Nesting depth, which complexity does NOT capture -- a function can score
+    // 8 (passing) while nested five levels deep (failing). 3 forces guard
+    // clauses and early returns. Matches ruff PLR1702.
+    //
+    // Measured at landing: 108 production (8 in server/).
+    "max-depth": ["error", { "max": 3 }],
+
+    // SIZE -- the third leg, which neither complexity nor depth captures. A
+    // 400-line function that branches three times scores 4 on complexity and 1
+    // on depth, and only this rule catches it.
+    //
+    // 100, NOT the exemplar's 50 (operator decision 2026-08-26). The 50-line
+    // ceiling was measured against this codebase and rejected on evidence: of
+    // 333 functions over 50 code lines, the MEDIAN was 89 -- so the ceiling was
+    // mostly flagging functions slightly over, which is the signature of a
+    // limit set tight enough to be ignored. At 100 the rule flags 147, with p90
+    // at 213 and the worst at 528. Those are defects nobody argues about, and a
+    // rule nobody disputes is a rule that gets enforced rather than bypassed.
+    //
+    // DIVERGENCE FROM PYTHON IS DELIBERATE AND MUST STAY RECORDED. The Python
+    // twin is 50 (STANDARDS-python.md, check_code_size.py). The standards
+    // otherwise match numbers on purpose, so that a rule does not read as
+    // arbitrary. This one differs because it was measured here and there; if
+    // the Python side ever moves, this comment is the reason to revisit.
+    //
+    // skipBlankLines/skipComments are ON: this repo is deliberately
+    // comment-dense (server/tools/search-engine.ts is 1097 raw lines and 837
+    // code lines), and the ceiling is on CODE, never on explanation or TSDoc.
+    "max-lines-per-function": [
+      "error",
+      { "max": 100, "skipBlankLines": true, "skipComments": true, "IIFEs": true }
+    ],
+
+    // One module, one job. 500 CODE lines, same number as the Python twin.
+    // Measured at landing: 30 production (5 in server/).
+    "max-lines": [
+      "error",
+      { "max": 500, "skipBlankLines": true, "skipComments": true }
+    ],
+
+    // A signature past four parameters is a struct that has not been named yet,
+    // and every caller has to remember the order. Pass an options object.
+    // Matches ruff PLR0913. Measured at landing: 57 production (17 in server/).
+    "max-params": ["error", { "max": 4 }],
+
+    "max-nested-callbacks": ["error", { "max": 3 }],
+
+    // Removes one nesting level for free, which is why it sits beside
+    // max-depth rather than in a style section. Matches ruff RET505.
+    "no-else-return": "error",
+
+    // An empty `catch {}` is a swallowed error. allowEmptyCatch is OFF.
+    //
+    // WHAT THIS RULE CANNOT DO, stated so it is not mistaken for full coverage:
+    // it catches `catch {}` but NOT `catch (e) { logger.warn("failed") }`,
+    // which swallows just as completely while looking responsible. Failing
+    // hard with a stack trace is an error-handling helper's job, not a
+    // linter's. See STANDARDS-typescript.md "`catch {}` is the TypeScript
+    // `except: pass`".
+    "no-empty": ["error", { "allowEmptyCatch": false }],
+    "no-useless-catch": "error",
+
+    // Structured logs or nothing. console.log bypasses the correlation id, the
+    // level filter, and every sink, so the one line you most want during an
+    // incident is the one that is not in the file.
+    "no-console": "error",
+
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
+    "no-var": "error",
+    "prefer-const": "error",
+
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error"
+  },
+
+  "overrides": [
+    // The logging modules ARE the thing that wraps the console sink.
+    {
+      "files": ["src/logger.ts", "server/logging/logger.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Entry points report a fatal error when the logger may be what failed.
+    {
+      "files": ["src/index.ts", "server/main.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Scripts are CLIs and printing is their job -- this is the one exemption
+    // that is not an escape hatch. It accounts for 489 of the 493 no-console
+    // hits measured at landing; the remaining 4 are in src/ and are real.
+    // NOTE that only no-console is relaxed: scripts obey every size,
+    // complexity, depth, and typing rule exactly as src/ and server/ do.
+    {
+      "files": ["scripts/**/*.ts"],
+      "rules": { "no-console": "off" }
+    },
+    // Tests print diagnostics, and a test asserting a rejection must be able to
+    // construct a deliberately-wrong value.
+    //
+    // THE EXEMPLAR ALSO DISABLED max-lines-per-function AND no-explicit-any
+    // HERE. Both are deliberately NOT carried over (operator decision
+    // 2026-08-26: no safeguards that let the rules be skipped). The exemplar's
+    // argument -- that a `describe` block is a suite rather than a function and
+    // the linter cannot tell them apart -- is real, but the exemption is what
+    // allowed a 364-line test function in
+    // src/tools/__tests__/append-session-event.test.ts. Tests that sprawl that
+    // far are not testing a unit, and this repo's flake history (#614, #634,
+    // #702) is what that costs.
+    //
+    // Measured at landing: 2800 violations in test files, dominated by
+    // no-explicit-any (1275) and no-non-null-assertion (1024). Same
+    // staged-content rule applies -- paid per-file, as tests are touched.
+    {
+      "files": ["**/*.test.ts", "**/__tests__/**/*.ts"],
+      "rules": { "no-console": "off" }
+    }
+  ],
+
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    "coverage/**",
+    "data/**",
+    "out/**"
+  ]
+}
