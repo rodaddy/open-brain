@@ -1,7 +1,9 @@
 # server/ hardening ladder — L1 through L6
 
-**Status: WRITTEN 2026-08-26.** Ordering approved by the operator this session.
-Nothing below is started.
+**Status: L1 MERGED, L2 IN PROGRESS — 2026-08-26.** Ordering approved by the
+operator. L1 is on `origin/main`; L2's schema half (L2a) is on `origin/main`;
+L2b is open and gated by the lint-debt ruling in #780. L3 through L6 are not
+started.
 
 ## What this file is, and what it is NOT
 
@@ -42,6 +44,15 @@ Each rung is a precondition for the next, not a preference:
 L1 is first because it is the only rung that stops the problem GROWING while
 the other five are in progress.
 
+**Superseded in part, 2026-08-26 (issue #780).** L1 armed the gate, and the
+existing lint debt then blocked L2's own commits, so the operator ruled the
+debt is paid one file at a time rather than rung by rung: the files blocking L2
+go first, and for `server/tools/search-engine.ts` and
+`server/observability/langfuse-tracing.ts` that means their L4 split is pulled
+FORWARD into their lint lane rather than waiting for L4. The dependency
+direction above still holds; what changed is that L4's work on those two files
+arrives early because `max-lines` is one of their findings.
+
 ---
 
 ## L1 — Arm enforcement
@@ -49,20 +60,21 @@ the other five are in progress.
 **Deliverable.** `.oxlintrc.json` on `main`, pre-commit refusing staged content
 that violates it.
 
-**Status (2026-08-26).** `.oxlintrc.json` is committed on
-`chore/oxlint-enforcement` (`2a89cf2`, clean clone at
-`/Volumes/ThunderBolt/_tmp/open-brain/_scratch/clone-20260825`). The hook step
-it arms exists only on `sprint/standards-fmt` (`b2d4252`, on hold, never
-pushed); `origin/main`'s `_githooks/pre-commit` has no oxlint step at all. A
-probe with `any` and `console.log` committed clean against main's hook, which
-is why L1 is not done until config AND hook step land together.
+**Status: MERGED 2026-08-26.** PR #771 (`c73a7f7`) landed both halves together,
+which is what the rung required: `.oxlintrc.json` and the config-guarded
+staged-content oxlint step in `_githooks/pre-commit`, plus the repo-local
+`oxlint` dependency the hook invokes. The hook reads the INDEX copy of the
+config, so an unstaged edit cannot decide how strictly staged content is
+judged. Proven RED first by
+`scripts/done-means/750-precommit-lint-gate-fires.sh`: a deliberately
+violating file is REFUSED by the oxlint step by name, which is the bar this
+rung set — not "the hook ran".
 
-**Why it is first and cheap.** The hook step (`_githooks/pre-commit:221` at
-`b2d4252`) lints STAGED CONTENT and is config-guarded. Landing that file
-unchanged alongside the config is the wiring job: no new hook code. The
-sprint's own `.oxlintrc.json` (rule values copied from what the live code
-already did, plus test exemptions) is superseded by the strict one on
-`chore/oxlint-enforcement`.
+**Why it was first and cheap.** The hook step lints STAGED CONTENT and is
+config-guarded, so landing it alongside the config was a wiring job, not new
+hook code. The `sprint/standards-fmt` variant of `.oxlintrc.json` (rule values
+copied from what the live code already did, plus test exemptions) was
+superseded by the strict config that shipped in #771.
 
 Staged-content scope is what makes this affordable: the 529 production and 3112
 test violations are NOT a debt owed before the next commit. They are paid
@@ -89,8 +101,51 @@ constructs logger + pool + embedder client from the validated result, and hands
 them down. `process.env` appears in `server/config.ts` and nowhere else in
 `server/`.
 
-**The defect, stated exactly.** `server/config.ts` (253 code lines) is the
-schema half and it is good: `parseServerConfig` runs
+**Status: L2a MERGED, L2b BLOCKED — 2026-08-26.** The rung splits into a schema
+half and a rewiring half, and only the first has landed.
+
+L2a is merged as PR #778 (`49ecfbe`): every env var name read anywhere in
+non-test `server/` code — 23 of them — is now declared in the validated schema,
+with the fields the composition root does not yet inject living in
+`server/config/env-groups.ts` and spread into `environmentSchema`. The parsers
+there deliberately MIRROR their existing readers rather than tidying them,
+because tightening a fallback into a hard rejection would turn a currently
+booting deployment into a startup failure — a behavior change smuggled in under
+a typing change. Proven by
+`scripts/done-means/750-l2a-config-covers-every-env-read.sh`, which reads the
+schema literal only (not the whole file) so a name mentioned in a comment
+cannot satisfy it, and which fails if the scan collects fewer than 15 names so
+a broken scan cannot pass as a clean repo.
+
+L2a is the SCHEMA half only. Declaring the field is what makes rewiring a
+consumer mechanical instead of behavioral; the rewiring is L2b/L2c, and until
+then both the schema field and the original `process.env` reader exist on
+purpose. That is why the baseline's process.env count went UP, not down, when
+L2a landed.
+
+L2b-1a — injecting the first four tool-layer env values from validated config —
+is open as DRAFT PR #779, blocked by the lint gate L1 armed: the files it must
+touch carry pre-existing violations, so the gate refuses the commit.
+
+**The lint-debt ruling (operator, issue #780, 2026-08-26), verbatim:**
+
+> Pay the debt one file at a time, each file brought fully to standard and
+> passing before the next, lane after lane, until the whole app passes the
+> standards. Order: the files blocking L2 first (server/main.ts,
+> search-brain.ts, search-all.ts, search-engine.ts, langfuse-tracing.ts), then
+> every remaining server/ file with findings. Each lane: one file,
+> behavior-preserving, existing tests unmodified and green, done-means =
+> oxlint --deny-warnings on that file exits 0 (RED on main).
+
+142 findings across non-test `server/`, measured at `49ecfbe`; #780 carries the
+per-file checklist. Two of the five blocking files —
+`server/tools/search-engine.ts` (9 findings) and
+`server/observability/langfuse-tracing.ts` (8) — include `max-lines` among
+theirs, so **their L4 split is pulled forward into their lint lane**. They are
+split once, here, rather than lint-fixed now and split again at L4.
+
+**The defect, stated exactly.** `server/config.ts` (303 code lines as of
+`49ecfbe`; 253 before L2a) is the schema half and it is good: `parseServerConfig` runs
 `environmentSchema.safeParse()` and returns `{ok, config}` or structured issues.
 Pure, no side effects.
 
@@ -103,9 +158,12 @@ It does not. Nothing constructs the logger, pool, or embedder FROM it. So the
 validator sits beside an application that never asks it, which is exactly why
 files bypass it — nothing is downstream.
 
-**Scope, measured.** 11 files in `server/` read `process.env`. Two are
-legitimate (`server/config.ts` is the door; `server/main.ts` is where env
-enters the process). Eight are real bypasses:
+**Scope, measured at `49ecfbe`.** 12 non-test files in `server/` CONTAIN the
+string `process.env` (was 11 before L2a). Three are not bypasses:
+`server/config.ts` is the door, `server/main.ts` is where env enters the
+process, and `server/config/env-groups.ts` names it only in comments. Eight are
+real bypasses, unchanged by L2a because L2a typed them rather than rewiring
+them:
 
     server/tools/shared-namespace.ts      3
     server/tools/search-engine.ts         2
@@ -122,7 +180,11 @@ allowing it ONLY in `server/config.ts` and `server/main.ts`. That makes the rung
 self-defending: once at zero it cannot regress.
 
 **Done means.** `rg -c 'process\.env' server/ --type ts | rg -v '\.test\.ts:'`
-returns only those two files, AND the lint rule refuses a new one.
+returns only the door and the composition root as CODE readers, AND the lint
+rule refuses a new one. `server/config/env-groups.ts` will still appear in that
+command's output because it names the string in prose; `no-process-env` is what
+distinguishes a reader from a mention, which is why the rule — not the grep —
+is the real gate.
 
 **Charter authority.** `server/config/` owns all env parsing and startup
 validation; `server/application/` owns composition, startup and shutdown order
@@ -183,8 +245,17 @@ The sixth largest is 420 (`server/tools/source-registry.ts`), comfortably under.
 This is five specific files, not a pervasive condition — worth stating because
 "the code is too big" invites a rewrite when the answer is five splits.
 
-**Depends on L2 and L3** so each file is split once, against its final config
-and logging shape, rather than split and then re-touched.
+**Two of the five are pulled FORWARD (issue #780).**
+`server/observability/langfuse-tracing.ts` and `server/tools/search-engine.ts`
+carry `max-lines` among their lint findings and both block L2, so their split
+happens inside their per-file lint lane rather than waiting here. By the time
+this rung runs, expect its scope to be the remaining three.
+
+**Depends on L2 and L3** for the three that remain, so each is split once,
+against its final config and logging shape, rather than split and then
+re-touched. The two pulled forward accept that cost knowingly: they are split
+against a config and logging shape that L2b/L3 may still move, because the
+alternative is L2 staying blocked.
 
 **Split along the charter's boundaries, not by line count.** Tool adapters
 become thin: validate, authorize, call domain or repository, map response
@@ -274,8 +345,10 @@ the Mac's local clone is no longer required by anything, and `src/` is gone.
 Both items are closed. Kept so the next reader does not re-open them.
 
 **The open PRs are merged.** #767 → `5ebf407`, #766 → `64af1d6`, #768 →
-`0692b63`, #765 → `96978a8`. `origin/main` at `96978a8` is RUNNING on the local
-clone (`/health`: embedding true, db true).
+`0692b63`, #765 → `96978a8`. `origin/main` was at `96978a8` and RUNNING on the
+local clone (`/health`: embedding true, db true) when this was written. It has
+since moved to `49ecfbe` via #771 and #778; those two are MERGED, not verified
+running.
 
 **Open Brain capture works again.** The cause was not the SessionStart prose.
 From #678 (2026-08-09) `src/contract.ts` advertised `agent_context_pack` v2 in
