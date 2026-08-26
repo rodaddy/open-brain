@@ -86,3 +86,23 @@ only when a session actually needed it.
     `10.71.1.11:8080` and the local MLX unit are dead; point nothing at them.
     The ingress has shown ~1-minute `503 no available server` windows
     (rtech-infra#1110); the clone rides through them.
+19. Branch is not tree. `rg` for a symbol in a checkout answers for the branch
+    CHECKED OUT, not for `main`, and an empty result reads as "main lacks
+    this" when it means "this branch lacks it". Twice on 2026-08-25 that
+    produced a confident wrong claim that external-embedder support was
+    stranded on the deploy branch; it was already merged. Ask git, not the
+    filesystem: `git show origin/main:<path>`, and settle "is it merged" by
+    CONTENT (`git diff origin/main <ref> -- <paths>`, empty = identical), not
+    by `git cherry`, which compares patch-ids and marks a squash-merged
+    commit as unmerged.
+20. A required-config guard goes at the CALL site, never at module level. A
+    top-level `process.exit()` on missing env fires on IMPORT, so any test
+    that imports the module takes the whole suite down with it -- observed
+    2026-08-26 in `scripts/ob-backfill.ts`, suite exit 2, zero tests
+    meaningful. Resolve through a `requireX()` the caller invokes.
+21. The k3s Postgres is `10.71.20.167:5432` (CNPG cluster `general`, PG 18.4,
+    pgvector 0.8.6, database `open_brain`, credentials in Vaultwarden under
+    "PostgreSQL - general open_brain"). The Mac's kubeconfig for the cluster
+    is `~/.kube/config-rtech-k3s` -- the DEFAULT context is a dead
+    `docker-desktop` and will make every `kubectl` call fail; export
+    KUBECONFIG before probing.
