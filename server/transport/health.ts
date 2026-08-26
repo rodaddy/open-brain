@@ -162,7 +162,9 @@ const HTTP_NATS_HEALTH: TransportNatsHealth = {
   last_error: null,
 };
 
-async function probeEmbedding(input: SingleWorkerHealthInput): Promise<boolean> {
+async function probeEmbedding(
+  input: SingleWorkerHealthInput,
+): Promise<boolean> {
   if (!input.embeddingBaseUrl) return false;
   const headers = new Headers();
   if (input.embeddingApiKey) {
@@ -176,7 +178,10 @@ async function probeEmbedding(input: SingleWorkerHealthInput): Promise<boolean> 
     const connected = response.ok;
     await response.body?.cancel();
     if (!connected) {
-      input.logger.warn({ status: response.status }, "embedding_health_degraded");
+      input.logger.warn(
+        { status: response.status },
+        "embedding_health_degraded",
+      );
     }
     return connected;
   } catch (error: unknown) {
@@ -188,64 +193,55 @@ async function probeEmbedding(input: SingleWorkerHealthInput): Promise<boolean> 
   }
 }
 
-/** Probe one worker's owned dependencies without opening a listener. */
-export async function getSingleWorkerHealth(
-  input: SingleWorkerHealthInput,
-): Promise<SingleWorkerHealth> {
-  const [database, embeddingConnected] = await Promise.all([
-    input.databaseHealth(),
-    probeEmbedding(input),
-  ]);
-  const nats = input.natsHealth?.() ?? HTTP_NATS_HEALTH;
-  const natsDegraded =
-    nats.requested_transport === "nats" && nats.availability !== "available";
-  // #625: a quiet producer degrades this worker. A process that composes no
-  // producer supplies nothing here and is unaffected — absence is not staleness.
-  const producer = input.producerHealth?.();
-  const producerDegraded = producer?.stale === true;
-  // #647: a silent capture lane degrades this worker, on the same argument as
-  // the producer above. A process that composes no capture lane supplies
-  // nothing here and is unaffected — absence is not staleness.
-  const capture = input.captureHealth?.();
-  const captureDegraded = capture?.stale === true;
-  const status =
-    database.connected && !natsDegraded && !producerDegraded && !captureDegraded
-      ? "healthy"
-      : "degraded";
-  input.logger.info(
-    {
-      status,
-      database_connected: database.connected,
-      embedding_connected: embeddingConnected,
-      nats_availability: nats.availability,
-      // Emitted whenever a producer exists, not only when it is stale: the
-      // healthy reading is what makes a later stale one comparable, and a field
-      // that appears only on failure cannot be graphed.
-      ...(producer
-        ? {
-            maintenance_producer_stale: producer.stale ? 1 : 0,
-            maintenance_producer_quiet_ms: producer.quiet_ms,
-            maintenance_producer_overlapped_ticks: producer.overlapped_ticks,
-          }
-        : {}),
-      // Emitted whenever a capture lane exists, not only when it is stale, for
-      // the same reason as the producer block above: a field that appears only
-      // on failure cannot be graphed, and the healthy reading is what makes a
-      // later stale one comparable.
-      ...(capture
-        ? {
-            capture_stale: capture.stale ? 1 : 0,
-            capture_sessions_observed: capture.sessions_observed,
-            capture_turns_delivered: capture.turns_delivered,
-            capture_spool_pending: capture.spool_pending,
-            capture_silent_roles: capture.silent_roles.length,
-          }
-        : {}),
-    },
-    "worker_health_result",
-  );
-  if (producerDegraded) {
-    input.logger.warn(
+/**
+ * Log fields describing the maintenance producer, or none when a process
+ * composes no producer.
+ *
+ * Emitted whenever a producer exists, not only when it is stale: the healthy
+ * reading is what makes a later stale one comparable, and a field that appears
+ * only on failure cannot be graphed.
+ */
+function producerLogFields(
+  producer: TransportProducerHealth | undefined,
+): Record<string, number> {
+  if (!producer) return {};
+  return {
+    maintenance_producer_stale: producer.stale ? 1 : 0,
+    maintenance_producer_quiet_ms: producer.quiet_ms,
+    maintenance_producer_overlapped_ticks: producer.overlapped_ticks,
+  };
+}
+
+/**
+ * Log fields describing the capture lane, or none when a process composes no
+ * capture lane.
+ *
+ * Emitted whenever a capture lane exists, not only when it is stale, for the
+ * same reason as the producer block above: a field that appears only on
+ * failure cannot be graphed, and the healthy reading is what makes a later
+ * stale one comparable.
+ */
+function captureLogFields(
+  capture: TransportCaptureHealth | undefined,
+): Record<string, number> {
+  if (!capture) return {};
+  return {
+    capture_stale: capture.stale ? 1 : 0,
+    capture_sessions_observed: capture.sessions_observed,
+    capture_turns_delivered: capture.turns_delivered,
+    capture_spool_pending: capture.spool_pending,
+    capture_silent_roles: capture.silent_roles.length,
+  };
+}
+
+/** Warn once per degraded background lane, naming that lane's own counters. */
+function warnDegradedLanes(
+  logger: Logger,
+  producer: TransportProducerHealth | undefined,
+  capture: TransportCaptureHealth | undefined,
+): void {
+  if (producer?.stale === true) {
+    logger.warn(
       {
         quiet_ms: producer.quiet_ms,
         quiet_threshold_ms: producer.quiet_threshold_ms,
@@ -255,8 +251,8 @@ export async function getSingleWorkerHealth(
       "maintenance_producer_health_degraded",
     );
   }
-  if (captureDegraded) {
-    input.logger.warn(
+  if (capture?.stale === true) {
+    logger.warn(
       {
         reason: capture.reason,
         sessions_observed: capture.sessions_observed,
@@ -269,6 +265,68 @@ export async function getSingleWorkerHealth(
       "capture_lane_health_degraded",
     );
   }
+}
+
+/** The background lanes a worker may compose, read once per health probe. */
+interface WorkerLaneReadings {
+  readonly nats: TransportNatsHealth;
+  readonly producer: TransportProducerHealth | undefined;
+  readonly capture: TransportCaptureHealth | undefined;
+}
+
+/**
+ * Read each optional lane once.
+ *
+ * #625 and #647: a quiet producer or a silent capture lane degrades this
+ * worker. A process that composes neither supplies nothing here and is
+ * unaffected — absence is not staleness.
+ */
+function readWorkerLanes(input: SingleWorkerHealthInput): WorkerLaneReadings {
+  return {
+    nats: input.natsHealth?.() ?? HTTP_NATS_HEALTH,
+    producer: input.producerHealth?.(),
+    capture: input.captureHealth?.(),
+  };
+}
+
+/** "healthy" only while the database and every composed lane agree. */
+function resolveStatus(
+  database: DatabaseHealth,
+  lanes: WorkerLaneReadings,
+): "healthy" | "degraded" {
+  const natsDegraded =
+    lanes.nats.requested_transport === "nats" &&
+    lanes.nats.availability !== "available";
+  const healthy =
+    database.connected &&
+    !natsDegraded &&
+    lanes.producer?.stale !== true &&
+    lanes.capture?.stale !== true;
+  return healthy ? "healthy" : "degraded";
+}
+
+/** Probe one worker's owned dependencies without opening a listener. */
+export async function getSingleWorkerHealth(
+  input: SingleWorkerHealthInput,
+): Promise<SingleWorkerHealth> {
+  const [database, embeddingConnected] = await Promise.all([
+    input.databaseHealth(),
+    probeEmbedding(input),
+  ]);
+  const lanes = readWorkerLanes(input);
+  const status = resolveStatus(database, lanes);
+  input.logger.info(
+    {
+      status,
+      database_connected: database.connected,
+      embedding_connected: embeddingConnected,
+      nats_availability: lanes.nats.availability,
+      ...producerLogFields(lanes.producer),
+      ...captureLogFields(lanes.capture),
+    },
+    "worker_health_result",
+  );
+  warnDegradedLanes(input.logger, lanes.producer, lanes.capture);
   return {
     status,
     hostname: input.hostname,
@@ -280,9 +338,9 @@ export async function getSingleWorkerHealth(
       configured: Boolean(input.embeddingBaseUrl),
       connected: embeddingConnected,
     },
-    nats,
-    ...(producer ? { maintenance_producer: producer } : {}),
-    ...(capture ? { capture } : {}),
+    nats: lanes.nats,
+    ...(lanes.producer ? { maintenance_producer: lanes.producer } : {}),
+    ...(lanes.capture ? { capture: lanes.capture } : {}),
     timestamp: new Date().toISOString(),
   };
 }
