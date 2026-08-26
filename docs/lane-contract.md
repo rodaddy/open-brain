@@ -87,6 +87,38 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 36) — harvest of lane 1 of the #780 sweep (PR #782), the #779 review, and the session-2 collection pass
+
+- **A git pathspec `**` must consume a directory.** `git diff --name-only
+  origin/main...HEAD -- 'server/**/*.ts'` matches NOTHING for a file directly
+  under `server/`, so `server/main.ts` was silently excluded while
+  `server/db/pool.ts` would have matched; the command exits 0 and the list is
+  just short. The check's refusal of an empty file list is what caught it. A
+  diff-derived file list is filtered with an anchored `rg '^server/.*\.ts$'`
+  over the full diff, never a git glob pathspec
+  (`scripts/done-means/780-touched-files-lint-clean.sh`).
+- **A rewiring lane has two halves, and the done-means asserts ARRIVAL.** #779
+  made four tool readers take a parameter with `?? default` fallbacks and never
+  changed the composition root (`server/main.ts:168`), so tsc and an
+  absence-only check went green with nothing wired. The check registers the
+  tools with a non-default env value and reads it back; the old `process.env`
+  read being gone proves nothing on its own.
+- **Tooling:** the Codex companion (`codex:codex-rescue`) refuses a commit in
+  the clone ("Codex git guard: unable to verify the current branch") and hands
+  the Workflow "No output." with no receipt, so a write lane that must commit
+  routes to a native Opus 5 worker at low effort with that reason stated; Codex
+  Luna max stays the route for read-only lanes. `gh run rerun --failed` on a
+  run whose only red job is the runner-transcript test (#764) left the run
+  `queued` with no second attempt for 20+ minutes; `main` has no required
+  status checks (ruleset `main`: pull_request, linear history), so the merge
+  evidence is the green jobs on the SHA plus the #764 reference, not a re-run.
+  `gh pr close` then `gh pr reopen` fires the `pull_request` trigger for a
+  PR that never got a CI run. verify-lane leaves a `verify-lane/pr-N-*` branch
+  behind with its worktree; both go in the same session.
+- **The harvest gate reads the whole Bash line.** `gh pr comment ... &&
+  gh pr merge ...` is refused because the merge is present before the comment
+  has landed; the comment and the merge are two separate calls.
+
 ### 2026-08-26 (round 35) — harvest of the L2a config-schema lane (PR #778)
 
 - **A schema field that "mirrors" a reader is differenced against the reader

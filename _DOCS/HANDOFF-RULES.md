@@ -145,3 +145,27 @@ only when a session actually needed it.
     without checking for an existing helper has met the rule value and
     missed the spec. Decorators (logging, stack traces) are rung L3 of
     `_plans/server-hardening-ladder.md`, sequenced after L2, not the sweep.
+28. **Delegate by default; the head does not do the work.** Rule 1 is enforced,
+    not advice: every edit, test run, and probe that is not one exact lookup or
+    one deterministic command goes to a Workflow `agent()` lane with the
+    four-line brief (deliverable, scope, must-not, done). A head that has run
+    several file-editing tool calls in a row is off-contract; stop and cut
+    lanes. Failure with receipts is a valid lane outcome. A write lane that
+    must commit in the clone routes to native Opus 5 at low effort with the
+    reason stated (the Codex companion git guard refuses the commit there);
+    read-only lanes stay Luna max. (Rico, 2026-08-26: "less work yourself,
+    more agents.")
+29. **Declare graph mode before the first mutation.** At State 0 the head runs
+    `/opt/homebrew/opt/node@24/bin/node
+    /Volumes/ThunderBolt/Development/_ob/scripts/graph-mode-gate.ts --agent
+    claude --session-id <session> --cwd <repo> declare T1` (or the tier the
+    handoff names), and every lane carries a `scripts/done-means/` check seen
+    RED before GREEN; the checker declares done, never the lane. (Rico,
+    2026-08-26: "we should also be running everything in graph mode.")
+30. **A scribe runs from State 0.** Records land as work lands: an issue
+    comment per landed change, a `harvested:` or `No new lessons:` line per
+    PR, a new issue per gap, each at the moment it happens. After every merge
+    pass the `tracking-scribe` agent runs as a Workflow lane to mirror issues
+    and harvest lane reports into `docs/lane-contract.md`,
+    `docs/sme/entries/`, and `docs/issue-graph.md`. (Rico, 2026-08-26:
+    "making sure that you have a scribe running.")
