@@ -69,10 +69,20 @@ if [ -n "${DONE_MEANS_780_FILES:-}" ]; then
   targets=(${DONE_MEANS_780_FILES})
 else
   source_label="git diff --name-only origin/main...HEAD"
+  # FILTERED WITH rg, NOT WITH A GIT PATHSPEC. `-- 'server/**/*.ts'` looks
+  # correct and silently matches NOTHING for a file sitting directly in
+  # server/: git's default pathspec globbing requires `**` to consume at least
+  # one directory, so server/main.ts -- the exact file this lane changed -- was
+  # excluded while server/db/pool.ts would have matched. Measured on this
+  # branch: the pathspec form returned empty, `:(glob)server/**/*.ts` returned
+  # server/main.ts. That is the plausible-looking wrong answer the lane
+  # contract keeps recording (round 30's `rg -r`/`-E`/`--` family): the command
+  # exits 0 and the list is just quietly short. An anchored regex over the full
+  # diff has no such edge, and the empty-list guard below is what surfaced it.
   while IFS= read -r f; do
     [ -n "$f" ] && targets+=("$f")
-  done < <(git diff --name-only origin/main...HEAD -- 'server/**/*.ts' \
-    | rg -v '\.test\.ts$' || true)
+  done < <(git diff --name-only origin/main...HEAD \
+    | rg '^server/.*\.ts$' | rg -v '\.test\.ts$' || true)
 fi
 
 # Deleted or renamed-away paths are in the diff but not on disk. Lint what
