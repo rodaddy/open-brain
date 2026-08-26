@@ -17,7 +17,6 @@
  * and could return a DIFFERENT ranking, so pointers would dedupe against rows
  * durable_memory never saw.
  */
-import type { Logger } from "pino";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import { canRead } from "../auth/permissions.ts";
 import type { AgentContextPackArgs } from "./context-pack-args.ts";
@@ -26,9 +25,14 @@ import { ALL_TABLES } from "./search-constants.ts";
 import { executeSearch, type SearchRow } from "./search-engine.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import {
-  CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
+  type DurableFailureLogger,
+  asError,
   boundedText,
-} from "./context-pack-durable-lane.ts";
+  errorIdentityFields,
+  logDurableFailure,
+  pgDiagnosticFields,
+  resolveContentChars,
+} from "./context-pack-shared.ts";
 import {
   suppressReferencedRecords,
   type PriorContextReference,
@@ -78,38 +82,6 @@ export const DURABLE_MEMORY_BURST_ITEMS = 10;
  * pointer/dedupe contract, never a frozen top-N identity.
  */
 const DURABLE_MEMORY_POINTER_OVERFETCH = 20;
-
-/**
- * Resolve the durable-memory content char budget.
- *
- * An explicit whole-pack allocation wins; then an explicit `max_tokens`; and
- * absent BOTH, recall means total recall. This mirrors the durable-lane resolver
- * instead of applying an undeclared 4,000-token default — that default silently
- * imposed a ~14,800-char ceiling on a pack whose own contract says an absent
- * budget returns everything, so a large recall was truncated exactly where the
- * contract promised it would not be.
- */
-function resolveDurableMemoryContentChars(
-  args: AgentContextPackArgs,
-  contentCharLimit: number | undefined,
-): number {
-  if (contentCharLimit !== undefined) {
-    return Math.max(
-      0,
-      Math.min(DURABLE_MEMORY_MAX_CONTENT_CHARS, contentCharLimit),
-    );
-  }
-  if (args.budget?.max_tokens !== undefined) {
-    return Math.max(
-      0,
-      Math.min(
-        DURABLE_MEMORY_MAX_CONTENT_CHARS,
-        args.budget.max_tokens * 4 - CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
-      ),
-    );
-  }
-  return DURABLE_MEMORY_MAX_CONTENT_CHARS;
-}
 
 export type DurableMemoryContextFragment = {
   section?: Record<string, unknown>;
@@ -207,92 +179,82 @@ export function recordStructuralSourceRef(row: SearchRow): {
  * the citations are built from the same refs, so every emitted item is
  * independently resolvable back to its record.
  */
-export async function loadDurableMemoryContext(
-  args: AgentContextPackArgs,
-  auth: AuthIdentity,
-  namespace: string,
-  dependencies: MemoryToolDependencies,
-  contentCharLimit?: number,
-): Promise<DurableMemoryContextFragment> {
-  const maxContentChars = resolveDurableMemoryContentChars(
-    args,
-    contentCharLimit,
-  );
-  const query = args.query?.trim() ?? "";
+/** Everything the durable-memory recall path needs, in one object. */
+export type DurableMemoryContextRequest = {
+  args: AgentContextPackArgs;
+  auth: AuthIdentity;
+  namespace: string;
+  dependencies: MemoryToolDependencies;
+  contentCharLimit?: number;
+};
 
-  // Where in the ranked recall this reply's burst starts. A caller walking the
-  // corpus replays the same request carrying the handle the previous reply
-  // returned; absent one, the walk starts at the top of the ranking.
-  const burstOffset = Math.max(0, Math.trunc(args.continue_from?.offset ?? 0));
-
-  const emptyBudget = () => ({
+/** The allocation block every empty/degraded/denied fragment reports. */
+function emptyBudget(maxContentChars: number): Record<string, unknown> {
+  return {
     content_char_limit: maxContentChars,
     content_chars_used: 0,
     burst_items: DURABLE_MEMORY_BURST_ITEMS,
     max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
-  });
+  };
+}
 
-  const emptyFragment = (
-    section: Record<string, unknown>,
-    extra: Partial<DurableMemoryContextFragment> = {},
-  ): DurableMemoryContextFragment => ({
-    section,
+/** A fragment carrying a defined-but-empty section and nothing else. */
+function emptyFragment(options: {
+  section: Record<string, unknown>;
+  maxContentChars: number;
+  extra?: Partial<DurableMemoryContextFragment>;
+}): DurableMemoryContextFragment {
+  return {
+    section: options.section,
     scopeDenials: [],
     truncation: [],
     degradedSources: [],
-    budget: emptyBudget(),
+    budget: emptyBudget(options.maxContentChars),
     citations: [],
     pointerCandidatePool: [],
-    ...extra,
-  });
+    ...options.extra,
+  };
+}
 
-  // Recall requires a query. A defined empty section lets the caller tell
-  // "requested but no query" apart from "not requested".
-  if (query.length === 0) {
-    return emptyFragment({
-      label: "durable_memory",
-      namespace_scoped: true,
-      query: null,
-      empty_reason: "no_query",
-      items: [],
-      item_count: 0,
-      truncated: false,
-    });
-  }
+/** The common shape of every empty durable_memory section. */
+function emptySection(
+  query: string | null,
+  emptyReason: string,
+): Record<string, unknown> {
+  return {
+    label: "durable_memory",
+    namespace_scoped: true,
+    query,
+    empty_reason: emptyReason,
+    items: [],
+    item_count: 0,
+    truncated: false,
+  };
+}
 
-  const accessibleTables: ResourceTable[] = ALL_TABLES.filter((table) =>
-    canRead(auth.role, table),
-  );
-  if (accessibleTables.length === 0) {
-    return emptyFragment(
-      {
-        label: "durable_memory",
-        namespace_scoped: true,
-        query,
-        empty_reason: "no_readable_tables",
-        items: [],
-        item_count: 0,
-        truncated: false,
-      },
-      {
-        scopeDenials: [
-          { source: "durable_memory", reasons: ["no_readable_tables"] },
-        ],
-      },
-    );
-  }
-
-  // The auth-derived namespace predicate is the isolation boundary. An explicit
-  // namespace argument was already authorized by the caller before any query
-  // ran; otherwise fall back to the caller's own readable namespaces.
-  const namespaceFilter = args.namespace
-    ? namespaceFilterFor(auth, namespace)
-    : namespaceFilterFor(auth);
-
-  let rows: SearchRow[];
+/**
+ * Run the one retrieval call, or return the truthful empty envelope for a
+ * failure.
+ *
+ * Recall was explicitly requested and failed. A defined empty envelope (not an
+ * omitted section) lets the caller tell "requested, recall failed" apart from
+ * "not requested". The envelope and the warning stay content-free — no
+ * dependency or error detail leaks into either — but the reason is NOT thrown
+ * away: this catch used to swallow the error entirely, so a failed recall was
+ * indistinguishable from an empty one.
+ */
+async function recallRows(options: {
+  request: DurableMemoryContextRequest;
+  query: string;
+  accessibleTables: ResourceTable[];
+  namespaceFilter: string | string[] | undefined;
+  maxContentChars: number;
+}): Promise<{ rows: SearchRow[] } | { failure: DurableMemoryContextFragment }> {
+  const { request, query, accessibleTables, namespaceFilter, maxContentChars } =
+    options;
   try {
-    rows = await executeSearch(
-      dependencies,
+    const rows = await executeSearch(
+      request.dependencies,
       accessibleTables,
       query,
       // Everything the query matches, plus the pointer over-fetch. Retrieval is
@@ -310,76 +272,47 @@ export async function loadDurableMemoryContext(
       0,
       namespaceFilter,
     );
+    return { rows };
   } catch (error) {
-    // Recall was explicitly requested and failed. Return a truthful empty
-    // envelope (not an omitted section) so the caller can tell "requested,
-    // recall failed" apart from "not requested". The envelope and the warning
-    // stay content-free — no dependency or error detail leaks into either.
-    //
-    // But the reason is NOT thrown away. This catch used to swallow the error
-    // entirely, so a failed recall was indistinguishable from an empty one and
-    // the only evidence left was `empty_reason: "recall_failed"` with nothing to
-    // act on.
-    logRecallFailure(
-      dependencies.logger,
-      auth,
-      args,
+    logRecallFailure({
+      logger: request.dependencies.logger,
+      auth: request.auth,
+      args: request.args,
       query,
       accessibleTables,
       namespaceFilter,
       error,
-    );
-    return emptyFragment(
-      {
-        label: "durable_memory",
-        namespace_scoped: true,
-        query,
-        empty_reason: "recall_failed",
-        items: [],
-        item_count: 0,
-        truncated: false,
-      },
-      {
-        degradedSources: [
-          { source: "durable_memory", reason: "recall_failed" },
-        ],
-      },
-    );
+    });
+    return {
+      failure: emptyFragment({
+        section: emptySection(query, "recall_failed"),
+        maxContentChars,
+        extra: {
+          degradedSources: [
+            { source: "durable_memory", reason: "recall_failed" },
+          ],
+        },
+      }),
+    };
   }
+}
 
-  // Prior-context suppression (#333) runs BEFORE the char budget selects and
-  // bounds bodies, so the surviving relevance order, item selection, citations,
-  // and budget accounting all reconcile against net-new results only. Budgeting
-  // first would spend the allocation on records about to be dropped.
-  const priorContext = (args.prior_context ??
-    []) as ReadonlyArray<PriorContextReference>;
-  const suppression = suppressReferencedRecords(
-    rows,
-    (row) => ({
-      citation_id: recordCitationId(row),
-      source_ref: recordSourceRef(row),
-    }),
-    priorContext,
-  );
-  const netNewRows = suppression.kept;
+type BurstItems = {
+  items: Array<Record<string, unknown>>;
+  citations: Array<Record<string, unknown>>;
+  remainingChars: number;
+  itemsTruncated: boolean;
+};
 
-  let remainingChars = maxContentChars;
+/** Shape one burst of ranked net-new rows into emitted items and citations. */
+function buildBurstItems(
+  burstRows: readonly SearchRow[],
+  startingChars: number,
+): BurstItems {
   const items: Array<Record<string, unknown>> = [];
   const citations: Array<Record<string, unknown>> = [];
+  let remainingChars = startingChars;
   let itemsTruncated = false;
-  const pointerCandidatePool: SearchRow[] = [...netNewRows];
-
-  // The burst window: the slice of the ranked net-new recall THIS reply
-  // delivers (#563). Rows before it were delivered by an earlier burst in the
-  // walk; rows after it are delivered by a later one and stay pointer-eligible
-  // meanwhile. Every row is in exactly one burst, so a full walk reconstructs
-  // the complete recalled set — this re-shapes delivery, it does not discard.
-  const burstRows = netNewRows.slice(
-    burstOffset,
-    burstOffset + DURABLE_MEMORY_BURST_ITEMS,
-  );
-  const burstEnd = burstOffset + burstRows.length;
-  const moreAfterBurst = netNewRows.length > burstEnd;
 
   for (const row of burstRows) {
     const bounded = boundedText(
@@ -387,20 +320,21 @@ export async function loadDurableMemoryContext(
       Math.min(DURABLE_MEMORY_MAX_ITEM_CHARS, remainingChars),
     );
     if (!bounded.text) {
+      // A non-empty body the char allocation could not admit IS a genuine
+      // durable drop. The row keeps a valid identity and stays
+      // pointer-eligible.
       if (
         typeof row.content_preview === "string" &&
         row.content_preview.length > 0
       ) {
-        // A non-empty body the char budget could not admit IS a genuine durable
-        // truncation. The row keeps a valid identity and stays pointer-eligible.
         itemsTruncated = true;
       }
       continue;
     }
     const citationId = recordCitationId(row);
-    // Build the bounded source_ref ONCE and attach the SAME object to both the
-    // item and its citation, so an item is independently resolvable without a
-    // citation lookup and the two can never drift through a partial trim.
+    // Build the source_ref ONCE and attach the SAME object to both the item and
+    // its citation, so an item is independently resolvable without a citation
+    // lookup and the two can never drift through a partial trim.
     const sourceRef = recordSourceRef(row);
     items.push({
       id: row.id,
@@ -413,59 +347,243 @@ export async function loadDurableMemoryContext(
       citation_id: citationId,
       source_ref: sourceRef,
     });
-    citations.push({ id: citationId, kind: "brain_record", source_ref: sourceRef });
+    citations.push({
+      id: citationId,
+      kind: "brain_record",
+      source_ref: sourceRef,
+    });
     remainingChars -= bounded.text.length;
     if (bounded.truncated) itemsTruncated = true;
   }
 
-  // When net-new records survived suppression but NONE produced an emittable
-  // body, durable_memory reports zero items with a truncated empty state: the
-  // diverted rows still resurface as pointers, but the durable section says
-  // truthfully that it emitted no content for a net-new match.
-  // Scoped to the burst window: a later burst that is legitimately empty
-  // because the walk has run past the end of the recall must not be reported as
-  // unemittable content.
-  if (
-    items.length === 0 &&
-    burstRows.length > 0 &&
-    suppression.suppression.net_new > 0
-  ) {
-    itemsTruncated = true;
-  }
+  return { items, citations, remainingChars, itemsTruncated };
+}
 
-  const truncation: Array<Record<string, unknown>> = [];
-  if (itemsTruncated) {
-    truncation.push({
+/**
+ * The burst window: the slice of the ranked net-new recall THIS reply delivers
+ * (#563).
+ *
+ * Rows before it were delivered by an earlier burst in the walk; rows after it
+ * are delivered by a later one and stay pointer-eligible meanwhile. Every row
+ * is in exactly one burst, so a full walk reconstructs the complete recalled
+ * set — this re-shapes delivery, it does not discard. A caller walking the
+ * corpus replays the same request carrying the handle the previous reply
+ * returned; absent one, the walk starts at the top of the ranking.
+ */
+function burstWindow(
+  netNewRows: readonly SearchRow[],
+  requestedOffset: number | undefined,
+): {
+  burstOffset: number;
+  burstRows: SearchRow[];
+  burstEnd: number;
+  moreAfterBurst: boolean;
+} {
+  const burstOffset = Math.max(0, Math.trunc(requestedOffset ?? 0));
+  const burstRows = netNewRows.slice(
+    burstOffset,
+    burstOffset + DURABLE_MEMORY_BURST_ITEMS,
+  );
+  const burstEnd = burstOffset + burstRows.length;
+  return {
+    burstOffset,
+    burstRows,
+    burstEnd,
+    moreAfterBurst: netNewRows.length > burstEnd,
+  };
+}
+
+/**
+ * What this burst could not emit, if anything.
+ *
+ * When net-new records survived suppression but NONE produced an emittable
+ * body, durable_memory reports zero items with a truncated empty state: the
+ * diverted rows still resurface as pointers, but the durable section says
+ * truthfully that it emitted no content for a net-new match. Scoped to the
+ * burst window: a later burst that is legitimately empty because the walk has
+ * run past the end of the recall must not be reported as unemittable content.
+ */
+function memoryTruncationEntries(options: {
+  burst: BurstItems;
+  burstRowCount: number;
+  netNew: number;
+  maxContentChars: number;
+}): Array<Record<string, unknown>> {
+  const { burst, burstRowCount, netNew, maxContentChars } = options;
+  const unemittableNetNew =
+    burst.items.length === 0 && burstRowCount > 0 && netNew > 0;
+  if (!burst.itemsTruncated && !unemittableNetNew) return [];
+  return [
+    {
       source: "durable_memory.items",
       burst_items: DURABLE_MEMORY_BURST_ITEMS,
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
       content_char_limit: maxContentChars,
-    });
+    },
+  ];
+}
+
+/**
+ * Which of the four genuine zero-item causes applies, or `undefined` when items
+ * were emitted.
+ *
+ * The order is the only one that reads correctly.
+ *   - walk_complete: the caller walked past the end of the recall, so this
+ *     reply is empty for the one benign reason — everything was already
+ *     delivered. Checked FIRST because it is a property of the WALK, not of the
+ *     records; reporting it as no_matches would tell a caller who now holds the
+ *     whole corpus that nothing matched.
+ *   - content_unavailable: net-new records survived but none had an emittable
+ *     body (null/empty preview, or the allocation admitted none). Checked
+ *     before no_matches so a net-new-but-unemittable section can never be
+ *     mislabeled.
+ *   - all_suppressed: recall returned rows and suppression removed every one.
+ *   - no_matches: recall genuinely found nothing.
+ */
+function resolveEmptyReason(options: {
+  itemCount: number;
+  burstRowCount: number;
+  burstOffset: number;
+  netNew: number;
+  suppressed: number;
+  recalledRowCount: number;
+}): string | undefined {
+  const {
+    itemCount,
+    burstRowCount,
+    burstOffset,
+    netNew,
+    suppressed,
+    recalledRowCount,
+  } = options;
+  if (itemCount > 0) return undefined;
+  if (burstRowCount === 0 && burstOffset > 0) return "walk_complete";
+  if (netNew > 0) return "content_unavailable";
+  if (recalledRowCount > 0 && suppressed === recalledRowCount) {
+    return "all_suppressed";
+  }
+  return "no_matches";
+}
+
+/**
+ * Validate the request and resolve the namespace predicate, or return the
+ * defined-empty fragment that answers it.
+ */
+function prepareRecall(
+  request: DurableMemoryContextRequest,
+  query: string,
+  maxContentChars: number,
+):
+  | {
+      accessibleTables: ResourceTable[];
+      namespaceFilter: string | string[] | undefined;
+    }
+  | { fragment: DurableMemoryContextFragment } {
+  // Recall requires a query. A defined empty section lets the caller tell
+  // "requested but no query" apart from "not requested".
+  if (query.length === 0) {
+    return {
+      fragment: emptyFragment({
+        section: emptySection(null, "no_query"),
+        maxContentChars,
+      }),
+    };
   }
 
-  // Three genuine zero-item causes, distinguished in the only order that reads
-  // correctly. `net_new` is checked FIRST so a net-new-but-unemittable section
-  // can never be mislabeled `no_matches`:
-  //   - content_unavailable: net-new records survived but none had an emittable
-  //     body (null/empty preview, or the budget admitted none).
-  //   - all_suppressed: recall returned rows and suppression removed every one.
-  //   - no_matches: recall genuinely found nothing.
-  // `walk_complete` is the fourth genuine zero-item cause, introduced with the
-  // burst shape (#563): the caller walked past the end of the recall, so this
-  // reply is empty for the one benign reason — everything was already
-  // delivered. Checked FIRST because it is a property of the WALK, not of the
-  // records; reporting it as no_matches would tell a caller who now holds the
-  // whole corpus that nothing matched.
-  const emptyReason =
-    items.length === 0
-      ? burstRows.length === 0 && burstOffset > 0
-        ? "walk_complete"
-        : suppression.suppression.net_new > 0
-          ? "content_unavailable"
-          : rows.length > 0 && suppression.suppression.suppressed === rows.length
-            ? "all_suppressed"
-            : "no_matches"
-      : undefined;
+  const accessibleTables: ResourceTable[] = ALL_TABLES.filter((table) =>
+    canRead(request.auth.role, table),
+  );
+  if (accessibleTables.length === 0) {
+    return {
+      fragment: emptyFragment({
+        section: emptySection(query, "no_readable_tables"),
+        maxContentChars,
+        extra: {
+          scopeDenials: [
+            { source: "durable_memory", reasons: ["no_readable_tables"] },
+          ],
+        },
+      }),
+    };
+  }
+
+  // The auth-derived namespace predicate is the isolation boundary. An explicit
+  // namespace argument was already authorized by the caller before any query
+  // ran; otherwise fall back to the caller's own readable namespaces.
+  const namespaceFilter = request.args.namespace
+    ? namespaceFilterFor(request.auth, request.namespace)
+    : namespaceFilterFor(request.auth);
+
+  return { accessibleTables, namespaceFilter };
+}
+
+export async function loadDurableMemoryContext(
+  args: AgentContextPackArgs,
+  auth: AuthIdentity,
+  namespace: string,
+  dependencies: MemoryToolDependencies,
+  contentCharLimit?: number,
+): Promise<DurableMemoryContextFragment> {
+  const request: DurableMemoryContextRequest = {
+    args,
+    auth,
+    namespace,
+    dependencies,
+    contentCharLimit,
+  };
+  const maxContentChars = resolveContentChars(
+    args,
+    contentCharLimit,
+    DURABLE_MEMORY_MAX_CONTENT_CHARS,
+  );
+  const query = args.query?.trim() ?? "";
+
+  const prepared = prepareRecall(request, query, maxContentChars);
+  if ("fragment" in prepared) return prepared.fragment;
+
+  const recalled = await recallRows({
+    request,
+    query,
+    accessibleTables: prepared.accessibleTables,
+    namespaceFilter: prepared.namespaceFilter,
+    maxContentChars,
+  });
+  if ("failure" in recalled) return recalled.failure;
+  const rows = recalled.rows;
+
+  // Prior-context suppression (#333) runs BEFORE the char allocation selects and
+  // shapes bodies, so the surviving relevance order, item selection, citations,
+  // and accounting all reconcile against net-new results only. Allocating first
+  // would spend it on records about to be dropped.
+  const priorContext = (args.prior_context ??
+    []) as ReadonlyArray<PriorContextReference>;
+  const suppression = suppressReferencedRecords(
+    rows,
+    (row) => ({
+      citation_id: recordCitationId(row),
+      source_ref: recordSourceRef(row),
+    }),
+    priorContext,
+  );
+  const netNewRows = suppression.kept;
+
+  const window = burstWindow(netNewRows, args.continue_from?.offset);
+  const burst = buildBurstItems(window.burstRows, maxContentChars);
+  const truncation = memoryTruncationEntries({
+    burst,
+    burstRowCount: window.burstRows.length,
+    netNew: suppression.suppression.net_new,
+    maxContentChars,
+  });
+
+  const emptyReason = resolveEmptyReason({
+    itemCount: burst.items.length,
+    burstRowCount: window.burstRows.length,
+    burstOffset: window.burstOffset,
+    netNew: suppression.suppression.net_new,
+    suppressed: suppression.suppression.suppressed,
+    recalledRowCount: rows.length,
+  });
 
   return {
     section: {
@@ -473,8 +591,8 @@ export async function loadDurableMemoryContext(
       namespace_scoped: true,
       query,
       ...(emptyReason ? { empty_reason: emptyReason } : {}),
-      items,
-      item_count: items.length,
+      items: burst.items,
+      item_count: burst.items.length,
       truncated: truncation.length > 0,
       // How to ask for the next burst of this walk (#563). Present ONLY while
       // records remain undelivered, so a caller walks until it disappears and a
@@ -483,10 +601,15 @@ export async function loadDurableMemoryContext(
       // separate `complete` flag is emitted: one fact, one field, and no way
       // for the two to disagree. The burst size and the delivery position live
       // in `budget` (below) rather than being restated here — a tight
-      // whole-pack budget must spend its bytes on records, not on an envelope
-      // describing itself.
-      ...(moreAfterBurst
-        ? { next: { offset: burstEnd, delivered_through: burstEnd } }
+      // whole-pack allocation must spend its bytes on records, not on an
+      // envelope describing itself.
+      ...(window.moreAfterBurst
+        ? {
+            next: {
+              offset: window.burstEnd,
+              delivered_through: window.burstEnd,
+            },
+          }
         : {}),
       // Content-free suppression counters (#333): counts only, never an id, a
       // reference, or a body.
@@ -494,7 +617,7 @@ export async function loadDurableMemoryContext(
         recalled: suppression.suppression.recalled,
         suppressed: suppression.suppression.suppressed,
         net_new: suppression.suppression.net_new,
-        emitted: items.length,
+        emitted: burst.items.length,
       },
     },
     scopeDenials: [],
@@ -502,19 +625,20 @@ export async function loadDurableMemoryContext(
     degradedSources: [],
     budget: {
       content_char_limit: maxContentChars,
-      content_chars_used: maxContentChars - remainingChars,
+      content_chars_used: maxContentChars - burst.remainingChars,
       burst_items: DURABLE_MEMORY_BURST_ITEMS,
-      burst_offset: burstOffset,
+      burst_offset: window.burstOffset,
       recalled_net_new: netNewRows.length,
       max_item_chars: DURABLE_MEMORY_MAX_ITEM_CHARS,
     },
-    citations,
-    pointerCandidatePool,
+    citations: burst.citations,
+    pointerCandidatePool: [...netNewRows],
   };
 }
 
 /**
- * Fail loudly in the log, stay content-free in the envelope.
+ * Fail loudly in the log, stay content-free in the envelope. See
+ * {@link logDurableFailure} for the two-line shape.
  *
  * The raw recall `query` is deliberately NOT logged. It is arbitrary caller
  * content — a private name, incident text, anything someone searched for — that
@@ -522,26 +646,33 @@ export async function loadDurableMemoryContext(
  * credential. `query_chars` keeps the one diagnostic that matters (an empty or
  * pathological query) without writing the body.
  */
-function logRecallFailure(
-  logger: Logger,
-  auth: AuthIdentity,
-  args: AgentContextPackArgs,
-  query: string,
-  accessibleTables: readonly ResourceTable[],
-  namespaceFilter: string | string[] | undefined,
-  error: unknown,
-): void {
-  const err = error instanceof Error ? error : undefined;
-  logger.error(
-    {
+function logRecallFailure(options: {
+  logger: DurableFailureLogger;
+  auth: AuthIdentity;
+  args: AgentContextPackArgs;
+  query: string;
+  accessibleTables: readonly ResourceTable[];
+  namespaceFilter: string | string[] | undefined;
+  error: unknown;
+}): void {
+  const {
+    logger,
+    auth,
+    args,
+    query,
+    accessibleTables,
+    namespaceFilter,
+    error,
+  } = options;
+  logDurableFailure({
+    logger,
+    event: "durable_memory_recall_failed",
+    error,
+    errorFields: {
       client_id: auth.clientId,
-      error_name: err?.name ?? typeof error,
-      error_message: err?.message ?? String(error),
+      ...errorIdentityFields(error),
     },
-    "durable_memory_recall_failed",
-  );
-  logger.debug(
-    {
+    detailFields: {
       client_id: auth.clientId,
       role: auth.role,
       agent: args.agent,
@@ -554,13 +685,9 @@ function logRecallFailure(
       namespace_filter: namespaceFilter,
       requested_max_tokens: args.budget?.max_tokens ?? null,
       pointer_overfetch: DURABLE_MEMORY_POINTER_OVERFETCH,
-      error_name: err?.name ?? typeof error,
-      error_message: err?.message ?? String(error),
-      pg_code: (error as { code?: unknown })?.code ?? null,
-      pg_detail: (error as { detail?: unknown })?.detail ?? null,
-      pg_hint: (error as { hint?: unknown })?.hint ?? null,
-      stack: err?.stack ?? null,
+      ...errorIdentityFields(error),
+      ...pgDiagnosticFields(error, ["code", "detail", "hint"]),
+      stack: asError(error)?.stack ?? null,
     },
-    "durable_memory_recall_failed_detail",
-  );
+  });
 }
