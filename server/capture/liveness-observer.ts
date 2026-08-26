@@ -176,6 +176,96 @@ interface RoleCountRow {
 }
 
 /**
+ * The four per-signal classifications, decided once and read by both the fault
+ * sentences and the published block.
+ *
+ * Split out so each signal is named where it is decided rather than inline in
+ * one judge: the predicates, their `active` gating, and the sentences they
+ * produce are the part a future reader has to check against the Python twin,
+ * and they are easier to check when each carries its own name.
+ */
+interface CaptureFaultSignals {
+  readonly watermarkWedged: boolean;
+  readonly spoolUnannounced: boolean;
+  readonly silentRoles: readonly string[];
+  readonly quarantined: number | undefined;
+}
+
+/**
+ * Roles that delivered nothing while the lane was above quorum.
+ *
+ * Below quorum this is empty rather than "every role": a quiet night is not a
+ * dead speaker, and `MIN_SESSIONS_FOR_SILENCE` is the boundary that says so.
+ */
+function classifySilentRoles(
+  observation: CaptureObservation,
+  active: boolean,
+): string[] {
+  if (!active) return [];
+  return Object.entries(observation.turnsByRole)
+    .filter(([, turns]) => turns === 0)
+    .map(([role]) => role)
+    .sort();
+}
+
+/**
+ * Decide every signal from the counts, with the quorum gating each one carries.
+ *
+ * ABANDONED RECORDS ARE A FAULT WHENEVER THEY EXIST (#680), with no `active`
+ * guard. The other faults ask "is the lane working right now?", so they are
+ * meaningless below quorum — a quiet night is not a dead lane. This one is not
+ * a liveness question at all: it is a report that data is already gone and
+ * stays gone until a human acts. A quarantine count is equally true on a busy
+ * Tuesday and an idle Sunday, so gating it on sessions observed would hide
+ * exactly the deployment that stopped capturing BECAUSE its records were being
+ * abandoned.
+ */
+function classifyCaptureFaults(
+  observation: CaptureObservation,
+): CaptureFaultSignals {
+  const active = observation.sessionsObserved >= MIN_SESSIONS_FOR_SILENCE;
+  return {
+    watermarkWedged: active && observation.watermarkBytesAdvanced === 0,
+    spoolUnannounced:
+      observation.spoolPending > 0 && observation.outageAnnouncements === 0,
+    silentRoles: classifySilentRoles(observation, active),
+    quarantined: observation.spoolQuarantined,
+  };
+}
+
+/**
+ * Render the operator-facing sentence for each raised signal, in the order the
+ * reading has always published them. Order is part of the contract: `reason` is
+ * a joined string a human reads, so reordering it is a behavior change.
+ */
+function describeCaptureFaults(
+  observation: CaptureObservation,
+  signals: CaptureFaultSignals,
+): string[] {
+  const faults: string[] = [];
+  if (signals.watermarkWedged) {
+    faults.push(
+      `watermark advanced 0 bytes across ${observation.sessionsObserved} session(s)`,
+    );
+  }
+  if (signals.spoolUnannounced) {
+    faults.push(
+      `spool holds ${observation.spoolPending} record(s) with no outage announced`,
+    );
+  }
+  const quarantined = signals.quarantined;
+  if (quarantined !== undefined && quarantined > 0) {
+    faults.push(
+      `${String(quarantined)} unit(s) quarantined — replay gave up, records are lost until an operator replays the sidecar`,
+    );
+  }
+  if (signals.silentRoles.length > 0) {
+    faults.push(`role(s) delivered nothing: ${signals.silentRoles.join(", ")}`);
+  }
+  return faults;
+}
+
+/**
  * Judge one observation. The TypeScript twin of `read_capture_liveness`.
  *
  * Kept as a pure function over counts for the reason the Python module's
@@ -193,48 +283,11 @@ export function readCaptureLiveness(
     (total, turns) => total + turns,
     0,
   );
-  const active = observation.sessionsObserved >= MIN_SESSIONS_FOR_SILENCE;
 
-  const watermarkWedged = active && observation.watermarkBytesAdvanced === 0;
-  const spoolUnannounced =
-    observation.spoolPending > 0 && observation.outageAnnouncements === 0;
-  const silentRoles = active
-    ? Object.entries(observation.turnsByRole)
-        .filter(([, turns]) => turns === 0)
-        .map(([role]) => role)
-        .sort()
-    : [];
-
-  // ABANDONED RECORDS ARE A FAULT WHENEVER THEY EXIST (#680), with no
-  // `active` guard. The other faults ask "is the lane working right now?", so
-  // they are meaningless below quorum — a quiet night is not a dead lane.
-  // This one is not a liveness question at all: it is a report that data is
-  // already gone and stays gone until a human acts. A quarantine count is
-  // equally true on a busy Tuesday and an idle Sunday, so gating it on
-  // sessions observed would hide exactly the deployment that stopped
-  // capturing BECAUSE its records were being abandoned.
-  const quarantined = observation.spoolQuarantined;
-  const quarantineFault = quarantined !== undefined && quarantined > 0;
-
-  const faults: string[] = [];
-  if (watermarkWedged) {
-    faults.push(
-      `watermark advanced 0 bytes across ${observation.sessionsObserved} session(s)`,
-    );
-  }
-  if (spoolUnannounced) {
-    faults.push(
-      `spool holds ${observation.spoolPending} record(s) with no outage announced`,
-    );
-  }
-  if (quarantineFault) {
-    faults.push(
-      `${String(quarantined)} unit(s) quarantined — replay gave up, records are lost until an operator replays the sidecar`,
-    );
-  }
-  if (silentRoles.length > 0) {
-    faults.push(`role(s) delivered nothing: ${silentRoles.join(", ")}`);
-  }
+  const signals = classifyCaptureFaults(observation);
+  const { watermarkWedged, spoolUnannounced, silentRoles, quarantined } =
+    signals;
+  const faults = describeCaptureFaults(observation, signals);
 
   return {
     stale: faults.length > 0,
@@ -319,7 +372,8 @@ async function gather(
     turnsByRole[row.role] = turns;
     turnsDelivered += turns;
     sessionsObserved = Math.max(sessionsObserved, Number(row.sessions));
-    const since = row.seconds_since_last === null ? 0 : Number(row.seconds_since_last);
+    const since =
+      row.seconds_since_last === null ? 0 : Number(row.seconds_since_last);
     silenceSeconds = Math.max(silenceSeconds, 0);
     if (silenceSeconds === 0 || since < silenceSeconds) silenceSeconds = since;
   }
@@ -353,7 +407,10 @@ async function gather(
  */
 export function createCaptureLivenessObserver(
   input: CaptureObserverInput,
-  options: { readonly refreshIntervalMs?: number; readonly autoStart?: boolean } = {},
+  options: {
+    readonly refreshIntervalMs?: number;
+    readonly autoStart?: boolean;
+  } = {},
 ): CaptureLivenessObserver {
   let latest: TransportCaptureHealth | undefined;
   let latestObservation: CaptureObservation | undefined;
@@ -401,9 +458,11 @@ export function createCaptureLivenessObserver(
 }
 
 /** Env var naming the tenant whose capture lane this process reports on. */
-export const CAPTURE_HEALTH_NAMESPACE_ENV = "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE";
+export const CAPTURE_HEALTH_NAMESPACE_ENV =
+  "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE";
 /** Env var overriding the observation window, in minutes. */
-export const CAPTURE_HEALTH_WINDOW_ENV = "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES";
+export const CAPTURE_HEALTH_WINDOW_ENV =
+  "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES";
 /** Env var overriding the refresh cadence, in milliseconds. */
 export const CAPTURE_HEALTH_REFRESH_ENV = "OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS";
 
