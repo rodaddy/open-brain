@@ -87,6 +87,158 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-26 (round 38) — harvest of the #780 wave 2 file lanes (PRs #797-#814)
+
+- **A reuse candidate is only reuse when its defaults AND its failure shape
+  match field for field.** `normalizeSearchArgs` and `respondToSearchFailure`
+  both looked like the obvious extraction target and both would have moved
+  behavior silently — a different default result count (10 vs 50), and a bare
+  driver message where the caller emits a prefixed one. Diff what the helper
+  emits, not what it is named. (PR #800)
+- **Split an authorize step so it returns a union of success-shape or
+  error-result and narrow it with a type predicate.** `tsc` then refuses the
+  forgot-to-check path at compile time; an early-return-only split leaves that
+  safety to reviewer attention. (PR #802)
+- **A helper that does strictly MORE is a behavior change wearing a
+  refactor's clothes.** `memory-helpers.authorize` fit the permission checks in
+  `tier-mutations.ts` by shape, but it resolves and checks a caller-supplied
+  namespace none of those four tools accepts. On a behavior-preserving sweep,
+  read the candidate's full body first: the reuse test is identical semantics,
+  not similar shape. (PR #803)
+- **Two namespace-predicate helpers can emit different SQL.**
+  `read-scope.ts`'s `appendReadNamespacePredicate` takes a caller-named column
+  plus a legacy-shared-fallback option; `namespace-policy.ts`'s
+  `namespacePredicate` does not. Substituting one for the other inside a
+  no-behavior-change lane changes the query. Read the emitted output, not the
+  signature. (PR #804)
+- **A `max-depth` finding inside a filter-then-emit loop means the row-admission
+  DECISION and the row EMISSION are tangled; lift the decision into a named
+  predicate rather than re-indenting.** The trap: the original marked a scope
+  key as seen BEFORE testing the item count, so a deduped-then-refused row still
+  consumes its key. Extracting the predicate makes it easy to move that `add`
+  after the count test unnoticed, which changes which items survive once a
+  maximum applies. Diff the ORDER of side effects against the guards, not just
+  the guards. (PR #805)
+- **Before changing a shared signature, lint the callers at `origin/main`
+  first.** The check's file list is derived from the branch diff, so touching a
+  dirty caller imports its findings into this lane —
+  `loadDurableMemoryContext`'s five-parameter finding was fixable only by
+  editing a caller already carrying three findings of its own (complexity 129
+  across 535 lines) on untouched `main`. If a caller is dirty the signature
+  belongs to whichever lane owns it: leave it, say so in the PR, and let
+  done-means stay honestly red on the one item rather than reach for a disable
+  comment or a silent revert. (PR #806)
+- **An over-complex function is usually held together by its mutable locals,
+  not by its length — name the shared state as one object before extracting.**
+  `buildAgentContextPackPayload` scored 129 because three locals were read and
+  written by nine sections in sequence; introducing `PackAllocator` first made
+  each section a one-argument function and took the file 729 → 425 code lines
+  with no helper over four parameters. Recorded as
+  `docs/sme/entries/2026-08-26-an-over-complex-function-is-usually-held-together-by-mutable-locals-not-by-length.md`
+  (lane: quality). Second lesson in the same entry: the extraction rewrote one
+  boolean predicate into a non-equivalent nested conditional and the 218-test
+  suite stayed green — a refactor claimed behavior-free is verified by reading
+  each extraction back against its original, not only by a green run. (PR #806)
+- **When a split leaves one helper still over the complexity rule value, the
+  leftover is usually a single composite decision, not size.**
+  `storedCitationResult` sat at 13 because the `expandable` disjunction was
+  inlined in the payload literal; extracting that one predicate cleared it.
+  Reach for the decision, not another arbitrary slice of the body. (PR #809)
+- **A near-identical sibling classifier can emit different label strings for the
+  same class.** `src/source-sync.ts`'s SQLSTATE-class table looks like an exact
+  fit for the one in `server/tools/conversation-facts-contract.ts`, but emits
+  `connection_error` where the contract publishes `connection_exception`;
+  importing it would have changed the error classes callers see. The reusable
+  thing was the PATTERN (switch → frozen lookup table), not the table. (PR #810)
+- **When a refactor splits a builder that assembles SQL with positional
+  placeholders, the parameter array is the invariant, not the SET list.** The
+  file numbered each placeholder from `params.length` immediately after pushing,
+  and appended the WHERE id param last. Splitting is safe only while every
+  helper mutates the one shared array in the original order; returning
+  per-helper arrays and concatenating renumbers placeholders silently, and both
+  the typechecker and a schema-level test stay green because the SQL is still
+  valid and the arity still matches. The catching check is reading the emitted
+  SQL and param order against the pre-change file. (PR #811)
+
+### 2026-08-26 (round 37) — harvest of the L2b-1 config-injection lane (PR #779) and the search-all lint lane (PR #780)
+
+- **A single-file green is not a suite green: `bun test` runs the whole
+  directory in ONE process, so module-scope memoization keeps the first value
+  it ever saw.** `recoveryWalStoreFor` (`server/tools/realtime-stores.ts:53`)
+  memoized its fallback store on first touch, so whichever file registered
+  first decided the WAL path for every later file. The new arrival test passed
+  alone and failed in CI job `db-integration`; the fix keys the fallback on the
+  `recoveryWalPath` it was built for (`realtime-stores.ts:59-66`) and the
+  docstring now names the failure mode: "Memoizing on first touch alone made
+  the answer depend on registration order, which is invisible in a single-file
+  run and wrong in a whole-suite one." Run the DIRECTORY before trusting a
+  single-file green.
+- **A test never builds a path under the Mac scratch workspace; it uses
+  `os.tmpdir()` through `mkdtempSync`.** The precedent is
+  `src/rotating-file.test.ts:23` — `mkdtempSync(join(tmpdir(), "ob-rotating-"))`
+  with `tmpdir` imported from `node:os` (`:12`). This is the one place the
+  never-`/tmp` rule does NOT mean "hand-write a workspace path": the workspace
+  is Mac-local and the test also runs on CI and in runner boxes, so the
+  resolved-at-runtime temp directory is the portable answer and the literal is
+  the bug.
+- **An arrival done-means needs a clause that RUNS the arrival test, not only
+  one that greps the call site.** In
+  `scripts/done-means/750-l2b1-tool-readers-take-config.sh`, clause 4 reads the
+  composition root's source and proves the values are passed (`:115-120`) —
+  which stays green while the wiring is merely TYPED. Clause 5 exercises it
+  (`:122`, `server/tools/dependency-arrival.test.ts`), and its failure text
+  says why: "clause 4 asserts the wiring was TYPED; nothing here asserts it
+  WORKS" (`:305`). A static clause and a behavioral clause are two clauses.
+- **The Codex runtime rejects `--effort max`; companion recon lanes ran at
+  xhigh.** Pin the effort the runtime actually accepts when briefing a
+  companion lane, and record the substitution rather than letting the launcher
+  pick silently.
+- **A recon lane that reads the Mac checkout answers for THAT checkout's
+  branch, not `main`** (rule 19, again). The Mac tree is dirty on
+  `sprint/standards-fmt` (`_DOCS/_handoff/2026-08-26-lint-sweep-l2.md:15`), so
+  a "what does main look like" question answered from it is answered about
+  someone else's in-progress work. Point recon at the clone, or at
+  `git show origin/main:<path>`.
+- **Shared extraction across twins happens only after the defaults are
+  confirmed byte-identical.** `normalizeSearchArgs` moved to
+  `server/tools/search-request.ts:33` in `fca45fb (#779)` and is now imported
+  by both `server/tools/search-brain.ts` and `server/tools/search-all.ts`; the
+  legacy `src/tools/search-all.ts` twin was deliberately left untouched. Two
+  callers that merely look alike get differenced first; the extraction is what
+  you do once they are proven the same, not the way you find out.
+
+### 2026-08-26 (round 36) — harvest of lane 1 of the #780 sweep (PR #782), the #779 review, and the session-2 collection pass
+
+- **A git pathspec `**` must consume a directory.** `git diff --name-only
+  origin/main...HEAD -- 'server/**/*.ts'` matches NOTHING for a file directly
+  under `server/`, so `server/main.ts` was silently excluded while
+  `server/db/pool.ts` would have matched; the command exits 0 and the list is
+  just short. The check's refusal of an empty file list is what caught it. A
+  diff-derived file list is filtered with an anchored `rg '^server/.*\.ts$'`
+  over the full diff, never a git glob pathspec
+  (`scripts/done-means/780-touched-files-lint-clean.sh`).
+- **A rewiring lane has two halves, and the done-means asserts ARRIVAL.** #779
+  made four tool readers take a parameter with `?? default` fallbacks and never
+  changed the composition root (`server/main.ts:168`), so tsc and an
+  absence-only check went green with nothing wired. The check registers the
+  tools with a non-default env value and reads it back; the old `process.env`
+  read being gone proves nothing on its own.
+- **Tooling:** the Codex companion (`codex:codex-rescue`) refuses a commit in
+  the clone ("Codex git guard: unable to verify the current branch") and hands
+  the Workflow "No output." with no receipt, so a write lane that must commit
+  routes to a native Opus 5 worker at low effort with that reason stated; Codex
+  Luna max stays the route for read-only lanes. `gh run rerun --failed` on a
+  run whose only red job is the runner-transcript test (#764) left the run
+  `queued` with no second attempt for 20+ minutes; `main` has no required
+  status checks (ruleset `main`: pull_request, linear history), so the merge
+  evidence is the green jobs on the SHA plus the #764 reference, not a re-run.
+  `gh pr close` then `gh pr reopen` fires the `pull_request` trigger for a
+  PR that never got a CI run. verify-lane leaves a `verify-lane/pr-N-*` branch
+  behind with its worktree; both go in the same session.
+- **The harvest gate reads the whole Bash line.** `gh pr comment ... &&
+  gh pr merge ...` is refused because the merge is present before the comment
+  has landed; the comment and the merge are two separate calls.
+
 ### 2026-08-26 (round 35) — harvest of the L2a config-schema lane (PR #778)
 
 - **A schema field that "mirrors" a reader is differenced against the reader

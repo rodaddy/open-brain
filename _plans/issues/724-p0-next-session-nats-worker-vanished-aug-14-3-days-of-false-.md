@@ -3,11 +3,12 @@
 
 # #724 — P0 next session: nats-worker vanished Aug 14 -- 3 days of false-receipt captures; interim repair RUNNING, backlog re-embed + silent-gap alarms needed
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-17T18:40:31Z
-Updated: 2026-08-17T18:40:31Z
+Updated: 2026-08-18T03:51:58Z
+Closed: 2026-08-18T03:51:58Z
 
 ---
 
@@ -45,3 +46,68 @@ Rebuilt the worker plist from `docs/deploy/com.rico.open-brain-nats-worker.plist
 - Serving revision during the outage: `f673299`. Deployment: `/Volumes/ThunderBolt/open-brain-local/app`.
 
 Interim repair by the Development head session (transcript `49d844f3`); repair deliberately stopped at restore-and-verify — no backfill, no code changes, per Rico.
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-18T03:51:58Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-18T03:51:57Z.
+
+---
+
+## Discussion (3)
+
+### rodaddy — 2026-08-17T23:02:41Z
+
+## Wrap-failure root cause (diagnosed 2026-08-17, head session — evidence from live dogfood DB + repo source)
+
+The `Existing lane exact scope does not match session_start request` wrap failures are **structural, not transient**. Chain, each step verified:
+
+1. **The capture hook creates the base session lane first**, stamped `agent='openbrain-capture'` (default at `python/openbrain/src/openbrain/config.py:517`) with `source`/`server_id`/`channel_id` all NULL. Verified in `ob_session_lanes`: every lane since Aug 5+ for real sessions (e.g. `49d844f3-…`, `c2df8efe-…`) carries exactly that shape.
+2. **A manual `openbrain-memory wrap` sends the session's own full exact scope** (the interim-repair proof lane shows what that looks like: `dev-head|claude-code|cli|local` — it only succeeded because it used a fresh `session_key`, `restore-proof-49d844f3`).
+3. **The server's #646 one-way scope fill refuses the mismatch by design**: `establishExactStartScope` (`server/tools/session-lifecycle.ts:61-100`) requires `(agent IS NULL OR agent = $3)`; `'openbrain-capture' ≠ 'dev-head'` → 0 rows → the exact error both sessions hit.
+
+So **every session whose lane the capture hook touched first can never manually wrap into its own session_key** — consistent with receipts.json showing zero wrap receipts ever. The #724 item-4 options stand: either wrap discovers the lane's existing scope, or the CLI refuses with "hook-owned; use capture". Note the scope predicate is an isolation boundary — widening the server-side WHERE is the wrong fix.
+
+## v23/v24 "contract skew" is a test-isolation leak, not a live v24 client
+
+`2026-08-09.memory-tools.v24` exists only in the Development repo's TS provider (`_ob/scripts/ob-memory-provider/receipt-state.ts:118`, mtime Aug 16). The placeholder receipts (`opaque-session_abc123`, correlation `12345678-1234-4234-8234-123456789abc`) are **literal fixtures in `_ob/scripts/ob-memory-provider.test.ts:1697,1850`**. `receipt-state.ts:132` falls back to the real `~/.local/state/agent-runtime/openbrain-memory/receipts.json` when `XDG_STATE_HOME` is unset, and the test file never sets it — so an Aug 17 ~06:56–07:18Z test run wrote its fixtures into the live receipts file. (Residual check for the owner: whether `runProvider` offers a receipts-path override the suite should be using; either way the suite needs `XDG_STATE_HOME` pinned to a fixture dir.)
+
+No action taken beyond diagnosis — report-only per scribe scope.
+
+---
+
+### rodaddy — 2026-08-18T02:15:29Z
+
+## Wave rollup (2026-08-17 merge pass, controller receipts)
+
+**Item 1 — backlog re-embed: DONE, RUNNING-verified.** PR #729 MERGED. The premise "the restored worker should drain it" was KILLED by design: enqueue is a deliberately caller-scoped boundary (docs/embedding-repair.md) and nothing occupied the bulk-caller position — the worker was healthy and correctly idle. `scripts/repair-embeddings.ts` now occupies it; `--global` run repaired **1,627 rows** (549 stuck lanes → 0). Independent verify-lane receipt on the PR: all three done-means clauses green against the live DB, including recall of window content through both the lexical and vector arms. Residual: #734 (thoughts blocked by a leaked `dream_bulk_release_trigger` — 1,297 rows; sessions content-hash collisions).
+
+**Item 2 — what removed the plist: mechanism CONFIRMED, actor UNVERIFIED.** Deliberate SIGTERM/bootout at 2026-08-14T14:53:35Z (the shutdown line's only emitter is the signal handler, run-nats-worker.ts:243-247; durable app log retained the full history). Deploy-strand hypothesis **KILLED** — local-clone-deploy.sh has no plist verbs and no deploy ran that day. Shell-history, agent-session, reboot, and mass-sweep hypotheses all KILLED (30 sibling plists intact = one item was picked). Strongest candidate, unverified: **CleanMyMac 5**, registered on the machine 10:50:10 that morning, process live across the 10:53 event, its removal-module artifacts in ~/.Trash at 11:03. Durable fix filed as #735 (installer + launchctl liveness assertion, per the repo's own install-qmd-sync-launchagent.sh pattern).
+
+**Item 3 — silence made loud: code done, merge pending.** PR #728 (embed-watermark fields + degraded state in the worker's 3110/health, red-first tested) is green but blocked on a process gap: verify-lane runs every done-means with bash, and #728's check is a bun test (#733). A wrapper micro-lane is landing; deploy to the local clone follows the merge as a controller-gated step.
+
+**Item 4 — wrap fix: implemented, held for one operator decision.** PR #732: manual wrap now adopts a hook-owned lane's scope (7 new fake-transport tests green, mypy/ruff zero). Held because the lane PROVED client-side scope cannot distinguish the capture hook's lane from another same-namespace session's lane (identical wire sequences), so the old client test asserting hostile same-namespace denial cannot survive adoption — that trade needs the operator's ruling before merge.
+
+**Also landed this pass:** #719 (PR #727), #721 (PR #730), #722 (PR #731) — all merged with independent verify-lane receipts; issues closed. Receipt-leak fix (fixture receipts polluting the live receipts.json) is pushed in the Development repo as `fix/ob-provider-test-state-isolation` (48 tests green, live file byte-identical across the suite run), PR there pending. Harvest: docs/lane-contract.md round 31 (a5adda8).
+
+---
+
+### rodaddy — 2026-08-18T03:51:57Z
+
+All four items complete; residuals carry their own issues. Final receipts (2026-08-18, all RUNNING unless noted):
+
+**1. Backlog re-embed — DONE.** PR #729 merged. Root premise killed: enqueue is a deliberately caller-scoped boundary (docs/embedding-repair.md); scripts/repair-embeddings.ts now occupies the missing bulk-caller seat. 1,627 rows repaired, 549 stuck lanes -> 0, window content recallable in both search arms (independent verify-lane receipt against the live DB). Residual: #734 (thoughts blocked by leaked dream trigger, sessions hash collisions).
+
+**2. Plist removal — mechanism CONFIRMED, actor UNVERIFIED, durable fix filed.** Deliberate SIGTERM/bootout 2026-08-14T14:53:35Z (only emitter: run-nats-worker.ts signal handlers; durable app log retained the line). Deploy-strand, shell, agent-session, reboot, mass-sweep hypotheses all KILLED. Strongest unverified candidate: CleanMyMac 5 (arrived 10:50 that morning, removal-module artifacts in ~/.Trash 11:03). The actual defect — no installer, no liveness assertion — is #735.
+
+**3. Silence made loud — DONE, RUNNING.** PR #728 (surface) + PR #737 (live DB-backed observer; #728 alone was the #674 class — proven only by injection, absent from the serving process). Deployed bf5e4d3: 3110/health now serves embed_watermark computed from the real registry (observed live: lag 890s / threshold 3600s / raw_rows_recent 6 / healthy; stale flips the endpoint to degraded+503). Worker log: embed_watermark_observed:true.
+
+**4. Wrap — DONE, RUNNING.** PR #732 merged (adoption per operator ruling, ledger item 33; hostile-same-namespace client test retired — client provably cannot observe the distinction, server namespace predicate is the boundary). Client reinstalled; live manual wrap against this session's own hook-owned lane returned status:saved/durable:true — the first successful manual wrap receipt on this machine — and the DB shows the lane's scope untouched (adopted, not re-pointed). TS-client parity: #736.
+
+Also from the wave: receipts-leak fix pushed in the Development repo (fix/ob-provider-test-state-isolation — live receipts.json byte-identical across the suite run); verify-lane bash-only gap #733; harvests rounds 31-32; gate lanes #719/#721/#722 closed earlier tonight.

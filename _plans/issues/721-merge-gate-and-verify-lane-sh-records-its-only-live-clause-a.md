@@ -3,11 +3,12 @@
 
 # #721 — merge-gate-and-verify-lane.sh records its only live clause as PASS when any non-empty MGVL_IN_VERIFY_LANE is inherited, yielding a full green with verify-lane never exercised
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T14:19:21Z
-Updated: 2026-08-10T14:19:21Z
+Updated: 2026-08-18T02:12:08Z
+Closed: 2026-08-18T02:12:08Z
 
 ---
 
@@ -85,3 +86,22 @@ Amend this check (it is its own subject, so the amendment is the proof):
 
 Round 29's rule, restated: a gate must not let anything it inherited from its
 caller decide its verdict.
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-18T02:12:08Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-18T02:12:08Z.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-18T02:12:08Z
+
+Closed by the #730 merge. Receipts: independent verify-lane receipt on the PR; lane's 7/7 done-means green (fabricated MGVL_IN_VERIFY_LANE now a named harness error, inherited env can no longer mint a PASS, genuine nested verify-lane pair still skips politely); CI 8/8; harvested round 31 (a5adda8).

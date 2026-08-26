@@ -11,8 +11,11 @@
 # machine through verify-lane, not in CI; a missing validator FAILS the check
 # rather than skipping it.
 #
-# Files come from the diff against `origin/main` (`_DOCS/_handoff/*.md`), or
-# from `DONE_MEANS_HANDOFF_FILES="<space-separated paths>"` as an override.
+# Files come from this branch's own diff against `origin/main`
+# (`origin/main...HEAD`, `_DOCS/_handoff/*.md`), plus untracked handoff files, or
+# from `DONE_MEANS_HANDOFF_FILES="<space-separated paths>"` as an override. A
+# change to the rules layer (`_DOCS/HANDOFF-RULES.md`) is judged by the newest
+# handoff document, the last `_DOCS/_handoff/*.md` by name sort.
 # The override is the RED control: point it at one of the skill's
 # `fixtures/fail-*.md` and this must exit 1. An empty file list is a FAIL, so
 # the check cannot pass by examining nothing.
@@ -36,8 +39,14 @@ else
   mapfile -t files < <(
     {
       git diff --name-only origin/main...HEAD -- '_DOCS/_handoff/*.md'
-      git diff --name-only origin/main -- '_DOCS/_handoff/*.md'
       git ls-files --others --exclude-standard -- '_DOCS/_handoff/*.md'
+      if [[ -n $(git diff --name-only origin/main...HEAD -- _DOCS/HANDOFF-RULES.md) ]]; then
+        newest=$(ls -1 _DOCS/_handoff/*.md | sort | tail -n 1)
+        if [[ -n $newest ]]; then
+          echo "note: rules layer changed; validating newest handoff $newest" >&2
+          echo "$newest"
+        fi
+      fi
     } | sort -u
   )
 fi

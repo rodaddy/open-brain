@@ -3,11 +3,12 @@
 
 # #719 — pre-commit gate is silently absent: repo core.hooksPath displaces the global gitleaks + protected-branch hook, and nothing runs in its place
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-10T14:18:25Z
-Updated: 2026-08-10T14:18:25Z
+Updated: 2026-08-18T02:11:43Z
+Closed: 2026-08-18T02:11:43Z
 
 ---
 
@@ -94,3 +95,22 @@ non-`pre-push` hook silently dropped.
 Note for the fixer: `.git/hooks/pre-commit` is untracked and unreachable. The
 fix belongs in tracked `_githooks/`, which is the whole point of `install.sh`
 ("the tracked directory must BE the hooks directory").
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-18T02:11:43Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-18T02:11:42Z.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-18T02:11:42Z
+
+Closed by the #727 merge. Receipts: independent verify-lane receipt on the PR (10-clause done-means green at head 5ef6172 — displaced-set sweep accounted for, secret commit refused, LAW #8 main-commit refused, secret push refused); CI green; harvested round 31 (a5adda8).
