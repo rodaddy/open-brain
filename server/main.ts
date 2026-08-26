@@ -188,6 +188,7 @@ function createServerFactory(input: {
       // needs an env record at all. Spread rather than assigned because the key
       // is optional and must stay ABSENT, not present-and-undefined.
       ...(config.qmd.path ? { qmdPath: config.qmd.path } : {}),
+      sharedNamespaceNames: config.sharedNamespaceNames,
       recoveryWalPath: config.recovery.walPath,
       natsRuntimeBoundary: nats.boundary,
       ...realtime,

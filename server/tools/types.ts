@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 import type { AuthIdentity } from "../auth/types.ts";
 import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import type { FtsConfig } from "./fts-config.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { WorkingSetStore } from "../realtime/working-set.ts";
 import type { RecoveryWalStore } from "../realtime/recovery-wal.ts";
 
@@ -12,6 +13,13 @@ export interface MemoryToolDependencies {
   readonly embedFn: (text: string) => Promise<number[] | null>;
   readonly logger: Logger;
   readonly embeddingModel?: string;
+  /**
+   * Validated shared-namespace names from the composition root.
+   *
+   * Absent means the helpers in `./shared-namespace.ts` derive them from the
+   * environment as they always have; present means this one parse is in force.
+   */
+  readonly sharedNamespaceNames?: SharedNamespaceConfig;
   /**
    * Resolved qmd entry point for `search_all`'s file-index arm.
    *

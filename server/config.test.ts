@@ -5,9 +5,19 @@
  */
 import { describe, expect, it, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { loadServerConfig, OPTIONAL_SECRET_KEYS, parseServerConfig } from "./config.ts";
+import {
+  loadServerConfig,
+  OPTIONAL_SECRET_KEYS,
+  parseServerConfig,
+} from "./config.ts";
 import { resolveFtsConfig } from "./tools/fts-config.ts";
 import { resolveQmdPath } from "./tools/search-all.ts";
+import {
+  canonicalNamespace,
+  isSharedNamespace,
+  physicalNamespace,
+  sharedNamespaceConfig,
+} from "./tools/shared-namespace.ts";
 import { parseAllowedOrigins } from "./transport/rest.ts";
 import { readMcpTracingConfig } from "./observability/langfuse-tracing.ts";
 
@@ -23,14 +33,27 @@ describe("server configuration boundary", () => {
     const result = parseServerConfig({ LOG_FILE: "logs/test.log" });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected invalid configuration");
-    expect(result.issues.map((issue) => issue.path)).toEqual(["DB_HOST", "DB_NAME", "DB_USER"]);
+    expect(result.issues.map((issue) => issue.path)).toEqual([
+      "DB_HOST",
+      "DB_NAME",
+      "DB_USER",
+    ]);
   });
 
   it("rejects malformed configured user tokens visibly", () => {
-    const result = parseServerConfig({ ...REQUIRED, AUTH_TOKEN_USER_BILBY: "agent" });
+    const result = parseServerConfig({
+      ...REQUIRED,
+      AUTH_TOKEN_USER_BILBY: "agent",
+    });
     expect(result).toEqual({
       ok: false,
-      issues: [{ path: "AUTH_TOKEN_USER_BILBY", message: "Invalid option: expected one of \"admin\"|\"agent\"|\"discord\"|\"ob-admin\"|\"promoter\"|\"readonly\"" }],
+      issues: [
+        {
+          path: "AUTH_TOKEN_USER_BILBY",
+          message:
+            'Invalid option: expected one of "admin"|"agent"|"discord"|"ob-admin"|"promoter"|"readonly"',
+        },
+      ],
     });
   });
 
@@ -42,7 +65,12 @@ describe("server configuration boundary", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");
-    expect(result.config.authTokens.map(({ role, clientId }) => ({ role, clientId }))).toEqual([
+    expect(
+      result.config.authTokens.map(({ role, clientId }) => ({
+        role,
+        clientId,
+      })),
+    ).toEqual([
       { role: "agent", clientId: "agent" },
       { role: "promoter", clientId: "openbrain-promoter" },
     ]);
@@ -74,14 +102,17 @@ describe("server configuration boundary", () => {
  * way on the next environment that sets one to empty.
  */
 describe("optional secrets that are present but empty", () => {
-  test.each([...OPTIONAL_SECRET_KEYS])("%s: empty string parses as absent", (key) => {
-    const result = parseServerConfig({ ...REQUIRED, [key]: "" });
-    if (!result.ok) {
-      throw new Error(
-        `empty ${key} must not fail the config boundary: ${JSON.stringify(result.issues)}`,
-      );
-    }
-  });
+  test.each([...OPTIONAL_SECRET_KEYS])(
+    "%s: empty string parses as absent",
+    (key) => {
+      const result = parseServerConfig({ ...REQUIRED, [key]: "" });
+      if (!result.ok) {
+        throw new Error(
+          `empty ${key} must not fail the config boundary: ${JSON.stringify(result.issues)}`,
+        );
+      }
+    },
+  );
 
   it("covers every field declared with the shared optional-secret schema", () => {
     // Guards the parameterization above: a NEW optionalSecret field added to the
@@ -128,7 +159,9 @@ describe("optional secrets that are present but empty", () => {
   it("still parses when EVERY optional secret is empty at once", () => {
     // The real clone environment sets several of these blank together; the
     // per-field cases above would all pass even if the combination did not.
-    const empties = Object.fromEntries(OPTIONAL_SECRET_KEYS.map((key) => [key, ""]));
+    const empties = Object.fromEntries(
+      OPTIONAL_SECRET_KEYS.map((key) => [key, ""]),
+    );
     const result = parseServerConfig({ ...REQUIRED, ...empties });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");
@@ -193,7 +226,10 @@ describe("EMBEDDING_API_KEY across every observed state", () => {
    */
   it("whitespace-only: treated as absent, matching the launcher's own check", () => {
     for (const blank of [" ", "   ", "\t", "\n", " \t\n "]) {
-      const result = parseServerConfig({ ...REQUIRED, EMBEDDING_API_KEY: blank });
+      const result = parseServerConfig({
+        ...REQUIRED,
+        EMBEDDING_API_KEY: blank,
+      });
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error("expected valid configuration");
       expect("embeddingApiKey" in result.config.transport).toBe(false);
@@ -204,7 +240,10 @@ describe("EMBEDDING_API_KEY across every observed state", () => {
     // Only the blank/non-blank DECISION is normalized. A key whose padding is
     // genuine must not be silently altered into a different credential.
     const padded = "  padded-key  ";
-    const result = parseServerConfig({ ...REQUIRED, EMBEDDING_API_KEY: padded });
+    const result = parseServerConfig({
+      ...REQUIRED,
+      EMBEDDING_API_KEY: padded,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");
     expect(result.config.transport.embeddingApiKey).toBe(padded);
@@ -213,7 +252,9 @@ describe("EMBEDDING_API_KEY across every observed state", () => {
   it("applies the blank rule to every optional secret, not just the embedding key", () => {
     // Same reasoning as the empty-string parameterization above: the defect is
     // in the shared schema, so a whitespace value in ANY of them must be absent.
-    const blanks = Object.fromEntries(OPTIONAL_SECRET_KEYS.map((key) => [key, "   "]));
+    const blanks = Object.fromEntries(
+      OPTIONAL_SECRET_KEYS.map((key) => [key, "   "]),
+    );
     const result = parseServerConfig({ ...REQUIRED, ...blanks });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");
@@ -235,11 +276,17 @@ describe("EMBEDDING_API_KEY across every observed state", () => {
 describe("loadServerConfig against a real process.env", () => {
   const OWNED = [...OPTIONAL_SECRET_KEYS, ...Object.keys(REQUIRED)];
 
-  function withEnv<T>(overrides: Record<string, string | undefined>, run: () => T): T {
+  function withEnv<T>(
+    overrides: Record<string, string | undefined>,
+    run: () => T,
+  ): T {
     const saved = new Map(OWNED.map((key) => [key, process.env[key]]));
     try {
       for (const key of OWNED) delete process.env[key];
-      for (const [key, value] of Object.entries({ ...REQUIRED, ...overrides })) {
+      for (const [key, value] of Object.entries({
+        ...REQUIRED,
+        ...overrides,
+      })) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
@@ -258,13 +305,17 @@ describe("loadServerConfig against a real process.env", () => {
   });
 
   it("starts with EMBEDDING_API_KEY absent", () => {
-    const config = withEnv({ EMBEDDING_API_KEY: undefined }, () => loadServerConfig());
+    const config = withEnv({ EMBEDDING_API_KEY: undefined }, () =>
+      loadServerConfig(),
+    );
     expect("embeddingApiKey" in config.transport).toBe(false);
   });
 
   it("starts with EMBEDDING_API_KEY set, and carries the key through", () => {
     const key = `real-${randomUUID()}`;
-    const config = withEnv({ EMBEDDING_API_KEY: key }, () => loadServerConfig());
+    const config = withEnv({ EMBEDDING_API_KEY: key }, () =>
+      loadServerConfig(),
+    );
     expect(config.transport.embeddingApiKey).toBe(key);
   });
 
@@ -306,7 +357,9 @@ describe("loadServerConfig against a real process.env", () => {
 function extendedConfig(overrides: Record<string, string | undefined> = {}) {
   const result = parseServerConfig({ ...REQUIRED, ...overrides });
   if (!result.ok) {
-    throw new Error(`expected valid configuration: ${JSON.stringify(result.issues)}`);
+    throw new Error(
+      `expected valid configuration: ${JSON.stringify(result.issues)}`,
+    );
   }
   return result.config;
 }
@@ -318,13 +371,15 @@ describe("extended env — search", () => {
 
   it("takes an explicit timeout", () => {
     expect(
-      extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "750" }).search.embeddingTimeoutMs,
+      extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "750" }).search
+        .embeddingTimeoutMs,
     ).toBe(750);
   });
 
   it("falls back to the legacy name when the preferred one is absent", () => {
     expect(
-      extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: "900" }).search.embeddingTimeoutMs,
+      extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: "900" }).search
+        .embeddingTimeoutMs,
     ).toBe(900);
   });
 
@@ -357,11 +412,15 @@ describe("extended env — fts", () => {
   });
 
   it("takes an explicit supported configuration", () => {
-    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: "simple" }).fts.corpusConfig).toBe("simple");
+    expect(
+      extendedConfig({ OPENBRAIN_FTS_CONFIG: "simple" }).fts.corpusConfig,
+    ).toBe("simple");
   });
 
   it("maps a language token to its configuration", () => {
-    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig).toBe("spanish");
+    expect(
+      extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig,
+    ).toBe("spanish");
   });
 
   // The unrecognized-token fallback is asserted against `resolveFtsConfig`
@@ -374,7 +433,9 @@ describe("extended env — qmd", () => {
   });
 
   it("takes an explicit path", () => {
-    expect(extendedConfig({ QMD_PATH: "/usr/local/bin/qmd" }).qmd.path).toBe("/usr/local/bin/qmd");
+    expect(extendedConfig({ QMD_PATH: "/usr/local/bin/qmd" }).qmd.path).toBe(
+      "/usr/local/bin/qmd",
+    );
   });
 
   it("treats a blank path as unset, which is the dogfood shape QMD_PATH=", () => {
@@ -390,29 +451,33 @@ describe("extended env — recovery", () => {
   });
 
   it("takes an explicit WAL path", () => {
-    expect(extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "var/wal.log" }).recovery.walPath).toBe(
-      "var/wal.log",
-    );
+    expect(
+      extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "var/wal.log" }).recovery
+        .walPath,
+    ).toBe("var/wal.log");
   });
 
   it("treats a blank WAL path as null", () => {
-    expect(extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "" }).recovery.walPath).toBeNull();
+    expect(
+      extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "" }).recovery.walPath,
+    ).toBeNull();
   });
 });
 
 describe("extended env — sharedNamespaceNames", () => {
   it("defaults physical to the canonical name and legacy to empty", () => {
     const names = extendedConfig().sharedNamespaceNames;
-    expect(names.physical).toBe("shared-kb");
+    expect(names.physicalSharedNamespace).toBe("shared-kb");
     // #167 retired `collab`; an empty legacy name must never match input.
-    expect(names.legacy).toBe("");
+    expect(names.legacySharedNamespace).toBe("");
     expect(names.legacyFallbackEnabled).toBe(false);
     expect(names.fallbackMinResults).toBe(5);
   });
 
   it("takes an explicit physical name pointed away from the canonical one", () => {
     expect(
-      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" }).sharedNamespaceNames.physical,
+      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" })
+        .sharedNamespaceNames.physicalSharedNamespace,
     ).toBe("shared-kb-v2");
   });
 
@@ -421,43 +486,44 @@ describe("extended env — sharedNamespaceNames", () => {
       SHARED_NAMESPACE_LEGACY: "collab",
       OPENBRAIN_LEGACY_SHARED_NAMESPACE: "older",
     }).sharedNamespaceNames;
-    expect(names.legacy).toBe("collab");
+    expect(names.legacySharedNamespace).toBe("collab");
   });
 
   it("falls back to OPENBRAIN_LEGACY_SHARED_NAMESPACE", () => {
     expect(
-      extendedConfig({ OPENBRAIN_LEGACY_SHARED_NAMESPACE: "collab" }).sharedNamespaceNames.legacy,
+      extendedConfig({ OPENBRAIN_LEGACY_SHARED_NAMESPACE: "collab" })
+        .sharedNamespaceNames.legacySharedNamespace,
     ).toBe("collab");
   });
 
   it("enables the legacy fallback on each permissive true token", () => {
     for (const token of ["1", "true", "YES", " on "]) {
       expect(
-        extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: token }).sharedNamespaceNames
-          .legacyFallbackEnabled,
+        extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: token })
+          .sharedNamespaceNames.legacyFallbackEnabled,
       ).toBe(true);
     }
   });
 
   it("treats an unrecognized flag token as false rather than failing startup", () => {
     expect(
-      extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: "maybe" }).sharedNamespaceNames
-        .legacyFallbackEnabled,
+      extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: "maybe" })
+        .sharedNamespaceNames.legacyFallbackEnabled,
     ).toBe(false);
   });
 
   it("takes an explicit fallback minimum", () => {
     expect(
-      extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: "12" }).sharedNamespaceNames
-        .fallbackMinResults,
+      extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: "12" })
+        .sharedNamespaceNames.fallbackMinResults,
     ).toBe(12);
   });
 
   it("ignores a non-positive fallback minimum rather than failing startup", () => {
     for (const bad of ["0", "-1", "abc"]) {
       expect(
-        extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: bad }).sharedNamespaceNames
-          .fallbackMinResults,
+        extendedConfig({ OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: bad })
+          .sharedNamespaceNames.fallbackMinResults,
       ).toBe(5);
     }
   });
@@ -478,7 +544,10 @@ describe("extended env — tracing", () => {
   });
 
   it("is on only when the flag is set AND all three coordinates are present", () => {
-    const tracing = extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "1" }).tracing;
+    const tracing = extendedConfig({
+      ...COORDINATES,
+      OPENBRAIN_TRACING_ENABLED: "1",
+    }).tracing;
     expect(tracing.enabled).toBe(true);
     expect(tracing.endpoint).toBe("https://langfuse.internal");
     expect(tracing.publicKey).toBe("pk-test");
@@ -487,7 +556,8 @@ describe("extended env — tracing", () => {
   it("stays off when the coordinates are complete but the flag is not exactly 1", () => {
     // An external payload-carrying export is opt-in; `true` is not the flag.
     expect(
-      extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "true" }).tracing.enabled,
+      extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "true" })
+        .tracing.enabled,
     ).toBe(false);
   });
 
@@ -495,11 +565,13 @@ describe("extended env — tracing", () => {
   // `readMcpTracingConfig` itself in the start-equivalence block below.
 
   it("disables masking only on an exact 0", () => {
-    expect(extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing.maskingEnabled).toBe(
-      false,
-    );
     expect(
-      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" }).tracing.maskingEnabled,
+      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing
+        .maskingEnabled,
+    ).toBe(false);
+    expect(
+      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" }).tracing
+        .maskingEnabled,
     ).toBe(true);
   });
 });
@@ -524,9 +596,11 @@ describe("extended env — captureHealth", () => {
   });
 
   it("treats a blank namespace as unset, which is what disables the observer", () => {
-    expect("namespace" in extendedConfig({ OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "  " }).captureHealth).toBe(
-      false,
-    );
+    expect(
+      "namespace" in
+        extendedConfig({ OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "  " })
+          .captureHealth,
+    ).toBe(false);
   });
 
   // The unparseable and non-positive cases are asserted against
@@ -553,21 +627,22 @@ describe("extended env — http", () => {
     // the start-equivalence block below.
     const result = parseServerConfig({ ...REQUIRED, PORT: "not-a-port" });
     expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected an unbindable port to be rejected");
+    if (result.ok)
+      throw new Error("expected an unbindable port to be rejected");
     expect(result.issues.map((issue) => issue.path)).toEqual(["PORT"]);
   });
 
   it("splits, trims, and drops blanks from the origin list", () => {
     expect(
-      extendedConfig({ ALLOWED_ORIGINS: "https://a.example, ,https://b.example " }).http
-        .allowedOrigins,
+      extendedConfig({
+        ALLOWED_ORIGINS: "https://a.example, ,https://b.example ",
+      }).http.allowedOrigins,
     ).toEqual(["https://a.example", "https://b.example"]);
   });
 
   // The blank list is asserted against `parseAllowedOrigins` itself in the
   // start-equivalence table below, over the whole input set.
 });
-
 
 /**
  * START-EQUIVALENCE: the schema must answer what the READER answers.
@@ -583,12 +658,28 @@ describe("extended env — http", () => {
  * fails a test rather than drifting apart quietly.
  */
 const DIVERGENCE_INPUTS = [
-  "3000ms", "10.5", "1e3", " 42 ", "0x10", "abc", "-1", "0", "", "   ",
-  undefined, "007", "3,000", "+5", "Infinity",
+  "3000ms",
+  "10.5",
+  "1e3",
+  " 42 ",
+  "0x10",
+  "abc",
+  "-1",
+  "0",
+  "",
+  "   ",
+  undefined,
+  "007",
+  "3,000",
+  "+5",
+  "Infinity",
 ] as const;
 
 /** `server/capture/liveness-observer.ts:535-550`, reproduced: `Number`, not `parseInt`. */
-function readPositiveInteger(raw: string | undefined, fallback: number): number {
+function readPositiveInteger(
+  raw: string | undefined,
+  fallback: number,
+): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const parsed = Number(raw.trim());
   const ok = Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0;
@@ -614,7 +705,8 @@ function searchEmbeddingTimeoutMs(
  */
 function expectPortMatchesReader(input: string | undefined): void {
   const expected = Number(input ?? 3_100);
-  const bindable = Number.isInteger(expected) && expected >= 0 && expected <= 65_535;
+  const bindable =
+    Number.isInteger(expected) && expected >= 0 && expected <= 65_535;
   const result = parseServerConfig({ ...REQUIRED, PORT: input });
   if (bindable) {
     expect(result.ok).toBe(true);
@@ -638,10 +730,12 @@ function expectCaptureHealthMatchesReader(input: string | undefined): void {
 
 function expectSearchTimeoutMatchesReader(input: string | undefined): void {
   expect(
-    extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: input }).search.embeddingTimeoutMs,
+    extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: input }).search
+      .embeddingTimeoutMs,
   ).toBe(searchEmbeddingTimeoutMs(input, undefined));
   expect(
-    extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: input }).search.embeddingTimeoutMs,
+    extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: input }).search
+      .embeddingTimeoutMs,
   ).toBe(searchEmbeddingTimeoutMs(undefined, input));
 }
 
@@ -706,11 +800,25 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
     // canonical unset -> the override is what `envString` reaches next
     [{ OPENBRAIN_SHARED_NAMESPACE: "other" }, "other"],
     // both set -> the CANONICAL name wins; the group had this inverted
-    [{ SHARED_NAMESPACE_CANONICAL: "shared-kb", OPENBRAIN_SHARED_NAMESPACE: "other" }, "shared-kb"],
+    [
+      {
+        SHARED_NAMESPACE_CANONICAL: "shared-kb",
+        OPENBRAIN_SHARED_NAMESPACE: "other",
+      },
+      "shared-kb",
+    ],
     // an explicit physical name outranks either canonical coordinate
-    [{ OPENBRAIN_SHARED_NAMESPACE: "other", SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" }, "shared-kb-v2"],
+    [
+      {
+        OPENBRAIN_SHARED_NAMESPACE: "other",
+        SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2",
+      },
+      "shared-kb-v2",
+    ],
   ])("resolves the physical name from %o", (env, expected) => {
-    expect(extendedConfig(env).sharedNamespaceNames.physical).toBe(expected);
+    expect(
+      extendedConfig(env).sharedNamespaceNames.physicalSharedNamespace,
+    ).toBe(expected);
   });
 
   it("matches readMcpTracingConfig on the complete and incomplete shapes", () => {
@@ -721,7 +829,12 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
       OPENBRAIN_TRACING_SECRET_KEY: "sk",
     };
     const incomplete = { ...complete, OPENBRAIN_TRACING_ENDPOINT: "  " };
-    for (const shape of [{}, { OPENBRAIN_TRACING_ENABLED: "1" }, complete, incomplete]) {
+    for (const shape of [
+      {},
+      { OPENBRAIN_TRACING_ENABLED: "1" },
+      complete,
+      incomplete,
+    ]) {
       const reader = readMcpTracingConfig(shape);
       const schema = extendedConfig(shape).tracing;
       expect(schema.enabled).toBe(reader.enabled);
@@ -729,5 +842,68 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
       expect(schema.endpoint).toBe(reader.endpoint);
       expect(schema.publicKey).toBe(reader.publicKey);
     }
+  });
+});
+
+/**
+ * Agreement between the validated group and the environment reader it mirrors.
+ *
+ * L2b-2 rung 5a leaves BOTH paths in force: `sharedNamespaceConfig()` still
+ * derives from `process.env`, and `config.sharedNamespaceNames` now carries the
+ * same five fields. While that lasts, the only thing that keeps the doubled
+ * state honest is a test that drives one input at a time through both and
+ * asserts they answer the same. A disagreement here is a real defect in one
+ * side, not a test to relax — namespace resolution is a security frontier
+ * (`docs/sme/security.md`).
+ */
+describe("sharedNamespaceNames agrees with sharedNamespaceConfig()", () => {
+  const NAMES = [
+    "SHARED_NAMESPACE_PHYSICAL",
+    "SHARED_NAMESPACE_LEGACY",
+    "OPENBRAIN_SHARED_NAMESPACE",
+    "OPENBRAIN_LEGACY_SHARED_NAMESPACE",
+    "OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS",
+  ] as const;
+  const VALUES = [undefined, "", "   ", "7"] as const;
+
+  for (const name of NAMES) {
+    for (const value of VALUES) {
+      it(`agrees for ${name}=${JSON.stringify(value)}`, () => {
+        const saved = process.env[name];
+        try {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+          const fromReader = sharedNamespaceConfig();
+          const fromConfig = extendedConfig({
+            [name]: value,
+          }).sharedNamespaceNames;
+          expect(fromConfig).toEqual(fromReader);
+        } finally {
+          if (saved === undefined) delete process.env[name];
+          else process.env[name] = saved;
+        }
+      });
+    }
+  }
+});
+
+describe("shared-namespace helpers honour a passed name set", () => {
+  const NAMES = {
+    canonicalSharedNamespace: "shared-kb",
+    physicalSharedNamespace: "shared-kb-v2",
+    legacySharedNamespace: "collab",
+    legacyFallbackEnabled: false,
+    fallbackMinResults: 5,
+  };
+
+  it("uses the passed set rather than the environment", () => {
+    expect(isSharedNamespace("shared-kb-v2", NAMES)).toBe(true);
+    expect(canonicalNamespace("shared-kb-v2", NAMES)).toBe("shared-kb");
+    expect(canonicalNamespace("collab", NAMES)).toBe("shared-kb");
+    expect(physicalNamespace("shared-kb", NAMES)).toBe("shared-kb-v2");
+  });
+
+  it("still reads the environment when no set is passed", () => {
+    expect(physicalNamespace("shared-kb")).toBe("shared-kb");
   });
 });
