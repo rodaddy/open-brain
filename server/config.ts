@@ -292,8 +292,16 @@ function parseUserTokens(environment: Environment): ConfigResult | AuthTokenConf
   return issues.length > 0 ? { ok: false, issues } : configured;
 }
 
+/**
+ * `environment` is the RAW input alongside the parsed one, not a duplicate of
+ * it: `SHARED_NAMESPACE_CANONICAL` is declared as a literal with a default
+ * (`:167`), so `parsed` can never say "the operator did not set this" — and the
+ * reader `sharedNamespaceConfig` (`server/tools/shared-namespace.ts:79-82`)
+ * decides precedence on exactly that distinction.
+ */
 function buildConfig(
   parsed: ParsedEnvironment,
+  environment: Environment,
   userTokens: AuthTokenConfig[],
   deployedRevision?: string,
 ): ServerConfig {
@@ -354,7 +362,7 @@ function buildConfig(
     recovery: recoveryGroup(parsed),
     sharedNamespaceNames: sharedNamespaceGroup(
       parsed,
-      parsed.SHARED_NAMESPACE_CANONICAL,
+      environment.SHARED_NAMESPACE_CANONICAL,
     ),
     tracing: tracingGroup(parsed),
     captureHealth: captureHealthGroup(parsed),
@@ -387,7 +395,7 @@ export function parseServerConfig(
   if (!Array.isArray(userTokens)) return userTokens;
   return {
     ok: true,
-    config: buildConfig(parsed.data, userTokens, deployedRevision),
+    config: buildConfig(parsed.data, environment, userTokens, deployedRevision),
   };
 }
 

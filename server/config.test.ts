@@ -6,6 +6,10 @@
 import { describe, expect, it, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { loadServerConfig, OPTIONAL_SECRET_KEYS, parseServerConfig } from "./config.ts";
+import { resolveFtsConfig } from "./tools/fts-config.ts";
+import { resolveQmdPath } from "./tools/search-all.ts";
+import { parseAllowedOrigins } from "./transport/rest.ts";
+import { readMcpTracingConfig } from "./observability/langfuse-tracing.ts";
 
 const REQUIRED = {
   DB_HOST: "db.internal",
@@ -299,7 +303,7 @@ describe("loadServerConfig against a real process.env", () => {
  * A valid configuration with `overrides` applied, or a failure naming the
  * issues. Shared by every group block below.
  */
-function extendedConfig(overrides: Record<string, string> = {}) {
+function extendedConfig(overrides: Record<string, string | undefined> = {}) {
   const result = parseServerConfig({ ...REQUIRED, ...overrides });
   if (!result.ok) {
     throw new Error(`expected valid configuration: ${JSON.stringify(result.issues)}`);
@@ -333,15 +337,11 @@ describe("extended env — search", () => {
     ).toBe(100);
   });
 
-  it("ignores a non-integer timeout rather than failing startup", () => {
-    expect(
-      extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "abc" }).search.embeddingTimeoutMs,
-    ).toBe(3_000);
-  });
-
   it("ignores a below-minimum timeout, and does NOT fall through to the legacy name", () => {
     // The name is chosen before the value is parsed, so an unusable preferred
-    // value lands on the DEFAULT, not on whatever the legacy name holds.
+    // value lands on the DEFAULT, not on whatever the legacy name holds. The
+    // unparseable case (`abc`) is covered against the reader itself in the
+    // start-equivalence table below.
     expect(
       extendedConfig({
         OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "0",
@@ -364,9 +364,8 @@ describe("extended env — fts", () => {
     expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig).toBe("spanish");
   });
 
-  it("falls back to english on an unrecognized token rather than failing startup", () => {
-    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: "klingon" }).fts.corpusConfig).toBe("english");
-  });
+  // The unrecognized-token fallback is asserted against `resolveFtsConfig`
+  // itself in the start-equivalence table below, over the whole input set.
 });
 
 describe("extended env — qmd", () => {
@@ -492,12 +491,8 @@ describe("extended env — tracing", () => {
     ).toBe(false);
   });
 
-  it("stays off when the flag is set but a coordinate is missing", () => {
-    const partial = { ...COORDINATES, OPENBRAIN_TRACING_SECRET_KEY: "" };
-    expect(extendedConfig({ ...partial, OPENBRAIN_TRACING_ENABLED: "1" }).tracing.enabled).toBe(
-      false,
-    );
-  });
+  // The incomplete-coordinate and masking shapes are asserted against
+  // `readMcpTracingConfig` itself in the start-equivalence block below.
 
   it("disables masking only on an exact 0", () => {
     expect(extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing.maskingEnabled).toBe(
@@ -534,14 +529,8 @@ describe("extended env — captureHealth", () => {
     );
   });
 
-  it("ignores an unparseable window or refresh rather than failing startup", () => {
-    const capture = extendedConfig({
-      OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "soon",
-      OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "-5",
-    }).captureHealth;
-    expect(capture.windowMinutes).toBe(360);
-    expect(capture.refreshMs).toBe(60_000);
-  });
+  // The unparseable and non-positive cases are asserted against
+  // `readPositiveInteger` itself in the start-equivalence table below.
 });
 
 describe("extended env — http", () => {
@@ -555,8 +544,17 @@ describe("extended env — http", () => {
     expect(extendedConfig({ PORT: "7150" }).http.port).toBe(7_150);
   });
 
-  it("ignores an unusable port rather than failing startup", () => {
-    expect(extendedConfig({ PORT: "not-a-port" }).http.port).toBe(3_100);
+  it("rejects an unbindable port by name instead of substituting a default", () => {
+    // The reader is `Number(process.env.PORT ?? DEFAULT_PORT)`
+    // (`server/main.ts:362`) and `Number("not-a-port")` is `NaN`, which
+    // `listen` throws on — so this deployment does NOT start today. A silent
+    // 3100 here would boot it on a port nobody configured; a named config
+    // issue is the same crash, reached earlier. Full equivalence table is in
+    // the start-equivalence block below.
+    const result = parseServerConfig({ ...REQUIRED, PORT: "not-a-port" });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected an unbindable port to be rejected");
+    expect(result.issues.map((issue) => issue.path)).toEqual(["PORT"]);
   });
 
   it("splits, trims, and drops blanks from the origin list", () => {
@@ -566,7 +564,170 @@ describe("extended env — http", () => {
     ).toEqual(["https://a.example", "https://b.example"]);
   });
 
-  it("yields no origins for a blank list", () => {
-    expect(extendedConfig({ ALLOWED_ORIGINS: "  " }).http.allowedOrigins).toEqual([]);
+  // The blank list is asserted against `parseAllowedOrigins` itself in the
+  // start-equivalence table below, over the whole input set.
+});
+
+
+/**
+ * START-EQUIVALENCE: the schema must answer what the READER answers.
+ *
+ * The blocks above assert the schema against a hand-written expected value,
+ * which is what let three divergences pass their own suite (PR #778 review):
+ * every input they chose is one on which reader and schema happen to agree.
+ * These drive the assertion from the reader instead, over the reviewer's
+ * divergence-finding input set, so the equivalence claim is falsifiable.
+ *
+ * An exported reader is IMPORTED and called. A module-private one has its exact
+ * expression written out beside its file and line, so an edit to either side
+ * fails a test rather than drifting apart quietly.
+ */
+const DIVERGENCE_INPUTS = [
+  "3000ms", "10.5", "1e3", " 42 ", "0x10", "abc", "-1", "0", "", "   ",
+  undefined, "007", "3,000", "+5", "Infinity",
+] as const;
+
+/** `server/capture/liveness-observer.ts:535-550`, reproduced: `Number`, not `parseInt`. */
+function readPositiveInteger(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw.trim());
+  const ok = Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0;
+  return ok ? parsed : fallback;
+}
+
+/** `server/tools/search-engine.ts:147-152`, reproduced: `??` does NOT skip `""`. */
+function searchEmbeddingTimeoutMs(
+  preferred: string | undefined,
+  legacy: string | undefined,
+): number {
+  const raw = preferred ?? legacy;
+  if (!raw) return 3_000;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) || parsed < 1 ? 3_000 : parsed;
+}
+
+/**
+ * `server/main.ts:362` is `Number(process.env.PORT ?? DEFAULT_PORT)` handed to
+ * `server.listen(port)`, which THROWS on a non-integer or an out-of-range one —
+ * so those environments crash today and a named rejection is that same crash,
+ * earlier. A silent 3100 would instead boot a deployment that does not boot.
+ */
+function expectPortMatchesReader(input: string | undefined): void {
+  const expected = Number(input ?? 3_100);
+  const bindable = Number.isInteger(expected) && expected >= 0 && expected <= 65_535;
+  const result = parseServerConfig({ ...REQUIRED, PORT: input });
+  if (bindable) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected valid configuration");
+    expect(result.config.http.port).toBe(expected);
+    return;
+  }
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error(`expected PORT=${String(input)} rejected`);
+  expect(result.issues.map((issue) => issue.path)).toEqual(["PORT"]);
+}
+
+function expectCaptureHealthMatchesReader(input: string | undefined): void {
+  const capture = extendedConfig({
+    OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: input,
+    OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: input,
+  }).captureHealth;
+  expect(capture.windowMinutes).toBe(readPositiveInteger(input, 360));
+  expect(capture.refreshMs).toBe(readPositiveInteger(input, 60_000));
+}
+
+function expectSearchTimeoutMatchesReader(input: string | undefined): void {
+  expect(
+    extendedConfig({ OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: input }).search.embeddingTimeoutMs,
+  ).toBe(searchEmbeddingTimeoutMs(input, undefined));
+  expect(
+    extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: input }).search.embeddingTimeoutMs,
+  ).toBe(searchEmbeddingTimeoutMs(undefined, input));
+}
+
+/** The readers that ARE exported are imported and called, not reproduced. */
+function expectExportedReadersAgree(input: string | undefined): void {
+  const config = extendedConfig({
+    OPENBRAIN_FTS_CONFIG: input,
+    ALLOWED_ORIGINS: input,
+    QMD_PATH: input,
+  });
+  expect(config.fts.corpusConfig).toEqual(resolveFtsConfig(input?.trim()));
+  expect(config.http.allowedOrigins).toEqual(parseAllowedOrigins(input));
+  expect(config.qmd.path).toBe(resolveQmdPath({ QMD_PATH: input }));
+}
+
+describe("start-equivalence — every field answers what its reader answers", () => {
+  test.each([...DIVERGENCE_INPUTS])("every reader agrees for %o", (input) => {
+    expectPortMatchesReader(input);
+    expectCaptureHealthMatchesReader(input);
+    expectSearchTimeoutMatchesReader(input);
+    expectExportedReadersAgree(input);
+  });
+
+  it("binds the ephemeral port for PORT= rather than substituting 3100", () => {
+    // `Number("")` is 0, and 0 asks the OS for an ephemeral port. That is a real
+    // deployment shape — the same one `QMD_PATH=` produced a live defect with.
+    expect(extendedConfig({ PORT: "" }).http.port).toBe(0);
+    expect(extendedConfig({ PORT: "   " }).http.port).toBe(0);
+  });
+
+  it("takes Number's reading of exponent, hex, and padded port forms", () => {
+    expect(extendedConfig({ PORT: "1e3" }).http.port).toBe(1_000);
+    expect(extendedConfig({ PORT: "0x10" }).http.port).toBe(16);
+    expect(extendedConfig({ PORT: " 42 " }).http.port).toBe(42);
+  });
+
+  it("does not fall through to the legacy timeout name when the preferred is blank", () => {
+    // `??` is not `||`: a present-but-empty preferred name is still PRESENT, so
+    // the reader answers 3000 and never looks at the legacy value.
+    const answer = extendedConfig({
+      OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: "",
+      SEARCH_EMBEDDING_TIMEOUT_MS: "900",
+    }).search.embeddingTimeoutMs;
+    expect(answer).toBe(searchEmbeddingTimeoutMs("", "900"));
+    expect(answer).toBe(3_000);
+  });
+});
+
+/**
+ * Canonical shared-namespace precedence.
+ *
+ * `server/tools/shared-namespace.ts:79-82` is
+ * `envString(["SHARED_NAMESPACE_CANONICAL", "OPENBRAIN_SHARED_NAMESPACE"], …)`
+ * — the first NON-EMPTY trimmed value in THAT order, so the canonical name
+ * wins. The schema declares it as a literal with a default
+ * (`server/config.ts:167`), so `parsed` cannot express "unset" and the RAW
+ * environment value has to decide. Namespace resolution is a security boundary
+ * (`docs/sme/security.md`); the same value propagates into `physical`.
+ */
+describe("start-equivalence — shared-namespace canonical precedence", () => {
+  test.each([
+    // canonical unset -> the override is what `envString` reaches next
+    [{ OPENBRAIN_SHARED_NAMESPACE: "other" }, "other"],
+    // both set -> the CANONICAL name wins; the group had this inverted
+    [{ SHARED_NAMESPACE_CANONICAL: "shared-kb", OPENBRAIN_SHARED_NAMESPACE: "other" }, "shared-kb"],
+    // an explicit physical name outranks either canonical coordinate
+    [{ OPENBRAIN_SHARED_NAMESPACE: "other", SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" }, "shared-kb-v2"],
+  ])("resolves the physical name from %o", (env, expected) => {
+    expect(extendedConfig(env).sharedNamespaceNames.physical).toBe(expected);
+  });
+
+  it("matches readMcpTracingConfig on the complete and incomplete shapes", () => {
+    const complete = {
+      OPENBRAIN_TRACING_ENABLED: "1",
+      OPENBRAIN_TRACING_ENDPOINT: "https://langfuse.internal",
+      OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
+      OPENBRAIN_TRACING_SECRET_KEY: "sk",
+    };
+    const incomplete = { ...complete, OPENBRAIN_TRACING_ENDPOINT: "  " };
+    for (const shape of [{}, { OPENBRAIN_TRACING_ENABLED: "1" }, complete, incomplete]) {
+      const reader = readMcpTracingConfig(shape);
+      const schema = extendedConfig(shape).tracing;
+      expect(schema.enabled).toBe(reader.enabled);
+      expect(schema.maskingEnabled).toBe(reader.maskingEnabled);
+      expect(schema.endpoint).toBe(reader.endpoint);
+      expect(schema.publicKey).toBe(reader.publicKey);
+    }
   });
 });
