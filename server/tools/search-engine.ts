@@ -118,16 +118,23 @@ interface ArmWindow {
   readonly offset: number;
 }
 
-/** Resolve the embedding timeout, ignoring an unusable environment value. */
-function searchEmbeddingTimeoutMs(): number {
-  const raw =
-    process.env.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS ??
-    process.env.SEARCH_EMBEDDING_TIMEOUT_MS;
-  if (!raw) return DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isNaN(parsed) || parsed < 1
+/**
+ * Resolve the embedding timeout from the injected dependencies.
+ *
+ * The value arrives from the ONE validated parse
+ * (`config.search.embeddingTimeoutMs`, `server/config/env-groups.ts`
+ * `searchGroup`), which already applies the same two names, the same
+ * `OPENBRAIN_`-first precedence, and the same fallback for a blank or
+ * unusable value. Absent means the caller injected nothing, and the same
+ * default answers — the value an unset environment produced before this
+ * became injected.
+ */
+function searchEmbeddingTimeoutMs(dependencies: SearchDependencies): number {
+  const injected = dependencies.searchEmbeddingTimeoutMs;
+  if (injected === undefined) return DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS;
+  return Number.isNaN(injected) || injected < 1
     ? DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS
-    : parsed;
+    : injected;
 }
 
 /**
@@ -142,7 +149,7 @@ async function generateSearchEmbedding(
   dependencies: SearchDependencies,
   query: string,
 ): Promise<number[] | null> {
-  const timeoutMs = searchEmbeddingTimeoutMs();
+  const timeoutMs = searchEmbeddingTimeoutMs(dependencies);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   return traceRetrievalSpan({
     name: "retrieval.embedding",

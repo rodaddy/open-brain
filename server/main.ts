@@ -181,6 +181,7 @@ function createServerFactory(input: {
       // `natsRuntimeBoundaryFromConfig(config.nats)` call: rebuilding it here
       // would give the doctor a boundary object that can drift from the one the
       // bridge and `/health` actually run on.
+      searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
       ftsCorpusConfig: config.fts.corpusConfig,
       recoveryWalPath: config.recovery.walPath,
       natsRuntimeBoundary: nats.boundary,
@@ -503,7 +504,10 @@ export async function startServer(
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
   const tracing = createTracingRuntime();
-  logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
+  logger.info(
+    { enabled: tracing.sink !== undefined },
+    "mcp_tracing_configured",
+  );
   let application: ShadowApplication | undefined;
   try {
     await applyMigrations({
@@ -624,7 +628,6 @@ async function shutdown(running: RunningProcess): Promise<void> {
   logger.info({}, "server_shutdown_complete");
   if (firstFailure !== undefined) throw firstFailure;
 }
-
 
 /**
  * The launchd-facing process wrapper: signals, exit codes, nothing else.

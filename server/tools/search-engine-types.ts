@@ -63,6 +63,14 @@ export interface SearchDependencies {
   readonly pool: Pool;
   readonly embedFn: (text: string) => Promise<number[] | null>;
   readonly logger: Logger;
+  /**
+   * Milliseconds the query-embedding call may take before the search degrades.
+   *
+   * From `config.search.embeddingTimeoutMs`. Absent means the engine answers
+   * {@link DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS}, which is what an unset
+   * environment produced when this was read here directly.
+   */
+  readonly searchEmbeddingTimeoutMs?: number;
 }
 
 export interface ExecuteSearchOptions {

@@ -62,6 +62,14 @@ export interface MemoryToolDependencies {
    * requested no bridge — rather than reading the environment a second time.
    */
   readonly natsRuntimeBoundary?: NatsRuntimeBoundary;
+  /**
+   * Milliseconds the query-embedding call may take before a search degrades.
+   *
+   * From `config.search.embeddingTimeoutMs`. Absent means the search engine's
+   * own default answers — the value an unset environment produced when the
+   * engine read the environment itself.
+   */
+  readonly searchEmbeddingTimeoutMs?: number;
 }
 
 export interface McpAuthInfo {
