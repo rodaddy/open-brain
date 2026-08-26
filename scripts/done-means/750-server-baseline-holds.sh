@@ -24,11 +24,12 @@ check() {
   fi
 }
 
-# baseline.md:36 -- non-test TypeScript files under server/
+# baseline.md -- non-test TypeScript files under server/
+# 99 -> 100 at 49ecfbe: L2a (PR #778) added server/config/env-groups.ts.
 files=$(fd -e ts . server/ | rg -v '\.test\.ts$' | wc -l | tr -d ' ')
-check "server/ non-test files" "${DONE_MEANS_750_EXPECT_FILES:-99}" "$files"
+check "server/ non-test files" "${DONE_MEANS_750_EXPECT_FILES:-100}" "$files"
 
-# baseline.md:56 -- code lines per file, comments and blanks stripped; count > 500
+# baseline.md -- code lines per file, comments and blanks stripped; count > 500
 over500=0
 while IFS= read -r f; do
   n=$(sed -e 's://.*::' -e '/^\s*$/d' "$f" | rg -v '^\s*(\*|/\*)' | wc -l | tr -d ' ')
@@ -36,11 +37,23 @@ while IFS= read -r f; do
 done < <(fd -e ts . server/ | rg -v '\.test\.ts$')
 check "server/ files over 500 code lines" 5 "$over500"
 
-# baseline.md:86 -- non-test files that read process.env
+# baseline.md -- non-test files CONTAINING the string process.env.
+#
+# This counts files that contain the text, comments included -- NOT readers.
+# server/config/env-groups.ts names it only in doc comments and reads nothing,
+# and it is counted here all the same. The count is deliberately left in this
+# mechanically re-runnable form: a hand-curated "real readers" number cannot be
+# re-measured by a script, which is the whole point of this file. The
+# no-process-env lint rule L2c installs is what distinguishes read from mention.
+#
+# 11 -> 12 at 49ecfbe: L2a (PR #778) added env-groups.ts. The number went UP
+# because L2a is the schema half only -- it typed the env names and left the
+# original readers in place on purpose. L2b/L2c bring it DOWN by rewiring
+# consumers onto injected config.
 envreaders=$(rg -c 'process\.env' server/ --type ts | rg -v '\.test\.ts:' | wc -l | tr -d ' ')
-check "server/ files reading process.env" 11 "$envreaders"
+check "server/ files containing process.env" 12 "$envreaders"
 
-# baseline.md:107 -- import sites from src/, and distinct modules
+# baseline.md -- import sites from src/, and distinct modules
 sites=$(rg -oN "from ['\"][^'\"]*src/[^'\"]+" server/ --type ts | rg -v '\.test\.ts:' | wc -l | tr -d ' ')
 modules=$(rg -oN "from ['\"][^'\"]*src/[^'\"]+" server/ --type ts | rg -v '\.test\.ts:' \
   | rg -o "src/[^'\"]+" | sort -u | wc -l | tr -d ' ')

@@ -44,6 +44,74 @@ import { tableEnum, tierEnum } from "./curation-helpers.ts";
  */
 const BULK_ENTRIES_PER_CALL = 100;
 
+const setTierInputSchema = {
+  table: tableEnum.describe("Table containing the entry"),
+  id: z.string().uuid().describe("UUID of the entry to update"),
+  tier: tierEnum.describe(
+    "Cognitive tier: hot (front-of-mind, boosted), warm (default), cold (deprioritized)",
+  ),
+};
+
+const setTierAnnotations = {
+  title: "Set Tier",
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+const bulkSetTierInputSchema = {
+  entries: z
+    .array(
+      z.object({
+        id: z.string().uuid().describe("UUID of the entry"),
+        table: tableEnum.describe("Table containing the entry"),
+        tier: tierEnum.describe("Target cognitive tier"),
+      }),
+    )
+    .min(1)
+    .max(BULK_ENTRIES_PER_CALL)
+    .describe(`Array of entries to update (max ${BULK_ENTRIES_PER_CALL})`),
+};
+
+const bulkSetTierAnnotations = {
+  title: "Bulk Set Tier",
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+const bulkArchiveInputSchema = {
+  entries: z
+    .array(
+      z.object({
+        id: z.string().uuid().describe("UUID of the entry to archive"),
+        table: tableEnum.describe("Table containing the entry"),
+      }),
+    )
+    .min(1)
+    .max(BULK_ENTRIES_PER_CALL)
+    .describe(`Array of entries to archive (max ${BULK_ENTRIES_PER_CALL})`),
+};
+
+const bulkArchiveAnnotations = {
+  title: "Bulk Archive",
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+};
+
+const demoteEntryInputSchema = {
+  table: tableEnum.describe("Table name"),
+  id: z.string().uuid().describe("UUID of the promoted entry to demote"),
+};
+
+const demoteEntryAnnotations = {
+  title: "Demote Entry",
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+};
+
 export function registerTierMutationTools(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -53,54 +121,10 @@ export function registerTierMutationTools(
     {
       description:
         "Set the cognitive tier (hot/warm/cold) for a brain entry. Hot entries are boosted in search, cold entries are deprioritized. Requires write permission.",
-      inputSchema: {
-        table: tableEnum.describe("Table containing the entry"),
-        id: z.string().uuid().describe("UUID of the entry to update"),
-        tier: tierEnum.describe(
-          "Cognitive tier: hot (front-of-mind, boosted), warm (default), cold (deprioritized)",
-        ),
-      },
-      annotations: {
-        title: "Set Tier",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: setTierInputSchema,
+      annotations: setTierAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      const table = args.table as ResourceTable;
-      if (!identity || !canWrite(identity.role, table)) {
-        return errorResult(`Permission denied: cannot write to ${table}`);
-      }
-
-      // `table` reaches an interpolated position only after `tableEnum` has
-      // narrowed it to one of five compile-time literals.
-      const predicate = namespacePredicate(identity, "write", 3);
-      const { rows } = await dependencies.pool.query(
-        `UPDATE ${table} SET tier = $1
-          WHERE id = $2 AND archived_at IS NULL${predicate.clause}
-          RETURNING id, tier`,
-        [args.tier, args.id, ...predicate.values],
-      );
-
-      // Not-mine and not-there collapse to ONE string, so this tool cannot be
-      // used to probe which UUIDs exist in a namespace the caller cannot write.
-      if (rows.length === 0) {
-        dependencies.logger.info(
-          { tool: "set_tier", table, matched: 0 },
-          "set_tier_noop",
-        );
-        return errorResult("Entry not found or archived");
-      }
-
-      const row = rows[0] as { id: string; tier: string };
-      dependencies.logger.info(
-        { tool: "set_tier", table, id: row.id, tier: row.tier },
-        "tool_result",
-      );
-      return textResult({ id: row.id, table, tier: row.tier });
-    },
+    async (args, extra) => handleSetTier(dependencies, args, extra),
   );
 
   server.registerTool(
@@ -108,60 +132,10 @@ export function registerTierMutationTools(
     {
       description:
         "Set cognitive tiers for multiple entries in a single transaction. Max 100 entries per call.",
-      inputSchema: {
-        entries: z
-          .array(
-            z.object({
-              id: z.string().uuid().describe("UUID of the entry"),
-              table: tableEnum.describe("Table containing the entry"),
-              tier: tierEnum.describe("Target cognitive tier"),
-            }),
-          )
-          .min(1)
-          .max(BULK_ENTRIES_PER_CALL)
-          .describe(`Array of entries to update (max ${BULK_ENTRIES_PER_CALL})`),
-      },
-      annotations: {
-        title: "Bulk Set Tier",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: bulkSetTierInputSchema,
+      annotations: bulkSetTierAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-
-      const entries = args.entries;
-      // Every referenced table is permission-checked BEFORE the transaction
-      // opens. Checking inside the loop would let a partially-authorized batch
-      // do real work and then roll back, which is a slower way to reach the
-      // same refusal and leaves a write burst in the WAL on the way.
-      for (const table of new Set(entries.map((entry) => entry.table))) {
-        if (!canWrite(identity.role, table as ResourceTable)) {
-          return errorResult(`Permission denied: cannot write to ${table}`);
-        }
-      }
-
-      const predicate = namespacePredicate(identity, "write", 3);
-      const result = await runBulkTransaction(
-        dependencies,
-        "bulk_set_tier",
-        entries,
-        (entry) => ({
-          sql: `UPDATE ${entry.table as ResourceTable} SET tier = $1
-                 WHERE id = $2 AND archived_at IS NULL${predicate.clause}`,
-          values: [entry.tier, entry.id, ...predicate.values],
-        }),
-      );
-      if (!result.ok) return result.response;
-
-      dependencies.logger.info(
-        { tool: "bulk_set_tier", requested: entries.length, updated: result.affected },
-        "tool_result",
-      );
-      return textResult({ requested: entries.length, updated: result.affected });
-    },
+    async (args, extra) => handleBulkSetTier(dependencies, args, extra),
   );
 
   server.registerTool(
@@ -169,58 +143,10 @@ export function registerTierMutationTools(
     {
       description:
         "Soft-delete multiple entries in a single transaction. Max 100 entries per call.",
-      inputSchema: {
-        entries: z
-          .array(
-            z.object({
-              id: z.string().uuid().describe("UUID of the entry to archive"),
-              table: tableEnum.describe("Table containing the entry"),
-            }),
-          )
-          .min(1)
-          .max(BULK_ENTRIES_PER_CALL)
-          .describe(`Array of entries to archive (max ${BULK_ENTRIES_PER_CALL})`),
-      },
-      annotations: {
-        title: "Bulk Archive",
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-      },
+      inputSchema: bulkArchiveInputSchema,
+      annotations: bulkArchiveAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-
-      const entries = args.entries;
-      // Archiving is a DELETE-class operation, so the delete permission is the
-      // authority here, not write. `discord` can write thoughts and must not be
-      // able to archive them.
-      for (const table of new Set(entries.map((entry) => entry.table))) {
-        if (!canDelete(identity.role, table as ResourceTable)) {
-          return errorResult(`Permission denied: cannot delete from ${table}`);
-        }
-      }
-
-      const predicate = namespacePredicate(identity, "delete", 2);
-      const result = await runBulkTransaction(
-        dependencies,
-        "bulk_archive",
-        entries,
-        (entry) => ({
-          sql: `UPDATE ${entry.table as ResourceTable} SET archived_at = NOW()
-                 WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-          values: [entry.id, ...predicate.values],
-        }),
-      );
-      if (!result.ok) return result.response;
-
-      dependencies.logger.info(
-        { tool: "bulk_archive", requested: entries.length, archived: result.affected },
-        "tool_result",
-      );
-      return textResult({ requested: entries.length, archived: result.affected });
-    },
+    async (args, extra) => handleBulkArchive(dependencies, args, extra),
   );
 
   server.registerTool(
@@ -229,73 +155,253 @@ export function registerTierMutationTools(
       description:
         "Archive a previously promoted entry, reversing a promotion. " +
         "Only works on entries that have promoted_from provenance metadata. Admin and ob-admin only.",
-      inputSchema: {
-        table: tableEnum.describe("Table name"),
-        id: z.string().uuid().describe("UUID of the promoted entry to demote"),
-      },
-      annotations: {
-        title: "Demote Entry",
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-      },
+      inputSchema: demoteEntryInputSchema,
+      annotations: demoteEntryAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      // Demotion reverses shared truth, so it is gated on the break-glass
-      // identities by ROLE rather than the table permission matrix: a promoter
-      // may promote INTO shared-kb but may not unwind what is already there.
-      if (!identity || (identity.role !== "admin" && identity.role !== "ob-admin")) {
-        return errorResult("Permission denied: admin or ob-admin role required");
-      }
-
-      const table = args.table as ResourceTable;
-      const notFound = errorResult("Entry not found or already archived");
-
-      const readPredicate = namespacePredicate(identity, "read", 2);
-      const { rows } = await dependencies.pool.query(
-        `SELECT id, namespace, promoted_from FROM ${table}
-          WHERE id = $1 AND archived_at IS NULL${readPredicate.clause}`,
-        [args.id, ...readPredicate.values],
-      );
-      if (rows.length === 0) return notFound;
-
-      const provenance = (rows[0] as { promoted_from: unknown }).promoted_from;
-      if (!provenance) {
-        return errorResult("Entry was not promoted — cannot demote");
-      }
-
-      // The UPDATE re-derives its own predicate rather than trusting the SELECT
-      // that just passed. The read scope is WIDER than the write scope (it
-      // includes shared-kb), so reusing the read predicate here would let an
-      // entry that is merely readable be archived.
-      const writePredicate = namespacePredicate(identity, "delete", 2);
-      const { rowCount } = await dependencies.pool.query(
-        `UPDATE ${table} SET archived_at = NOW()
-          WHERE id = $1 AND archived_at IS NULL${writePredicate.clause}`,
-        [args.id, ...writePredicate.values],
-      );
-      if ((rowCount ?? 0) === 0) return notFound;
-
-      const source = provenance as { source_id?: unknown; source_namespace?: unknown };
-      dependencies.logger.info(
-        {
-          tool: "demote_entry",
-          table,
-          id: args.id,
-          sourceId: source.source_id,
-          sourceNamespace: source.source_namespace,
-        },
-        "tool_result",
-      );
-      return textResult({
-        status: "demoted",
-        archived_id: args.id,
-        source_id: source.source_id,
-        source_namespace: source.source_namespace,
-      });
-    },
+    async (args, extra) => handleDemoteEntry(dependencies, args, extra),
   );
+}
+
+/** Minimal shape of the handler `extra` argument these tools read. */
+interface HandlerExtra {
+  authInfo?: Parameters<typeof authIdentity>[0];
+}
+
+/**
+ * Check one permission per DISTINCT table referenced by a bulk batch.
+ *
+ * Both bulk tools check every referenced table BEFORE their transaction opens.
+ * Checking inside the loop would let a partially-authorized batch do real work
+ * and then roll back, which is a slower way to reach the same refusal and
+ * leaves a write burst in the WAL on the way.
+ *
+ * @param entries Batch entries, each naming the table it targets.
+ * @param permitted Role check for one table: `canWrite` or `canDelete`.
+ * @param denial Builds the observed current-src refusal string for a table.
+ * @returns The denial envelope for the first unauthorized table, else `undefined`.
+ */
+function denyUnauthorizedTables(
+  entries: readonly { table: string }[],
+  permitted: (table: ResourceTable) => boolean,
+  denial: (table: string) => string,
+): ReturnType<typeof errorResult> | undefined {
+  for (const table of new Set(entries.map((entry) => entry.table))) {
+    if (!permitted(table as ResourceTable)) {
+      return errorResult(denial(table));
+    }
+  }
+  return undefined;
+}
+
+/** `set_tier`: retier ONE entry the caller may write, in its own namespace. */
+async function handleSetTier(
+  dependencies: MemoryToolDependencies,
+  args: { table: string; id: string; tier: string },
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  const table = args.table as ResourceTable;
+  if (!identity || !canWrite(identity.role, table)) {
+    return errorResult(`Permission denied: cannot write to ${table}`);
+  }
+
+  // `table` reaches an interpolated position only after `tableEnum` has
+  // narrowed it to one of five compile-time literals.
+  const predicate = namespacePredicate(identity, "write", 3);
+  const { rows } = await dependencies.pool.query(
+    `UPDATE ${table} SET tier = $1
+          WHERE id = $2 AND archived_at IS NULL${predicate.clause}
+          RETURNING id, tier`,
+    [args.tier, args.id, ...predicate.values],
+  );
+
+  // Not-mine and not-there collapse to ONE string, so this tool cannot be
+  // used to probe which UUIDs exist in a namespace the caller cannot write.
+  if (rows.length === 0) {
+    dependencies.logger.info(
+      { tool: "set_tier", table, matched: 0 },
+      "set_tier_noop",
+    );
+    return errorResult("Entry not found or archived");
+  }
+
+  const row = rows[0] as { id: string; tier: string };
+  dependencies.logger.info(
+    { tool: "set_tier", table, id: row.id, tier: row.tier },
+    "tool_result",
+  );
+  return textResult({ id: row.id, table, tier: row.tier });
+}
+
+/** `bulk_set_tier`: retier a batch in ONE transaction, all-or-nothing. */
+async function handleBulkSetTier(
+  dependencies: MemoryToolDependencies,
+  args: { entries: { id: string; table: string; tier: string }[] },
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  if (!identity) return errorResult("Permission denied: not authenticated");
+
+  const entries = args.entries;
+  const denied = denyUnauthorizedTables(
+    entries,
+    (table) => canWrite(identity.role, table),
+    (table) => `Permission denied: cannot write to ${table}`,
+  );
+  if (denied) return denied;
+
+  const predicate = namespacePredicate(identity, "write", 3);
+  const result = await runBulkTransaction(
+    dependencies,
+    "bulk_set_tier",
+    entries,
+    (entry) => ({
+      sql: `UPDATE ${entry.table as ResourceTable} SET tier = $1
+                 WHERE id = $2 AND archived_at IS NULL${predicate.clause}`,
+      values: [entry.tier, entry.id, ...predicate.values],
+    }),
+  );
+  if (!result.ok) return result.response;
+
+  dependencies.logger.info(
+    {
+      tool: "bulk_set_tier",
+      requested: entries.length,
+      updated: result.affected,
+    },
+    "tool_result",
+  );
+  return textResult({ requested: entries.length, updated: result.affected });
+}
+
+/** `bulk_archive`: soft-delete a batch in ONE transaction, all-or-nothing. */
+async function handleBulkArchive(
+  dependencies: MemoryToolDependencies,
+  args: { entries: { id: string; table: string }[] },
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  if (!identity) return errorResult("Permission denied: not authenticated");
+
+  const entries = args.entries;
+  // Archiving is a DELETE-class operation, so the delete permission is the
+  // authority here, not write. `discord` can write thoughts and must not be
+  // able to archive them.
+  const denied = denyUnauthorizedTables(
+    entries,
+    (table) => canDelete(identity.role, table),
+    (table) => `Permission denied: cannot delete from ${table}`,
+  );
+  if (denied) return denied;
+
+  const predicate = namespacePredicate(identity, "delete", 2);
+  const result = await runBulkTransaction(
+    dependencies,
+    "bulk_archive",
+    entries,
+    (entry) => ({
+      sql: `UPDATE ${entry.table as ResourceTable} SET archived_at = NOW()
+                 WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
+      values: [entry.id, ...predicate.values],
+    }),
+  );
+  if (!result.ok) return result.response;
+
+  dependencies.logger.info(
+    {
+      tool: "bulk_archive",
+      requested: entries.length,
+      archived: result.affected,
+    },
+    "tool_result",
+  );
+  return textResult({ requested: entries.length, archived: result.affected });
+}
+
+/**
+ * Archive the promoted entry, re-deriving the write predicate.
+ *
+ * The UPDATE re-derives its own predicate rather than trusting the SELECT that
+ * just passed. The read scope is WIDER than the write scope (it includes
+ * shared-kb), so reusing the read predicate here would let an entry that is
+ * merely readable be archived.
+ *
+ * @returns Rows affected by the archiving UPDATE.
+ */
+async function archiveDemotedEntry(
+  dependencies: MemoryToolDependencies,
+  identity: NonNullable<ReturnType<typeof authIdentity>>,
+  table: ResourceTable,
+  id: string,
+): Promise<number> {
+  const writePredicate = namespacePredicate(identity, "delete", 2);
+  const { rowCount } = await dependencies.pool.query(
+    `UPDATE ${table} SET archived_at = NOW()
+          WHERE id = $1 AND archived_at IS NULL${writePredicate.clause}`,
+    [id, ...writePredicate.values],
+  );
+  return rowCount ?? 0;
+}
+
+/** `demote_entry`: reverse a promotion, break-glass roles only. */
+async function handleDemoteEntry(
+  dependencies: MemoryToolDependencies,
+  args: { table: string; id: string },
+  extra: HandlerExtra,
+) {
+  const identity = authIdentity(extra.authInfo);
+  // Demotion reverses shared truth, so it is gated on the break-glass
+  // identities by ROLE rather than the table permission matrix: a promoter
+  // may promote INTO shared-kb but may not unwind what is already there.
+  if (
+    !identity ||
+    (identity.role !== "admin" && identity.role !== "ob-admin")
+  ) {
+    return errorResult("Permission denied: admin or ob-admin role required");
+  }
+
+  const table = args.table as ResourceTable;
+  const notFound = errorResult("Entry not found or already archived");
+
+  const readPredicate = namespacePredicate(identity, "read", 2);
+  const { rows } = await dependencies.pool.query(
+    `SELECT id, namespace, promoted_from FROM ${table}
+          WHERE id = $1 AND archived_at IS NULL${readPredicate.clause}`,
+    [args.id, ...readPredicate.values],
+  );
+  if (rows.length === 0) return notFound;
+
+  const provenance = (rows[0] as { promoted_from: unknown }).promoted_from;
+  if (!provenance) {
+    return errorResult("Entry was not promoted — cannot demote");
+  }
+
+  if (
+    (await archiveDemotedEntry(dependencies, identity, table, args.id)) === 0
+  ) {
+    return notFound;
+  }
+
+  const source = provenance as {
+    source_id?: unknown;
+    source_namespace?: unknown;
+  };
+  dependencies.logger.info(
+    {
+      tool: "demote_entry",
+      table,
+      id: args.id,
+      sourceId: source.source_id,
+      sourceNamespace: source.source_namespace,
+    },
+    "tool_result",
+  );
+  return textResult({
+    status: "demoted",
+    archived_id: args.id,
+    source_id: source.source_id,
+    source_namespace: source.source_namespace,
+  });
 }
 
 type BulkOutcome =

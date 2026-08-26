@@ -85,87 +85,74 @@
  * shutdown flush — the SDK's own error line is silenced here on purpose (see
  * `defaultSinkFactory`), so nothing else was left to say it.
  */
-import { configureGlobalLogger, LogLevel } from "@langfuse/core";
-import { LangfuseSpanProcessor } from "@langfuse/otel";
-import {
-  setLangfuseTracerProvider,
-  startObservation,
-  type LangfuseSpan,
-} from "@langfuse/tracing";
-import { setGlobalErrorHandler } from "@opentelemetry/core";
-import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFileSync } from "node:fs";
 import { logger } from "../../src/logger.ts";
+import { maskTraceValue } from "./trace-masking.ts";
+import { buildToolTraceBody, errorOutput } from "./trace-body.ts";
+export { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
+import { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
+import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
-  isSensitiveKey,
-  SECRET_DETECTORS,
-} from "../../src/secret-patterns.ts";
+  DEFAULT_FLAP_COOLDOWN_MS,
+  reportSinkFailure,
+  reportSinkSuccess,
+  SinkHealthTracker,
+} from "./trace-sink-health.ts";
+import {
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  defaultSinkFactory,
+  shutdownSink,
+  SINK_EXPORT_TIMEOUT_SECONDS,
+  SINK_HEALTH_PROBE_MS,
+} from "./trace-sink.ts";
+import type {
+  McpTracingConfig,
+  McpTracingDeps,
+  McpTracingHandle,
+  TraceBody,
+  TraceSpanBody,
+  TracingSink,
+} from "./trace-types.ts";
+export type { McpTraceStatus } from "./trace-types.ts";
+export {
+  buildToolTraceBody,
+  errorOutput,
+  type ToolTraceBodyInput,
+} from "./trace-body.ts";
+export { emitTraceBodyWithObservations } from "./trace-sink.ts";
 import type {
   BackgroundObservation,
   BackgroundTraceBody,
   BackgroundTraceEmitter,
 } from "../../src/background-tracing.ts";
 import type { AuthInfo } from "../../src/types.ts";
-import { readDeployedRevision } from "../transport/server-identity.ts";
 
-/** Tags on every trace this lane writes, so server traffic is filterable. */
-const TRACE_TAGS = ["open-brain-server", "mcp-tool"] as const;
+/**
+ * Re-exported so this module stays the single import surface for the tracing
+ * lane. The extractions below are about file size and testability, not about
+ * asking every caller and test to learn four new paths.
+ */
+export {
+  reportSinkFailure,
+  reportSinkSuccess,
+  SinkHealthTracker,
+} from "./trace-sink-health.ts";
+export {
+  readRuntimeDeployStamp,
+  repoRelease,
+  resolveRepoRelease,
+} from "./trace-release.ts";
+export type {
+  McpTracingConfig,
+  McpTracingDeps,
+  McpTracingHandle,
+  TraceBody,
+  TraceSpanBody,
+  TracingSink,
+} from "./trace-types.ts";
 
 const tracingInstalledServers = new WeakSet<McpServer>();
-
-export type McpTraceStatus = "success" | "error" | "exception";
-
-/**
- * Deadline for the whole drain on the way down.
- *
- * Belt AND braces, because each alone has been observed to fail. The processor
- * is handed an export timeout so the SDK bounds its own HTTP attempt, and the
- * awaited drain is ALSO raced against this deadline — a promise that never
- * settles ignores every config knob, which is exactly what the v3 lane did
- * (measured 28.0 s against an unreachable endpoint with one queued event).
- * launchd's default `ExitTimeOut` is 20 s, so an unbounded await turns a clean
- * drain into SIGKILL and takes `database.close()` with it. 2.5 s sits well
- * inside that and far above a reachable server's millisecond flush.
- */
-const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2500;
-
-/**
- * Export timeout handed to the processor, in SECONDS — the SDK's unit for
- * `LangfuseSpanProcessorParams.timeout`, which it documents as seconds with a
- * default of 5. Kept below the shutdown deadline above so the SDK's own attempt
- * gives up first and the race stays a backstop rather than the normal path.
- */
-const SINK_EXPORT_TIMEOUT_SECONDS = 2;
-
-/**
- * Quiet period after a reported recovery before another PAIR may be printed.
- *
- * State-change-only is not by itself a bound on output: a sink alternating
- * fail/success is a state change on every call, which is how 20 alternating
- * calls MEASURED 10 suspend and 10 resume lines — per-call noise arriving
- * through the rule meant to prevent it. The operator's ruling on #530 is
- * state-change-only "within reason", so a flapping sink reports at most one
- * pair per cooldown while a genuine outage still reports immediately: the first
- * transition after a quiet period is never delayed, only the ones stacked
- * behind a recovery that was just printed.
- *
- * 30 s is chosen against the export cadence rather than arbitrarily — the batch
- * processor's default schedule is 5 s, so this spans several export attempts
- * and a real outage is still surfaced inside one operator-noticeable interval.
- */
-const DEFAULT_FLAP_COOLDOWN_MS = 30_000;
-
-/**
- * How often a KNOWN-UNHEALTHY sink re-checks whether the endpoint is back.
- *
- * Only ever runs while the tracker is already down, so this is not a background
- * cost on a working system. 5 s matches the batch processor's default export
- * cadence: probing faster would just race the queue's own attempts, and slower
- * would leave the recovery line trailing the actual recovery.
- */
-const SINK_HEALTH_PROBE_MS = 5_000;
 
 /**
  * Emergency circuit breaker for pathological payloads such as the issue #604
@@ -173,190 +160,6 @@ const SINK_HEALTH_PROBE_MS = 5_000;
  * reach this branch; ordinary retrieval evidence flows in full.
  */
 export const MAX_ACTIVE_SPAN_BYTES = 256 * 1024;
-
-const COMPILED_SECRET_DETECTORS = SECRET_DETECTORS.map((detector) => ({
-  kind: detector.kind,
-  pattern: new RegExp(
-    detector.pattern.source,
-    detector.pattern.flags.includes("g")
-      ? detector.pattern.flags
-      : `${detector.pattern.flags}g`,
-  ),
-}));
-
-/**
- * How long `git rev-parse` may take before the release is treated as unknown.
- *
- * Short by intent: resolving the SHA is an enrichment, so a hung git call must
- * never be what delays server startup. The timeout expiring costs one metadata
- * field and nothing else.
- */
-const REV_PARSE_TIMEOUT_MS = 2_000;
-
-/**
- * The short git SHA of the checkout this process runs from, or `undefined`.
- *
- * Langfuse's `release` is what turns "cost went up" into "cost went up at THIS
- * commit"; #560 measured it empty on 100% of traces.
- *
- * Resolved ONCE, lazily, and cached for the process: the SHA cannot change
- * under a running process, and a subprocess per emit would put a fork on the
- * request path — which is the one thing this whole lane is built not to do.
- *
- * `undefined` when neither the deploy stamp nor a git checkout can identify the
- * SHA. Deliberately NOT a placeholder like `"unknown"`: an omitted release reads
- * as absent, while a placeholder groups every unversioned trace together as
- * though they shared a commit.
- */
-let cachedRelease: string | undefined | null = null;
-
-interface RepoReleaseDeps {
-  readStamp?: () => string | undefined;
-  parseStamp?: typeof readDeployedRevision;
-  resolveGit?: () => string | undefined;
-}
-
-/** Resolve the deploy stamp first, then a development checkout as fallback. */
-export function resolveRepoRelease(
-  deps: RepoReleaseDeps = {},
-): string | undefined {
-  try {
-    const parseStamp = deps.parseStamp ?? readDeployedRevision;
-    const stamped = parseStamp(deps.readStamp ?? readRuntimeDeployStamp);
-    if (stamped !== undefined) return stamped;
-    return (deps.resolveGit ?? resolveGitCheckoutRelease)();
-  } catch {
-    // Not knowing the release is never a reason to lose tracing.
-    return undefined;
-  }
-}
-
-export function readRuntimeDeployStamp(): string | undefined {
-  return readFileSync(
-    new URL("../../.deployed-revision", import.meta.url),
-    "utf8",
-  );
-}
-
-function resolveGitCheckoutRelease(): string | undefined {
-  const result = Bun.spawnSync({
-    cmd: ["git", "rev-parse", "--short", "HEAD"],
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: REV_PARSE_TIMEOUT_MS,
-  });
-  if (!result.success) return undefined;
-  return result.stdout.toString().trim() || undefined;
-}
-
-export function repoRelease(): string | undefined {
-  if (cachedRelease !== null) return cachedRelease;
-  cachedRelease = resolveRepoRelease();
-  return cachedRelease;
-}
-
-export interface McpTracingConfig {
-  enabled: boolean;
-  maskingEnabled: boolean;
-  endpoint: string;
-  publicKey: string;
-  secretKey: string;
-}
-
-/** One child observation collected while a traced MCP tool call is active. */
-export interface TraceSpanBody {
-  name: string;
-  input: unknown;
-  output: unknown;
-  metadata: Record<string, unknown>;
-}
-
-/** The content-ful trace payload for one tool call. */
-export interface TraceBody {
-  name: string;
-  input: unknown;
-  output: unknown;
-  tags: string[];
-  metadata: Record<string, unknown>;
-  spans?: TraceSpanBody[];
-  sessionId?: string;
-  userId?: string;
-  observations?: BackgroundObservation[];
-  startedAt?: number;
-  endedAt?: number;
-}
-
-/**
- * The minimum of the tracing surface this module uses.
- *
- * Declared structurally rather than importing the SDK's classes so a test can
- * inject a fake sink without a provider, a socket, or OTel global state (and so
- * a future SDK-major swap stays a one-file change). `emit` is the whole
- * request-path contract: hand it a built trace body, it returns nothing, and it
- * must not block.
- */
-export interface TracingSink {
-  emit(body: TraceBody): void;
-  forceFlush(): Promise<void>;
-  shutdown(): Promise<void>;
-  /**
-   * Outage state for THIS sink, owned by whoever built it.
-   *
-   * Health belongs to the sink and not to an install, because the composition
-   * root builds ONE sink and hands it to every per-session install. A tracker
-   * created per install would be a tracker the shared path never has (the bug
-   * this field exists to remove: `installMcpTracing` used to create one only
-   * when it owned the sink, so in production — where `server/main.ts` always
-   * passes a shared sink — every failure was counted into `undefined` and no
-   * line was ever emitted, measured as zero suspend/recovery lines across a
-   * 500-call outage). Optional so a hand-written test fake stays a three-method
-   * object; when it is absent the emit path simply has nothing to report to.
-   */
-  readonly health?: SinkHealthTracker;
-}
-
-export interface McpTracingDeps {
-  config?: McpTracingConfig;
-  /**
-   * An already-built sink to share.
-   *
-   * The composition root builds ONE sink for the process and passes it to
-   * every per-session install: the sink owns a background flush timer and a
-   * bounded queue, so one per MCP session would multiply both by the session
-   * count and leave each with its own unflushed tail at shutdown. When this is
-   * set the install never constructs anything, and `shutdown()` is a no-op
-   * because the OWNER of a shared sink drains it (see `startServer`).
-   */
-  sink?: TracingSink;
-  /**
-   * Sink factory, used only when `sink` is absent. Injectable for the same
-   * reason `McpAuditDeps.now` is: the tests need a deterministic seam that
-   * never opens a socket.
-   */
-  createSink?: (config: McpTracingConfig) => TracingSink;
-  /**
-   * Deadline for the shutdown drain, in milliseconds.
-   *
-   * Injectable so a test can prove the bound holds against a sink that never
-   * resolves without waiting the real deadline for it.
-   */
-  shutdownTimeoutMs?: number;
-  /**
-   * Health-tracker tuning for a sink the runtime has to wrap.
-   *
-   * Exists so a test can drive the flap cooldown from an injected clock instead
-   * of sleeping through a 30 s real one.
-   */
-  healthOptions?: { cooldownMs?: number; now?: () => number };
-}
-
-/** Shutdown handle returned by `installMcpTracing`, wired into the stop path. */
-export interface McpTracingHandle {
-  /** True when a sink was actually built and tool calls are being traced. */
-  readonly active: boolean;
-  /** Flush pending events and stop the SDK's background machinery. */
-  shutdown(): Promise<void>;
-}
 
 /** A no-op handle, returned whenever tracing is off or already installed. */
 const INACTIVE_HANDLE: McpTracingHandle = {
@@ -509,472 +312,74 @@ function traceSpanOutput<T>(
   }
 }
 
+interface RetrievalSpanInput<T, R> {
+  name: string;
+  input?: unknown;
+  metadata?: Record<string, unknown>;
+  run: () => R;
+  output?: (result: T) => unknown;
+}
+
+/**
+ * Record one finished retrieval stage, success or throw.
+ *
+ * Shared by the async and sync entries below, which differed only in an
+ * `await`: the span shape, the status values, and the duration arithmetic are
+ * one behaviour and belong in one place.
+ */
+function recordRetrievalOutcome<T, R>(
+  input: RetrievalSpanInput<T, R>,
+  started: number,
+  outcome:
+    { status: "success"; result: T } | { status: "exception"; err: unknown },
+): void {
+  const output =
+    outcome.status === "success"
+      ? traceSpanOutput(input.output, outcome.result)
+      : errorOutput(outcome.err);
+  recordTraceSpan(input.name, input.input ?? null, output, {
+    ...input.metadata,
+    status: outcome.status,
+    duration_ms: Math.max(0, Date.now() - started),
+  });
+}
+
 /**
  * Run an asynchronous retrieval stage as a child of the active MCP tool trace.
  *
  * With tracing disabled there is no async-local trace context, so this calls the
  * operation directly and performs no masking, collection, or exporter work.
  */
-export async function traceRetrievalSpan<T>(input: {
-  name: string;
-  input?: unknown;
-  metadata?: Record<string, unknown>;
-  run: () => Promise<T>;
-  output?: (result: T) => unknown;
-}): Promise<T> {
+export async function traceRetrievalSpan<T>(
+  input: RetrievalSpanInput<T, Promise<T>>,
+): Promise<T> {
   if (!activeMcpTrace.getStore()) return input.run();
   const started = Date.now();
   try {
     const result = await input.run();
-    recordTraceSpan(
-      input.name,
-      input.input ?? null,
-      traceSpanOutput(input.output, result),
-      {
-        ...(input.metadata ?? {}),
-        status: "success",
-        duration_ms: Math.max(0, Date.now() - started),
-      },
-    );
+    recordRetrievalOutcome(input, started, { status: "success", result });
     return result;
   } catch (err: unknown) {
-    recordTraceSpan(input.name, input.input ?? null, errorOutput(err), {
-      ...(input.metadata ?? {}),
-      status: "exception",
-      duration_ms: Math.max(0, Date.now() - started),
-    });
+    recordRetrievalOutcome(input, started, { status: "exception", err });
     throw err;
   }
 }
 
 /** Synchronous counterpart for ranking, filtering, and deterministic transforms. */
-export function traceRetrievalSpanSync<T>(input: {
-  name: string;
-  input?: unknown;
-  metadata?: Record<string, unknown>;
-  run: () => T;
-  output?: (result: T) => unknown;
-}): T {
+export function traceRetrievalSpanSync<T>(input: RetrievalSpanInput<T, T>): T {
   if (!activeMcpTrace.getStore()) return input.run();
   const started = Date.now();
   try {
     const result = input.run();
-    recordTraceSpan(
-      input.name,
-      input.input ?? null,
-      traceSpanOutput(input.output, result),
-      {
-        ...(input.metadata ?? {}),
-        status: "success",
-        duration_ms: Math.max(0, Date.now() - started),
-      },
-    );
+    recordRetrievalOutcome(input, started, { status: "success", result });
     return result;
   } catch (err: unknown) {
-    recordTraceSpan(input.name, input.input ?? null, errorOutput(err), {
-      ...(input.metadata ?? {}),
-      status: "exception",
-      duration_ms: Math.max(0, Date.now() - started),
-    });
+    recordRetrievalOutcome(input, started, { status: "exception", err });
     throw err;
   }
 }
 
 type RegisterTool = McpServer["registerTool"];
-
-/**
- * Resolve tracing configuration from the environment.
- *
- * Mirrors `readMcpAuditConfig` (`src/audit-log.ts:134-158`), with the opposite
- * default: audit is on unless disabled, tracing is OFF unless every coordinate
- * is present. A payload-carrying export to an external server is opt-in per
- * deployment, never something a missing variable turns on by accident.
- *
- * The incomplete-flag case warns exactly once at install, content-free: the
- * operator who set the flag and mistyped one variable would otherwise get a
- * silent zero, which is the failure mode this whole file exists to remove.
- * Key VALUES are never logged — only whether each one was present.
- */
-export function readMcpTracingConfig(
-  env: Record<string, string | undefined> = process.env,
-): McpTracingConfig {
-  const endpoint = env.OPENBRAIN_TRACING_ENDPOINT?.trim() ?? "";
-  const publicKey = env.OPENBRAIN_TRACING_PUBLIC_KEY?.trim() ?? "";
-  const secretKey = env.OPENBRAIN_TRACING_SECRET_KEY?.trim() ?? "";
-  const flagged = env.OPENBRAIN_TRACING_ENABLED === "1";
-  const maskingEnabled = env.OPENBRAIN_TRACING_MASKING_ENABLED !== "0";
-  const complete =
-    endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
-  if (flagged && !complete) {
-    // Field names deliberately avoid every substring in
-    // `SENSITIVE_KEY_PARTS` (`src/secret-patterns.ts:160-173` — `secret`,
-    // `apikey`, `credential`, `privatekey`, ...). A field named `hasSecretKey`
-    // is rewritten to "[REDACTED]" by the shared logger, which turns the one
-    // line telling an operator WHICH variable they mistyped into noise. The
-    // values are booleans by construction, so no key material can travel here
-    // regardless of the name.
-    logger.warn("mcp_tool_tracing_config_incomplete", {
-      endpointSet: endpoint.length > 0,
-      publicIdSet: publicKey.length > 0,
-      privateIdSet: secretKey.length > 0,
-    });
-  }
-  return {
-    enabled: flagged && complete,
-    maskingEnabled,
-    endpoint,
-    publicKey,
-    secretKey,
-  };
-}
-
-/**
- * The Langfuse session this call belongs to, or undefined.
- *
- * Preference order is deliberate: a `session_key` in the arguments is the
- * BRAIN's own session identity, which is what makes an agent's whole
- * conversation with the brain read as one Langfuse timeline next to the
- * client-side traces the #523 sink already ships. The MCP transport's
- * `sessionId` is a per-connection fallback — real, but a different grain.
- */
-export function resolveSessionId(
-  args: unknown,
-  extra: unknown,
-): string | undefined {
-  const fromArgs =
-    readStringField(args, "session_key") ??
-    readStringField(readField(args, "scope"), "session_key");
-  if (fromArgs !== undefined) return fromArgs;
-  return readStringField(extra, "sessionId");
-}
-
-function readField(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object") return undefined;
-  return (value as Record<string, unknown>)[key];
-}
-
-function readStringField(value: unknown, key: string): string | undefined {
-  const field = readField(value, key);
-  if (typeof field !== "string" || field.length === 0) return undefined;
-  return field;
-}
-
-function maskDetectorMatch(kind: string, match: string): string {
-  const replacement = `[MASKED:${kind}]`;
-  if (kind === "json_labeled_secret") {
-    return match.replace(/"[^"]+"$/, `"${replacement}"`);
-  }
-  if (kind === "labeled_secret") {
-    return match.replace(/([:=]\s*)[^\s,;]+$/, `$1${replacement}`);
-  }
-  return replacement;
-}
-
-/** Replace every detector match while retaining the rest of the string. */
-function maskTraceString(value: string): string {
-  let masked = value;
-  for (const detector of COMPILED_SECRET_DETECTORS) {
-    masked = masked.replace(detector.pattern, (match) =>
-      maskDetectorMatch(detector.kind, match),
-    );
-  }
-  return masked;
-}
-
-function binaryViewMarker(value: ArrayBufferView): {
-  type: string;
-  byteLength: number;
-} {
-  return {
-    type: value.constructor.name || "ArrayBufferView",
-    byteLength: value.byteLength,
-  };
-}
-
-/** Recursively normalize and mask values without removing fields or array items. */
-function maskTraceValue(value: unknown): unknown {
-  if (typeof value === "string") return maskTraceString(value);
-  if (Array.isArray(value)) {
-    const masked = value.map(maskTraceValue);
-    return masked.some((child, index) => child !== value[index])
-      ? masked
-      : value;
-  }
-  if (!value || typeof value !== "object") return value;
-  if (ArrayBuffer.isView(value)) return binaryViewMarker(value);
-  if (value instanceof Map) {
-    return maskTraceValue(
-      Object.fromEntries(
-        Array.from(value, ([key, child]) => [String(key), child]),
-      ),
-    );
-  }
-  if (value instanceof Set) return maskTraceValue(Array.from(value));
-  if (value instanceof Error) {
-    return maskTraceValue({ name: value.name, message: value.message });
-  }
-
-  let masked: Record<string, unknown> | undefined;
-  for (const [key, child] of Object.entries(value)) {
-    const maskedChild =
-      isSensitiveKey(key) && child !== null && child !== undefined
-        ? "[MASKED:sensitive_key]"
-        : maskTraceValue(child);
-    if (maskedChild === child) continue;
-    masked ??= { ...(value as Record<string, unknown>) };
-    masked[key] = maskedChild;
-  }
-  return masked ?? value;
-}
-
-/**
- * The trace body for one tool call, content-ful and masked by default.
- *
- * Exported so the shape is assertable without an SDK, a server, or a socket.
- */
-export function buildToolTraceBody(input: {
-  toolName: string;
-  status: McpTraceStatus;
-  durationMs: number;
-  args: unknown;
-  output: unknown;
-  auth?: AuthInfo;
-  sessionId?: string;
-  maskingEnabled?: boolean;
-  metadata?: Record<string, unknown>;
-  spans?: TraceSpanBody[];
-}): TraceBody {
-  const maskingEnabled = input.maskingEnabled !== false;
-  const traceMetadata = (
-    maskingEnabled
-      ? maskTraceValue(input.metadata ?? {})
-      : (input.metadata ?? {})
-  ) as Record<string, unknown>;
-  const metadata = {
-    ...traceMetadata,
-    caller_role: input.auth?.role ?? null,
-    caller_client_id: input.auth?.clientId ?? null,
-    // The audit lane records BOTH ids (`src/audit-log.ts:299-301`), and the
-    // pair is the whole answer to "who actually did this" when a delegated
-    // call's `clientId` differs from its token-derived identity.
-    caller_token_client_id: input.auth?.tokenClientId ?? null,
-    caller_agent_id: input.auth?.agentId ?? null,
-    namespace_source: input.auth?.namespaceSource ?? null,
-    duration_ms: Number.isFinite(input.durationMs)
-      ? Math.max(0, Math.round(input.durationMs))
-      : 0,
-    status: input.status,
-  };
-  const spans = input.spans?.map((span) => ({
-    name: span.name,
-    input: maskingEnabled ? maskTraceValue(span.input) : span.input,
-    output: maskingEnabled ? maskTraceValue(span.output) : span.output,
-    metadata: (maskingEnabled
-      ? maskTraceValue(span.metadata)
-      : span.metadata) as Record<string, unknown>,
-  }));
-  return {
-    name: input.toolName,
-    input: maskingEnabled ? maskTraceValue(input.args) : input.args,
-    output: maskingEnabled ? maskTraceValue(input.output) : input.output,
-    tags: [...TRACE_TAGS],
-    metadata,
-    ...(spans === undefined ? {} : { spans }),
-    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
-    ...(input.auth?.clientId === undefined
-      ? {}
-      : { userId: input.auth.clientId }),
-  };
-}
-
-/**
- * The output field for a call that threw: class and message, nothing else.
- *
- * Content-FUL like the rest of this lane — the operator's stated requirement is
- * to see WHY a call failed — so the message travels in full. That is the whole
- * difference from `tracingErrorLabel`, which labels tracing's OWN failures for
- * the local log and is deliberately content-free.
- */
-export function errorOutput(err: unknown): Record<string, string> {
-  if (err instanceof Error) {
-    return { error_class: err.name, error_message: err.message };
-  }
-  return { error_class: errorClassOf(err), error_message: String(err) };
-}
-
-/** The best available class name for a non-`Error` throw. */
-function errorClassOf(err: unknown): string {
-  if (typeof err !== "object" || err === null) return typeof err;
-  return err.constructor?.name ?? "Object";
-}
-
-/**
- * Outage state for one sink, and the only thing that decides whether a line
- * is logged.
- *
- * The #530 rule is state-change-only, so this tracker's whole job is to turn a
- * stream of per-call outcomes into at most two lines per outage. `healthy` is
- * the edge detector; `dropped` counts the window and resets on recovery, so
- * each recovery line reports ITS window rather than a running total.
- *
- * Exported because the tests assert the counting rule directly, without
- * needing a real outage to produce it.
- */
-export class SinkHealthTracker {
-  private healthy = true;
-  private dropped = 0;
-  /**
-   * Traces enqueued while the sink still looked healthy.
-   *
-   * Rolled into `dropped` when a failure is discovered, because a background
-   * export failure condemns the batch that was already queued — those traces
-   * were lost, they simply had not been found out yet. Cleared on a flush that
-   * really reached the endpoint (`noteDelivered`).
-   */
-  private pending = 0;
-  /**
-   * When the last REPORTED pair completed, i.e. the last recovery that actually
-   * logged. `undefined` until one has, so the first outage is never delayed.
-   */
-  private lastReportedAt: number | undefined;
-  /** True while a window is being ridden out silently under the cooldown. */
-  private suppressed = false;
-  private readonly cooldownMs: number;
-  private readonly now: () => number;
-
-  constructor(options: { cooldownMs?: number; now?: () => number } = {}) {
-    this.cooldownMs = options.cooldownMs ?? DEFAULT_FLAP_COOLDOWN_MS;
-    this.now = options.now ?? Date.now;
-  }
-
-  /**
-   * Count one trace handed to the sink, whatever the current health state.
-   *
-   * SEPARATE FROM `recordFailure` because the two count different things, and
-   * conflating them under-reports the loss by orders of magnitude. A failure is
-   * one failed EXPORT BATCH; the operator's question is the TRACE count that
-   * went missing. The first probe of this lane reported `droppedTraces: 1`
-   * after 500 dropped calls, because the batch processor had failed a single
-   * export — a figure that reads as "nearly nothing happened" for a total
-   * outage.
-   *
-   * COUNTED WHILE HEALTHY TOO, into a pending tally that only becomes a loss if
-   * the window turns out to be bad. An outage is discovered on the background
-   * export, SECONDS after the traces were enqueued — the same 500-call probe
-   * then reported `droppedTraces: 0`, because every one of those traces had
-   * been handed over while the sink still looked healthy. The traces already
-   * sitting in the queue when the endpoint dies are exactly the ones an
-   * operator lost, so they have to be in the figure.
-   */
-  recordEnqueued(): void {
-    if (this.healthy) {
-      this.pending += 1;
-      return;
-    }
-    this.dropped += 1;
-  }
-
-  /**
-   * Record a failed emit or export. Returns true ONLY on the transition into
-   * an outage, so the caller logs the suspend line exactly once per window.
-   *
-   * A transition inside the cooldown window returns false and marks the whole
-   * window suppressed, so its recovery stays silent too: the unit of output is
-   * the PAIR, and reporting a resume whose suspend was never printed would read
-   * as a recovery from nothing.
-   *
-   * `countsAsTrace` distinguishes the two callers: a throwing `emit` lost
-   * exactly one trace, while a failed background export batch lost none by
-   * itself — its traces are already counted by `recordEnqueued`, so counting
-   * the batch too would double-count.
-   */
-  recordFailure(countsAsTrace = true): boolean {
-    if (countsAsTrace) this.dropped += 1;
-    if (!this.healthy) return false;
-    this.healthy = false;
-    // The batch that was in flight when the endpoint died is lost with it.
-    this.dropped += this.pending;
-    this.pending = 0;
-    if (this.withinCooldown()) {
-      this.suppressed = true;
-      return false;
-    }
-    this.suppressed = false;
-    return true;
-  }
-
-  /**
-   * Record a success. Returns the number of traces dropped during the window
-   * that just ended, or undefined when nothing changed — so a healthy sink
-   * emits nothing at all on the happy path.
-   *
-   * The drop count is cleared on every recovery including a suppressed one:
-   * the counter measures a window, and a suppressed window is still a window
-   * that ended. Carrying it forward would inflate the next reported figure with
-   * drops from flaps the operator was deliberately not shown.
-   */
-  recordSuccess(): number | undefined {
-    if (this.healthy) return undefined;
-    const dropped = this.dropped;
-    this.healthy = true;
-    this.dropped = 0;
-    if (this.suppressed) {
-      this.suppressed = false;
-      return undefined;
-    }
-    // Only a REPORTED pair starts the next cooldown. A suppressed window must
-    // not extend the quiet period, or a sink flapping faster than the cooldown
-    // would stay silent forever instead of reporting once per cooldown.
-    this.lastReportedAt = this.now();
-    return dropped;
-  }
-
-  /**
-   * A flush that really reached the endpoint: the pending traces landed, so
-   * they can no longer become a loss. Distinct from `recordSuccess`, which is
-   * about the health EDGE — a healthy sink calls this routinely and logs
-   * nothing.
-   */
-  noteDelivered(): void {
-    this.pending = 0;
-  }
-
-  private withinCooldown(): boolean {
-    if (this.lastReportedAt === undefined) return false;
-    return this.now() - this.lastReportedAt < this.cooldownMs;
-  }
-
-  /** Traces dropped in the current window; 0 while healthy. */
-  get droppedInWindow(): number {
-    return this.dropped;
-  }
-
-  get isHealthy(): boolean {
-    return this.healthy;
-  }
-}
-
-/**
- * Emit the suspend line, and only on the transition.
- *
- * Content-free on purpose: this is a local log line about transport health,
- * not a trace, so it carries an error LABEL (code/name) and nothing else.
- */
-export function reportSinkFailure(
-  tracker: SinkHealthTracker,
-  err: unknown,
-  countsAsTrace = true,
-): void {
-  if (!tracker.recordFailure(countsAsTrace)) return;
-  logger.warn("mcp_tool_tracing_suspended", { error: tracingErrorLabel(err) });
-}
-
-/** Emit the recovery line with the window's drop count, and only on the edge. */
-export function reportSinkSuccess(tracker: SinkHealthTracker): void {
-  const dropped = tracker.recordSuccess();
-  if (dropped === undefined) return;
-  logger.info("mcp_tool_tracing_resumed", { droppedTraces: dropped });
-}
 
 /**
  * Install content-ful tracing on every tool registered after this call.
@@ -1245,386 +650,12 @@ function createSinkSafely(
   }
 }
 
-interface TraceObservation {
-  startObservation(
-    name: string,
-    body: {
-      input?: unknown;
-      output?: unknown;
-      metadata?: Record<string, unknown>;
-    },
-  ): TraceObservation;
-  updateTrace(input: {
-    name: string;
-    tags: string[];
-    input?: unknown;
-    output?: unknown;
-    metadata?: Record<string, unknown>;
-    sessionId?: string;
-    userId?: string;
-  }): void;
-  end(endTime?: Date): void;
-}
-
-interface TraceEmissionOptions<T extends TraceObservation> {
-  emitObservation?: (
-    parent: T,
-    observation: BackgroundObservation,
-  ) => void;
-}
-
-/** Materialize one completed trace body through the SDK observation surface. */
-export function emitTraceBodyWithObservations<T extends TraceObservation>(
-  body: TraceBody,
-  start: (name: string, body: Record<string, unknown>) => T,
-  options: TraceEmissionOptions<T> = {},
-): void {
-  const span = start(body.name, {
-    input: body.input,
-    output: body.output,
-    metadata: body.metadata,
-  });
-  try {
-    span.updateTrace({
-      name: body.name,
-      tags: body.tags,
-      input: body.input,
-      output: body.output,
-      metadata: body.metadata,
-      ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
-      ...(body.userId === undefined ? {} : { userId: body.userId }),
-    });
-    for (const childBody of body.spans ?? []) {
-      const child = span.startObservation(childBody.name, {
-        input: childBody.input,
-        output: childBody.output,
-        metadata: childBody.metadata,
-      });
-      child.end();
-    }
-    for (const observation of body.observations ?? []) {
-      options.emitObservation?.(span, observation);
-    }
-  } finally {
-    span.end(body.endedAt === undefined ? undefined : new Date(body.endedAt));
-  }
-}
-
-/**
- * The real sink: a Langfuse span processor on an ISOLATED tracer provider.
- *
- * `setLangfuseTracerProvider` is the SDK's own isolation seam, and it is not
- * the OTel global: the SDK documents `getLangfuseTracerProvider` as returning
- * the isolated provider when one has been set and falling back to the global
- * otherwise. Registering here therefore routes THIS lane's spans to THIS
- * processor without touching, or being touched by, any other instrumentation
- * in the process. `startObservation` accepts no per-call provider argument
- * (verified against `StartObservationOpts`, which carries only `startTime`,
- * `parentSpanContext`, and `asType`), so this registration is the supported
- * way to bind the two.
- *
- * The OTel batch processor's existing queue is the holding area, per the #530
- * decision to use it as-is and accept its drop behaviour. The export timeout is
- * short (`SINK_EXPORT_TIMEOUT_SECONDS`) so the lane never waits on a dead
- * socket. Together they are the outage contract: during an outage the brain
- * neither slows nor grows, and the window's traces are simply lost.
- */
-function emitChildObservation(
-  parent: LangfuseSpan,
-  observation: BackgroundObservation,
-): void {
-  const attributes = {
-    input: observation.input,
-    output: observation.output,
-    metadata: {
-      ...observation.metadata,
-      duration_ms: Math.max(0, observation.endedAt - observation.startedAt),
-    },
-    ...(observation.model === undefined ? {} : { model: observation.model }),
-    ...(observation.usageDetails === undefined
-      ? {}
-      : { usageDetails: observation.usageDetails }),
-    ...(observation.level === undefined ? {} : { level: observation.level }),
-    ...(observation.statusMessage === undefined
-      ? {}
-      : { statusMessage: observation.statusMessage }),
-  };
-  const options = {
-    startTime: new Date(observation.startedAt),
-    parentSpanContext: parent.otelSpan.spanContext(),
-  };
-  const child =
-    observation.type === "generation"
-      ? startObservation(observation.name, attributes, {
-          ...options,
-          asType: "generation",
-        })
-      : observation.type === "embedding"
-        ? startObservation(observation.name, attributes, {
-            ...options,
-            asType: "embedding",
-          })
-        : startObservation(observation.name, attributes, {
-            ...options,
-            asType: "span",
-          });
-  child.end(new Date(observation.endedAt));
-}
-
-function defaultSinkFactory(config: McpTracingConfig): TracingSink {
-  // The SDK's own logger writes export failures straight to `console.error`
-  // with the raw error attached (`@langfuse/core` Logger.error), which would
-  // route a transport message — potentially carrying the endpoint, a request
-  // body, or an auth header — around this module's content-free discipline and
-  // around the shared logger's redaction. Silenced to ERROR+1 so nothing the
-  // SDK emits reaches the log; this lane reports its own health through the
-  // two state-change lines instead, which carry a label and a count only.
-  configureGlobalLogger({ level: (LogLevel.ERROR + 1) as LogLevel });
-  // `release` belongs to the PROCESSOR, not to `updateTrace` (#560). The SDK
-  // stamps it onto every span it sees at start, and `LangfuseTraceAttributes`
-  // — what `updateTrace` accepts — has no release field at all, so setting it
-  // there would be silently dropped rather than rejected. Verified against the
-  // installed `@langfuse/otel` 4.6.x type surface.
-  //
-  // Spread so an unresolvable SHA omits the option entirely instead of passing
-  // `undefined`, keeping "unknown release" distinct from a placeholder value.
-  const release = repoRelease();
-  const processor = new LangfuseSpanProcessor({
-    publicKey: config.publicKey,
-    secretKey: config.secretKey,
-    baseUrl: config.endpoint,
-    timeout: SINK_EXPORT_TIMEOUT_SECONDS,
-    exportMode: "batched",
-    ...(release === undefined ? {} : { release }),
-  });
-  const provider = new BasicTracerProvider({ spanProcessors: [processor] });
-  setLangfuseTracerProvider(provider);
-  const tracker = new SinkHealthTracker();
-
-  // WHERE AN OUTAGE ACTUALLY BECOMES VISIBLE WHILE THE SERVER RUNS.
-  //
-  // `emit` cannot fail against a dead endpoint — it is a synchronous enqueue
-  // onto the batch processor's in-memory queue, which succeeds whether or not
-  // anything is listening on the far end. The failure happens later, on the
-  // processor's own background export, and OTel routes that rejection to the
-  // global error handler (`BatchSpanProcessorBase._maybeStartTimer`'s `.catch`,
-  // verified in `@opentelemetry/sdk-trace` 2.10.0). The default handler logs
-  // through `diag`, and this module silences the SDK logger for content-free
-  // reasons — so before this hook an outage produced NOTHING until shutdown
-  // flush, which is precisely the silence #530 forbids.
-  //
-  // `forceFlush()` rejects to its CALLER instead of coming through here, so the
-  // drain path below and this hook are disjoint and one outage is never
-  // double-reported.
-  //
-  // This handler is process-global and OTel offers no per-processor seam, so it
-  // is installed only when this lane builds a real sink (never in tests, which
-  // inject a fake factory), and it deliberately reports rather than swallows:
-  // the previous behaviour for a non-Langfuse OTel error was a silent drop into
-  // a silenced diag logger, so routing it to a content-free warn strictly
-  // increases what an operator sees.
-  // `countsAsTrace: false` — a failed export batch is not itself a lost trace.
-  // The traces are counted as they are enqueued below, so counting the batch
-  // here as well would double-count them.
-  setGlobalErrorHandler((err: unknown) => {
-    reportSinkFailure(tracker, err, false);
-  });
-
-  // THE RECOVERY EDGE, which the error handler above cannot see.
-  //
-  // OTel signals export FAILURE globally but signals success nowhere: on a good
-  // batch `_flushOneBatch` simply resolves into a `.finally`, with no hook
-  // (verified in `@opentelemetry/sdk-trace` 2.10.0). Without this probe an
-  // outage would print its suspend line and then stay silent forever, and #530
-  // asks for the pair — the recovery line naming the dropped count is the half
-  // that tells an operator to stop looking.
-  //
-  // ONLY probes while already known-unhealthy, so the happy path costs exactly
-  // nothing.
-  //
-  // A REAL SPAN IS SENT, and that is not incidental. `forceFlush()` on an EMPTY
-  // queue returns an already-resolved promise without touching the network
-  // (`_flushOneBatch` returns early on `length === 0`), so flushing nothing
-  // "succeeds" against a blackholed endpoint and reads as recovery. That false
-  // recovery was MEASURED on the first probe of this fix: the lane reported
-  // `mcp_tool_tracing_resumed` while the endpoint was still non-routable.
-  // Enqueueing one span first means the flush has something to actually export,
-  // so its result reflects the transport rather than an empty queue.
-  const probe = setInterval(() => {
-    if (tracker.isHealthy) return;
-    try {
-      const span = startObservation("mcp_tool_tracing_health_probe", {
-        // Content-free by construction: the probe carries no payload, so it can
-        // never smuggle argument or result text to the endpoint.
-        metadata: { probe: true },
-      });
-      span.end();
-    } catch {
-      // A probe that cannot even be built is not a recovery; stay down.
-      return;
-    }
-    void processor
-      .forceFlush()
-      .then(() => {
-        // The probe span above guarantees the queue was non-empty, so a resolve
-        // here really is the endpoint answering.
-        tracker.noteDelivered();
-        reportSinkSuccess(tracker);
-      })
-      // Still down — and deliberately NOT `recordFailure`, which would count
-      // this probe as a dropped trace and inflate the recovery line with
-      // attempts that carried no payload. The window is already open; a failed
-      // probe is simply not the recovery, so it reports nothing.
-      .catch(() => undefined);
-  }, SINK_HEALTH_PROBE_MS);
-  // Never hold the event loop open for a diagnostic: without this an idle
-  // process would refuse to exit on account of the tracing lane alone.
-  probe.unref?.();
-
-  return {
-    health: tracker,
-    emit(body: TraceBody): void {
-      // These records are emitted after the work completes. Supplying the real
-      // timestamps preserves worker/provider duration instead of measuring the
-      // few microseconds spent enqueueing the completed trace.
-      emitTraceBodyWithObservations(
-        body,
-        (name, attributes) =>
-          startObservation(
-            name,
-            attributes,
-            body.startedAt === undefined
-              ? undefined
-              : { startTime: new Date(body.startedAt) },
-          ),
-        { emitObservation: emitChildObservation },
-      );
-      tracker.recordEnqueued();
-    },
-    async forceFlush(): Promise<void> {
-      // DRAINING IS NOT EVIDENCE OF HEALTH, so this path deliberately reports
-      // no recovery. `forceFlush()` resolves whenever the queue ends up empty —
-      // including when the spans were already DROPPED by earlier failed
-      // exports, which is exactly the state a long outage leaves behind. A
-      // blackholed 500-call probe was measured printing `resumed` from right
-      // here with the endpoint still non-routable; announcing a recovery that
-      // did not happen is worse than saying nothing, because it retracts a
-      // warning the operator was correctly given.
-      //
-      // Recovery is the health probe's job (see above): it enqueues its own
-      // span first, so a resolve there means that span was exported rather than
-      // merely absent. A failure is still worth recording, since a REJECTED
-      // flush is unambiguous.
-      try {
-        await processor.forceFlush();
-      } catch (err: unknown) {
-        reportSinkFailure(tracker, err, false);
-      }
-    },
-    shutdown(): Promise<void> {
-      // Stop probing before draining, so a probe cannot race the shutdown flush
-      // and report health state about a sink that is on its way out.
-      clearInterval(probe);
-      return processor.shutdown();
-    },
-  };
-}
-
-/**
- * Flush on the way down.
- *
- * This is the ONE place tracing awaits anything, and it is off the request path
- * by construction: without it the in-memory batch from the last seconds of the
- * process is dropped, which is exactly the window an operator debugging a crash
- * cares about. A flush failure is logged, never rethrown — a tracing problem
- * must not make a clean shutdown read as a dirty one.
- *
- * The whole drain runs against a deadline, because a hung socket produces a
- * promise that never settles and no SDK timeout setting can be trusted to cover
- * every path (the v3 lane was MEASURED at 28.0 s, past launchd's 20 s
- * `ExitTimeOut`; the process was SIGKILLed and everything after this call —
- * including `database.close()` — never ran). Waiting is what has to stop, not
- * the diagnostics: a reachable Langfuse drains in milliseconds and never
- * touches the deadline.
- */
-async function shutdownSink(
-  sink: TracingSink,
-  timeoutMs: number = DEFAULT_SHUTDOWN_TIMEOUT_MS,
-): Promise<void> {
-  const outcome = await withDeadline(drainSink(sink), timeoutMs);
-  if (outcome === "timeout") {
-    // Content-free: the deadline itself, never a payload, a key, or a
-    // transport error message.
-    logger.warn("mcp_tool_tracing_shutdown_timeout", { timeoutMs });
-  }
-}
-
-/** The drain pair, each failure logged content-free and never rethrown. */
-async function drainSink(sink: TracingSink): Promise<void> {
-  try {
-    await sink.forceFlush();
-  } catch (err: unknown) {
-    logger.warn("mcp_tool_tracing_flush_failed", {
-      error: tracingErrorLabel(err),
-    });
-  }
-  try {
-    await sink.shutdown();
-  } catch (err: unknown) {
-    logger.warn("mcp_tool_tracing_shutdown_failed", {
-      error: tracingErrorLabel(err),
-    });
-  }
-}
-
-/**
- * Resolve when `work` settles or the deadline passes, whichever is first.
- *
- * Same shape as the audit lane's bounded write (`src/audit-log.ts:453-455`).
- * The timer is cleared on the fast path so a bounded drain never holds the
- * event loop open past its own completion, and `work` is left running: it is
- * fire-and-forget by contract, and abandoning the wait is the entire point.
- */
-async function withDeadline(
-  work: Promise<void>,
-  timeoutMs: number,
-): Promise<"settled" | "timeout"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timed = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), timeoutMs);
-  });
-  const outcome = await Promise.race([
-    work.then(() => "settled" as const),
-    timed,
-  ]);
-  if (timer) clearTimeout(timer);
-  return outcome;
-}
-
 function isToolError(result: unknown): boolean {
   return Boolean(
     result &&
-      typeof result === "object" &&
-      (result as { isError?: unknown }).isError === true,
+    typeof result === "object" &&
+    (result as { isError?: unknown }).isError === true,
   );
-}
-
-/**
- * Content-free error label for tracing warn lines.
- *
- * Copied in spirit from `auditErrorLabel` (`src/audit-log.ts:526-534`) and for
- * the same reason: an SDK/transport error message can contain the endpoint, a
- * request body, or an auth header, and these warns go to the local log. Only
- * the code/name is ever emitted.
- */
-function tracingErrorLabel(err: unknown): string {
-  if (err && typeof err === "object") {
-    const code = (err as { code?: unknown }).code;
-    if (typeof code === "string" && code.length > 0) return code;
-    const name = (err as { name?: unknown }).name;
-    if (typeof name === "string" && name.length > 0) return name;
-  }
-  return "unknown_error";
 }
 
 /** Test-visible constants, so a test asserts the real value and not a copy. */

@@ -11,10 +11,19 @@
  * this server doing" and keeps that answer under the existing lock.
  *
  * The builder is a pure function of `(pool, natsRuntimeBoundary,
- * natsBridgeHealth)`. The rewrite has not ported `nats-runtime.ts`, so the
- * boundary is read from the environment exactly as current-src's tool does when
- * no boundary was injected -- that path opens no NATS connection, it only reads
- * `OPENBRAIN_TRANSPORT`/`OPENBRAIN_NATS_URL` and reports what they declare.
+ * natsBridgeHealth)`. The boundary is INJECTED, from
+ * `natsRuntimeBoundaryFromConfig(config.nats)` at the composition root: the
+ * same parsed `NatsConfig` the bridge and `/health` already answer from. It
+ * used to be read here from the ambient environment, which made the doctor a
+ * second opinion on the transport -- it could report `nats` while the process
+ * was serving http, because nothing tied the two reads together. `server/config/`
+ * owns env parsing (`_plans/463-server-rewrite-charter.md:108,119`), so the
+ * doctor now reports the boundary in force rather than re-deriving one.
+ *
+ * The fallback when nothing is injected is the boundary an EMPTY environment
+ * produces, not a re-read: a caller that registers tools without a composition
+ * root has no transport configured, and that is exactly what the empty-env
+ * boundary declares.
  *
  * Two properties are deliberate and load-bearing:
  *
@@ -32,6 +41,17 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOperatorDoctorStatus } from "../../src/operator-doctor.ts";
 import { readNatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+
+/**
+ * The boundary an unconfigured deployment declares.
+ *
+ * Derived ONCE from the reader itself against an empty environment, rather than
+ * hand-written, so it cannot drift from the shape `readNatsRuntimeBoundary`
+ * produces if that shape gains a field. The input is the EMPTY object:
+ * no environment is consulted, and the answer is the constant "http transport,
+ * no bridge requested" that an unwired caller is entitled to.
+ */
+const UNCONFIGURED_NATS_BOUNDARY = readNatsRuntimeBoundary({});
 
 export function registerOperatorDoctorTool(
   server: McpServer,
@@ -59,7 +79,7 @@ export function registerOperatorDoctorTool(
       try {
         const status = await getOperatorDoctorStatus(
           dependencies.pool,
-          readNatsRuntimeBoundary(process.env),
+          dependencies.natsRuntimeBoundary ?? UNCONFIGURED_NATS_BOUNDARY,
         );
         dependencies.logger.info(
           { tool: "operator_doctor", status: status.status },

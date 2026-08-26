@@ -202,6 +202,23 @@ configs, and a commit or push that violates a rule cannot complete.
 2026-08-26 05:10Z — The backlog the gate exposes is expected and is not grounds
 for softening the gate.
 
+### The lint debt is paid one file at a time, each file finished before the next
+
+> option one is also what I would say. And just go through them one at a time until everything is proper and passing and then go to the next file, the next file, the next file, until we have an app that passes proper through the standards.
+
+2026-08-26 15:57Z — https://github.com/rodaddy/open-brain/issues/780#issuecomment-5427728743
+
+Once L1 armed the gate (#771, `c73a7f7`), the pre-existing violations blocked
+L2's own commits — draft PR #779 could not land. This ruling settles how the
+debt is paid: per FILE, sequentially, each one finished before the next starts,
+rather than per rule or per rung. Consequence for the ladder: for
+`server/tools/search-engine.ts` and `server/observability/langfuse-tracing.ts`,
+`max-lines` is among their findings, so their L4 split is pulled FORWARD into
+their lint lane. 142 findings across non-test `server/`, measured at `49ecfbe`;
+the per-file checklist lives in the issue. The head’s paraphrase of this
+ruling (file order, per-lane conditions) is the first comment on #780; the
+blockquote above is the operator’s own wording as posted in the third.
+
 ### Better git hygiene: branches and PRs pushed, committed, merged
 
 > well you need to do better git hygiene and make sure that all of your fucking PRs and branches are pushed committed and merged and then we won't have this problem will we

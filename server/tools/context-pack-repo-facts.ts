@@ -22,6 +22,7 @@ import {
   type SectionFragment,
   type SectionReaderDeps,
 } from "./context-pack-sections.ts";
+import { asError, errorIdentityFields } from "./context-pack-shared.ts";
 
 /**
  * Read-side mirror of the write-side `staleness_policy` enum.
@@ -127,6 +128,206 @@ export type RepoFactsReaderArgs = {
   budget?: SectionBudget;
 };
 
+type RepoFactRowAdmission =
+  | { admitted: false; countsAsTruncated: boolean }
+  | { admitted: true; text: string; truncated: boolean };
+
+/**
+ * Decide whether one row may become an item, and with what text.
+ *
+ * The three exclusions are ordered exactly as the original loop ran them, and
+ * that order is behavior: only the LAST of them (an unusable `fact`) can mark
+ * the section truncated, so a row rejected by an earlier guard must not reach
+ * the text step and set that flag. Lifting the decision here keeps the three
+ * reasons legible without letting them reorder.
+ */
+function admitRepoFactRow(
+  meta: Record<string, unknown>,
+  repo: string,
+  maxItemChars: number,
+): RepoFactRowAdmission {
+  // Defense in depth: never let a row whose metadata.repo drifted from the
+  // bind slip through, in case a JSON edit ever bypasses the predicate.
+  if (asText(meta.repo) !== repo) {
+    return { admitted: false, countsAsTruncated: false };
+  }
+  // A repo fact without source refs cannot be cited to its exact commit.
+  // Excluding it is the point of the section: an uncitable "fact" is just an
+  // assertion, and this section's value is that every item is checkable.
+  if (!asText(meta.source_url) || !asText(meta.source_commit)) {
+    return { admitted: false, countsAsTruncated: false };
+  }
+  const bounded = boundedItemText(meta.fact, maxItemChars);
+  if (!bounded.text) {
+    return { admitted: false, countsAsTruncated: asText(meta.fact) !== null };
+  }
+  return { admitted: true, text: bounded.text, truncated: bounded.truncated };
+}
+
+/** One admitted row as its item body and its matching citation. */
+function repoFactEntry(options: {
+  row: Record<string, unknown>;
+  meta: Record<string, unknown>;
+  repo: string;
+  fact: string;
+  nowMs: number;
+}): {
+  item: Record<string, unknown>;
+  citation: Record<string, unknown>;
+} {
+  const { row, meta, repo, fact, nowMs } = options;
+  const sourceUrl = asText(meta.source_url);
+  const sourceCommit = asText(meta.source_commit);
+  const citationId = `repo_fact:${String(row.id)}`;
+  return {
+    item: {
+      id: row.id,
+      repo,
+      path: asText(meta.path),
+      subject: asText(meta.subject) ?? asText(meta.symbol),
+      fact_type: asText(meta.fact_type),
+      fact,
+      source_commit: sourceCommit,
+      source_url: sourceUrl,
+      verified_at: asText(meta.verified_at),
+      staleness_policy: asText(meta.staleness_policy),
+      staleness_disposition: stalenessDispositionFor(
+        asText(meta.staleness_policy),
+        asText(meta.verified_at),
+        nowMs,
+      ),
+      confidence: typeof meta.confidence === "number" ? meta.confidence : null,
+      citation_id: citationId,
+    },
+    citation: {
+      id: citationId,
+      kind: "repo_fact",
+      source_ref: `ob_entities/${String(row.id)}`,
+      source_url: sourceUrl,
+      source_commit: sourceCommit,
+    },
+  };
+}
+
+/** Everything the row loop produces, before the envelope is assembled. */
+type RepoFactCollection = {
+  items: Array<Record<string, unknown>>;
+  citations: Array<Record<string, unknown>>;
+  truncated: boolean;
+};
+
+/**
+ * Walk the ordered rows once, admitting each through {@link admitRepoFactRow}.
+ * `truncated` starts at the caller's row-count verdict and can only be set, so
+ * the flag means "something did not make it in whole", exactly as before.
+ */
+function collectRepoFacts(options: {
+  rows: Array<Record<string, unknown>>;
+  repo: string;
+  maxItemChars: number;
+  nowMs: number;
+  truncated: boolean;
+}): RepoFactCollection {
+  const { rows, repo, maxItemChars, nowMs } = options;
+  const items: Array<Record<string, unknown>> = [];
+  const citations: Array<Record<string, unknown>> = [];
+  let truncated = options.truncated;
+
+  for (const row of rows) {
+    const meta = metadataOf(row);
+    const admission = admitRepoFactRow(meta, repo, maxItemChars);
+    if (!admission.admitted) {
+      if (admission.countsAsTruncated) truncated = true;
+      continue;
+    }
+    if (admission.truncated) truncated = true;
+    const entry = repoFactEntry({
+      row,
+      meta,
+      repo,
+      fact: admission.text,
+      nowMs,
+    });
+    items.push(entry.item);
+    citations.push(entry.citation);
+  }
+
+  return { items, citations, truncated };
+}
+
+/** The defined empty state for a pack that carries no active repo. */
+function noActiveRepoFragment(
+  budget: Record<string, unknown>,
+): SectionFragment {
+  return {
+    section: {
+      label: "repo_facts",
+      repo: null,
+      namespace_bound: true,
+      repo_bound: false,
+      items: [],
+      item_count: 0,
+      truncated: false,
+    },
+    scopeDenials: [{ source: "repo_facts", reasons: ["no_active_repo"] }],
+    truncation: [],
+    degradedSources: [],
+    budget,
+    citations: [],
+  };
+}
+
+/** The ordered, exactly-bound rows for one repo. No cross-repo fallback. */
+async function queryRepoFactRows(
+  deps: SectionReaderDeps,
+  namespace: string,
+  repo: string,
+): Promise<Array<Record<string, unknown>>> {
+  // Exact repo bind, archived rows excluded, no legacy fallback.
+  const { rows } = await deps.query(
+    `SELECT id, namespace, metadata, updated_at
+         FROM ob_entities
+        WHERE entity_type = 'repo_fact'
+          AND archived_at IS NULL
+          AND namespace = $1
+          AND metadata->>'repo' = $2
+        ORDER BY updated_at DESC, id DESC`,
+    [namespace, repo],
+  );
+  return rows;
+}
+
+/**
+ * Log a failed repo_facts read on two lines. ERROR states what broke so it is
+ * visible at the default level; DEBUG carries every input that shaped the call.
+ */
+function logRepoFactsFailure(options: {
+  logger: Logger | undefined;
+  args: RepoFactsReaderArgs;
+  repo: string;
+  budget: Record<string, unknown>;
+  error: unknown;
+}): void {
+  const { logger, args, repo, budget, error } = options;
+  const identity = errorIdentityFields(error);
+  logger?.error(
+    { repo, namespace: args.namespace, ...identity },
+    "repo_facts_section_failed",
+  );
+  logger?.debug(
+    {
+      repo,
+      namespace: args.namespace,
+      requested_budget: args.budget,
+      resolved_budget: budget,
+      ...identity,
+      pg_code: (error as { code?: unknown })?.code ?? null,
+      stack: asError(error)?.stack ?? null,
+    },
+    "repo_facts_section_failed_detail",
+  );
+}
+
 /**
  * Assemble a repo_facts fragment bound to exactly one repo. Deterministic order:
  * most-recently-updated first, then id.
@@ -148,104 +349,28 @@ export async function loadRepoFactsSection(
   };
 
   // No active repo -> defined empty state. Never widen the bind to recover.
-  if (repo === null) {
-    return {
-      section: {
-        label: "repo_facts",
-        repo: null,
-        namespace_bound: true,
-        repo_bound: false,
-        items: [],
-        item_count: 0,
-        truncated: false,
-      },
-      scopeDenials: [{ source: "repo_facts", reasons: ["no_active_repo"] }],
-      truncation: [],
-      degradedSources: [],
-      budget,
-      citations: [],
-    };
-  }
+  if (repo === null) return noActiveRepoFragment(budget);
 
   try {
-    // Exact repo bind, archived rows excluded, no legacy fallback.
-    const { rows } = await deps.query(
-      `SELECT id, namespace, metadata, updated_at
-         FROM ob_entities
-        WHERE entity_type = 'repo_fact'
-          AND archived_at IS NULL
-          AND namespace = $1
-          AND metadata->>'repo' = $2
-        ORDER BY updated_at DESC, id DESC`,
-      [args.namespace, repo],
-    );
+    const rows = await queryRepoFactRows(deps, args.namespace, repo);
+    const overCount = rows.length > maxItems;
+    const collected = collectRepoFacts({
+      rows: overCount ? rows.slice(0, maxItems) : rows,
+      repo,
+      maxItemChars,
+      nowMs: args.nowMs,
+      truncated: overCount,
+    });
 
-    const truncation: Array<Record<string, unknown>> = [];
-    let itemsTruncated = rows.length > maxItems;
-    const capped = itemsTruncated ? rows.slice(0, maxItems) : rows;
-
-    const items: Array<Record<string, unknown>> = [];
-    const citations: Array<Record<string, unknown>> = [];
-
-    for (const row of capped) {
-      const meta = metadataOf(row);
-      const boundRepo = asText(meta.repo);
-      // Defense in depth: never let a row whose metadata.repo drifted from the
-      // bind slip through, in case a JSON edit ever bypasses the predicate.
-      if (boundRepo !== repo) continue;
-
-      const sourceUrl = asText(meta.source_url);
-      const sourceCommit = asText(meta.source_commit);
-      // A repo fact without source refs cannot be cited to its exact commit.
-      // Excluding it is the point of the section: an uncitable "fact" is just an
-      // assertion, and this section's value is that every item is checkable.
-      if (!sourceUrl || !sourceCommit) continue;
-
-      const bounded = boundedItemText(meta.fact, maxItemChars);
-      if (!bounded.text) {
-        if (asText(meta.fact)) itemsTruncated = true;
-        continue;
-      }
-      if (bounded.truncated) itemsTruncated = true;
-
-      const disposition = stalenessDispositionFor(
-        asText(meta.staleness_policy),
-        asText(meta.verified_at),
-        args.nowMs,
-      );
-      const citationId = `repo_fact:${String(row.id)}`;
-      items.push({
-        id: row.id,
-        repo,
-        path: asText(meta.path),
-        subject: asText(meta.subject) ?? asText(meta.symbol),
-        fact_type: asText(meta.fact_type),
-        fact: bounded.text,
-        source_commit: sourceCommit,
-        source_url: sourceUrl,
-        verified_at: asText(meta.verified_at),
-        staleness_policy: asText(meta.staleness_policy),
-        staleness_disposition: disposition,
-        confidence:
-          typeof meta.confidence === "number" ? meta.confidence : null,
-        citation_id: citationId,
-      });
-      citations.push({
-        id: citationId,
-        kind: "repo_fact",
-        source_ref: `ob_entities/${String(row.id)}`,
-        source_url: sourceUrl,
-        source_commit: sourceCommit,
-      });
-    }
-
-    if (itemsTruncated) {
-      truncation.push({
-        source: "repo_facts",
-        max_items: maxItems,
-        max_item_chars: maxItemChars,
-      });
-    }
+    const truncation: Array<Record<string, unknown>> = collected.truncated
+      ? [
+          {
+            source: "repo_facts",
+            max_items: maxItems,
+            max_item_chars: maxItemChars,
+          },
+        ]
+      : [];
 
     return {
       section: {
@@ -253,40 +378,18 @@ export async function loadRepoFactsSection(
         repo,
         namespace_bound: true,
         repo_bound: true,
-        items,
-        item_count: items.length,
+        items: collected.items,
+        item_count: collected.items.length,
         truncated: truncation.length > 0,
       },
       scopeDenials: [],
       truncation,
       degradedSources: [],
-      budget: { ...budget, items_included: items.length },
-      citations,
+      budget: { ...budget, items_included: collected.items.length },
+      citations: collected.citations,
     };
   } catch (error) {
-    const err = error instanceof Error ? error : undefined;
-    logger?.error(
-      {
-        repo,
-        namespace: args.namespace,
-        error_name: err?.name ?? typeof error,
-        error_message: err?.message ?? String(error),
-      },
-      "repo_facts_section_failed",
-    );
-    logger?.debug(
-      {
-        repo,
-        namespace: args.namespace,
-        requested_budget: args.budget,
-        resolved_budget: budget,
-        error_name: err?.name ?? typeof error,
-        error_message: err?.message ?? String(error),
-        pg_code: (error as { code?: unknown })?.code ?? null,
-        stack: err?.stack ?? null,
-      },
-      "repo_facts_section_failed_detail",
-    );
+    logRepoFactsFailure({ logger, args, repo, budget, error });
     return databaseUnavailableFragment("repo_facts", budget);
   }
 }

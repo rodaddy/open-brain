@@ -51,6 +51,7 @@
  * here rather than assumed: reporting them is what requires the unbounded join.
  */
 import { z } from "zod";
+import type { PoolClient } from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
@@ -125,9 +126,258 @@ function scanNamespaces(
   requested: string | undefined,
 ): readonly string[] | undefined {
   if (requested !== undefined) {
-    return canTargetNamespace(identity, "read", requested) ? [requested] : undefined;
+    return canTargetNamespace(identity, "read", requested)
+      ? [requested]
+      : undefined;
   }
   return [identity.clientId];
+}
+
+const findDuplicatesInputSchema = {
+  table: tableEnum
+    .optional()
+    .describe("Optional: limit to a specific table (default: all)"),
+  namespace: z
+    .string()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe(
+      "Namespace to scan for duplicate pairs (defaults to the caller's own namespace)",
+    ),
+  threshold: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      `Cosine distance threshold for duplicates (default ${DUPLICATE_THRESHOLD}, lower = stricter)`,
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(`Max duplicate pairs to return (default ${DEFAULT_PAIRS})`),
+};
+
+const findDuplicatesAnnotations = {
+  title: "Find Duplicates",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+interface FindDuplicatesArgs {
+  readonly table?: string;
+  readonly namespace?: string;
+  readonly threshold?: number;
+  readonly limit?: number;
+}
+
+/** One reported pair, in the frozen observed wire shape. */
+interface DuplicatePair {
+  entry_a: { id: string; preview: string };
+  entry_b: { id: string; preview: string };
+  table: string;
+  distance: number;
+}
+
+/** The resolved, permission-checked scope of one duplicate scan. */
+interface DuplicateScanScope {
+  readonly namespaces: readonly string[];
+  readonly tables: readonly ResourceTable[];
+  readonly threshold: number;
+  readonly wanted: number;
+}
+
+/**
+ * Resolve the scope of one scan, or the reason the caller may not have it.
+ *
+ * Every denial message is returned verbatim so the two servers answer a refused
+ * call identically. The namespace resolution is the #485 fix: `scanNamespaces`
+ * is total, so a resolved scope can never carry an unscoped join.
+ *
+ * @returns The resolved scope, or a `denied` message to return as-is.
+ */
+function resolveDuplicateScanScope(
+  identity: AuthIdentity,
+  args: FindDuplicatesArgs,
+): { scope: DuplicateScanScope } | { denied: string } {
+  const namespaces = scanNamespaces(identity, args.namespace);
+  if (namespaces === undefined) {
+    return {
+      denied: `Permission denied: cannot read namespace '${String(args.namespace)}'`,
+    };
+  }
+
+  const requestedTables = args.table
+    ? [args.table as ResourceTable]
+    : ALL_TABLES;
+  const tables = requestedTables.filter((table) =>
+    canRead(identity.role, table),
+  );
+  if (tables.length === 0) {
+    return { denied: "Permission denied: no readable tables" };
+  }
+
+  return {
+    scope: {
+      namespaces,
+      tables,
+      threshold: args.threshold ?? DUPLICATE_THRESHOLD,
+      wanted: args.limit ?? DEFAULT_PAIRS,
+    },
+  };
+}
+
+/**
+ * Query one table's nearest duplicate pairs within the resolved namespaces.
+ *
+ * BOTH sides of the self-join are bound to the same resolved namespace list.
+ * Binding only one side still admits a cross-namespace pair, which is both an
+ * isolation leak and the unbounded shape #485 measured.
+ *
+ * @param remaining Pairs still wanted, passed straight to `LIMIT`.
+ * @returns The raw rows, nearest pair first.
+ */
+async function queryDuplicatePairs(options: {
+  client: PoolClient;
+  table: ResourceTable;
+  scope: DuplicateScanScope;
+  remaining: number;
+}): Promise<Record<string, unknown>[]> {
+  const { client, table, scope, remaining } = options;
+  const { rows } = await client.query(
+    `SELECT
+       a.id AS id_a,
+       LEFT(${previewForAlias(table, "a")}, ${PREVIEW_WIDTH}) AS preview_a,
+       b.id AS id_b,
+       LEFT(${previewForAlias(table, "b")}, ${PREVIEW_WIDTH}) AS preview_b,
+       a.embedding <=> b.embedding AS distance
+     FROM ${table} a
+     JOIN ${table} b ON a.id < b.id
+       AND b.archived_at IS NULL
+       AND b.embedding IS NOT NULL
+       AND b.namespace = ANY($3::text[])
+     WHERE a.archived_at IS NULL
+       AND a.embedding IS NOT NULL
+       AND a.namespace = ANY($3::text[])
+       AND a.embedding <=> b.embedding < $1
+     ORDER BY distance ASC
+     LIMIT $2`,
+    [scope.threshold, remaining, scope.namespaces],
+  );
+  return rows;
+}
+
+/**
+ * Scan every accessible table inside one bounded READ ONLY transaction.
+ *
+ * One connection covers the whole scan. Taking a fresh pooled connection per
+ * table would re-arm the timeout each time but would also let a slow table hold
+ * a connection the next table then waits for.
+ *
+ * @returns The pairs found, nearest first within each table, in table order.
+ */
+async function scanTablesForDuplicates(
+  client: PoolClient,
+  scope: DuplicateScanScope,
+): Promise<DuplicatePair[]> {
+  const duplicates: DuplicatePair[] = [];
+  await client.query("BEGIN READ ONLY");
+  await client.query("SELECT set_config('statement_timeout', $1, true)", [
+    `${SELF_JOIN_STATEMENT_TIMEOUT_MS}ms`,
+  ]);
+
+  for (const table of scope.tables) {
+    if (duplicates.length >= scope.wanted) break;
+    const rows = await queryDuplicatePairs({
+      client,
+      table,
+      scope,
+      remaining: scope.wanted - duplicates.length,
+    });
+
+    for (const row of rows) {
+      duplicates.push({
+        entry_a: { id: row.id_a as string, preview: row.preview_a as string },
+        entry_b: { id: row.id_b as string, preview: row.preview_b as string },
+        table,
+        distance: Number(row.distance),
+      });
+    }
+  }
+  await client.query("COMMIT");
+  return duplicates;
+}
+
+/**
+ * Log a failed scan and map it to the refusal the caller can act on.
+ *
+ * `57014` is a statement cancelled by the timeout above. It is reported as its
+ * own refusal rather than a generic failure, because the caller CAN act on it:
+ * narrowing the table or tightening the threshold makes the same call succeed.
+ *
+ * @returns The tool error response.
+ */
+function respondToScanFailure(
+  dependencies: MemoryToolDependencies,
+  error: unknown,
+): ReturnType<typeof errorResult> {
+  const code = (error as { code?: string } | null | undefined)?.code;
+  dependencies.logger.error(
+    {
+      tool: "find_duplicates",
+      errorName: error instanceof Error ? error.name : "unknown",
+      errorCode: code,
+    },
+    "find_duplicates_error",
+  );
+  return errorResult(
+    code === "57014"
+      ? "Duplicate scan exceeded its time bound; narrow it with table or a stricter threshold"
+      : "Database error during duplicate scan",
+  );
+}
+
+async function handleFindDuplicates(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity | null | undefined,
+  args: FindDuplicatesArgs,
+) {
+  if (!identity) return errorResult("Permission denied: not authenticated");
+
+  const resolved = resolveDuplicateScanScope(identity, args);
+  if ("denied" in resolved) return errorResult(resolved.denied);
+  const { scope } = resolved;
+
+  let duplicates: DuplicatePair[];
+  const client = await dependencies.pool.connect();
+  try {
+    duplicates = await scanTablesForDuplicates(client, scope);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    return respondToScanFailure(dependencies, error);
+  } finally {
+    client.release();
+  }
+
+  dependencies.logger.info(
+    {
+      tool: "find_duplicates",
+      tablesScanned: scope.tables.length,
+      duplicatesFound: duplicates.length,
+    },
+    "tool_result",
+  );
+  return textResult({
+    threshold: scope.threshold,
+    namespaces: scope.namespaces,
+    duplicates_found: duplicates.length,
+    duplicates,
+  });
 }
 
 export function registerFindDuplicatesTool(
@@ -141,157 +391,10 @@ export function registerFindDuplicatesTool(
         "Discover potential duplicate entries using vector similarity. Read-only -- does NOT archive anything. " +
         "The pairwise scan is always bounded to one namespace: it defaults to the caller's own and can be pointed " +
         "at any namespace the caller may read.",
-      inputSchema: {
-        table: tableEnum
-          .optional()
-          .describe("Optional: limit to a specific table (default: all)"),
-        namespace: z
-          .string()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe(
-            "Namespace to scan for duplicate pairs (defaults to the caller's own namespace)",
-          ),
-        threshold: z
-          .number()
-          .min(0)
-          .max(1)
-          .optional()
-          .describe(
-            `Cosine distance threshold for duplicates (default ${DUPLICATE_THRESHOLD}, lower = stricter)`,
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe(`Max duplicate pairs to return (default ${DEFAULT_PAIRS})`),
-      },
-      annotations: {
-        title: "Find Duplicates",
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: findDuplicatesInputSchema,
+      annotations: findDuplicatesAnnotations,
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-
-      const namespaces = scanNamespaces(identity, args.namespace);
-      if (namespaces === undefined) {
-        return errorResult(
-          `Permission denied: cannot read namespace '${String(args.namespace)}'`,
-        );
-      }
-
-      const requestedTables = args.table ? [args.table as ResourceTable] : ALL_TABLES;
-      const accessible = requestedTables.filter((table) =>
-        canRead(identity.role, table),
-      );
-      if (accessible.length === 0) {
-        return errorResult("Permission denied: no readable tables");
-      }
-
-      const threshold = args.threshold ?? DUPLICATE_THRESHOLD;
-      const wanted = args.limit ?? DEFAULT_PAIRS;
-      const duplicates: Array<{
-        entry_a: { id: string; preview: string };
-        entry_b: { id: string; preview: string };
-        table: string;
-        distance: number;
-      }> = [];
-
-      // One connection for the whole scan, inside one READ ONLY transaction
-      // carrying the statement timeout. Taking a fresh pooled connection per
-      // table would re-arm the bound each time but would also let a slow table
-      // hold a connection the next table then waits for.
-      const client = await dependencies.pool.connect();
-      try {
-        await client.query("BEGIN READ ONLY");
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [
-          `${SELF_JOIN_STATEMENT_TIMEOUT_MS}ms`,
-        ]);
-
-        for (const table of accessible) {
-          if (duplicates.length >= wanted) break;
-          const remaining = wanted - duplicates.length;
-
-          // BOTH sides of the self-join are bound to the same resolved
-          // namespace list. Binding only one side still admits a cross-namespace
-          // pair, which is both an isolation leak and the unbounded shape #485
-          // measured.
-          const { rows } = await client.query(
-            `SELECT
-               a.id AS id_a,
-               LEFT(${previewForAlias(table, "a")}, ${PREVIEW_WIDTH}) AS preview_a,
-               b.id AS id_b,
-               LEFT(${previewForAlias(table, "b")}, ${PREVIEW_WIDTH}) AS preview_b,
-               a.embedding <=> b.embedding AS distance
-             FROM ${table} a
-             JOIN ${table} b ON a.id < b.id
-               AND b.archived_at IS NULL
-               AND b.embedding IS NOT NULL
-               AND b.namespace = ANY($3::text[])
-             WHERE a.archived_at IS NULL
-               AND a.embedding IS NOT NULL
-               AND a.namespace = ANY($3::text[])
-               AND a.embedding <=> b.embedding < $1
-             ORDER BY distance ASC
-             LIMIT $2`,
-            [threshold, remaining, namespaces],
-          );
-
-          for (const row of rows) {
-            duplicates.push({
-              entry_a: { id: row.id_a, preview: row.preview_a },
-              entry_b: { id: row.id_b, preview: row.preview_b },
-              table,
-              distance: Number(row.distance),
-            });
-          }
-        }
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        // `57014` is a statement cancelled by the timeout above. It is reported
-        // as its own refusal rather than a generic failure, because the caller
-        // CAN act on it -- narrowing the table or tightening the threshold makes
-        // the same call succeed.
-        const code = (error as { code?: string } | null | undefined)?.code;
-        dependencies.logger.error(
-          {
-            tool: "find_duplicates",
-            errorName: error instanceof Error ? error.name : "unknown",
-            errorCode: code,
-          },
-          "find_duplicates_error",
-        );
-        return errorResult(
-          code === "57014"
-            ? "Duplicate scan exceeded its time bound; narrow it with table or a stricter threshold"
-            : "Database error during duplicate scan",
-        );
-      } finally {
-        client.release();
-      }
-
-      dependencies.logger.info(
-        {
-          tool: "find_duplicates",
-          tablesScanned: accessible.length,
-          duplicatesFound: duplicates.length,
-        },
-        "tool_result",
-      );
-      return textResult({
-        threshold,
-        namespaces,
-        duplicates_found: duplicates.length,
-        duplicates,
-      });
-    },
+    async (args, extra) =>
+      handleFindDuplicates(dependencies, authIdentity(extra.authInfo), args),
   );
 }

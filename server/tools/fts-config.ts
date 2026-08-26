@@ -106,13 +106,6 @@ export function resolveFtsConfig(raw: string | undefined): FtsConfig {
   );
 }
 
-/** Resolve the deployment-wide corpus default from the environment. */
-export function corpusFtsConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): FtsConfig {
-  return resolveFtsConfig(env.OPENBRAIN_FTS_CONFIG?.trim());
-}
-
 /**
  * Resolve the configuration for one request.
  *
@@ -120,15 +113,24 @@ export function corpusFtsConfig(
  * than to english, so an operator who pinned a corpus keeps that pinning; an
  * explicitly recognized english token stays english.
  *
+ * THE DEPLOYMENT DEFAULT IS NOW A PARAMETER, NOT AN ENV READ. It arrives from
+ * `config.fts.corpusConfig`, which `server/config/env-groups.ts` derives by
+ * calling `resolveFtsConfig` on `OPENBRAIN_FTS_CONFIG` — the same function this
+ * module exports, so there is one allowlist and one alias table rather than two
+ * opinions on the same question. `server/config/` owns env parsing
+ * (`_plans/463-server-rewrite-charter.md:108,119`); the former
+ * `corpusFtsConfig(env)` reader was the duplicate half and is gone.
+ *
  * @param requested The request's `fts_config` argument, if any.
- * @param env Environment carrying the deployment default.
+ * @param corpusDefault The deployment-wide default; english when unset, which
+ *   is what an unset `OPENBRAIN_FTS_CONFIG` resolved to.
  */
 export function requestFtsConfig(
   requested: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  corpusDefault: FtsConfig = DEFAULT_FTS_CONFIG,
 ): FtsConfig {
   const raw = requested?.trim();
-  if (!raw) return corpusFtsConfig(env);
+  if (!raw) return corpusDefault;
   const normalized = raw.toLowerCase();
   const resolved = resolveFtsConfig(normalized);
   if (resolved !== DEFAULT_FTS_CONFIG) return resolved;
@@ -138,7 +140,7 @@ export function requestFtsConfig(
     ftsConfigSchema.safeParse(normalized).success ||
     LANGUAGE_TOKEN_TO_CONFIG[normalized] !== undefined ||
     LANGUAGE_TOKEN_TO_CONFIG[primarySubtag(normalized)] !== undefined;
-  return knownEnglishToken ? "english" : corpusFtsConfig(env);
+  return knownEnglishToken ? "english" : corpusDefault;
 }
 
 /**

@@ -1,9 +1,15 @@
 # server/ quality baseline — measured, not remembered
 
-Status: WRITTEN 2026-08-26. Numbers below are measured, each with the command
-that produced it. Re-measure with those commands; do not re-derive by hand and
-do not re-run the survey from scratch in a new session. That is what this file
-exists to stop.
+Status: MEASURED at `49ecfbe` (`origin/main`), 2026-08-26. Numbers below are
+measured, each with the command that produced it. Re-measure with those
+commands; do not re-derive by hand and do not re-run the survey from scratch in
+a new session. That is what this file exists to stop.
+
+`scripts/done-means/750-server-baseline-holds.sh` re-runs these commands and
+fails on drift, so this document cannot silently describe a tree that no longer
+exists. It is EXPECTED to go red when a ladder rung moves a number; the rung
+re-measures and updates BOTH this file and the script's expectations. Numbers
+changed by L2a (PR #778, `49ecfbe`) are annotated inline with what they were.
 
 ## Why this file exists
 
@@ -30,8 +36,9 @@ containerize. `src/` dies at the end of that, not at the start.
     server/observability/ server/realtime/   server/security/
     server/tools/         server/transport/
 
-99 non-test TypeScript files, 36 test files, 17,565 non-test CODE lines
-(comments and blanks stripped).
+100 non-test TypeScript files, 36 test files, 17,802 non-test CODE lines
+(comments and blanks stripped). Was 99 files / 17,565 lines before L2a (PR
+#778, `49ecfbe`, 2026-08-26), which added `server/config/env-groups.ts`.
 
     fd -e ts . server/ | rg -v '\.test\.ts$' | wc -l
 
@@ -57,7 +64,8 @@ Command (per file):
 
 ## Defect 2 — config is a validator nothing consumes
 
-`server/config.ts` (253 code lines) parses and validates: `parseServerConfig`
+`server/config.ts` (303 code lines; was 253 before L2a, PR #778, `49ecfbe`)
+parses and validates: `parseServerConfig`
 runs `environmentSchema.safeParse()` and returns `{ok, config}` or structured
 issues. Pure function, no side effects. That is the schema half of Python's
 `config.py` and it is good.
@@ -69,11 +77,13 @@ same, just the same idea and the weaker one at that."
 
 It does not. There is no composition root. Nothing constructs the logger, the
 pool, or the embedder client FROM the parsed config and hands them down, so
-11 files in `server/` read `process.env` directly instead of receiving config:
+12 non-test files in `server/` still reach for `process.env` instead of
+receiving config:
 
     server/main.ts                        6
+    server/config/env-groups.ts           4   <- COMMENTS ONLY, not a reader
+    server/config.ts                      4   <- legitimate, this is the door
     server/tools/shared-namespace.ts      3
-    server/config.ts                      3   <- legitimate, this is the door
     server/tools/search-engine.ts         2
     server/tools/fts-config.ts            2
     server/tools/search-all.ts            1
@@ -85,9 +95,28 @@ pool, or the embedder client FROM the parsed config and hands them down, so
 
     rg -c 'process\.env' server/ --type ts | rg -v '\.test\.ts:'
 
-Eight files are the real bypass (excluding config.ts itself and main.ts, which
-is where env legitimately enters). This is smaller than the 16 quoted from
-memory in an earlier session — that number spanned src/ AND server/.
+**This counts files CONTAINING the string, comments included — it is not a
+count of readers.** `rg` matches text, so a file that only DISCUSSES
+`process.env` in a doc comment is counted the same as one that reads it.
+`server/config/env-groups.ts` is exactly that case: its four hits are all in
+prose (`:6`, `:7`, `:48`, `:111`) and it reads nothing. The number is kept in
+this honest, mechanically re-runnable form rather than hand-curated to
+"real readers", because a curated count cannot be re-measured by a script; the
+`no-process-env` lint rule L2c installs is what will distinguish a reader from
+a mention.
+
+**L2 lowers this number as readers are rewired**, not as comments are deleted.
+Eight files are the real bypass (excluding `config.ts`, `main.ts`, and
+`env-groups.ts`). Expect the count to fall toward three as L2b/L2c inject
+config into those eight.
+
+Was 11 before L2a (PR #778, `49ecfbe`, 2026-08-26). It went UP, not down, which
+is correct: L2a is the schema half only, so it added a typed home for these env
+names while deliberately leaving the original readers in place. Both exist on
+purpose until L2b rewires the consumers. `server/config.ts` also went 3 → 4.
+
+This is smaller than the 16 quoted from memory in an earlier session — that
+number spanned src/ AND server/.
 
 `server/config/` (a DIFFERENT thing from `server/config.ts`) holds only
 `maintenance.ts` and `nats.ts` — subsystem config, not the keystone.
@@ -158,12 +187,19 @@ the rules" — so test exemptions come OUT of the lint config.
 
 ## Where the artifacts are
 
-- `.oxlintrc.json` — committed as `2a89cf2` on `chore/oxlint-enforcement` in
-  the clean clone at `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/clone-20260825`.
-- `_githooks/pre-commit:221` — the config-guarded staged-content oxlint step
-  exists only on `sprint/standards-fmt` (`b2d4252`, on hold, unpushed).
-  `origin/main`'s hook has no oxlint step; a probe with `any` and
-  `console.log` committed clean against it. L1 lands hook step and config
-  together (see the ladder).
-- PRs #765, #766, #767, #768 merged 2026-08-26; `origin/main` is `96978a8`,
-  deployed to the local clone.
+- `.oxlintrc.json` and the config-guarded staged-content oxlint step in
+  `_githooks/pre-commit` are both on `origin/main`, landed together by PR #771
+  (`c73a7f7`) — which is what L1 required. Proven RED first by
+  `scripts/done-means/750-precommit-lint-gate-fires.sh`. The earlier split
+  state (config on `chore/oxlint-enforcement` at `2a89cf2`, hook step only on
+  the unpushed `sprint/standards-fmt` at `b2d4252`) is history.
+- `server/config/env-groups.ts` — the L2a schema half, PR #778 (`49ecfbe`).
+  Checked by `scripts/done-means/750-l2a-config-covers-every-env-read.sh`,
+  which passes with all 23 env names read in `server/` declared in
+  `environmentSchema`.
+- PRs #765, #766, #767, #768 merged 2026-08-26 at `96978a8`, deployed to the
+  local clone. `origin/main` has since moved to `49ecfbe` via #771 and #778;
+  those two are MERGED, not verified running.
+- Draft PR #779 (L2b-1a) is open and blocked by the lint gate. The debt is paid
+  one file at a time per the operator ruling in
+  https://github.com/rodaddy/open-brain/issues/780.

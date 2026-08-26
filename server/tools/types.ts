@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { AuthIdentity } from "../auth/types.ts";
+import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
+import type { FtsConfig } from "./fts-config.ts";
 import type { WorkingSetStore } from "../realtime/working-set.ts";
 import type { RecoveryWalStore } from "../realtime/recovery-wal.ts";
 
@@ -37,6 +39,29 @@ export interface MemoryToolDependencies {
    */
   readonly workingSetStore?: WorkingSetStore;
   readonly recoveryWalStore?: RecoveryWalStore;
+  /**
+   * Deployment-wide corpus default for full-text search.
+   *
+   * From `config.fts.corpusConfig`. Absent means english, which is what
+   * `corpusFtsConfig` answered for an unset environment.
+   */
+  readonly ftsCorpusConfig?: FtsConfig;
+  /**
+   * Recovery WAL path for the fallback store, `null` for RAM-only.
+   *
+   * From `config.recovery.walPath`. Only consulted when no `recoveryWalStore`
+   * was injected; a composition root that builds the store itself has already
+   * applied this value and never reaches the fallback.
+   */
+  readonly recoveryWalPath?: string | null;
+  /**
+   * The NATS runtime boundary `operator_doctor` reports.
+   *
+   * From `natsRuntimeBoundaryFromConfig(config.nats)`. Absent means the doctor
+   * reports the boundary an unset environment produces — an http transport that
+   * requested no bridge — rather than reading the environment a second time.
+   */
+  readonly natsRuntimeBoundary?: NatsRuntimeBoundary;
 }
 
 export interface McpAuthInfo {

@@ -66,7 +66,8 @@ function promotionAuth(identity: AuthIdentity): AuthInfo {
   return {
     role: identity.role,
     clientId: identity.clientId,
-    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource:
+      identity.namespaceSource === "delegated" ? "header" : "token",
   } as AuthInfo;
 }
 
@@ -77,6 +78,158 @@ function isPromotionIdentity(identity: AuthIdentity): boolean {
     identity.role === "ob-admin" ||
     identity.role === "promoter"
   );
+}
+
+/** Input schema for `promote_entry`. */
+const promoteEntryInputSchema = {
+  table: tableEnum.describe("Source table"),
+  id: z.string().uuid().describe("Source entry UUID"),
+  reason: z
+    .string()
+    .max(1000)
+    .optional()
+    .describe("Why this entry is being promoted"),
+  target_namespace: z
+    .string()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe("Target namespace (default: shared-kb)"),
+  dry_run: z
+    .boolean()
+    .optional()
+    .describe(
+      "Return a promotion report without inserting into the target namespace (default true)",
+    ),
+};
+
+/** MCP annotations for `promote_entry`. */
+const promoteEntryAnnotations = {
+  title: "Promote Entry",
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+/** The already-validated arguments this tool's helpers operate on. */
+interface PromoteEntryArgs {
+  table: string;
+  id: string;
+  reason?: string;
+  target_namespace?: string;
+  dry_run?: boolean;
+}
+
+/**
+ * Resolve the promotion target, refusing the legacy shared name.
+ *
+ * @returns The resolved target namespace, or a refusal message when the
+ * requested target is the pre-rename shared namespace.
+ */
+function resolvePromotionTarget(
+  requested: string | undefined,
+): { target: string } | { refusal: string } {
+  const shared = sharedNamespaceConfig();
+  const target = requested ?? shared.sharedNamespace;
+  // The legacy name is a migration SOURCE, never a write target: accepting
+  // it would recreate the two-names-for-one-lane split the canonical
+  // namespace decision exists to end.
+  if (
+    target === LEGACY_SHARED_NAMESPACE ||
+    target === shared.legacySharedNamespace
+  ) {
+    return {
+      refusal: `Permission denied: '${target}' is a legacy migration source and cannot be a promotion target; use '${shared.canonicalSharedNamespace}'`,
+    };
+  }
+  return { target };
+}
+
+/**
+ * Map a promotion throw onto a caller-safe error result, logging the failure.
+ *
+ * @returns The tool error response for the failed promotion.
+ */
+function respondToPromotionFailure(options: {
+  dependencies: MemoryToolDependencies;
+  args: PromoteEntryArgs;
+  target: string;
+  dryRun: boolean;
+  error: unknown;
+}): ReturnType<typeof errorResult> {
+  const { dependencies, args, target, dryRun, error } = options;
+  // A promotion that never happened used to leave no trace while a
+  // successful one did; silence meaning failure is exactly backwards.
+  dependencies.logger.error(
+    {
+      tool: "promote_entry",
+      table: args.table,
+      sourceId: args.id,
+      targetNamespace: target,
+      dryRun,
+      errorName: error instanceof Error ? error.name : "unknown",
+    },
+    "promote_entry_failed",
+  );
+  // The promotion service marks DELIBERATE rejections with a statusCode
+  // and a curated message, and those are the contract. An error without
+  // one is an unexpected throw whose message is raw driver text --
+  // relation names, connection detail, quoted parameter values -- and
+  // must not reach a caller.
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  return errorResult(
+    typeof statusCode === "number" && error instanceof Error
+      ? error.message
+      : "Promotion failed due to an internal error",
+  );
+}
+
+/**
+ * Run the promotion through the owning service and shape its report.
+ *
+ * @returns The promotion report, or an error result when the service throws.
+ */
+async function runPromotion(options: {
+  dependencies: MemoryToolDependencies;
+  args: PromoteEntryArgs;
+  identity: AuthIdentity;
+  target: string;
+}): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> {
+  const { dependencies, args, identity, target } = options;
+  const dryRun = args.dry_run ?? true;
+  try {
+    const result = await promoteEntry(
+      dependencies.pool,
+      args.table as ResourceTable,
+      args.id,
+      target,
+      args.reason,
+      promotionAuth(identity),
+      { dryRun },
+    );
+    dependencies.logger.info(
+      {
+        tool: "promote_entry",
+        table: args.table,
+        sourceId: args.id,
+        newId: result.new_id,
+        existingId: result.existing_id,
+        targetNamespace: result.target_namespace,
+        status: result.status,
+        dryRun: result.dry_run,
+      },
+      "tool_result",
+    );
+    return textResult(result);
+  } catch (error) {
+    return respondToPromotionFailure({
+      dependencies,
+      args,
+      target,
+      dryRun,
+      error,
+    });
+  }
 }
 
 export function registerPromoteEntryTool(
@@ -90,33 +243,8 @@ export function registerPromoteEntryTool(
         "Promote an entry from an agent namespace to shared-kb or another target namespace. " +
         "Copies the entry with provenance tracking and detects duplicate target rows. " +
         "Dry-run by default.",
-      inputSchema: {
-        table: tableEnum.describe("Source table"),
-        id: z.string().uuid().describe("Source entry UUID"),
-        reason: z
-          .string()
-          .max(1000)
-          .optional()
-          .describe("Why this entry is being promoted"),
-        target_namespace: z
-          .string()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe("Target namespace (default: shared-kb)"),
-        dry_run: z
-          .boolean()
-          .optional()
-          .describe(
-            "Return a promotion report without inserting into the target namespace (default true)",
-          ),
-      },
-      annotations: {
-        title: "Promote Entry",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: promoteEntryInputSchema,
+      annotations: promoteEntryAnnotations,
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
@@ -132,68 +260,15 @@ export function registerPromoteEntryTool(
         );
       }
 
-      const shared = sharedNamespaceConfig();
-      const target = args.target_namespace ?? shared.sharedNamespace;
-      // The legacy name is a migration SOURCE, never a write target: accepting
-      // it would recreate the two-names-for-one-lane split the canonical
-      // namespace decision exists to end.
-      if (target === LEGACY_SHARED_NAMESPACE || target === shared.legacySharedNamespace) {
-        return errorResult(
-          `Permission denied: '${target}' is a legacy migration source and cannot be a promotion target; use '${shared.canonicalSharedNamespace}'`,
-        );
-      }
+      const resolved = resolvePromotionTarget(args.target_namespace);
+      if ("refusal" in resolved) return errorResult(resolved.refusal);
 
-      const dryRun = args.dry_run ?? true;
-      try {
-        const result = await promoteEntry(
-          dependencies.pool,
-          args.table as ResourceTable,
-          args.id,
-          target,
-          args.reason,
-          promotionAuth(identity),
-          { dryRun },
-        );
-        dependencies.logger.info(
-          {
-            tool: "promote_entry",
-            table: args.table,
-            sourceId: args.id,
-            newId: result.new_id,
-            existingId: result.existing_id,
-            targetNamespace: result.target_namespace,
-            status: result.status,
-            dryRun: result.dry_run,
-          },
-          "tool_result",
-        );
-        return textResult(result);
-      } catch (error) {
-        // A promotion that never happened used to leave no trace while a
-        // successful one did; silence meaning failure is exactly backwards.
-        dependencies.logger.error(
-          {
-            tool: "promote_entry",
-            table: args.table,
-            sourceId: args.id,
-            targetNamespace: target,
-            dryRun,
-            errorName: error instanceof Error ? error.name : "unknown",
-          },
-          "promote_entry_failed",
-        );
-        // The promotion service marks DELIBERATE rejections with a statusCode
-        // and a curated message, and those are the contract. An error without
-        // one is an unexpected throw whose message is raw driver text --
-        // relation names, connection detail, quoted parameter values -- and
-        // must not reach a caller.
-        const statusCode = (error as { statusCode?: unknown }).statusCode;
-        return errorResult(
-          typeof statusCode === "number" && error instanceof Error
-            ? error.message
-            : "Promotion failed due to an internal error",
-        );
-      }
+      return runPromotion({
+        dependencies,
+        args,
+        identity,
+        target: resolved.target,
+      });
     },
   );
 }

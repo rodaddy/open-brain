@@ -25,6 +25,8 @@ import type { MemoryToolDependencies } from "./types.ts";
 
 let fallbackWorkingSetStore: WorkingSetStore | undefined;
 let fallbackRecoveryWalStore: RecoveryWalStore | undefined;
+/** The `recoveryWalPath` the current fallback was built for. */
+let fallbackRecoveryWalPath: string | null | undefined;
 
 /** The injected working-set store, or the shared process-lifetime fallback. */
 export function workingSetStoreFor(
@@ -37,14 +39,28 @@ export function workingSetStoreFor(
   return fallbackWorkingSetStore;
 }
 
-/** The injected recovery WAL store, or the shared process-lifetime fallback. */
+/**
+ * The injected recovery WAL store, or the shared process-lifetime fallback.
+ *
+ * The fallback is keyed on the `recoveryWalPath` it was built for, so an
+ * injected path is honored no matter WHEN it arrives: callers asking for the
+ * same path keep sharing one store — which is the point of a process-lifetime
+ * fallback — and a caller asking for a different path (or for none) gets a
+ * store built for that path instead of silently writing to the first one seen.
+ * Memoizing on first touch alone made the answer depend on registration order,
+ * which is invisible in a single-file run and wrong in a whole-suite one.
+ */
 export function recoveryWalStoreFor(
   dependencies: MemoryToolDependencies,
 ): RecoveryWalStore {
   if (dependencies.recoveryWalStore) return dependencies.recoveryWalStore;
-  fallbackRecoveryWalStore ??= new RecoveryWalStore({
-    walPath: process.env.OPENBRAIN_RECOVERY_WAL_PATH ?? null,
-    logger: dependencies.logger,
-  });
+  const walPath = dependencies.recoveryWalPath ?? null;
+  if (!fallbackRecoveryWalStore || fallbackRecoveryWalPath !== walPath) {
+    fallbackRecoveryWalStore = new RecoveryWalStore({
+      walPath,
+      logger: dependencies.logger,
+    });
+    fallbackRecoveryWalPath = walPath;
+  }
   return fallbackRecoveryWalStore;
 }

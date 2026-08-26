@@ -20,10 +20,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import {
-  namespacePredicate,
-  type NamespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import { canonicalNamespace } from "../../src/shared-namespace.ts";
 import {
@@ -48,7 +45,7 @@ const TABLE_ALIAS: Readonly<Record<ResourceTable, string>> = {
   sessions: "s",
 };
 
-/** Observed current-src caps on the reported breakdowns. */
+/** Observed current-src maxima on the reported breakdowns. */
 const TOP_NAMESPACES = 10;
 const TOP_ACCESSED = 10;
 const TOP_ENTITY_TYPES = 25;
@@ -56,6 +53,37 @@ const TOP_ENTITY_TYPES = 25;
 /** Trend bands from observed current-src: +/-20% around the prior window. */
 const RISING_RATIO = 1.2;
 const DECLINING_RATIO = 0.8;
+
+/** Map-key separator, chosen so no namespace value can contain it. */
+const NAMESPACE_KEY_SEPARATOR = "\u0000";
+
+/** Look-back window applied when the caller names none. */
+const DEFAULT_PERIOD_DAYS = 30;
+
+/** Minimal shape of the handler `extra` argument these tools read. */
+interface HandlerExtra {
+  authInfo?: Parameters<typeof authIdentity>[0];
+}
+
+const accessReportInputSchema = {
+  entry_id: z.string().uuid().describe("UUID of the entry to report on"),
+  days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe("Number of days to look back (default 30)"),
+};
+
+const getStatsInputSchema = {
+  raw: z
+    .boolean()
+    .optional()
+    .describe(
+      "Return physical namespace names instead of canonical public names",
+    ),
+};
 
 export function registerReportingTools(
   server: McpServer,
@@ -74,16 +102,7 @@ function registerAccessReport(
     {
       description:
         "Returns a detailed access report for a specific entry: total accesses, unique queries, unique agents, access trend, and recency.",
-      inputSchema: {
-        entry_id: z.string().uuid().describe("UUID of the entry to report on"),
-        days: z
-          .number()
-          .int()
-          .min(1)
-          .max(365)
-          .optional()
-          .describe("Number of days to look back (default 30)"),
-      },
+      inputSchema: accessReportInputSchema,
       annotations: {
         title: "Access Report",
         readOnlyHint: true,
@@ -91,70 +110,7 @@ function registerAccessReport(
         idempotentHint: true,
       },
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-      const accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
-      if (accessible.length === 0) {
-        return errorResult("Permission denied: no readable tables");
-      }
-
-      // Which table owns this id is resolved through the namespace predicate,
-      // so an entry the caller cannot read is indistinguishable from a miss.
-      const sourceTable = await findReadableEntryTable(
-        dependencies,
-        identity,
-        accessible,
-        args.entry_id,
-      );
-      if (!sourceTable) return errorResult("Entry not found or not readable");
-
-      const days = args.days ?? 30;
-      // One pass over the log instead of five sequential round trips: the
-      // windows are FILTER clauses over the same scan, which is what the
-      // separate current-src queries add up to.
-      const { rows } = await dependencies.pool.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3) AS total,
-           COUNT(DISTINCT query_text) FILTER (
-             WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND query_text IS NOT NULL
-           ) AS unique_queries,
-           COUNT(DISTINCT accessed_by) FILTER (
-             WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND accessed_by IS NOT NULL
-           ) AS unique_agents,
-           COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '7 days') AS recent_7d,
-           COUNT(*) FILTER (
-             WHERE accessed_at >= NOW() - INTERVAL '14 days'
-               AND accessed_at < NOW() - INTERVAL '7 days'
-           ) AS previous_7d,
-           MAX(accessed_at) AS last_accessed
-         FROM entry_access_log
-         WHERE entry_id = $1 AND source_table = $2`,
-        [args.entry_id, sourceTable, days],
-      );
-
-      const row = rows[0] ?? {};
-      const recent7d = Number(row.recent_7d ?? 0);
-      const previous7d = Number(row.previous_7d ?? 0);
-      const lastAccessed = row.last_accessed ?? null;
-
-      dependencies.logger.info(
-        { tool: "access_report", entryId: args.entry_id },
-        "tool_result",
-      );
-      return textResult({
-        entry_id: args.entry_id,
-        source_table: sourceTable,
-        period_days: days,
-        total_accesses: Number(row.total ?? 0),
-        unique_queries: Number(row.unique_queries ?? 0),
-        unique_agents: Number(row.unique_agents ?? 0),
-        trend: accessTrend(recent7d, previous7d),
-        trend_detail: { recent_7d: recent7d, previous_7d: previous7d },
-        last_accessed: lastAccessed,
-        days_since_last_access: daysSince(lastAccessed),
-      });
-    },
+    async (args, extra) => handleAccessReport(dependencies, args, extra),
   );
 }
 
@@ -167,14 +123,7 @@ function registerGetStats(
     {
       description:
         "Returns aggregate statistics about the Open Brain knowledge base: entry counts, tier distribution, namespace breakdown, and access analytics.",
-      inputSchema: {
-        raw: z
-          .boolean()
-          .optional()
-          .describe(
-            "Return physical namespace names instead of canonical public names",
-          ),
-      },
+      inputSchema: getStatsInputSchema,
       annotations: {
         title: "Get Stats",
         readOnlyHint: true,
@@ -182,85 +131,247 @@ function registerGetStats(
         idempotentHint: true,
       },
     },
-    async (args, extra) => {
-      const identity = authIdentity(extra.authInfo);
-      if (!identity) return errorResult("Permission denied: not authenticated");
-      const accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
-      if (accessible.length === 0) {
-        return errorResult("Permission denied: no readable tables");
-      }
-
-      const perTable = await Promise.all(
-        accessible.map((table) => tableStats(dependencies, identity, table)),
-      );
-      const [accessStats, graph, topAccessed] = await Promise.all([
-        accessLogStats(dependencies, identity, accessible),
-        graphCounts(dependencies, identity),
-        topAccessedEntries(dependencies, identity, accessible),
-      ]);
-
-      const entryCounts: Record<string, { active: number; archived: number }> = {};
-      const tierDistribution: Record<string, Record<string, number>> = {};
-      const zeroAccess: Record<string, number> = {};
-      const namespaceRows: Array<{ table: string; namespace: string; count: number }> = [];
-      let avgTotal = 0;
-
-      for (const stats of perTable) {
-        entryCounts[stats.table] = { active: stats.active, archived: stats.archived };
-        // Observed current-src omits a table with no rows entirely rather than
-        // mapping it to an empty object, because it builds this from the
-        // GROUP BY result rows. A table key with `{}` would be a new shape.
-        if (Object.keys(stats.tiers).length > 0) {
-          tierDistribution[stats.table] = stats.tiers;
-        }
-        zeroAccess[stats.table] = stats.zeroAccess;
-        avgTotal += stats.avgAccess;
-        for (const entry of stats.namespaces) {
-          namespaceRows.push({
-            table: stats.table,
-            // Legacy `collab` is folded into the canonical shared name unless
-            // the caller explicitly asked for physical names.
-            namespace: args.raw ? entry.namespace : canonicalNamespace(entry.namespace),
-            count: entry.count,
-          });
-        }
-      }
-
-      // Folding can collide two physical names onto one canonical name, so sum
-      // before ranking rather than ranking the pre-fold rows.
-      const merged = new Map<string, { table: string; namespace: string; count: number }>();
-      for (const entry of namespaceRows) {
-        const key = `${entry.table}\u0000${entry.namespace}`;
-        const existing = merged.get(key);
-        if (existing) existing.count += entry.count;
-        else merged.set(key, { ...entry });
-      }
-      const namespaces = [...merged.values()]
-        .sort((a, b) => b.count - a.count)
-        .slice(0, TOP_NAMESPACES);
-
-      dependencies.logger.info(
-        { tool: "get_stats", tables: accessible.length },
-        "tool_result",
-      );
-      return textResult({
-        entry_counts: entryCounts,
-        tier_distribution: tierDistribution,
-        namespaces,
-        access_stats: {
-          total_log_entries: accessStats.totalLogEntries,
-          unique_entries_accessed: accessStats.uniqueEntriesAccessed,
-          avg_access_count:
-            perTable.length > 0
-              ? Math.round((avgTotal / perTable.length) * 100) / 100
-              : 0,
-        },
-        graph_counts: graph,
-        zero_access_entries: zeroAccess,
-        top_accessed: topAccessed,
-      });
-    },
+    async (args, extra) => handleGetStats(dependencies, args, extra),
   );
+}
+
+/** A resolved read scope, or the error result that replaces it. */
+type ReadScope =
+  | { identity: AuthIdentity; tables: readonly ResourceTable[] }
+  | { error: ReturnType<typeof errorResult> };
+
+/**
+ * @returns The identity and its readable tables, or an error result when the
+ *   caller is unauthenticated or may read nothing.
+ */
+function resolveReadScope(identity: AuthIdentity | undefined): ReadScope {
+  if (!identity) {
+    return { error: errorResult("Permission denied: not authenticated") };
+  }
+  const tables = ALL_TABLES.filter((table) => canRead(identity.role, table));
+  if (tables.length === 0) {
+    return { error: errorResult("Permission denied: no readable tables") };
+  }
+  return { identity, tables };
+}
+
+/** Raw one-row access aggregate, before it becomes the reported payload. */
+interface AccessAggregate {
+  total: number;
+  uniqueQueries: number;
+  uniqueAgents: number;
+  recent7d: number;
+  previous7d: number;
+  lastAccessed: unknown;
+}
+
+/**
+ * One pass over the log instead of five sequential round trips: the windows are
+ * FILTER clauses over the same scan, which is what the separate current-src
+ * queries add up to.
+ */
+async function accessAggregate(
+  dependencies: MemoryToolDependencies,
+  entryId: string,
+  sourceTable: ResourceTable,
+  days: number,
+): Promise<AccessAggregate> {
+  const { rows } = await dependencies.pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3) AS total,
+       COUNT(DISTINCT query_text) FILTER (
+         WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND query_text IS NOT NULL
+       ) AS unique_queries,
+       COUNT(DISTINCT accessed_by) FILTER (
+         WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND accessed_by IS NOT NULL
+       ) AS unique_agents,
+       COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '7 days') AS recent_7d,
+       COUNT(*) FILTER (
+         WHERE accessed_at >= NOW() - INTERVAL '14 days'
+           AND accessed_at < NOW() - INTERVAL '7 days'
+       ) AS previous_7d,
+       MAX(accessed_at) AS last_accessed
+     FROM entry_access_log
+     WHERE entry_id = $1 AND source_table = $2`,
+    [entryId, sourceTable, days],
+  );
+
+  const row = rows[0] ?? {};
+  return {
+    total: Number(row.total ?? 0),
+    uniqueQueries: Number(row.unique_queries ?? 0),
+    uniqueAgents: Number(row.unique_agents ?? 0),
+    recent7d: Number(row.recent_7d ?? 0),
+    previous7d: Number(row.previous_7d ?? 0),
+    lastAccessed: row.last_accessed ?? null,
+  };
+}
+
+/** @returns The `access_report` payload, or an error result. */
+async function handleAccessReport(
+  dependencies: MemoryToolDependencies,
+  args: { entry_id: string; days?: number },
+  extra: HandlerExtra,
+) {
+  const scope = resolveReadScope(authIdentity(extra.authInfo));
+  if ("error" in scope) return scope.error;
+
+  // Which table owns this id is resolved through the namespace predicate,
+  // so an entry the caller cannot read is indistinguishable from a miss.
+  const sourceTable = await findReadableEntryTable(
+    dependencies,
+    scope.identity,
+    scope.tables,
+    args.entry_id,
+  );
+  if (!sourceTable) return errorResult("Entry not found or not readable");
+
+  const days = args.days ?? DEFAULT_PERIOD_DAYS;
+  const aggregate = await accessAggregate(
+    dependencies,
+    args.entry_id,
+    sourceTable,
+    days,
+  );
+
+  dependencies.logger.info(
+    { tool: "access_report", entryId: args.entry_id },
+    "tool_result",
+  );
+  return textResult({
+    entry_id: args.entry_id,
+    source_table: sourceTable,
+    period_days: days,
+    total_accesses: aggregate.total,
+    unique_queries: aggregate.uniqueQueries,
+    unique_agents: aggregate.uniqueAgents,
+    trend: accessTrend(aggregate.recent7d, aggregate.previous7d),
+    trend_detail: {
+      recent_7d: aggregate.recent7d,
+      previous_7d: aggregate.previous7d,
+    },
+    last_accessed: aggregate.lastAccessed,
+    days_since_last_access: daysSince(aggregate.lastAccessed),
+  });
+}
+
+/** One namespace breakdown row, before and after canonical folding. */
+interface NamespaceRow {
+  table: string;
+  namespace: string;
+  count: number;
+}
+
+/** The per-table aggregates, folded into the reported `get_stats` shapes. */
+interface FoldedTableStats {
+  entryCounts: Record<string, { active: number; archived: number }>;
+  tierDistribution: Record<string, Record<string, number>>;
+  zeroAccess: Record<string, number>;
+  namespaceRows: NamespaceRow[];
+  avgTotal: number;
+}
+
+/** @returns The per-table stats folded into their reported shapes. */
+function foldTableStats(
+  perTable: readonly TableStats[],
+  raw: boolean | undefined,
+): FoldedTableStats {
+  const folded: FoldedTableStats = {
+    entryCounts: {},
+    tierDistribution: {},
+    zeroAccess: {},
+    namespaceRows: [],
+    avgTotal: 0,
+  };
+  for (const stats of perTable) {
+    folded.entryCounts[stats.table] = {
+      active: stats.active,
+      archived: stats.archived,
+    };
+    // Observed current-src omits a table with no rows entirely rather than
+    // mapping it to an empty object, because it builds this from the
+    // GROUP BY result rows. A table key with `{}` would be a new shape.
+    if (Object.keys(stats.tiers).length > 0) {
+      folded.tierDistribution[stats.table] = stats.tiers;
+    }
+    folded.zeroAccess[stats.table] = stats.zeroAccess;
+    folded.avgTotal += stats.avgAccess;
+    for (const entry of stats.namespaces) {
+      folded.namespaceRows.push({
+        table: stats.table,
+        // Legacy `collab` is folded into the canonical shared name unless
+        // the caller explicitly asked for physical names.
+        namespace: raw ? entry.namespace : canonicalNamespace(entry.namespace),
+        count: entry.count,
+      });
+    }
+  }
+  return folded;
+}
+
+/**
+ * @returns The highest-count namespaces.
+ *
+ * Folding can collide two physical names onto one canonical name, so this sums
+ * before ranking rather than ranking the pre-fold rows.
+ */
+function rankNamespaces(
+  namespaceRows: readonly NamespaceRow[],
+): NamespaceRow[] {
+  const merged = new Map<string, NamespaceRow>();
+  for (const entry of namespaceRows) {
+    const key = `${entry.table}${NAMESPACE_KEY_SEPARATOR}${entry.namespace}`;
+    const existing = merged.get(key);
+    if (existing) existing.count += entry.count;
+    else merged.set(key, { ...entry });
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, TOP_NAMESPACES);
+}
+
+/** @returns The `get_stats` payload, or an error result. */
+async function handleGetStats(
+  dependencies: MemoryToolDependencies,
+  args: { raw?: boolean },
+  extra: HandlerExtra,
+) {
+  const scope = resolveReadScope(authIdentity(extra.authInfo));
+  if ("error" in scope) return scope.error;
+  const { identity, tables: accessible } = scope;
+
+  const perTable = await Promise.all(
+    accessible.map((table) => tableStats(dependencies, identity, table)),
+  );
+  const [accessStats, graph, topAccessed] = await Promise.all([
+    accessLogStats(dependencies, identity, accessible),
+    graphCounts(dependencies, identity),
+    topAccessedEntries(dependencies, identity, accessible),
+  ]);
+
+  const folded = foldTableStats(perTable, args.raw);
+  const namespaces = rankNamespaces(folded.namespaceRows);
+
+  dependencies.logger.info(
+    { tool: "get_stats", tables: accessible.length },
+    "tool_result",
+  );
+  return textResult({
+    entry_counts: folded.entryCounts,
+    tier_distribution: folded.tierDistribution,
+    namespaces,
+    access_stats: {
+      total_log_entries: accessStats.totalLogEntries,
+      unique_entries_accessed: accessStats.uniqueEntriesAccessed,
+      avg_access_count:
+        perTable.length > 0
+          ? Math.round((folded.avgTotal / perTable.length) * 100) / 100
+          : 0,
+    },
+    graph_counts: graph,
+    zero_access_entries: folded.zeroAccess,
+    top_accessed: topAccessed,
+  });
 }
 
 /** @returns The first readable table holding this id, or `undefined`. */
@@ -309,7 +420,9 @@ async function tableStats(
   table: ResourceTable,
 ): Promise<TableStats> {
   const predicate = namespacePredicate(identity, "read", 1);
-  const scoped = predicate.clause ? ` WHERE ${predicate.clause.slice(" AND ".length)}` : "";
+  const scoped = predicate.clause
+    ? ` WHERE ${predicate.clause.slice(" AND ".length)}`
+    : "";
   const activeScoped = ` WHERE archived_at IS NULL${predicate.clause}`;
 
   const [totals, tierRows, namespaces] = await Promise.all([
@@ -415,10 +528,9 @@ async function graphCounts(
       `SELECT COUNT(*) AS total FROM ob_entities${where}`,
       [...predicate.values],
     ),
-    dependencies.pool.query(
-      `SELECT COUNT(*) AS total FROM ob_links${where}`,
-      [...predicate.values],
-    ),
+    dependencies.pool.query(`SELECT COUNT(*) AS total FROM ob_links${where}`, [
+      ...predicate.values,
+    ]),
     dependencies.pool.query(
       `SELECT entity_type, COUNT(*) AS count
          FROM ob_entities${where}
@@ -444,7 +556,12 @@ async function topAccessedEntries(
   identity: AuthIdentity,
   accessible: readonly ResourceTable[],
 ): Promise<
-  Array<{ id: string; table: string; content_preview: string; access_count: number }>
+  Array<{
+    id: string;
+    table: string;
+    content_preview: string;
+    access_count: number;
+  }>
 > {
   const values: unknown[] = [];
   const arms = accessible.map((table) => {

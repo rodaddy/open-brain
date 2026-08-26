@@ -137,6 +137,177 @@ export type GuidanceReaderArgs = {
 };
 
 /**
+ * Bind by LANE namespace — the isolation boundary for session events. The
+ * candidate_type discriminator is an explicit typed metadata field, not a
+ * content match. promote/relegate/discard are all pulled so supersession is
+ * reconciled deterministically in-process.
+ */
+const GUIDANCE_ROWS_SQL = `SELECT e.id,
+              e.content,
+              e.created_at,
+              e.metadata->>'memory_lifecycle_action' AS memory_lifecycle_action,
+              e.metadata->>'candidate_type' AS candidate_type,
+              e.metadata->>'candidate_reason' AS candidate_reason,
+              (e.metadata->>'candidate_confidence')::float8 AS candidate_confidence,
+              e.metadata->'candidate_scope' AS candidate_scope
+         FROM ob_session_events e
+         JOIN ob_session_lanes l ON l.id = e.lane_id
+        WHERE l.namespace = $1
+          AND e.metadata->>'candidate_type' = $2
+          AND e.metadata->>'memory_lifecycle_action' IN ('promote', 'relegate', 'discard')
+        ORDER BY e.created_at DESC, e.id DESC`;
+
+/**
+ * Is this row a promote that is still standing for its own candidate type?
+ *
+ * Flattens what was nested selection logic: a row survives only if it is a
+ * promote of the requested type whose explicit scope key has neither been
+ * retired by a newer decisive action nor already been emitted. Keyless promotes
+ * always survive here and are flagged downstream instead.
+ */
+function isStandingPromote(options: {
+  row: LifecycleRow;
+  candidateType: string;
+  retired: Set<string>;
+  seenScopeKeys: Set<string>;
+}): boolean {
+  const { row, candidateType, retired, seenScopeKeys } = options;
+  if (row.action !== "promote") return false;
+  if (row.candidateType !== candidateType) return false;
+  if (!row.scopeKey) return true;
+  // Supersession: an explicit key later relegated/discarded is gone.
+  if (retired.has(row.scopeKey)) return false;
+  // Deterministic dedupe: keep only the most-recent promote per key.
+  if (seenScopeKeys.has(row.scopeKey)) return false;
+  seenScopeKeys.add(row.scopeKey);
+  return true;
+}
+
+type GuidanceSelection = {
+  items: Array<Record<string, unknown>>;
+  citations: Array<Record<string, unknown>>;
+  itemsTruncated: boolean;
+};
+
+/**
+ * Build the emitted items and their citations, in arrival order, applying
+ * supersession and the resolved per-item text bound. Order and admission are
+ * unchanged from the single-pass form this replaces.
+ */
+function selectGuidanceItems(options: {
+  normalized: LifecycleRow[];
+  candidateType: string;
+  retired: Set<string>;
+  maxItems: number;
+  maxItemChars: number;
+}): GuidanceSelection {
+  const { normalized, candidateType, retired, maxItems, maxItemChars } =
+    options;
+  const citations: Array<Record<string, unknown>> = [];
+  const items: Array<Record<string, unknown>> = [];
+  const seenScopeKeys = new Set<string>();
+  let itemsTruncated = false;
+
+  for (const row of normalized) {
+    if (!isStandingPromote({ row, candidateType, retired, seenScopeKeys })) {
+      continue;
+    }
+
+    if (items.length >= maxItems) {
+      itemsTruncated = true;
+      break;
+    }
+
+    const bounded = boundedItemText(row.content, maxItemChars);
+    if (!bounded.text) {
+      // Non-empty content the budget cannot admit is recorded as an omission,
+      // content-free, rather than emitted as an empty rule.
+      if (row.content) itemsTruncated = true;
+      continue;
+    }
+    if (bounded.truncated) itemsTruncated = true;
+
+    const citationId = `session_event:${row.id}`;
+    items.push({
+      id: row.id,
+      guidance: bounded.text,
+      candidate_type: candidateType,
+      confidence: row.confidence,
+      reason: row.reason,
+      scope_key: row.scopeKey,
+      // Keyless promotes cannot be proven un-superseded: flag, never fabricate.
+      supersession_verifiable: row.scopeKey !== null,
+      promoted_at: row.createdAt,
+      citation_id: citationId,
+    });
+    citations.push({
+      id: citationId,
+      kind: "session_event",
+      source_ref: `ob_session_events/${row.id}`,
+    });
+  }
+
+  return { items, citations, itemsTruncated };
+}
+
+/**
+ * ERROR names what broke at the default level; DEBUG carries the inputs,
+ * because a "database_unavailable" envelope on its own tells a later reader
+ * nothing and by then the call that produced it is gone.
+ */
+type FailureShape = {
+  error_name: string;
+  error_message: string;
+  pg_code: unknown;
+  stack: string | null;
+};
+
+/** Content-free description of a thrown value, Error or not. */
+function failureShape(error: unknown): FailureShape {
+  const err = error instanceof Error ? error : undefined;
+  return {
+    error_name: err?.name ?? typeof error,
+    error_message: err?.message ?? String(error),
+    pg_code: (error as { code?: unknown })?.code ?? null,
+    stack: err?.stack ?? null,
+  };
+}
+
+function logGuidanceFailure(options: {
+  args: GuidanceReaderArgs;
+  candidateType: string;
+  budget: Record<string, number>;
+  error: unknown;
+  logger?: Logger;
+}): void {
+  const { args, candidateType, budget, error, logger } = options;
+  const shape = failureShape(error);
+  logger?.error(
+    {
+      section: args.section,
+      namespace: args.namespace,
+      error_name: shape.error_name,
+      error_message: shape.error_message,
+    },
+    "guidance_section_failed",
+  );
+  logger?.debug(
+    {
+      section: args.section,
+      candidate_type: candidateType,
+      namespace: args.namespace,
+      requested_budget: args.budget,
+      resolved_budget: budget,
+      error_name: shape.error_name,
+      error_message: shape.error_message,
+      pg_code: shape.pg_code,
+      stack: shape.stack,
+    },
+    "guidance_section_failed_detail",
+  );
+}
+
+/**
  * Assemble one guidance fragment for an authorized namespace. Deterministic
  * order: promoted-most-recent first, then id. Empty state is an explicit empty
  * items array, never omitted and never fabricated.
@@ -159,82 +330,22 @@ export async function loadGuidanceSection(
   };
 
   try {
-    // Bind by LANE namespace — the isolation boundary for session events. The
-    // candidate_type discriminator is an explicit typed metadata field, not a
-    // content match. promote/relegate/discard are all pulled so supersession is
-    // reconciled deterministically in-process.
-    const { rows } = await deps.query(
-      `SELECT e.id,
-              e.content,
-              e.created_at,
-              e.metadata->>'memory_lifecycle_action' AS memory_lifecycle_action,
-              e.metadata->>'candidate_type' AS candidate_type,
-              e.metadata->>'candidate_reason' AS candidate_reason,
-              (e.metadata->>'candidate_confidence')::float8 AS candidate_confidence,
-              e.metadata->'candidate_scope' AS candidate_scope
-         FROM ob_session_events e
-         JOIN ob_session_lanes l ON l.id = e.lane_id
-        WHERE l.namespace = $1
-          AND e.metadata->>'candidate_type' = $2
-          AND e.metadata->>'memory_lifecycle_action' IN ('promote', 'relegate', 'discard')
-        ORDER BY e.created_at DESC, e.id DESC`,
-      [args.namespace, candidateType],
-    );
+    const { rows } = await deps.query(GUIDANCE_ROWS_SQL, [
+      args.namespace,
+      candidateType,
+    ]);
 
     const normalized = rows.map(normalizeRow);
     const retired = retiredScopeKeys(normalized);
+    const { items, citations, itemsTruncated } = selectGuidanceItems({
+      normalized,
+      candidateType,
+      retired,
+      maxItems,
+      maxItemChars,
+    });
 
     const truncation: Array<Record<string, unknown>> = [];
-    const citations: Array<Record<string, unknown>> = [];
-    const items: Array<Record<string, unknown>> = [];
-    const seenScopeKeys = new Set<string>();
-    let itemsTruncated = false;
-
-    for (const row of normalized) {
-      if (row.action !== "promote") continue;
-      if (row.candidateType !== candidateType) continue;
-      // Supersession: an explicit key later relegated/discarded is gone.
-      if (row.scopeKey && retired.has(row.scopeKey)) continue;
-      // Deterministic dedupe: keep only the most-recent promote per key.
-      if (row.scopeKey) {
-        if (seenScopeKeys.has(row.scopeKey)) continue;
-        seenScopeKeys.add(row.scopeKey);
-      }
-
-      if (items.length >= maxItems) {
-        itemsTruncated = true;
-        break;
-      }
-
-      const bounded = boundedItemText(row.content, maxItemChars);
-      if (!bounded.text) {
-        // Non-empty content the budget cannot admit is recorded as an omission,
-        // content-free, rather than emitted as an empty rule.
-        if (row.content) itemsTruncated = true;
-        continue;
-      }
-      if (bounded.truncated) itemsTruncated = true;
-
-      const citationId = `session_event:${row.id}`;
-      items.push({
-        id: row.id,
-        guidance: bounded.text,
-        candidate_type: candidateType,
-        confidence: row.confidence,
-        reason: row.reason,
-        scope_key: row.scopeKey,
-        // Keyless promotes cannot be proven un-superseded: flag, never fabricate.
-        supersession_verifiable: row.scopeKey !== null,
-        promoted_at: row.createdAt,
-        citation_id: citationId,
-      });
-      citations.push({
-        id: citationId,
-        kind: "session_event",
-        source_ref: `ob_session_events/${row.id}`,
-      });
-    }
-
     if (itemsTruncated) {
       truncation.push({
         source: args.section,
@@ -265,33 +376,7 @@ export async function loadGuidanceSection(
       citations,
     };
   } catch (error) {
-    // ERROR names what broke at the default level; DEBUG carries the inputs,
-    // because a "database_unavailable" envelope on its own tells a later reader
-    // nothing and by then the call that produced it is gone.
-    const err = error instanceof Error ? error : undefined;
-    logger?.error(
-      {
-        section: args.section,
-        namespace: args.namespace,
-        error_name: err?.name ?? typeof error,
-        error_message: err?.message ?? String(error),
-      },
-      "guidance_section_failed",
-    );
-    logger?.debug(
-      {
-        section: args.section,
-        candidate_type: candidateType,
-        namespace: args.namespace,
-        requested_budget: args.budget,
-        resolved_budget: budget,
-        error_name: err?.name ?? typeof error,
-        error_message: err?.message ?? String(error),
-        pg_code: (error as { code?: unknown })?.code ?? null,
-        stack: err?.stack ?? null,
-      },
-      "guidance_section_failed_detail",
-    );
+    logGuidanceFailure({ args, candidateType, budget, error, logger });
     return databaseUnavailableFragment(args.section, budget);
   }
 }

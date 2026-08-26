@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 import {
   authorize,
   contentHash,
@@ -17,6 +22,48 @@ const contextLaneFields = `id, session_key, namespace, status, agent, project, t
 const eventFields = `id, event_type, content, source, artifact_path, transcript_ref,
   transcript, occurred_at, importance, metadata, created_at, created_by`;
 
+/**
+ * The declared input shapes of the three lifecycle tools, lifted out of their
+ * registration calls so each registration body stays readable. Values and
+ * constraints are unchanged from the inline schemas they replace.
+ */
+const START_INPUT_SCHEMA = {
+  session_key: z.string().min(1).max(500),
+  namespace: z.string().max(500).optional(),
+  project: z.string().max(500).optional(),
+  agent: z.string().max(500).optional(),
+  platform: z.string().max(500).optional(),
+  server_id: z.string().max(500).optional(),
+  channel_id: z.string().max(500).optional(),
+  thread_id: z.string().max(500).optional(),
+  topic: z.string().max(500).optional(),
+};
+
+const CONTEXT_INPUT_SCHEMA = {
+  session_key: z.string().max(500).optional(),
+  namespace: z.string().max(500).optional(),
+  channel_id: z.string().max(500).optional(),
+  thread_id: z.string().max(500).optional(),
+  include_events: z.boolean().optional(),
+  event_limit: z.number().int().min(1).max(200).optional(),
+  event_types: z.array(z.enum(EVENT_TYPES)).optional(),
+  importance: z.enum(IMPORTANCE_LEVELS).optional(),
+};
+
+const WRAP_INPUT_SCHEMA = {
+  session_key: z.string().min(1).max(500),
+  namespace: z.string().max(500).optional(),
+  summary: z.string().min(1).max(100_000),
+  key_decisions: z.array(z.string().max(2000)).max(20).optional(),
+  next_steps: z.array(z.string().max(2000)).max(20).optional(),
+  project: z.string().max(500).optional(),
+  source_refs: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
+};
+
+type StartArgs = z.infer<z.ZodObject<typeof START_INPUT_SCHEMA>>;
+type ContextArgs = z.infer<z.ZodObject<typeof CONTEXT_INPUT_SCHEMA>>;
+type WrapArgs = z.infer<z.ZodObject<typeof WRAP_INPUT_SCHEMA>>;
+
 type ExactStartScope = {
   agent?: string;
   platform?: string;
@@ -25,9 +72,14 @@ type ExactStartScope = {
   thread_id?: string;
 };
 
+/** A prepared `WHERE` fragment plus the positional values it refers to. */
+type SqlFilter = { conditions: string[]; values: unknown[] };
+
 function hasCompleteExactScope(
   args: ExactStartScope,
-): args is Required<Omit<ExactStartScope, "thread_id">> & { thread_id?: string } {
+): args is Required<Omit<ExactStartScope, "thread_id">> & {
+  thread_id?: string;
+} {
   return (
     args.agent !== undefined &&
     args.platform !== undefined &&
@@ -108,22 +160,145 @@ export function registerSessionLifecycleTools(
   registerSessionWrap(server, dependencies);
 }
 
-function registerSessionStart(server: McpServer, dependencies: MemoryToolDependencies): void {
+/** Read the most recent events on a lane, newest first. */
+async function recentLaneEvents(
+  dependencies: MemoryToolDependencies,
+  laneId: unknown,
+): Promise<unknown[]> {
+  const events = await dependencies.pool.query(
+    `SELECT ${eventFields} FROM ob_session_events
+            WHERE lane_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [laneId],
+  );
+  return events.rows;
+}
+
+/**
+ * Resolve the lane an existing `session_start` should answer with, filling in
+ * exact scope first when the request carries the complete predicate (#646).
+ *
+ * Returns the tool's own error response rather than the lane when the fill is
+ * refused, because a conflicting lane must be reported by name rather than
+ * returned unproven: returning it makes every later capture fail with a scope
+ * error the caller cannot act on.
+ */
+async function scopeExistingLane(
+  dependencies: MemoryToolDependencies,
+  namespace: string,
+  args: StartArgs,
+  existing: Record<string, unknown>,
+): Promise<
+  | { lane: Record<string, unknown> }
+  | { response: ReturnType<typeof errorResult> }
+> {
+  if (!hasCompleteExactScope(args)) return { lane: existing };
+  const scopedLane = await establishExactStartScope(
+    dependencies,
+    namespace,
+    args.session_key,
+    args,
+  );
+  if (!scopedLane) {
+    return {
+      response: errorResult(
+        "Existing lane exact scope does not match session_start request",
+      ),
+    };
+  }
+  return { lane: scopedLane };
+}
+
+/** Create the lane a `session_start` asked for when none existed yet. */
+async function insertStartLane(
+  dependencies: MemoryToolDependencies,
+  namespace: string,
+  args: StartArgs,
+  clientId: string,
+): Promise<unknown> {
+  const inserted = await dependencies.pool.query(
+    `INSERT INTO ob_session_lanes
+           (session_key, namespace, status, agent, source, project, channel_id,
+            thread_id, topic, metadata, created_by)
+         VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+         RETURNING ${startLaneFields}`,
+    [
+      args.session_key,
+      namespace,
+      args.agent ?? null,
+      args.platform ?? null,
+      args.project ?? null,
+      args.channel_id ?? null,
+      args.thread_id ?? null,
+      args.topic ?? null,
+      JSON.stringify(args.server_id ? { server_id: args.server_id } : {}),
+      clientId,
+    ],
+  );
+  return inserted.rows[0];
+}
+
+async function startSession(
+  dependencies: MemoryToolDependencies,
+  args: StartArgs,
+  extra: { authInfo?: unknown },
+) {
+  const auth = authorize(
+    authIdentity(extra.authInfo),
+    "write",
+    "sessions",
+    "cannot write to sessions",
+    args.namespace,
+  );
+  if (!auth.ok) return auth.response;
+  const existing = await dependencies.pool.query(
+    `SELECT ${startLaneFields} FROM ob_session_lanes
+          WHERE namespace = $1 AND session_key = $2`,
+    [auth.namespace, args.session_key],
+  );
+  if (existing.rows[0]) {
+    const scoped = await scopeExistingLane(
+      dependencies,
+      auth.namespace,
+      args,
+      existing.rows[0],
+    );
+    if ("response" in scoped) return scoped.response;
+    const events = await recentLaneEvents(dependencies, scoped.lane.id);
+    return textResult({
+      lane: scoped.lane,
+      events,
+      events_returned: events.length,
+      is_new: false,
+    });
+  }
+  const lane = await insertStartLane(
+    dependencies,
+    auth.namespace,
+    args,
+    auth.identity.clientId,
+  );
+  dependencies.logger.info(
+    { tool: "session_start", namespace: auth.namespace },
+    "tool_result",
+  );
+  return textResult({
+    lane,
+    events: [],
+    events_returned: 0,
+    is_new: true,
+  });
+}
+
+function registerSessionStart(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "session_start",
     {
-      description: "Find or create a persistent session lane and return its current state",
-      inputSchema: {
-        session_key: z.string().min(1).max(500),
-        namespace: z.string().max(500).optional(),
-        project: z.string().max(500).optional(),
-        agent: z.string().max(500).optional(),
-        platform: z.string().max(500).optional(),
-        server_id: z.string().max(500).optional(),
-        channel_id: z.string().max(500).optional(),
-        thread_id: z.string().max(500).optional(),
-        topic: z.string().max(500).optional(),
-      },
+      description:
+        "Find or create a persistent session lane and return its current state",
+      inputSchema: START_INPUT_SCHEMA,
       annotations: {
         title: "Session Start",
         readOnlyHint: false,
@@ -131,98 +306,102 @@ function registerSessionStart(server: McpServer, dependencies: MemoryToolDepende
         idempotentHint: true,
       },
     },
-    async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write to sessions",
-        args.namespace,
-      );
-      if (!auth.ok) return auth.response;
-      const existing = await dependencies.pool.query(
-        `SELECT ${startLaneFields} FROM ob_session_lanes
-          WHERE namespace = $1 AND session_key = $2`,
-        [auth.namespace, args.session_key],
-      );
-      if (existing.rows[0]) {
-        let lane = existing.rows[0];
-        // Establish exact scope on a lane that predates it (#646). Only runs
-        // when the request carries the complete predicate; a conflicting lane
-        // is refused by name rather than returned unproven, because returning
-        // it makes every later capture fail with a scope error the caller
-        // cannot act on.
-        if (hasCompleteExactScope(args)) {
-          const scopedLane = await establishExactStartScope(
-            dependencies,
-            auth.namespace,
-            args.session_key,
-            args,
-          );
-          if (!scopedLane) {
-            return errorResult(
-              "Existing lane exact scope does not match session_start request",
-            );
-          }
-          lane = scopedLane;
-        }
-        const events = await dependencies.pool.query(
-          `SELECT ${eventFields} FROM ob_session_events
-            WHERE lane_id = $1 ORDER BY created_at DESC LIMIT 50`,
-          [lane.id],
-        );
-        return textResult({
-          lane,
-          events: events.rows,
-          events_returned: events.rows.length,
-          is_new: false,
-        });
-      }
-      const inserted = await dependencies.pool.query(
-        `INSERT INTO ob_session_lanes
-           (session_key, namespace, status, agent, source, project, channel_id,
-            thread_id, topic, metadata, created_by)
-         VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
-         RETURNING ${startLaneFields}`,
-        [
-          args.session_key,
-          auth.namespace,
-          args.agent ?? null,
-          args.platform ?? null,
-          args.project ?? null,
-          args.channel_id ?? null,
-          args.thread_id ?? null,
-          args.topic ?? null,
-          JSON.stringify(args.server_id ? { server_id: args.server_id } : {}),
-          auth.identity.clientId,
-        ],
-      );
-      dependencies.logger.info({ tool: "session_start", namespace: auth.namespace }, "tool_result");
-      return textResult({
-        lane: inserted.rows[0],
-        events: [],
-        events_returned: 0,
-        is_new: true,
-      });
-    },
+    async (args, extra) => startSession(dependencies, args, extra),
   );
 }
 
-function registerSessionContext(server: McpServer, dependencies: MemoryToolDependencies): void {
+/**
+ * Build the lane lookup predicate. `session_key` is exact and wins outright;
+ * only in its absence do `channel_id`/`thread_id` narrow the match, which is
+ * why both are guarded on `!args.session_key`.
+ */
+function laneLookupFilter(namespace: string, args: ContextArgs): SqlFilter {
+  const values: unknown[] = [namespace];
+  const conditions = ["namespace = $1"];
+  if (args.session_key) {
+    values.push(args.session_key);
+    conditions.push(`session_key = $${values.length}`);
+  }
+  if (!args.session_key && args.channel_id) {
+    values.push(args.channel_id);
+    conditions.push(`channel_id = $${values.length}`);
+  }
+  if (!args.session_key && args.thread_id) {
+    values.push(args.thread_id);
+    conditions.push(`thread_id = $${values.length}`);
+  }
+  return { conditions, values };
+}
+
+/**
+ * Build the event predicate for one lane. `$2` is reserved for the row count
+ * up front so it can be referenced by the `ORDER BY ... LIMIT $2` tail while
+ * the optional filters keep appending after it.
+ */
+function laneEventFilter(laneId: unknown, args: ContextArgs): SqlFilter {
+  const conditions = ["lane_id = $1"];
+  const values: unknown[] = [laneId, args.event_limit ?? 50];
+  if (args.event_types && args.event_types.length > 0) {
+    values.push(args.event_types);
+    conditions.push(`event_type = ANY($${values.length})`);
+  }
+  if (args.importance) {
+    values.push(args.importance);
+    conditions.push(`importance = $${values.length}`);
+  }
+  return { conditions, values };
+}
+
+async function loadSessionContext(
+  dependencies: MemoryToolDependencies,
+  args: ContextArgs,
+  extra: { authInfo?: unknown },
+) {
+  const auth = authorize(
+    authIdentity(extra.authInfo),
+    "read",
+    "sessions",
+    "cannot read session context",
+    args.namespace,
+  );
+  if (!auth.ok) return auth.response;
+  if (!args.session_key && !args.channel_id) {
+    return errorResult("At least one of session_key or channel_id is required");
+  }
+  const laneFilter = laneLookupFilter(auth.namespace, args);
+  const lanes = await dependencies.pool.query(
+    `SELECT ${contextLaneFields} FROM ob_session_lanes
+          WHERE ${laneFilter.conditions.join(" AND ")} ORDER BY updated_at DESC`,
+    laneFilter.values,
+  );
+  const lane = lanes.rows[0];
+  if (!lane) return textResult({ lane: null, events: [], event_count: 0 });
+  let events: { rows: unknown[] } = { rows: [] };
+  if (args.include_events !== false) {
+    const eventFilter = laneEventFilter(lane.id, args);
+    events = await dependencies.pool.query(
+      `SELECT ${eventFields} FROM ob_session_events
+            WHERE ${eventFilter.conditions.join(" AND ")}
+            ORDER BY created_at DESC LIMIT $2`,
+      eventFilter.values,
+    );
+  }
+  return textResult({
+    lane,
+    events: events.rows,
+    event_count: events.rows.length,
+  });
+}
+
+function registerSessionContext(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "session_context",
     {
       description: "Load lane state and recent events for a session",
-      inputSchema: {
-        session_key: z.string().max(500).optional(),
-        namespace: z.string().max(500).optional(),
-        channel_id: z.string().max(500).optional(),
-        thread_id: z.string().max(500).optional(),
-        include_events: z.boolean().optional(),
-        event_limit: z.number().int().min(1).max(200).optional(),
-        event_types: z.array(z.enum(EVENT_TYPES)).optional(),
-        importance: z.enum(IMPORTANCE_LEVELS).optional(),
-      },
+      inputSchema: CONTEXT_INPUT_SCHEMA,
       annotations: {
         title: "Session Context",
         readOnlyHint: true,
@@ -230,77 +409,145 @@ function registerSessionContext(server: McpServer, dependencies: MemoryToolDepen
         idempotentHint: true,
       },
     },
-    async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "read",
-        "sessions",
-        "cannot read session context",
-        args.namespace,
-      );
-      if (!auth.ok) return auth.response;
-      if (!args.session_key && !args.channel_id) {
-        return errorResult("At least one of session_key or channel_id is required");
-      }
-      const values: unknown[] = [auth.namespace];
-      const conditions = ["namespace = $1"];
-      if (args.session_key) {
-        values.push(args.session_key);
-        conditions.push(`session_key = $${values.length}`);
-      }
-      if (!args.session_key && args.channel_id) {
-        values.push(args.channel_id);
-        conditions.push(`channel_id = $${values.length}`);
-      }
-      if (!args.session_key && args.thread_id) {
-        values.push(args.thread_id);
-        conditions.push(`thread_id = $${values.length}`);
-      }
-      const lanes = await dependencies.pool.query(
-        `SELECT ${contextLaneFields} FROM ob_session_lanes
-          WHERE ${conditions.join(" AND ")} ORDER BY updated_at DESC`,
-        values,
-      );
-      const lane = lanes.rows[0];
-      if (!lane) return textResult({ lane: null, events: [], event_count: 0 });
-      let events: { rows: unknown[] } = { rows: [] };
-      if (args.include_events !== false) {
-        const eventConditions = ["lane_id = $1"];
-        const eventValues: unknown[] = [lane.id, args.event_limit ?? 50];
-        if (args.event_types && args.event_types.length > 0) {
-          eventValues.push(args.event_types);
-          eventConditions.push(`event_type = ANY($${eventValues.length})`);
-        }
-        if (args.importance) {
-          eventValues.push(args.importance);
-          eventConditions.push(`importance = $${eventValues.length}`);
-        }
-        events = await dependencies.pool.query(
-          `SELECT ${eventFields} FROM ob_session_events
-            WHERE ${eventConditions.join(" AND ")}
-            ORDER BY created_at DESC LIMIT $2`,
-          eventValues,
-        );
-      }
-      return textResult({ lane, events: events.rows, event_count: events.rows.length });
-    },
+    async (args, extra) => loadSessionContext(dependencies, args, extra),
   );
 }
 
-function registerSessionWrap(server: McpServer, dependencies: MemoryToolDependencies): void {
+/** Insert the durable session row, or `undefined` when it deduplicated away. */
+async function insertWrapSession(options: {
+  dependencies: MemoryToolDependencies;
+  args: WrapArgs;
+  namespace: string;
+  project: string | null;
+  embedded: Awaited<ReturnType<typeof embeddingFields>>;
+  clientId: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const { dependencies, args, namespace, project, embedded, clientId } =
+    options;
+  const sessions = await dependencies.pool.query(
+    `INSERT INTO sessions
+           (summary, key_decisions, next_steps, project, namespace, embedding,
+            content_hash, embedded_at, embedding_model, created_by, source_refs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
+         RETURNING id, created_at, source_refs`,
+    [
+      args.summary,
+      args.key_decisions ?? [],
+      args.next_steps ?? [],
+      project,
+      namespace,
+      embedded.embedding,
+      contentHash(`${args.summary}|${project ?? ""}`),
+      embedded.embeddedAt,
+      embedded.model,
+      clientId,
+      JSON.stringify(args.source_refs ?? []),
+    ],
+  );
+  return sessions.rows[0];
+}
+
+/** Point the lane's current context at this checkpoint, leaving it active. */
+async function updateLaneContext(options: {
+  dependencies: MemoryToolDependencies;
+  args: WrapArgs;
+  namespace: string;
+  laneId: unknown;
+  embedded: Awaited<ReturnType<typeof embeddingFields>>;
+}): Promise<void> {
+  const { dependencies, args, namespace, laneId, embedded } = options;
+  await dependencies.pool.query(
+    `UPDATE ob_session_lanes
+            SET current_context_md = $2, embedding = $3, content_hash = $4,
+                embedded_at = $5, embedding_model = $6
+          WHERE id = $1 AND namespace = $7 AND session_key = $8`,
+    [
+      laneId,
+      args.summary,
+      embedded.embedding,
+      contentHash(`${args.session_key}|${args.summary}`),
+      embedded.embeddedAt,
+      embedded.model,
+      namespace,
+      args.session_key,
+    ],
+  );
+}
+
+async function wrapSession(
+  dependencies: MemoryToolDependencies,
+  args: WrapArgs,
+  extra: { authInfo?: unknown },
+) {
+  const auth = authorize(
+    authIdentity(extra.authInfo),
+    "write",
+    "sessions",
+    "cannot write to sessions",
+    args.namespace,
+  );
+  if (!auth.ok) return auth.response;
+  const lanes = await dependencies.pool.query(
+    `SELECT id, status, project FROM ob_session_lanes
+          WHERE namespace = $1 AND session_key = $2`,
+    [auth.namespace, args.session_key],
+  );
+  const lane = lanes.rows[0];
+  if (!lane) {
+    return errorResult(
+      `Lane not found for session_key "${args.session_key}" in namespace "${auth.namespace}"`,
+    );
+  }
+  const events = await dependencies.pool.query(
+    "SELECT count(*)::int AS cnt FROM ob_session_events WHERE lane_id = $1",
+    [lane.id],
+  );
+  const project = args.project ?? lane.project ?? null;
+  const embedded = await embeddingFields(dependencies, sessionEmbedText(args));
+  const session = await insertWrapSession({
+    dependencies,
+    args,
+    namespace: auth.namespace,
+    project,
+    embedded,
+    clientId: auth.identity.clientId,
+  });
+  await updateLaneContext({
+    dependencies,
+    args,
+    namespace: auth.namespace,
+    laneId: lane.id,
+    embedded,
+  });
+  if (!session) {
+    return textResult({
+      duplicate: true,
+      lane_id: lane.id,
+      lane_status: lane.status,
+      context_updated: true,
+    });
+  }
+  return textResult({
+    session_id: session.id,
+    lane_id: lane.id,
+    lane_status: lane.status,
+    event_count: events.rows[0].cnt,
+    created_at: session.created_at,
+    source_refs: session.source_refs,
+    context_updated: true,
+  });
+}
+
+function registerSessionWrap(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
   server.registerTool(
     "session_wrap",
     {
       description: "Checkpoint a session lane while leaving the lane active",
-      inputSchema: {
-        session_key: z.string().min(1).max(500),
-        namespace: z.string().max(500).optional(),
-        summary: z.string().min(1).max(100_000),
-        key_decisions: z.array(z.string().max(2000)).max(20).optional(),
-        next_steps: z.array(z.string().max(2000)).max(20).optional(),
-        project: z.string().max(500).optional(),
-        source_refs: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
-      },
+      inputSchema: WRAP_INPUT_SCHEMA,
       annotations: {
         title: "Session Wrap",
         readOnlyHint: false,
@@ -308,80 +555,6 @@ function registerSessionWrap(server: McpServer, dependencies: MemoryToolDependen
         idempotentHint: false,
       },
     },
-    async (args, extra) => {
-      const auth = authorize(
-        authIdentity(extra.authInfo),
-        "write",
-        "sessions",
-        "cannot write to sessions",
-        args.namespace,
-      );
-      if (!auth.ok) return auth.response;
-      const lanes = await dependencies.pool.query(
-        `SELECT id, status, project FROM ob_session_lanes
-          WHERE namespace = $1 AND session_key = $2`,
-        [auth.namespace, args.session_key],
-      );
-      const lane = lanes.rows[0];
-      if (!lane) {
-        return errorResult(
-          `Lane not found for session_key "${args.session_key}" in namespace "${auth.namespace}"`,
-        );
-      }
-      const events = await dependencies.pool.query(
-        "SELECT count(*)::int AS cnt FROM ob_session_events WHERE lane_id = $1",
-        [lane.id],
-      );
-      const project = args.project ?? lane.project ?? null;
-      const embedded = await embeddingFields(dependencies, sessionEmbedText(args));
-      const sessions = await dependencies.pool.query(
-        `INSERT INTO sessions
-           (summary, key_decisions, next_steps, project, namespace, embedding,
-            content_hash, embedded_at, embedding_model, created_by, source_refs)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
-         ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
-         RETURNING id, created_at, source_refs`,
-        [
-          args.summary,
-          args.key_decisions ?? [],
-          args.next_steps ?? [],
-          project,
-          auth.namespace,
-          embedded.embedding,
-          contentHash(`${args.summary}|${project ?? ""}`),
-          embedded.embeddedAt,
-          embedded.model,
-          auth.identity.clientId,
-          JSON.stringify(args.source_refs ?? []),
-        ],
-      );
-      await dependencies.pool.query(
-        `UPDATE ob_session_lanes
-            SET current_context_md = $2, embedding = $3, content_hash = $4,
-                embedded_at = $5, embedding_model = $6
-          WHERE id = $1 AND namespace = $7 AND session_key = $8`,
-        [
-          lane.id,
-          args.summary,
-          embedded.embedding,
-          contentHash(`${args.session_key}|${args.summary}`),
-          embedded.embeddedAt,
-          embedded.model,
-          auth.namespace,
-          args.session_key,
-        ],
-      );
-      const session = sessions.rows[0];
-      if (!session) return textResult({ duplicate: true, lane_id: lane.id, lane_status: lane.status, context_updated: true });
-      return textResult({
-        session_id: session.id,
-        lane_id: lane.id,
-        lane_status: lane.status,
-        event_count: events.rows[0].cnt,
-        created_at: session.created_at,
-        source_refs: session.source_refs,
-        context_updated: true,
-      });
-    },
+    async (args, extra) => wrapSession(dependencies, args, extra),
   );
 }
