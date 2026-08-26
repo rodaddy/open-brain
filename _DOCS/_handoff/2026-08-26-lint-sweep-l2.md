@@ -31,7 +31,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
   (`docs/ladder-status-l2a`: ladder status, #780 ruling in the decisions
   file, baseline re-measure) were dispatched by the authoring session; their
   PRs: docs lane is PR #781 (open, docs-only, baseline check green at its
-  head); lane 1 had pushed its branch with no PR at authoring — UNVERIFIED (`gh pr list --state open`)
+  head); lane 1 is PR #782 (open, `chore/780-lint-main-ts`) — UNVERIFIED (`gh pr checks 782`)
 - `scripts/done-means/750-server-baseline-holds.sh` is red on main (100
   files, 12 `process.env` mentions) until the docs lane merges — RUNNING
 - `./node_modules/.bin/oxlint --deny-warnings <file>` at `49ecfbe`:
@@ -63,7 +63,7 @@ Done-check: `git log -1 --stat`
 ## State 3 — Collect lane 1 (main.ts) and the docs lane
 Tier: T1 — shared startup code and the plan files every later lane reads
 Deliverable: both PRs merged: Light review, `bun scripts/verify-lane.ts <pr>` receipt, Tightenings harvest, `gh pr merge --squash --delete-branch`; or re-cut smaller if absent or failing. Docs PR is #781 (`8395395`): before merging, replace the `UNVERIFIED` ruling quote in `_plans/server-rewrite-decisions.md` with Rico's verbatim text from the third comment on #780
-Scope: PRs on `chore/780-lint-main-ts` and `docs/ladder-status-l2a`; `docs/lane-contract.md` for the harvest
+Scope: PRs #782 (`chore/780-lint-main-ts`), #781 (`docs/ladder-status-l2a`), #783 (this handoff); `docs/lane-contract.md` for the harvest
 Must NOT: merge without a receipt on the final head; re-review a fixer commit; touch `#779`
 Record: each PR, then tick `server/main.ts` on the #780 checklist comment
 Done-check: `cd <clone> && ./node_modules/.bin/oxlint --deny-warnings server/main.ts` → exit 0 and `bash scripts/done-means/750-server-baseline-holds.sh` → exit 0 (RED: 49ecfbe, 3 findings / baseline FAIL)
