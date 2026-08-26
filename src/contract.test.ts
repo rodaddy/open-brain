@@ -13,7 +13,7 @@ describe("Open Brain contract manifest", () => {
     expect(contract.contract_scope).toBe("required_openbrain_memory_contract");
     expect(contract.schema_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(contract.schema_hash).toBe(
-      "b9157706e09023bc7d3459d5e3d42360fe92179c70e9c3c460bad7be9bf83377",
+      "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c",
     );
     expect(contract.min_client_versions.mcp2cli).toBe("0.3.6");
     expect(contract.min_client_versions["openbrain-memory"]).toBe("0.1.15");
@@ -324,7 +324,7 @@ describe("Open Brain contract manifest", () => {
     expect(
       contract.capabilities.find((item) => item.name === "agent_context_pack")
         ?.version,
-    ).toBe(2);
+    ).toBe(3);
     expect(
       contract.capabilities.find((item) => item.name === "append_session_event")
         ?.version,

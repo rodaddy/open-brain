@@ -193,7 +193,7 @@ describe("get_contract", () => {
         parsed.capabilities.find(
           (item: { name: string }) => item.name === "agent_context_pack",
         ).version,
-      ).toBe(2);
+      ).toBe(3);
       expect(
         parsed.capabilities.find(
           (item: { name: string }) => item.name === "append_session_event",
