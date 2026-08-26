@@ -183,6 +183,11 @@ function createServerFactory(input: {
       // bridge and `/health` actually run on.
       searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
       ftsCorpusConfig: config.fts.corpusConfig,
+      // `config.qmd.path` is the validated parse of QMD_PATH (blank reads as
+      // absent, `server/config/env-groups.ts:188,304`), so the handler no longer
+      // needs an env record at all. Spread rather than assigned because the key
+      // is optional and must stay ABSENT, not present-and-undefined.
+      ...(config.qmd.path ? { qmdPath: config.qmd.path } : {}),
       recoveryWalPath: config.recovery.walPath,
       natsRuntimeBoundary: nats.boundary,
       ...realtime,

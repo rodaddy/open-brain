@@ -1,5 +1,5 @@
 /**
- * ARRIVAL regressions for the three values the composition root injects.
+ * ARRIVAL regressions for the four values the composition root injects.
  *
  * `scripts/done-means/750-l2b1-tool-readers-take-config.sh` clause 4 reads
  * `server/main.ts` and proves each value is WRITTEN at the call site. That is a
@@ -16,13 +16,14 @@
  *   - `ftsCorpusConfig` -> the SQL text `search_brain` actually sends.
  *   - `recoveryWalPath` -> a JSONL file that exists on disk afterwards.
  *   - `natsRuntimeBoundary` -> the transport `operator_doctor` reports.
+ *   - `qmdPath` -> the entry point `search_all` actually spawns.
  *
  * No database is involved: the pool is a fake that records or answers queries,
  * the same shape `search-read-scope.test.ts` and `src/operator-doctor.test.ts`
  * already use.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -68,7 +69,8 @@ async function clientFor(
     logger: pino({ level: "silent" }),
     ...dependencies,
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options_) =>
     send(message, {
@@ -107,7 +109,8 @@ function onlyQuery(queries: readonly CapturedQuery[]): CapturedQuery {
 function payloadOf(result: unknown): Record<string, unknown> {
   const content = (result as { content?: Array<{ text?: string }> }).content;
   const text = content?.[0]?.text;
-  if (typeof text !== "string") throw new Error("tool returned no text content");
+  if (typeof text !== "string")
+    throw new Error("tool returned no text content");
   return JSON.parse(text) as Record<string, unknown>;
 }
 
@@ -237,7 +240,9 @@ describe("recoveryWalPath arrives at the fallback recovery WAL store", () => {
 
     expect(existsSync(firstPath)).toBe(true);
     expect(existsSync(secondPath)).toBe(true);
-    expect(readFileSync(firstPath, "utf8")).toContain('"content":"first-arrival"');
+    expect(readFileSync(firstPath, "utf8")).toContain(
+      '"content":"first-arrival"',
+    );
     expect(readFileSync(secondPath, "utf8")).toContain(
       '"content":"second-arrival"',
     );
@@ -295,5 +300,71 @@ describe("natsRuntimeBoundary arrives at operator_doctor", () => {
     const transport = payloadOf(result).transport as Record<string, unknown>;
     expect(transport.mode).toBe("nats");
     expect(transport.availability).toBe("not_runtime_available");
+  });
+});
+
+/**
+ * A stub standing in for the qmd entry point, printing one hit as JSON.
+ *
+ * `searchQmdInternal` runs `bun <qmdPath> search …`, so a script IS the qmd
+ * binary as far as the handler is concerned. Writing it under the same
+ * `mkdtempSync` root the WAL cases use keeps this runnable on a fresh runner,
+ * which a repo-relative scratch path would not be.
+ *
+ * @returns The absolute path to the stub.
+ */
+function stubQmdEntryPoint(marker: string): string {
+  const path = join(
+    mkdtempSync(join(tmpdir(), "ob-arrival-qmd-")),
+    "qmd-stub.ts",
+  );
+  writeFileSync(
+    path,
+    `console.log(JSON.stringify([{ path: ${JSON.stringify(marker)}, content: "stub hit", score: 0.9 }]));\n`,
+  );
+  return path;
+}
+
+describe("qmdPath arrives at the search_all qmd arm", () => {
+  test("an injected entry point is the one search_all runs", async () => {
+    const marker = "arrival/injected-qmd-path.md";
+    const client = await clientFor(
+      { pool: capturingPool([]), qmdPath: stubQmdEntryPoint(marker) },
+      "admin",
+      "operator",
+    );
+
+    // `sources: "qmd"` isolates the arm: no brain query runs, so every hit in
+    // the payload came from the injected entry point and nowhere else.
+    const result = await client.callTool({
+      name: "search_all",
+      arguments: { query: "needle", sources: "qmd" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const payload = payloadOf(result);
+    expect(payload.qmd_hits).toBe(1);
+    const results = payload.results as Array<Record<string, unknown>>;
+    // The marker is unforgeable: it exists only inside the stub this case
+    // wrote, so observing it proves the injected value reached the spawn.
+    expect(results[0]?.path).toBe(marker);
+  });
+
+  test("no injected entry point leaves the qmd arm off rather than falling back to the environment", async () => {
+    const client = await clientFor(
+      { pool: capturingPool([]) },
+      "admin",
+      "operator",
+    );
+
+    const result = await client.callTool({
+      name: "search_all",
+      arguments: { query: "needle", sources: "qmd" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    // Zero even on a machine whose QMD_PATH is set and usable: the handler has
+    // no ambient read left, so an absent dependency is an absent arm (#825).
+    expect(payloadOf(result).qmd_hits).toBe(0);
   });
 });
