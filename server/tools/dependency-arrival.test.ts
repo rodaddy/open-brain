@@ -22,7 +22,8 @@
  * already use.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -158,13 +159,19 @@ describe("ftsCorpusConfig arrives at search_brain's SQL", () => {
   });
 });
 
-/** Unique per process and per case, so two runs never share a file. */
+/**
+ * Unique per case, in a directory that exists on every runner.
+ *
+ * A repo-relative scratch path is a developer-machine assumption: CI has no
+ * such directory, so the file could never be written there. Same shape as
+ * `src/rotating-file.test.ts`.
+ */
 let walCounter = 0;
 function scratchWalPath(): string {
   walCounter += 1;
   return join(
-    "/Volumes/ThunderBolt/_tmp/open-brain/_scratch",
-    `arrival-recovery-wal-${process.pid}-${walCounter}.jsonl`,
+    mkdtempSync(join(tmpdir(), "ob-arrival-")),
+    `arrival-recovery-wal-${walCounter}.jsonl`,
   );
 }
 
@@ -195,6 +202,45 @@ describe("recoveryWalPath arrives at the fallback recovery WAL store", () => {
     expect(result.isError).toBeFalsy();
     expect(existsSync(walPath)).toBe(true);
     expect(readFileSync(walPath, "utf8")).toContain('"content":"arrival"');
+  });
+
+  test("a second registration with a different path writes to that path, not the first", async () => {
+    // The fallback is process-lifetime and SHARED, so in a run that registers
+    // more than once the first path must not decide where every later caller
+    // writes. This is the CI shape: the whole directory runs in one process,
+    // and whichever file registered first would otherwise own the fallback.
+    const firstPath = scratchWalPath();
+    const secondPath = scratchWalPath();
+
+    for (const [walPath, content] of [
+      [firstPath, "first-arrival"],
+      [secondPath, "second-arrival"],
+    ] as const) {
+      const client = await clientFor(
+        { pool: capturingPool([]), recoveryWalPath: walPath },
+        "admin",
+        "operator",
+      );
+      const result = await client.callTool({
+        name: "recovery_wal_append",
+        arguments: {
+          agent: "claude",
+          platform: "claude-code",
+          server_id: "arrival-host",
+          channel_id: "open-brain",
+          session_key: "arrival-lane",
+          content,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+    }
+
+    expect(existsSync(firstPath)).toBe(true);
+    expect(existsSync(secondPath)).toBe(true);
+    expect(readFileSync(firstPath, "utf8")).toContain('"content":"first-arrival"');
+    expect(readFileSync(secondPath, "utf8")).toContain(
+      '"content":"second-arrival"',
+    );
   });
 });
 
