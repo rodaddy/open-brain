@@ -3,7 +3,10 @@ import type { Logger } from "pino";
 import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
 import type { Database } from "../db/pool.ts";
 import type { ServerModuleBoundary } from "../module.ts";
-import { createMaintenanceRuntime } from "../maintenance/index.ts";
+import {
+  createMaintenanceRuntime,
+  type MaintenanceRuntime,
+} from "../maintenance/index.ts";
 import {
   readCaptureLiveness,
   type CaptureObservation,
@@ -134,27 +137,41 @@ export interface ShadowApplication {
   close(): Promise<void>;
 }
 
-/** Compose the phase-4 shadow implementation without binding a network socket. */
-export function createShadowApplication(
+/**
+ * Compose the session transport handlers.
+ *
+ * `transportFactory` stays conditionally spread rather than defaulted: the
+ * transport builder owns its own default, and passing an explicit `undefined`
+ * is not the same call.
+ */
+function composeSessions(
   input: ShadowApplicationInput,
-): ShadowApplication {
-  const transportLogger = input.logger.child({ component: "transport" });
-  const sessions = createSessionTransportHandlers({
+  transportLogger: Logger,
+): SessionTransportHandlers {
+  return createSessionTransportHandlers({
     config: input.config.transport,
     logger: transportLogger,
     serverFactory: input.serverFactory,
-    ...(input.transportFactory ? { transportFactory: input.transportFactory } : {}),
+    ...(input.transportFactory
+      ? { transportFactory: input.transportFactory }
+      : {}),
   });
-  const health = {
-    databaseHealth: input.database.health,
-    hostname: input.config.transport.hostname,
-    serverIp: input.config.transport.serverIp,
-    serverIps: input.config.transport.serverIps,
+}
+
+/**
+ * The optional fields of the `/health` block, kept as conditional spreads.
+ *
+ * Each one is present-or-absent rather than present-and-undefined, because the
+ * health builder distinguishes the two: an absent `revision` publishes no
+ * revision, an explicit `undefined` is a different call. Split out only so the
+ * composition root stays under the branch count; every read is the same read
+ * from the same place, in the same order.
+ */
+function composeHealthOverrides(input: ShadowApplicationInput) {
+  return {
     ...(input.config.transport.deployedRevision
       ? { revision: input.config.transport.deployedRevision }
       : {}),
-    probeTimeoutMs: input.config.transport.healthProbeTimeoutMs,
-    logger: transportLogger,
     ...(input.config.transport.embeddingBaseUrl
       ? { embeddingBaseUrl: input.config.transport.embeddingBaseUrl }
       : {}),
@@ -162,6 +179,29 @@ export function createShadowApplication(
       ? { embeddingApiKey: input.config.transport.embeddingApiKey }
       : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),
+  };
+}
+
+/**
+ * Compose the `/health` inputs.
+ *
+ * `readProducerHealth` is passed in rather than read from a captured value for
+ * the LATE-BINDING reason spelled out at its call site: the maintenance runtime
+ * is composed after this object, and the reading must be taken per request.
+ */
+function composeHealth(
+  input: ShadowApplicationInput,
+  transportLogger: Logger,
+  readProducerHealth: () => MaintenanceProducerHealth | undefined,
+) {
+  return {
+    databaseHealth: input.database.health,
+    hostname: input.config.transport.hostname,
+    serverIp: input.config.transport.serverIp,
+    serverIps: input.config.transport.serverIps,
+    probeTimeoutMs: input.config.transport.healthProbeTimeoutMs,
+    logger: transportLogger,
+    ...composeHealthOverrides(input),
     // Config is the DEFAULT source of the `nats` health block, not an optional
     // extra. `server/transport/health.ts` falls back to a hardcoded
     // http/available literal when nothing supplies one, which is correct only
@@ -173,24 +213,7 @@ export function createShadowApplication(
     // cannot.
     natsHealth:
       input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
-    // #625. Deliberately LATE-BOUND: `maintenance` is composed below this
-    // object, because the health block is an input to the transport app and
-    // the runner is a shutdown-order concern. Reading `maintenance` through a
-    // closure invoked per request — rather than reordering the composition —
-    // keeps that ordering intact and, more importantly, keeps the reading
-    // LIVE. A value captured here would be the producer's liveness at boot,
-    // which is exactly the stale-but-confident answer the issue is about.
-    producerHealth: () => {
-      const liveness = maintenance?.producerLiveness();
-      if (!liveness) return undefined;
-      return {
-        quiet_ms: liveness.quietMs,
-        stale: liveness.stale,
-        quiet_threshold_ms: liveness.quietThresholdMs,
-        overlapped_ticks: liveness.overlappedTicks,
-        completed_ticks: liveness.completedTicks,
-      };
-    },
+    producerHealth: readProducerHealth,
     // #652. The reading #648 built and nothing composed. Same LATE-BINDING as
     // `producerHealth` above and for the same reason: the closure is invoked
     // per request, so `/health` publishes what the capture lane looks like NOW
@@ -203,7 +226,63 @@ export function createShadowApplication(
     // most workers rather than an edge (core01 runs several — `AGENTS.md`).
     captureHealth: () => readCaptureLiveness(input.captureObserver?.()),
   };
-  const app = createSingleWorkerTransportApp({
+}
+
+/** The `producer` block of `/health`, as the transport layer publishes it. */
+interface MaintenanceProducerHealth {
+  readonly quiet_ms: number;
+  readonly stale: boolean;
+  readonly quiet_threshold_ms: number;
+  readonly overlapped_ticks: number;
+  readonly completed_ticks: number;
+}
+
+/** Snake-case the runner's producer liveness for `/health`. */
+function readMaintenanceProducerHealth(
+  maintenance: MaintenanceRuntime | undefined,
+): MaintenanceProducerHealth | undefined {
+  const liveness = maintenance?.producerLiveness();
+  if (!liveness) return undefined;
+  return {
+    quiet_ms: liveness.quietMs,
+    stale: liveness.stale,
+    quiet_threshold_ms: liveness.quietThresholdMs,
+    overlapped_ticks: liveness.overlappedTicks,
+    completed_ticks: liveness.completedTicks,
+  };
+}
+
+/**
+ * Compose the maintenance runner, or nothing.
+ *
+ * `createMaintenanceRuntime` returns undefined when the operator disabled
+ * maintenance for this process, and a process that dispatches no job kinds
+ * composes none at all. `autoStart` stays conditionally spread so the runtime's
+ * own default applies when the caller expressed no preference.
+ */
+function composeMaintenance(
+  input: ShadowApplicationInput,
+): MaintenanceRuntime | undefined {
+  if (!input.maintenanceHandlers) return undefined;
+  return createMaintenanceRuntime({
+    config: input.config.maintenance,
+    logger: input.logger.child({ component: "maintenance" }),
+    pool: input.database.pool,
+    handlers: input.maintenanceHandlers,
+    ...(input.maintenanceAutoStart !== undefined
+      ? { autoStart: input.maintenanceAutoStart }
+      : {}),
+  });
+}
+
+/** Compose the transport app from the session handlers and health inputs. */
+function composeTransportApp(
+  input: ShadowApplicationInput,
+  transportLogger: Logger,
+  sessions: SessionTransportHandlers,
+  health: ReturnType<typeof composeHealth>,
+): Express {
+  return createSingleWorkerTransportApp({
     authenticate: input.authenticate,
     parseRequestBody: input.parseRequestBody,
     sessions,
@@ -212,25 +291,33 @@ export function createShadowApplication(
     ...(input.beforeRoutes ? { beforeRoutes: input.beforeRoutes } : {}),
     ...(input.routers ? { routers: input.routers } : {}),
   });
+}
+
+/** Compose the phase-4 shadow implementation without binding a network socket. */
+export function createShadowApplication(
+  input: ShadowApplicationInput,
+): ShadowApplication {
+  const transportLogger = input.logger.child({ component: "transport" });
+  const sessions = composeSessions(input, transportLogger);
+  // #625. The producer reading is deliberately LATE-BOUND: `maintenance` is
+  // composed below this object, because the health block is an input to the
+  // transport app and the runner is a shutdown-order concern. Reading
+  // `maintenance` through a closure invoked per request — rather than
+  // reordering the composition — keeps that ordering intact and, more
+  // importantly, keeps the reading LIVE. A value captured here would be the
+  // producer's liveness at boot, which is exactly the stale-but-confident
+  // answer the issue is about.
+  const health = composeHealth(input, transportLogger, () =>
+    readMaintenanceProducerHealth(maintenance),
+  );
+  const app = composeTransportApp(input, transportLogger, sessions, health);
   // Compose maintenance BEFORE returning, so the runner and its place in the
-  // shutdown order are created together. `createMaintenanceRuntime` returns
-  // undefined when the operator disabled maintenance for this process, and a
-  // process that dispatches no job kinds composes none at all.
+  // shutdown order are created together.
   //
   // Caller-supplied runtimes stop first, then maintenance. The queue runner is
   // the drain that needs the database longest -- it must finish jobs it has
   // already leased -- so it sits closest to the database in the ordering.
-  const maintenance = input.maintenanceHandlers
-    ? createMaintenanceRuntime({
-        config: input.config.maintenance,
-        logger: input.logger.child({ component: "maintenance" }),
-        pool: input.database.pool,
-        handlers: input.maintenanceHandlers,
-        ...(input.maintenanceAutoStart !== undefined
-          ? { autoStart: input.maintenanceAutoStart }
-          : {}),
-      })
-    : undefined;
+  const maintenance = composeMaintenance(input);
   const backgroundRuntimes: readonly BackgroundRuntime[] = [
     ...(input.backgroundRuntimes ?? []),
     ...(maintenance ? [maintenance] : []),
