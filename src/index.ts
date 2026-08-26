@@ -47,6 +47,7 @@ import {
   createTracingRuntime,
   installMcpTracing,
 } from "../server/observability/langfuse-tracing.ts";
+import { readMcpTracingConfig } from "../server/observability/trace-config.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -315,7 +316,12 @@ if (import.meta.main) {
   }
 
   const pool = createPool();
-  const tracing = createTracingRuntime();
+  // This legacy root has no `ServerConfig`, so it is the env door for its own
+  // tracing configuration: it reads the environment here and hands the result
+  // down, the same values `server/main.ts` hands down from its validated parse.
+  const tracing = createTracingRuntime({
+    config: readMcpTracingConfig(process.env),
+  });
 
   if (process.env.OPEN_BRAIN_RUN_MIGRATIONS !== "0") {
     try {

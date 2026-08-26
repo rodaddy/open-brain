@@ -91,7 +91,7 @@ import { logger } from "../../src/logger.ts";
 import { maskTraceValue } from "./trace-masking.ts";
 import { buildToolTraceBody, errorOutput } from "./trace-body.ts";
 export { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
-import { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
+import { resolveSessionId } from "./trace-config.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
   DEFAULT_FLAP_COOLDOWN_MS,
@@ -389,13 +389,22 @@ type RegisterTool = McpServer["registerTool"];
  * disagree. The composition root (`server/main.ts`) passes `config.tracing`
  * from the single validated parse, so `deps.config` is the normal path there.
  *
- * The fallback exists only for the legacy root `src/index.ts:318`, which has no
- * `ServerConfig` and still calls with no arguments. `readMcpTracingConfig` no
- * longer defaults its parameter (#825, L2b-2), so the environment is named
- * HERE, once, instead of hiding inside the reader's signature.
+ * There is no environment fallback here (#825, L2b-2). This module reads no
+ * environment at all; a caller without a `ServerConfig` — the legacy root
+ * `src/index.ts` and `scripts/run-nats-worker.ts` — calls
+ * `readMcpTracingConfig` on its own environment record and passes the result,
+ * so the one place the environment is named is the root that owns it. A
+ * missing `deps.config` is a wiring mistake, so it fails at the call site
+ * rather than silently resolving to a different configuration than the root
+ * parsed.
  */
 function resolveTracingConfig(deps: McpTracingDeps): McpTracingConfig {
-  return deps.config ?? readMcpTracingConfig(process.env);
+  if (!deps.config) {
+    throw new Error(
+      "createTracingRuntime requires config from the composition root: pass { config } (server/main.ts uses config.tracing; a root without a ServerConfig passes readMcpTracingConfig on its own environment record)",
+    );
+  }
+  return deps.config;
 }
 
 /**

@@ -1573,6 +1573,19 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
     expect(gated.shouldLog(LogLevel.ERROR)).toBe(false);
     expect(gated.shouldLog(LogLevel.WARN)).toBe(false);
   });
+
+  // #825 (L2b-2): this module reads no environment. A caller that omits
+  // `config` used to get a second, module-private parse of `process.env` that
+  // could disagree with the one the composition root made; now it gets a
+  // wiring error at the call site instead of a silently different runtime.
+  test("throws when constructed without config from the composition root", () => {
+    expect(() => createTracingRuntime()).toThrow(
+      /requires config from the composition root/,
+    );
+    expect(() => createTracingRuntime({})).toThrow(
+      /requires config from the composition root/,
+    );
+  });
 });
 
 const REAL_SINK_PROBE_SCRIPT = String.raw`
