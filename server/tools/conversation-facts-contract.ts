@@ -24,8 +24,13 @@ import { z } from "zod";
  * contract ingests statements a caller decided are durable, not the traffic
  * they were derived from.
  */
-export const CONVERSATION_FACT_EVENT_TYPES = ["fact", "decision", "receipt"] as const;
-export type ConversationFactEventType = (typeof CONVERSATION_FACT_EVENT_TYPES)[number];
+export const CONVERSATION_FACT_EVENT_TYPES = [
+  "fact",
+  "decision",
+  "receipt",
+] as const;
+export type ConversationFactEventType =
+  (typeof CONVERSATION_FACT_EVENT_TYPES)[number];
 
 /**
  * Keys whose PRESENCE anywhere in a request means a raw conversation body was
@@ -177,7 +182,9 @@ export function findRawTranscriptKey(value: unknown): string | null {
     return null;
   }
   if (value && typeof value === "object") {
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, child] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
       if (RAW_TRANSCRIPT_KEYS.has(key.toLowerCase())) return key;
       const hit = findRawTranscriptKey(child);
       if (hit) return hit;
@@ -194,10 +201,7 @@ export function findRawTranscriptKey(value: unknown): string | null {
  * indistinguishable from having stored it, and only one of those is true.
  */
 export type UnitDisposition =
-  | "stored"
-  | "duplicate"
-  | "duplicate_evidence_merged"
-  | "evidence_not_stored";
+  "stored" | "duplicate" | "duplicate_evidence_merged" | "evidence_not_stored";
 
 /**
  * Structural evidence entries retained per duplicated durable row.
@@ -226,6 +230,70 @@ function evidenceKey(
   locator: string | undefined,
 ): string {
   return JSON.stringify([eventType ?? null, locator ?? null]);
+}
+
+/** @returns The value at `key` when it is a string, else `undefined`. */
+function stringField(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** @returns The row's `metadata` object, or an empty one when it is absent. */
+function rowMetadata(row: Record<string, unknown>): Record<string, unknown> {
+  return row.metadata && typeof row.metadata === "object"
+    ? (row.metadata as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * The structural evidence already merged onto a stored row.
+ *
+ * Read separately from the primary write's own `(event_type, source_locator)`,
+ * because only this list grows and only its length is compared against
+ * `RETAINED_EVIDENCE_ENTRIES`.
+ *
+ * @returns The stored `metadata.additional_evidence` entries, or an empty list.
+ */
+function additionalEvidence(
+  metadata: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  return Array.isArray(metadata.additional_evidence)
+    ? (metadata.additional_evidence as Array<Record<string, unknown>>)
+    : [];
+}
+
+/**
+ * Every evidence identity the stored row already asserts.
+ *
+ * That is the primary write's own event type and locator, plus each entry
+ * merged onto it since. A candidate whose key is in here adds no new provenance
+ * and is a plain duplicate.
+ *
+ * @returns The set of `evidenceKey` values already present on the row.
+ */
+function knownEvidenceKeys(
+  row: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  existingEvidence: ReadonlyArray<Record<string, unknown>>,
+): Set<string> {
+  const known = new Set<string>([
+    evidenceKey(
+      stringField(row, "event_type"),
+      stringField(metadata, "source_locator"),
+    ),
+  ]);
+  for (const entry of existingEvidence) {
+    known.add(
+      evidenceKey(
+        stringField(entry, "event_type"),
+        stringField(entry, "source_locator"),
+      ),
+    );
+  }
+  return known;
 }
 
 /**
@@ -267,10 +335,7 @@ export async function mergeDuplicateEvidence(
   }
 
   const eventId = String(row.id);
-  const metadata =
-    row.metadata && typeof row.metadata === "object"
-      ? (row.metadata as Record<string, unknown>)
-      : {};
+  const metadata = rowMetadata(row);
   const candidate = {
     event_type: fact.event_type,
     ...(fact.source_locator !== undefined
@@ -278,25 +343,8 @@ export async function mergeDuplicateEvidence(
       : {}),
   };
 
-  // What the row already asserts: the primary write's own event type and
-  // locator, plus anything merged onto it since.
-  const existingEvidence = Array.isArray(metadata.additional_evidence)
-    ? (metadata.additional_evidence as Array<Record<string, unknown>>)
-    : [];
-  const known = new Set<string>([
-    evidenceKey(
-      typeof row.event_type === "string" ? row.event_type : undefined,
-      typeof metadata.source_locator === "string" ? metadata.source_locator : undefined,
-    ),
-  ]);
-  for (const entry of existingEvidence) {
-    known.add(
-      evidenceKey(
-        typeof entry.event_type === "string" ? entry.event_type : undefined,
-        typeof entry.source_locator === "string" ? entry.source_locator : undefined,
-      ),
-    );
-  }
+  const existingEvidence = additionalEvidence(metadata);
+  const known = knownEvidenceKeys(row, metadata, existingEvidence);
 
   if (known.has(evidenceKey(candidate.event_type, candidate.source_locator))) {
     return { eventId, kind: "duplicate" };
@@ -345,6 +393,24 @@ const SAFE_DB_ERROR_CLASSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The recognized SQLSTATE classes, keyed by the two-character CLASS.
+ *
+ * A finite table rather than a chain of branches: the mapping is data, and one
+ * unrecognized class is an absent key rather than a fallthrough to reason about.
+ * Every value here is also a member of `SAFE_DB_ERROR_CLASSES`.
+ */
+const SQLSTATE_CLASS_LABELS: Readonly<Record<string, string>> = {
+  "08": "connection_error",
+  "22": "data_exception",
+  "23": "integrity_constraint_violation",
+  "40": "transaction_rollback",
+  "42": "syntax_or_access_error",
+  "53": "insufficient_resources",
+  "57": "operator_intervention",
+  "58": "system_error",
+};
+
+/**
  * Map a SQLSTATE to a content-free class label.
  *
  * Only the two-character CLASS is used, never the full code, so no per-row
@@ -352,26 +418,7 @@ const SAFE_DB_ERROR_CLASSES: ReadonlySet<string> = new Set([
  */
 function sqlstateClass(code: unknown): string | null {
   if (typeof code !== "string" || code.length < 2) return null;
-  switch (code.slice(0, 2)) {
-    case "08":
-      return "connection_error";
-    case "53":
-      return "insufficient_resources";
-    case "57":
-      return "operator_intervention";
-    case "58":
-      return "system_error";
-    case "23":
-      return "integrity_constraint_violation";
-    case "40":
-      return "transaction_rollback";
-    case "22":
-      return "data_exception";
-    case "42":
-      return "syntax_or_access_error";
-    default:
-      return null;
-  }
+  return SQLSTATE_CLASS_LABELS[code.slice(0, 2)] ?? null;
 }
 
 /**
