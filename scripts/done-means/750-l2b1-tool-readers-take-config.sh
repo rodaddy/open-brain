@@ -111,7 +111,31 @@
 #         what passes it as `requestFtsConfig`'s second argument. Without this
 #         the branch's new second parameter is never supplied by any caller.
 #
-# Exit 0 only when all four clauses pass. Exit 3 is a harness error (missing
+# CLAUSE 5 -- THE INJECTED VALUES ARRIVE AT THEIR CONSUMERS.
+#   Clause 4 reads the composition root's SOURCE and proves the three values are
+#   written at the call site. That is a textual assertion: it proves someone
+#   typed the wiring, never that the value survives the trip. A field can be
+#   spelled correctly at the root and still be dropped by the registrar, shadowed
+#   by a fallback, or read from the wrong place by the handler, and every one of
+#   those states keeps clause 4 green.
+#
+#   So clause 5 EXERCISES the wiring. `server/tools/dependency-arrival.test.ts`
+#   registers the real tools through a fake McpServer, injects each value, and
+#   asserts on observable behavior at the far end:
+#     ftsCorpusConfig      -> the SQL search_brain emits names the injected
+#                             configuration, with no per-request argument.
+#     recoveryWalPath      -> recovery_wal_append writes a real JSONL file at
+#                             the injected path, through the fallback store.
+#     natsRuntimeBoundary  -> operator_doctor reports the injected transport,
+#                             not the one an empty environment produces.
+#
+#   The clause runs `bun test` on that one file and requires exit 0 AND at least
+#   3 passing tests parsed from the output. The parsed count is the vacuity
+#   guard, the same shape as clause 3: a runner that loads no tests also exits 0,
+#   and "0 pass" must never read as success. A missing file is a hard FAIL here
+#   rather than a skip, for the same reason clause 1 is a hard fail.
+#
+# Exit 0 only when all five clauses pass. Exit 3 is a harness error (missing
 # tool / wrong repo root), which is NOT a fail of the thing under test.
 set -uo pipefail
 
@@ -145,6 +169,12 @@ CLAUSE1=FAIL; CLAUSE1_EVIDENCE=""
 CLAUSE2=FAIL; CLAUSE2_EVIDENCE=""
 CLAUSE3=FAIL; CLAUSE3_EVIDENCE=""
 CLAUSE4=FAIL; CLAUSE4_EVIDENCE=""
+CLAUSE5=FAIL; CLAUSE5_EVIDENCE=""
+
+# The behavioral test clause 5 runs, and the least number of passing tests that
+# can honestly satisfy it -- one per injected value.
+ARRIVAL_TEST="server/tools/dependency-arrival.test.ts"
+ARRIVAL_TEST_MIN_PASS=3
 
 # ---------------------------------------------------------------------------
 # CLAUSE 1 — every target file is present.
@@ -268,9 +298,40 @@ if [ "$CLAUSE2" != PASS ] && [ -n "${CLAUSE2_HITS:-}" ]; then
 fi
 printf 'CLAUSE 3 (scanner proven to match in %s):   %s — %s\n' "$CONTROL" "$CLAUSE3" "$CLAUSE3_EVIDENCE"
 
-printf 'CLAUSE 4 (values arrive at the composition root):        %s — %s\n' "$CLAUSE4" "$CLAUSE4_EVIDENCE"
+# ---------------------------------------------------------------------------
+# CLAUSE 5 — the injected values arrive at their consumers, proven by running.
+# ---------------------------------------------------------------------------
+if [ ! -f "$REPO_ROOT/$ARRIVAL_TEST" ]; then
+  CLAUSE5_EVIDENCE="$ARRIVAL_TEST does not exist — clause 4 asserts the wiring was TYPED; nothing here asserts it WORKS"
+else
+  command -v bun >/dev/null 2>&1 || fail_hard "bun not on PATH; cannot run $ARRIVAL_TEST"
+  ARRIVAL_TEST_OUT="$(cd "$REPO_ROOT" && bun test "$ARRIVAL_TEST" 2>&1)"
+  ARRIVAL_TEST_STATUS=$?
+  # bun prints a summary line of the form "N pass". Read the last one, so an
+  # earlier per-file line cannot be mistaken for the total.
+  ARRIVAL_PASS="$(printf '%s\n' "$ARRIVAL_TEST_OUT" | rg -o '^\s*([0-9]+) pass' -r '$1' | tail -n 1)"
+  ARRIVAL_PASS="${ARRIVAL_PASS:-0}"
+  if [ "$ARRIVAL_TEST_STATUS" -ne 0 ]; then
+    CLAUSE5_EVIDENCE="bun test $ARRIVAL_TEST exited $ARRIVAL_TEST_STATUS ($ARRIVAL_PASS passing) — an injected value does not reach its consumer:"
+    CLAUSE5_OUT="$ARRIVAL_TEST_OUT"
+  elif [ "$ARRIVAL_PASS" -lt "$ARRIVAL_TEST_MIN_PASS" ]; then
+    # exit 0 with too few tests is the vacuous pass: the runner found the file
+    # and ran nothing meaningful in it.
+    CLAUSE5_EVIDENCE="bun test $ARRIVAL_TEST exited 0 but only $ARRIVAL_PASS test(s) passed, expected at least $ARRIVAL_TEST_MIN_PASS — one per injected value, so a green run here examined nothing"
+    CLAUSE5_OUT="$ARRIVAL_TEST_OUT"
+  else
+    CLAUSE5=PASS
+    CLAUSE5_EVIDENCE="$ARRIVAL_PASS test(s) passed in $ARRIVAL_TEST — each injected value observed at its consumer, not just at the call site"
+  fi
+fi
 
-if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ] && [ "$CLAUSE4" = PASS ]; then
+printf 'CLAUSE 4 (values arrive at the composition root):        %s — %s\n' "$CLAUSE4" "$CLAUSE4_EVIDENCE"
+printf 'CLAUSE 5 (injected values observed at their consumers):  %s — %s\n' "$CLAUSE5" "$CLAUSE5_EVIDENCE"
+if [ "$CLAUSE5" != PASS ] && [ -n "${CLAUSE5_OUT:-}" ]; then
+  printf '%s\n' "$CLAUSE5_OUT" | sed 's/^/    /'
+fi
+
+if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ] && [ "$CLAUSE4" = PASS ] && [ "$CLAUSE5" = PASS ]; then
   exit 0
 fi
 exit 1
