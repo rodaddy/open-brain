@@ -50,6 +50,7 @@ import {
 } from "./search-constants.ts";
 import { DEFAULT_FTS_CONFIG, type FtsConfig } from "./fts-config.ts";
 import { sharedNamespaceConfig } from "./shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { NamespaceFilter } from "./read-scope.ts";
 import {
   traceRetrievalSpan,
@@ -599,12 +600,16 @@ export function executeSearch(
  * top-up depends on how many canonical rows the CURRENT page found, so pages
  * would overlap or skip rows), and when the request is not actually scoped to
  * the shared namespace.
+ *
+ * @param names Validated shared-namespace names from `ServerConfig`. Omitting
+ * it leaves the environment-derived resolution unchanged.
  */
 function sharedFallbackApplies(
   request: SearchRequest,
   requestedShared: boolean,
+  names?: SharedNamespaceConfig,
 ): boolean {
-  const config = sharedNamespaceConfig();
+  const config = sharedNamespaceConfig(names);
   if (!config.legacyFallbackEnabled) return false;
   if (config.legacySharedNamespace === "") return false;
   if (request.offset !== 0) return false;
@@ -620,7 +625,7 @@ async function searchWithLegacyTopUp(
   dependencies: SearchDependencies,
   request: SearchRequest,
 ): Promise<SearchRow[]> {
-  const config = sharedNamespaceConfig();
+  const config = sharedNamespaceConfig(dependencies.sharedNamespaceNames);
   const primaryRows = await executeSearchInternal(dependencies, request);
   // Enough shared truth was found; the legacy namespace has nothing to add.
   if (
@@ -654,7 +659,8 @@ export async function executeSearchWithSharedFallback(
     args;
   const request = toSearchRequest(args);
   const requestedShared = args[9] ?? false;
-  if (!sharedFallbackApplies(request, requestedShared)) {
+  const names = dependencies.sharedNamespaceNames;
+  if (!sharedFallbackApplies(request, requestedShared, names)) {
     return withCanonicalNamespaces(
       await executeSearch(
         dependencies,
@@ -667,10 +673,12 @@ export async function executeSearchWithSharedFallback(
         namespace,
         args[8] ?? {},
       ),
+      names,
     );
   }
   return withCanonicalNamespaces(
     await searchWithLegacyTopUp(dependencies, request),
+    names,
   );
 }
 

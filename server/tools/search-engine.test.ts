@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
-import { executeSearch } from "./search-engine.ts";
+import {
+  executeSearch,
+  executeSearchWithSharedFallback,
+} from "./search-engine.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import {
   DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS,
   type SearchDependencies,
@@ -85,5 +89,84 @@ describe("search embedding timeout injection", () => {
     );
     expect(dependencies.searchEmbeddingTimeoutMs).toBeUndefined();
     expect(warnings).toHaveLength(0);
+  });
+});
+
+/**
+ * Prove the injected shared-namespace names are the ones the search path
+ * resolves against.
+ *
+ * The observable is the namespace reported on an emitted row. A row is stored
+ * under the PHYSICAL name; `executeSearchWithSharedFallback` canonicalises it
+ * on the way out. Injecting a distinctive canonical name that no environment
+ * default could produce makes the emitted value proof that the injected set —
+ * not the environment — drove the resolution.
+ *
+ * Keyword mode is used so no embedder is needed; the pool is faked so no
+ * database is required.
+ */
+
+const INJECTED_NAMES = {
+  canonicalSharedNamespace: "lane5-canonical-shared",
+  physicalSharedNamespace: "lane5-physical-shared",
+  legacySharedNamespace: "",
+  legacyFallbackEnabled: false,
+  fallbackMinResults: 5,
+} as const;
+
+function poolReturningPhysicalRow(): Pool {
+  return {
+    query: async () => ({
+      rows: [
+        {
+          id: "row-1",
+          source_type: "thoughts",
+          namespace: INJECTED_NAMES.physicalSharedNamespace,
+          content_preview: "shared truth",
+          created_by: "tester",
+        },
+      ],
+    }),
+  } as unknown as Pool;
+}
+
+async function namespaceEmittedWith(
+  names?: SharedNamespaceConfig,
+): Promise<string | undefined> {
+  const dependencies: SearchDependencies = {
+    pool: poolReturningPhysicalRow(),
+    embedFn: async () => null,
+    logger: {
+      warn: () => {},
+      debug: () => {},
+      info: () => {},
+      error: () => {},
+    } as unknown as Logger,
+    sharedNamespaceNames: names,
+  };
+  const rows = await executeSearchWithSharedFallback(
+    dependencies,
+    ["thoughts"],
+    "shared",
+    5,
+    "keyword",
+    undefined,
+    0,
+    INJECTED_NAMES.physicalSharedNamespace,
+  );
+  return rows[0]?.namespace;
+}
+
+describe("shared-namespace name injection on the search path", () => {
+  test("injected names drive the canonical namespace on emitted rows", async () => {
+    expect(await namespaceEmittedWith(INJECTED_NAMES)).toBe(
+      INJECTED_NAMES.canonicalSharedNamespace,
+    );
+  });
+
+  test("no injected names leaves the physical name untranslated", async () => {
+    expect(await namespaceEmittedWith(undefined)).toBe(
+      INJECTED_NAMES.physicalSharedNamespace,
+    );
   });
 });

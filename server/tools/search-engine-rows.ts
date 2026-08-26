@@ -13,6 +13,7 @@
  * make the legacy top-up compare a canonical name against a physical one.
  */
 import { canonicalNamespace } from "./shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { SearchRow } from "./search-engine-types.ts";
 
 /** Convert a timestamp-ish value to an ISO string, or `undefined`. */
@@ -47,18 +48,26 @@ export function withSourceRefs(rows: SearchRow[]): SearchRow[] {
   }));
 }
 
-/** Report the canonical shared name on emitted rows and their source refs. */
-export function withCanonicalNamespaces(rows: SearchRow[]): SearchRow[] {
+/**
+ * Report the canonical shared name on emitted rows and their source refs.
+ *
+ * @param names Validated shared-namespace names from `ServerConfig`. Omitting
+ * it leaves the environment-derived resolution unchanged.
+ */
+export function withCanonicalNamespaces(
+  rows: SearchRow[],
+  names?: SharedNamespaceConfig,
+): SearchRow[] {
   return rows.map((row) => ({
     ...row,
     namespace: row.namespace
-      ? canonicalNamespace(row.namespace)
+      ? canonicalNamespace(row.namespace, names)
       : row.namespace,
     source_ref: row.source_ref
       ? {
           ...row.source_ref,
           namespace: row.source_ref.namespace
-            ? canonicalNamespace(row.source_ref.namespace)
+            ? canonicalNamespace(row.source_ref.namespace, names)
             : row.source_ref.namespace,
         }
       : row.source_ref,
