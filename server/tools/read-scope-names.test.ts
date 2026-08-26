@@ -37,7 +37,7 @@ const identity: AuthIdentity = {
 
 describe("read-scope helpers honour injected shared-namespace names", () => {
   test("readableNamespaces returns the injected physical shared namespace", () => {
-    expect(readableNamespaces(identity)).toEqual(["rico", "shared-kb"]);
+    expect(() => readableNamespaces(identity)).toThrow(/sharedNamespaceNames/);
     expect(readableNamespaces(identity, {}, injected)).toEqual([
       "rico",
       "lane3-physical-kb",
@@ -45,7 +45,9 @@ describe("read-scope helpers honour injected shared-namespace names", () => {
   });
 
   test("canReadNamespace authorizes the injected canonical name, not the default", () => {
-    expect(canReadNamespace(identity, "lane3-canonical-kb")).toBe(false);
+    expect(() => canReadNamespace(identity, "lane3-canonical-kb")).toThrow(
+      /sharedNamespaceNames/,
+    );
     expect(canReadNamespace(identity, "lane3-canonical-kb", injected)).toBe(
       true,
     );
@@ -53,8 +55,8 @@ describe("read-scope helpers honour injected shared-namespace names", () => {
   });
 
   test("namespaceFilterFor translates through the injected names", () => {
-    expect(namespaceFilterFor(identity, "lane3-canonical-kb")).toBe(
-      "lane3-canonical-kb",
+    expect(() => namespaceFilterFor(identity, "lane3-canonical-kb")).toThrow(
+      /sharedNamespaceNames/,
     );
     expect(
       namespaceFilterFor(identity, "lane3-canonical-kb", {}, injected),

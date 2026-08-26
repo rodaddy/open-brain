@@ -72,17 +72,13 @@ const args = {
 } as unknown as Parameters<typeof buildAgentContextPackPayload>[0];
 
 describe("agent_context_pack honours injected shared-namespace names", () => {
-  test("the canonical shared name is denied without the injected set", async () => {
-    const result = await buildAgentContextPackPayload(
-      args,
-      identity,
-      dependenciesWith(),
-    );
-
-    expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.payload)).toContain(
-      "cannot read namespace 'lane5-canonical-kb'",
-    );
+  test("the missing set fails loudly rather than reading as a denial", async () => {
+    // Before the names came from config this returned an ordinary permission
+    // refusal, which made an unwired composition root indistinguishable from a
+    // caller asking for a namespace it genuinely may not read.
+    await expect(
+      buildAgentContextPackPayload(args, identity, dependenciesWith()),
+    ).rejects.toThrow(/sharedNamespaceNames/);
   });
 
   test("the same name is authorized once the set arrives via dependencies", async () => {

@@ -850,44 +850,18 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
  *
  * L2b-2 rung 5a leaves BOTH paths in force: `sharedNamespaceConfig()` still
  * derives from `process.env`, and `config.sharedNamespaceNames` now carries the
- * same five fields. While that lasts, the only thing that keeps the doubled
- * state honest is a test that drives one input at a time through both and
- * asserts they answer the same. A disagreement here is a real defect in one
- * side, not a test to relax — namespace resolution is a security frontier
- * (`docs/sme/security.md`).
+/**
+ * The composition root is now the ONLY source of shared-namespace names.
+ *
+ * L2b-2 is finished: `server/tools/shared-namespace.ts` reads no environment at
+ * all, so the previous agreement test between the validated group and an
+ * environment reader no longer has two sides to compare. What has to stay true
+ * instead is that a call site which never received the names FAILS rather than
+ * resolving a default — namespace resolution is a security frontier
+ * (`docs/sme/security.md`), and a silent default there would bind an isolation
+ * predicate to the wrong partition.
  */
-describe("sharedNamespaceNames agrees with sharedNamespaceConfig()", () => {
-  const NAMES = [
-    "SHARED_NAMESPACE_PHYSICAL",
-    "SHARED_NAMESPACE_LEGACY",
-    "OPENBRAIN_SHARED_NAMESPACE",
-    "OPENBRAIN_LEGACY_SHARED_NAMESPACE",
-    "OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS",
-  ] as const;
-  const VALUES = [undefined, "", "   ", "7"] as const;
-
-  for (const name of NAMES) {
-    for (const value of VALUES) {
-      it(`agrees for ${name}=${JSON.stringify(value)}`, () => {
-        const saved = process.env[name];
-        try {
-          if (value === undefined) delete process.env[name];
-          else process.env[name] = value;
-          const fromReader = sharedNamespaceConfig();
-          const fromConfig = extendedConfig({
-            [name]: value,
-          }).sharedNamespaceNames;
-          expect(fromConfig).toEqual(fromReader);
-        } finally {
-          if (saved === undefined) delete process.env[name];
-          else process.env[name] = saved;
-        }
-      });
-    }
-  }
-});
-
-describe("shared-namespace helpers honour a passed name set", () => {
+describe("shared-namespace helpers require the validated name set", () => {
   const NAMES = {
     canonicalSharedNamespace: "shared-kb",
     physicalSharedNamespace: "shared-kb-v2",
@@ -896,14 +870,38 @@ describe("shared-namespace helpers honour a passed name set", () => {
     fallbackMinResults: 5,
   };
 
-  it("uses the passed set rather than the environment", () => {
+  it("uses the passed set", () => {
     expect(isSharedNamespace("shared-kb-v2", NAMES)).toBe(true);
     expect(canonicalNamespace("shared-kb-v2", NAMES)).toBe("shared-kb");
     expect(canonicalNamespace("collab", NAMES)).toBe("shared-kb");
     expect(physicalNamespace("shared-kb", NAMES)).toBe("shared-kb-v2");
   });
 
-  it("still reads the environment when no set is passed", () => {
-    expect(physicalNamespace("shared-kb")).toBe("shared-kb");
+  it("throws naming sharedNamespaceNames when the set is missing", () => {
+    expect(() => isSharedNamespace("x", undefined)).toThrow(
+      /sharedNamespaceNames/,
+    );
+    expect(() => isSharedNamespace("x", undefined)).toThrow(
+      /isSharedNamespace/,
+    );
+  });
+
+  it("throws from every helper that resolves a name", () => {
+    expect(() => canonicalNamespace("x", undefined)).toThrow(
+      /sharedNamespaceNames/,
+    );
+    expect(() => physicalNamespace("x", undefined)).toThrow(
+      /sharedNamespaceNames/,
+    );
+    expect(() => sharedNamespaceConfig(undefined)).toThrow(
+      /sharedNamespaceNames/,
+    );
+  });
+
+  it("carries the same five fields as the validated config group", () => {
+    expect(sharedNamespaceConfig(NAMES)).toEqual(NAMES);
+    expect(Object.keys(extendedConfig({}).sharedNamespaceNames).sort()).toEqual(
+      Object.keys(NAMES).sort(),
+    );
   });
 });

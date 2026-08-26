@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import type { Pool } from "pg";
 import { registerMemoryTools } from "./index.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
 const closers: Array<() => Promise<void>> = [];
 
@@ -23,8 +24,10 @@ async function clientForAgent(): Promise<Client> {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
+    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     send(message, {
@@ -35,7 +38,10 @@ async function clientForAgent(): Promise<Client> {
         namespaceSource: "token",
       },
     } as unknown as Parameters<typeof send>[1]);
-  const client = new Client({ name: "namespace-denial-test", version: "1.0.0" });
+  const client = new Client({
+    name: "namespace-denial-test",
+    version: "1.0.0",
+  });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   closers.push(async () => {
@@ -45,7 +51,10 @@ async function clientForAgent(): Promise<Client> {
   return client;
 }
 
-async function textFor(tool: string, arguments_: Record<string, unknown>): Promise<string> {
+async function textFor(
+  tool: string,
+  arguments_: Record<string, unknown>,
+): Promise<string> {
   const client = await clientForAgent();
   const result = await client.callTool({ name: tool, arguments: arguments_ });
   expect(result.isError).toBe(true);
@@ -59,7 +68,9 @@ describe("memory tools preserve namespace denial envelopes", () => {
         session_key: "denied",
         namespace: "attacker",
       }),
-    ).toBe("Permission denied: agent role cannot write to namespace 'attacker'");
+    ).toBe(
+      "Permission denied: agent role cannot write to namespace 'attacker'",
+    );
   });
 
   test("session reads preserve the named namespace denial", async () => {

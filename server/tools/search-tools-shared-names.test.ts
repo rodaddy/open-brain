@@ -98,8 +98,10 @@ describe("search tools take shared-namespace names from dependencies", () => {
       );
     });
 
-    test(`${tool} denies that namespace when no names are injected`, async () => {
-      expect(await textFor(tool, undefined)).toContain(NAMESPACE_DENIED);
+    test(`${tool} fails loudly when no names are injected`, async () => {
+      // Not a denial: an unwired composition root is a defect, and the tool
+      // says so by name rather than looking like an ordinary refusal.
+      expect(await textFor(tool, undefined)).toContain("sharedNamespaceNames");
     });
   }
 });

@@ -18,6 +18,7 @@ import pino from "pino";
 import type { Pool } from "pg";
 import type { Role } from "../config.ts";
 import { registerMemoryTools } from "./index.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
 interface CapturedQuery {
   readonly sql: string;
@@ -66,8 +67,10 @@ async function clientCapturingQueries(
         ? Array(768).fill(0.01)
         : options.embedding,
     logger: pino({ level: "silent" }),
+    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options_) =>
     send(message, {
@@ -103,7 +106,10 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
   });
 
   test("a global role emits no namespace predicate at all", async () => {
-    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "ob-admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "search_brain",
@@ -187,7 +193,11 @@ describe("search_brain gates the non-English FTS configuration", () => {
 
     const result = await client.callTool({
       name: "search_brain",
-      arguments: { query: "nadel", search_mode: "keyword", fts_config: "german" },
+      arguments: {
+        query: "nadel",
+        search_mode: "keyword",
+        fts_config: "german",
+      },
     });
 
     expect(result.isError).toBe(true);
@@ -202,7 +212,11 @@ describe("search_brain gates the non-English FTS configuration", () => {
 
     const result = await client.callTool({
       name: "search_brain",
-      arguments: { query: "nadel", search_mode: "vector", fts_config: "german" },
+      arguments: {
+        query: "nadel",
+        search_mode: "vector",
+        fts_config: "german",
+      },
     });
 
     // Vector mode runs no FTS, so the argument cannot influence execution — and
@@ -212,11 +226,18 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("an admin gets the on-the-fly to_tsvector path with the requested config", async () => {
-    const { client, queries } = await clientCapturingQueries("admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "search_brain",
-      arguments: { query: "nadel", search_mode: "keyword", fts_config: "german" },
+      arguments: {
+        query: "nadel",
+        search_mode: "keyword",
+        fts_config: "german",
+      },
     });
 
     const query = onlyQuery(queries);
@@ -228,11 +249,18 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("english reads the stored GIN-indexed column, never a recomputed vector", async () => {
-    const { client, queries } = await clientCapturingQueries("admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "search_brain",
-      arguments: { query: "needle", search_mode: "keyword", fts_config: "english" },
+      arguments: {
+        query: "needle",
+        search_mode: "keyword",
+        fts_config: "english",
+      },
     });
 
     const query = onlyQuery(queries);
@@ -241,11 +269,18 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("an unrecognized language token falls back rather than reaching SQL", async () => {
-    const { client, queries } = await clientCapturingQueries("admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "search_brain",
-      arguments: { query: "needle", search_mode: "keyword", fts_config: "klingon" },
+      arguments: {
+        query: "needle",
+        search_mode: "keyword",
+        fts_config: "klingon",
+      },
     });
 
     const query = onlyQuery(queries);
@@ -267,7 +302,12 @@ describe("brain_answer scopes its retrieval identically", () => {
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("t.namespace = ANY($4::text[])");
-    expect(query.values).toEqual(["what is known", 5, 0, ["rico", "shared-kb"]]);
+    expect(query.values).toEqual([
+      "what is known",
+      5,
+      0,
+      ["rico", "shared-kb"],
+    ]);
   });
 
   test("an unreadable namespace is refused before any query runs", async () => {
@@ -303,7 +343,10 @@ describe("list_recent scopes both its data and its count query", () => {
   });
 
   test("a global role emits no predicate in either query", async () => {
-    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "ob-admin",
+      "operator",
+    );
 
     await client.callTool({ name: "list_recent", arguments: {} });
 

@@ -164,9 +164,11 @@ describe("shared-namespace name injection on the search path", () => {
     );
   });
 
-  test("no injected names leaves the physical name untranslated", async () => {
-    expect(await namespaceEmittedWith(undefined)).toBe(
-      INJECTED_NAMES.physicalSharedNamespace,
+  test("no injected names fails loudly rather than emitting a raw name", async () => {
+    // An emitted row that silently kept the physical partition name would leak
+    // that partition to a caller; naming the missing wiring is the safe answer.
+    await expect(namespaceEmittedWith(undefined)).rejects.toThrow(
+      /sharedNamespaceNames/,
     );
   });
 });
