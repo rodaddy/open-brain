@@ -1,7 +1,7 @@
-# Handoff — recall is broken (2026-08-25)
+# Handover — recall is broken (2026-08-25)
 
 ## State 0 — BASE
-Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
+Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 (181 lines). It is the standing contract for this session.
 - Any question this document does not directly override → the rules layers
   answer it, nearest layer first.
@@ -9,7 +9,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
   before acting.
 - Output discipline: minimum verbosity, only the context needed, output
   tokens low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (28 lines). It
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (28 lines). It
   overrides the base; this document overrides it.
 
 ## State 1 — ORIENT
@@ -36,8 +36,8 @@ absent; if the checkout is `main` or `fix/guard-label-not-codex` is merged
 (PR #739), switch first, never work there.
 Retire: `none` — `git branch --merged origin/main` names only `main`, and
 `git worktree list` shows only the primary checkout.
-Commit this handoff: branch `fix/recall-serves-durable-memory`, path
-`_DOCS/_handoff/2026-08-25-recall-is-broken.md`, explicit-path staging,
+Commit this handover: branch `fix/recall-serves-durable-memory`, path
+`_DOCS/_handover/2026-08-25-recall-is-broken.md`, explicit-path staging,
 `git commit -F` message file.
 Scribe: #744 — started: `gh issue comment 744 --body "<session start note>"`
 Done-check: `git log -1 --stat`
@@ -76,7 +76,7 @@ Close: #744 once D1 has a named file:line and the State 4 check exists; tick
 the map checkbox in the same motion.
 
 ## State FINAL — WRAP
-Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
+Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - D2/D3/D4 of #744 are unconfirmed against the server; this slice takes D1 only.

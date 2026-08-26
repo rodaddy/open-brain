@@ -1,16 +1,16 @@
-# Handoff — #780 lint sweep, collect nine and dispatch five (2026-08-26)
+# Handover — #780 lint sweep, collect nine and dispatch five (2026-08-26)
 
 ## State 0 — BASE
-Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
+Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 (181 lines). It is the standing contract for this session.
 - Any question this document does not directly override → the rules layers
   answer it, nearest layer first.
 - Anything neither the base nor this document covers → ask Rico before acting.
 - Output discipline: minimum verbosity, only the context needed, output tokens
   low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOFF-RULES.md in full (208 lines, on
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (208 lines, on
   `origin/docs/780-sweep-paperwork-2` until PR #785 merges — `git show
-  origin/docs/780-sweep-paperwork-2:_DOCS/HANDOFF-RULES.md`; `main` still has
+  origin/docs/780-sweep-paperwork-2:_DOCS/HANDOVER-RULES.md`; `main` still has
   147). It overrides the base; this document overrides it. New rules 28-32 bind
   this session: the head consolidates and never works (31), lanes run parallel
   in their own clones (32), at most FIVE in flight, each its own Workflow (3).
@@ -24,28 +24,28 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOFF-BASE.md in full
 - #780 checklist comment `5427622744`: 32 of 54 ticked — RUNNING (`gh api repos/:owner/:repo/issues/comments/5427622744`)
 - CI fires again on lane PRs (run 33004537250); `python-capture` fails as the known #764 flake — RUNNING (`gh pr checks 823`)
 - Clones `lane-1`..`lane-11` under `/Volumes/ThunderBolt/_tmp/open-brain/_worktrees/`;
-  lane-1..9 hold the nine PR branches, lane-10 free, lane-11 this handoff —
+  lane-1..9 hold the nine PR branches, lane-10 free, lane-11 this handover —
   RUNNING (`git -C <clone> branch --show-current`)
 - Mac checkout `/Volumes/ThunderBolt/Development/open-brain` is DIRTY on `sprint/standards-fmt`
   (Rico's, on hold, 37 paths); lanes work in clones, never there — RUNNING (`git -C /Volumes/ThunderBolt/Development/open-brain status -sb`)
 - Rest of the program: `_plans/server-hardening-ladder.md` (L2b-2, L2c, L3-L6) and the #780 checklist tail — MERGED
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has
-  `780-touched-files-lint-clean.sh`, `handoff-validates.sh`)
+  `780-touched-files-lint-clean.sh`, `handover-validates.sh`)
 Re-probe before dispatching anything (live state beats this doc):
 - `gh pr list --state open --json number,headRefName,isDraft` → expect the nine plus #785
 - `cd <lane-10> && ./node_modules/.bin/oxlint --deny-warnings server/transport/health.ts` → expect 1 finding (complexity 21)
 
 ## State 2 — LAND THE PAPERWORK
 Branch: `docs/780-sweep-session3` from `origin/main` — cut it if absent; if the
-checkout is `main` or `docs/780-handoff-session3` is merged (PR #824), switch
+checkout is `main` or `docs/780-handover-session3` is merged (PR #824), switch
 first, never work there.
 Retire: the nine `chore/780-lint-*` branches (`list-recent`, `get-entry`,
 `context-pack-repo-facts`, `worker-proxy`, `tier-lane`, `reporting`, `people`,
 `promotion-shared`, `session-lifecycle`) as each PR merges — `gh pr merge --squash
 --delete-branch`, then `git branch -D` in the owning clone — and
 `docs/780-sweep-paperwork-2` once #785 merges. Worktrees: `none`.
-Commit this handoff: branch `docs/780-handoff-session3`, path
-`_DOCS/_handoff/2026-08-26-lint-sweep-l2-session3.md`, explicit-path staging,
+Commit this handover: branch `docs/780-handover-session3`, path
+`_DOCS/_handover/2026-08-26-lint-sweep-l2-session3.md`, explicit-path staging,
 `git commit -F` message file. Done by the authoring session as PR #824.
 Scribe: issue #780 — started: `gh issue comment 780 --body "Scribe, session 3: ..."`
 Done-check: `git log -1 --stat`
@@ -69,7 +69,7 @@ helpers across `promotion.ts` and `promote-entry.ts`, so it merges LAST
 Scope: PRs #820 #821 #822 #823 #785; their clones
 Must NOT: merge #822 before the other three (shared owner, rule 32); rewrite #785's text
 Record: each PR; #785 also comments on #780 that rules 28-32 are now on `main`
-Done-check: `git show origin/main:_DOCS/HANDOFF-RULES.md | wc -l` → 208 (RED: 40628c9, 147 lines)
+Done-check: `git show origin/main:_DOCS/HANDOVER-RULES.md | wc -l` → 208 (RED: 40628c9, 147 lines)
 
 ## State 5 — Re-tick the #780 checklist
 Tier: T0 — one comment PATCH, reversible, derived from live oxlint
@@ -99,7 +99,7 @@ exits 0; this session ticks in the same motion as each merge (State 5).
 Also close #784 if Rico accepts resolved-by-observation (comment `5430102158`).
 
 ## State FINAL — WRAP
-Invoke the handoff-author skill; next handoff passes the validator; `aqmd up`.
+Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - The standing scribe (rule 30) did NOT run in session 2; the head carried receipts

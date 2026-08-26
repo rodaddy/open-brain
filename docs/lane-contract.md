@@ -195,7 +195,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   pick silently.
 - **A recon lane that reads the Mac checkout answers for THAT checkout's
   branch, not `main`** (rule 19, again). The Mac tree is dirty on
-  `sprint/standards-fmt` (`_DOCS/_handoff/2026-08-26-lint-sweep-l2.md:15`), so
+  `sprint/standards-fmt` (`_DOCS/_handover/2026-08-26-lint-sweep-l2.md:15`), so
   a "what does main look like" question answered from it is answered about
   someone else's in-progress work. Point recon at the clone, or at
   `git show origin/main:<path>`.
