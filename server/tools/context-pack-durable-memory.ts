@@ -518,19 +518,9 @@ function prepareRecall(
 }
 
 export async function loadDurableMemoryContext(
-  args: AgentContextPackArgs,
-  auth: AuthIdentity,
-  namespace: string,
-  dependencies: MemoryToolDependencies,
-  contentCharLimit?: number,
+  request: DurableMemoryContextRequest,
 ): Promise<DurableMemoryContextFragment> {
-  const request: DurableMemoryContextRequest = {
-    args,
-    auth,
-    namespace,
-    dependencies,
-    contentCharLimit,
-  };
+  const { args, contentCharLimit } = request;
   const maxContentChars = resolveContentChars(
     args,
     contentCharLimit,
