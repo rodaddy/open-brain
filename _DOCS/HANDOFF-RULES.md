@@ -13,10 +13,15 @@ only when a session actually needed it.
 2. **Lanes are 10-15 minutes.** A lane that would run 30 minutes was cut
    wrong, not slow. Re-cut until it fits. Expect MANY lanes landed per round;
    a round that produces one lane was under-dispatched.
-3. **Batches of 5-10 concurrent** (Rico ruling 2026-08-26). One dispatch per
-   worker so each lane is its own visible row. Scopes are disjoint and one
-   file has one owner — two lanes never share a file; entangled files mean
-   sequenced lanes, not parallel ones.
+3. **At most FIVE lanes in flight, each its own agent** (Rico ruling
+   2026-08-26 evening, superseding the 5-10 batch from earlier that day). A
+   nine-node Workflow is one swarm: Rico sees "3 of 9" and cannot open a
+   lane. Dispatch every lane as its own Workflow with a single `agent()`
+   node so each is its own visible row he can enter, never more than five
+   running. Keep the QUEUE full instead: up to five batches of five briefs
+   written and ready, and a lane launches the moment a slot frees. Scopes
+   are disjoint and one file has one owner — two lanes never share a file;
+   entangled files mean sequenced lanes, not parallel ones.
 4. **Failure is a valid outcome WITH RECEIPTS.** A lane that fails but reports
    exactly what it ran, what it saw, and where it stopped is a good outcome.
    The head re-cuts a SMALLER task and sends a new worker carrying what the
@@ -184,7 +189,7 @@ only when a session actually needed it.
     compacting twice in one session (2026-08-26) was caused by head-side
     plumbing output, not by decisions. Rule 1 stays as the principle; this
     rule is the operational list.
-32. **Lanes that do not touch each other run in PARALLEL, 5-10 at once.**
+32. **Lanes that do not touch each other run in PARALLEL, at most five at once (rule 3).**
     Operator ruling 2026-08-26: "if they can be done in parallel, we should be
     doing that." Sequencing lanes that share no file is wasted wall clock, not
     caution. Each lane gets its OWN LOCAL CLONE under
