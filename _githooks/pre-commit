@@ -132,10 +132,18 @@ echo "  ✓ gitleaks found no secrets in the staged changes"
 # ---------------------------------------------------------------------------
 # Ported from /Volumes/ThunderBolt/Development/_DOCS/typescript-exemplar/_githooks/pre-commit.
 #
-# Runs against STAGED CONTENT ONLY, via a temporary index checkout. Checking the
-# working tree instead is the single most common way a hook lies: you stage a
-# fix, leave a broken edit unstaged, and the hook passes on code that is not
-# what you are committing.
+# EVERY CHECK BELOW READS THE INDEX, NEVER THE WORKING TREE. That is the whole
+# point of a pre-commit gate and it is the single most common way one lies: you
+# stage a fix, leave a broken edit unstaged, and the hook passes on code that is
+# not what you are committing. _DOCS/STANDARDS-git.md:188-189 says the
+# pre-commit scan is of staged changes only.
+#
+# Four separate places the working tree could leak in, all closed here:
+#   1. membership   — decided from `git diff --cached`, never from `[ -f ]`.
+#   2. content      — every tool is pointed at a `git checkout-index` snapshot.
+#   3. lint config  — read from the INDEX copy of .oxlintrc.json, so an
+#                     unstaged relaxation cannot weaken the staged lint.
+#   4. tsc          — run against the snapshot's tsconfig, not the repo root's.
 #
 # `git stash --keep-index` is the usual trick and it is dangerous here: it
 # touches the working tree, and an interrupted hook can leave the user's
@@ -145,34 +153,91 @@ fail=0
 step() { printf '\n[pre-commit] %s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 
-# FAIL CLOSED on a missing tool. A gate that exits 0 because it could not find
-# its runner is indistinguishable from one that ran and passed — the same
-# absent-looks-like-passed confusion that made #719 survive.
-require() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    step "MISSING TOOL: $1"
-    note "This hook fails closed. Install it, do not bypass."
-    note "  brew install oven-sh/bun/bun"
-    exit 1
-  fi
+# ---------------------------------------------------------------------------
+# WHAT IS STAGED — decided from the INDEX ALONE.
+# ---------------------------------------------------------------------------
+# `--name-status -z` rather than `--name-only`, and rather than a `[ -f "$f" ]`
+# existence test, for two independent reasons:
+#
+#   MEMBERSHIP. A `[ -f ]` test asks the WORKING TREE whether a staged path
+#   exists. Stage a violating file, delete only its working-tree copy, and the
+#   file drops out of the lint set while still going into the commit — the
+#   violation ships. The index is the only authority on what is being
+#   committed.
+#
+#   DELETIONS COUNT. A deleted `.ts` path cannot be linted (there is no content
+#   to lint) but it absolutely can break the build: delete a module something
+#   still imports and the type error is in the IMPORTER, which is not staged.
+#   So deletions are excluded from the lint list and INCLUDED in the "did
+#   TypeScript change" decision that arms tsc. Ranking them as "no files staged"
+#   is what let a broken tree through (docs/CI_CD_REQUIREMENTS.md:70-78).
+#
+#   -z / NUL. Pathnames may legally contain newlines, and a line-oriented read
+#   silently splits one such path into two nonexistent ones. NUL is the only
+#   delimiter that cannot appear in a pathname.
+#
+# EXTENSIONS follow tsconfig.json, which sets "allowJs": true (line 14) and
+# includes whole directory trees (lines 23-29) — so JavaScript is part of this
+# project's type-checked surface and a `.js` file with a lint violation was
+# previously invisible to this gate.
+is_checked_source() {
+  case "$1" in
+    *.ts|*.tsx|*.mts|*.cts|*.js|*.mjs|*.cjs) return 0 ;;
+    *) return 1 ;;
+  esac
 }
-require bun
-require bunx
 
-# Staged TypeScript files, filtered to those that still exist (a delete stages a
-# path that is gone; running a linter on it errors out for the wrong reason).
 # A read loop rather than `mapfile`: macOS may resolve bash 3.2, which has none.
-staged_ts=()
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  [ -f "$f" ] && staged_ts+=("$f")
-done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' '*.mts' '*.cts')
+# `read -d ''` consumes one NUL-terminated field at a time.
+lintable=()        # paths whose staged CONTENT exists and can be linted
+source_changed=0   # any staged change to a checked source, DELETIONS INCLUDED
+while IFS= read -r -d '' status; do
+  [ -n "$status" ] || continue
+  IFS= read -r -d '' path || break
+  case "$status" in
+    R*|C*)
+      # A rename/copy emits TWO paths: source then destination. Only the
+      # destination exists in the new index state.
+      IFS= read -r -d '' dest || break
+      path="$dest"
+      ;;
+  esac
+  is_checked_source "$path" || continue
+  source_changed=1
+  case "$status" in
+    D*) ;;                      # deleted: no content to lint, but tsc must run
+    *) lintable+=("$path") ;;
+  esac
+done < <(git diff --cached --name-status -z --diff-filter=ACMRTD)
 
-if [ ${#staged_ts[@]} -eq 0 ]; then
-  echo "  (no staged TypeScript files — lint/typecheck skipped)"
+if [ "$source_changed" -eq 0 ]; then
+  echo "  (no staged TypeScript/JavaScript — lint/typecheck skipped)"
   echo "pre-commit: all checks passed ✓"
   exit 0
 fi
+
+# ---------------------------------------------------------------------------
+# TOOLS — checked only once we know a check will actually run.
+# ---------------------------------------------------------------------------
+# AFTER the staged-set decision, not before. A docs-only commit needs neither
+# oxlint nor tsc, and demanding Bun to commit a Markdown edit blocks the
+# Node/npm toolchain this repo is pinned to (_DOCS/STANDARDS-typescript.md:27-30).
+#
+# The linter is the REPO-LOCAL binary, never `bunx oxlint`: bare `bunx` will
+# fetch a missing package from the network, so on a clean offline checkout the
+# gate either stalls or silently lints with a version nobody pinned. A gate that
+# installs its own checker is not reproducible.
+OXLINT="$ROOT/node_modules/.bin/oxlint"
+TSC="$ROOT/node_modules/.bin/tsc"
+
+require_bin() {
+  if [ ! -x "$1" ]; then
+    step "MISSING TOOL: $1"
+    note "This hook fails closed. Install dependencies, do not bypass:"
+    note "  bun install --frozen-lockfile"
+    exit 1
+  fi
+}
 
 # WHERE THE STAGED CHECKOUT LIVES, AND WHY NOT UNDER .git/
 #
@@ -193,6 +258,9 @@ scratch="$scratch_root/pre-commit-staged-$$"
 # AGENTS.md has no carve-out, and a hook is exactly the kind of place a
 # convenient `rm -rf` gets added and then inherited by fifty repos.
 cleanup_scratch() {
+  if [ -L "$scratch/node_modules" ]; then
+    unlink "$scratch/node_modules" 2>/dev/null || true
+  fi
   archive="$scratch_root/../_archive"
   mkdir -p "$archive" 2>/dev/null || return 0
   mv "$scratch" "$archive/$(basename "$scratch")-$(date +%s)" 2>/dev/null || true
@@ -200,58 +268,117 @@ cleanup_scratch() {
 trap cleanup_scratch EXIT
 
 mkdir -p "$scratch" || exit 1
+# `-a` writes every file in the INDEX, so the snapshot is exactly the tree this
+# commit would produce: staged edits present, unstaged edits absent, paths
+# deleted in the index absent.
 git checkout-index --prefix="$scratch/" -af || exit 1
 
-# Tools are INVOKED from the repo root (that is where node_modules, tsconfig.json
-# and the config files live) but POINTED AT the staged copies under $scratch.
-# Running them with cwd inside $scratch means the runner finds no node_modules
-# there and either fails to resolve the binary or silently downloads a different
-# version — and the hook then reports that as a code violation.
+# node_modules is not in the index, and tsc needs it to resolve @types and the
+# runtime packages. A symlink rather than a copy: it is read-only for our
+# purposes and copying it would dominate the hook's cost.
+ln -sfn "$ROOT/node_modules" "$scratch/node_modules" || exit 1
+
+# Tools are INVOKED from the repo root but POINTED AT the staged copies under
+# $scratch. Running them with cwd inside $scratch means the runner finds no
+# node_modules there and either fails to resolve the binary or silently
+# downloads a different version — and the hook then reports that as a code
+# violation.
+# `${#lintable[@]}` guard first: bash 3.2 (which macOS may still resolve via
+# `env bash`) treats an empty array expansion as an unset variable under
+# `set -u` and aborts. Deletion-only commits hit exactly that case.
 staged_paths=()
-for f in "${staged_ts[@]}"; do
-  staged_paths+=("$scratch/$f")
-done
+if [ ${#lintable[@]} -gt 0 ]; then
+  for f in "${lintable[@]}"; do
+    staged_paths+=("$scratch/$f")
+  done
+fi
 
 cd "$ROOT" || exit 1
 
-# CONFIG-GUARDED. .oxlintrc.json and .prettierrc.json are landing in a separate
-# lane; until one exists there is no rule set to enforce, so the step announces
-# the skip rather than pretending to have checked. An absent CONFIG is a skip;
-# an absent TOOL is a failure (see require above) — the two are not the same.
-if [ -f "$ROOT/.oxlintrc.json" ]; then
+# ---------------------------------------------------------------------------
+# THE LINT CONFIG COMES FROM THE INDEX TOO.
+# ---------------------------------------------------------------------------
+# Reading `$ROOT/.oxlintrc.json` would let an unstaged edit decide how strictly
+# the staged code is judged: relax or delete the working-tree config, and a
+# violating staged file lints clean or skips entirely, while the STRICT config
+# is what actually gets committed. So: the staged version if one is staged,
+# otherwise HEAD's. Both come out of `git show`, which never consults the
+# working tree.
+#
+# Config-guarded: an absent config in the INDEX is a genuine skip (there is no
+# rule set to enforce). An absent TOOL is a failure. The two are not the same.
+oxlint_config="$scratch/.oxlint-index-config.json"
+if git show :.oxlintrc.json > "$oxlint_config" 2>/dev/null; then
+  config_origin="index (staged)"
+elif git show HEAD:.oxlintrc.json > "$oxlint_config" 2>/dev/null; then
+  config_origin="HEAD"
+else
+  : > "$oxlint_config"
+  config_origin=""
+fi
+
+if [ -n "$config_origin" ] && [ ${#staged_paths[@]} -gt 0 ]; then
+  require_bin "$OXLINT"
   # --no-ignore because the staged copies live outside the repo, where oxlint's
   # ignore rules and .gitignore-awareness would exclude them. Without it the
   # linter reports "no files to lint" and exits 0 — a check that examines
   # nothing and calls it a pass.
-  step "oxlint (staged content)"
-  if ! bunx oxlint --no-ignore --deny-warnings --config "$ROOT/.oxlintrc.json" "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
-    note "FAILED. Some are auto-fixable: bunx oxlint --fix"
+  step "oxlint (staged content, config from $config_origin)"
+  if ! "$OXLINT" --no-ignore --deny-warnings --config "$oxlint_config" "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+    note "FAILED. Some are auto-fixable: $OXLINT --fix"
     fail=1
   fi
+elif [ -z "$config_origin" ]; then
+  step "oxlint — SKIPPED: no .oxlintrc.json in the index or at HEAD"
 else
-  step "oxlint — SKIPPED: no .oxlintrc.json in the repo root"
+  step "oxlint — SKIPPED: only deletions staged, no content to lint"
 fi
 
-if [ -f "$ROOT/.prettierrc.json" ]; then
+if [ -f "$scratch/.prettierrc.json" ] && [ ${#staged_paths[@]} -gt 0 ]; then
+  require_bin "$ROOT/node_modules/.bin/prettier"
   # --ignore-path /dev/null so a local .prettierignore cannot silently exempt a
   # staged file from the check that is supposed to gate it.
   step "prettier --check (staged content)"
-  if ! bunx prettier --check --config "$ROOT/.prettierrc.json" --ignore-path /dev/null "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
-    note "FAILED. Fix with: bunx prettier --write <files>"
+  if ! "$ROOT/node_modules/.bin/prettier" --check --config "$scratch/.prettierrc.json" --ignore-path /dev/null "${staged_paths[@]}" 2>&1 | sed 's/^/  /'; then
+    note "FAILED. Fix with: prettier --write <files>"
     fail=1
   fi
 else
-  step "prettier — SKIPPED: no .prettierrc.json in the repo root"
+  step "prettier — SKIPPED: no .prettierrc.json in the staged tree"
 fi
 
-# tsc runs over the whole project, not just staged files: a change in one module
-# breaks type contracts in its callers, and per-file checking cannot see that.
-# tsconfig.json governs the scope.
-step "tsc --noEmit (whole project)"
-if ! bunx tsc --noEmit 2>&1 | sed 's/^/  /'; then
+# ---------------------------------------------------------------------------
+# tsc — WHOLE PROJECT, over the STAGED SNAPSHOT.
+# ---------------------------------------------------------------------------
+# Whole-project because a change in one module breaks type contracts in its
+# CALLERS, and per-file checking cannot see that — which is also why a staged
+# deletion arms this step even though there is nothing to lint.
+#
+# Over the snapshot because running it at $ROOT type-checks the working tree:
+# a staged type error hidden behind a clean unstaged copy commits, and an
+# unrelated unstaged error blocks a valid commit. Both are the gate reporting
+# on a tree that is not the one being committed.
+#
+# COST, measured on this repo (2026-08-26, 5 runs): `git checkout-index -a`
+# adds ~0.2s and tsc over the snapshot is ~3.0s — the same as tsc at $ROOT
+# (~3.0s), because the file count is identical and the symlinked node_modules
+# means no re-resolution. The snapshot is therefore ~0.2s of the total, which
+# is why the correct behavior is also the affordable one.
+require_bin "$TSC"
+step "tsc --noEmit (whole project, staged snapshot)"
+tsc_started=$(date +%s)
+# tsc reports paths relative to ITS cwd ($ROOT), so a snapshot path arrives as
+# `../pre-commit-staged-NNN/src/x.ts`. Both spellings are rewritten back to a
+# repo-relative path so the developer can act on the error without translating.
+scratch_rel="$(cd "$scratch" && pwd -P)"
+if ! "$TSC" --noEmit -p "$scratch/tsconfig.json" 2>&1 \
+    | sed -e "s|$scratch_rel/||g" -e "s|$scratch/||g" -e "s|\.\./$(basename "$scratch")/||g" \
+    | sed 's/^/  /'; then
   note "FAILED. Type errors block the commit."
+  note "Paths above are relative to the staged snapshot, not your working tree."
   fail=1
 fi
+note "tsc took $(( $(date +%s) - tsc_started ))s over the staged snapshot."
 
 if [ "$fail" -ne 0 ]; then
   printf '\n[pre-commit] BLOCKED. Nothing was committed.\n' >&2
