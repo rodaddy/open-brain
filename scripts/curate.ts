@@ -14,13 +14,23 @@ import { createPool } from "../src/db/pool.ts";
 import { logger } from "../src/logger.ts";
 
 type TableName =
-  | "thoughts"
-  | "decisions"
-  | "relationships"
-  | "projects"
-  | "sessions";
+  "thoughts" | "decisions" | "relationships" | "projects" | "sessions";
 
-const LLM_BASE_URL = process.env.LLM_BASE_URL ?? "http://localhost:4000";
+// No local default. Inference is a fleet service, not a process on whatever
+// machine happens to run this script: a localhost fallback silently works on
+// a developer Mac and silently fails everywhere else, including in a
+// container. Resolved at the CALL site, not at import, so importing this
+// module stays free of side effects.
+function requireLlmBaseUrl(): string {
+  const url = process.env.LLM_BASE_URL;
+  if (!url) {
+    throw new Error(
+      "LLM_BASE_URL is required: point it at the fleet inference endpoint. " +
+        "There is no local default.",
+    );
+  }
+  return url;
+}
 const LLM_MODEL = process.env.CURATE_MODEL ?? "gpt-4o-mini";
 const DUPLICATE_THRESHOLD = 0.08;
 const STALE_DAYS = 90;
@@ -49,7 +59,7 @@ const CONTENT_PREVIEW: Record<TableName, string> = {
 
 async function llmJudge(prompt: string): Promise<string> {
   try {
-    const response = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${requireLlmBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
