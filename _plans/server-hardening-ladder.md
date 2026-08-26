@@ -101,8 +101,11 @@ constructs logger + pool + embedder client from the validated result, and hands
 them down. `process.env` appears in `server/config.ts` and nowhere else in
 `server/`.
 
-**Status: L2a MERGED, L2b BLOCKED — 2026-08-26.** The rung splits into a schema
-half and a rewiring half, and only the first has landed.
+**Status: L2a MERGED, L2b MERGED — 2026-08-26.** The rung splits into a schema
+half and a rewiring half, and both have now landed: #825 moved the remaining
+`server/` readers onto injected config and armed `node/no-process-env`, proven
+by `scripts/done-means/750-l2a-config-covers-every-env-read.sh` and
+`scripts/done-means/750-l2b2-lint-refuses-process-env.sh`.
 
 L2a is merged as PR #778 (`49ecfbe`): every env var name read anywhere in
 non-test `server/` code — 23 of them — is now declared in the validated schema,
