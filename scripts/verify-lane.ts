@@ -103,6 +103,11 @@ if (TEMP_WORKSPACE_SOURCE === "fallback") {
 }
 const RECEIPT_PREFIX = "verify-lane receipt:";
 
+// The ref lane-bootstrap cuts its worktree from, and therefore the ref whose
+// dependencies it installs. Named once so the deps-at-head comparison below
+// and lane-bootstrap cannot drift apart silently.
+const BOOTSTRAP_REF = "origin/main";
+
 interface Args {
   pr: string;
   check: string | null;
@@ -250,6 +255,63 @@ function resolveCheck(body: string, flagCheck: string | null): { path: string; s
       "       bun scripts/verify-lane.ts <pr-number> --check scripts/done-means/<check>.sh",
     ].join("\n"),
   );
+}
+
+/**
+ * The set of files whose contents decide what `bun install` produces. A
+ * difference in ANY of them between the bootstrap ref and the PR head means
+ * the `node_modules` lane-bootstrap installed does not describe the head.
+ */
+export const DEPENDENCY_MANIFESTS = ["package.json", "bun.lock"] as const;
+
+export interface DepsAtHeadDecision {
+  /** true when `bun install --frozen-lockfile` must be re-run at the head. */
+  reinstall: boolean;
+  /** The `deps-at-head` step line, printed on BOTH paths. */
+  detail: string;
+}
+
+/**
+ * Decide whether the verification worktree needs its dependencies reinstalled
+ * for the PR head.
+ *
+ * WHY THIS EXISTS (#775). lane-bootstrap cuts the worktree from `origin/main`
+ * and installs deps THERE; this script then hard-resets the same worktree onto
+ * the PR head. The SOURCE moves and `node_modules` does not, so any PR that
+ * adds or bumps a dependency was verified against origin/main's dependency
+ * tree. Measured twice on PR #771 (head 2d67702), which adds `oxlint`: the
+ * done-means check died on `MISSING TOOL: .../node_modules/.bin/oxlint` and NO
+ * receipt was posted, while a second `bun install --frozen-lockfile` in that
+ * same worktree installed the 2 missing packages and the identical check
+ * passed.
+ *
+ * `manifestsDiffer` is the caller's `git diff --quiet <base> <head> --
+ * package.json bun.lock` result, inverted: git exits 0 when there is no
+ * difference.
+ *
+ * NOTHING IS ADJUSTED SILENTLY (AGENTS.md Coding Standards): both outcomes
+ * produce a line, so the transcript always says which path ran.
+ */
+export function decideDepsAtHead(input: {
+  baseRef: string;
+  headSha: string;
+  manifestsDiffer: boolean;
+}): DepsAtHeadDecision {
+  const manifests = DEPENDENCY_MANIFESTS.join(", ");
+  if (input.manifestsDiffer) {
+    return {
+      reinstall: true,
+      detail:
+        `reinstalled: lockfile differs from ${input.baseRef} ` +
+        `(${manifests} changed between ${input.baseRef} and ${input.headSha})`,
+    };
+  }
+  return {
+    reinstall: false,
+    detail:
+      `unchanged: lockfile matches ${input.baseRef} ` +
+      `(${manifests} identical, bootstrap deps describe ${input.headSha})`,
+  };
 }
 
 function main(): void {
@@ -441,6 +503,52 @@ function main(): void {
   }
   step("checkout-head", `worktree at PR head ${headSha}`);
 
+  // --- 3b. dependencies AT THE HEAD (#775) ---------------------------------
+  // lane-bootstrap installed deps for BOOTSTRAP_REF; the reset above moved the
+  // source to the PR head without touching node_modules. Reconcile that here,
+  // or a PR that adds a dependency can never earn a receipt.
+  //
+  // `git diff --quiet` exits 0 for "no difference" and 1 for "differs", so a
+  // non-zero exit is a normal answer rather than a failure — it cannot go
+  // through capture(), which throws on any non-zero status. Any OTHER exit
+  // code (a bad ref, a missing object) is a real error and fails loudly, so
+  // this never silently decides "unchanged" because git could not compare.
+  const diff = spawnSync(
+    "git",
+    ["diff", "--quiet", BOOTSTRAP_REF, headSha, "--", ...DEPENDENCY_MANIFESTS],
+    { cwd: worktreePath, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (diff.error) {
+    throw new VerifyLaneError(
+      "deps-at-head",
+      `could not compare dependency manifests: ${diff.error.message}`,
+    );
+  }
+  if (diff.status !== 0 && diff.status !== 1) {
+    throw new VerifyLaneError(
+      "deps-at-head",
+      `git diff --quiet ${BOOTSTRAP_REF} ${headSha} exited ${diff.status}. ` +
+        "Refusing to guess whether the head's dependencies are installed.",
+      `${diff.stdout ?? ""}${diff.stderr ?? ""}`.trim(),
+    );
+  }
+
+  const depsDecision = decideDepsAtHead({
+    baseRef: BOOTSTRAP_REF,
+    headSha,
+    manifestsDiffer: diff.status === 1,
+  });
+  if (depsDecision.reinstall) {
+    note("deps-at-head", `installing the head's dependencies in ${worktreePath}`);
+    // Same fail-loud shape lane-bootstrap uses for its own deps step
+    // (scripts/lane-bootstrap.ts): a partially-installed environment is not a
+    // thing to verify against, so a non-zero install aborts before run-check.
+    capture("deps-at-head", "bun", ["install", "--frozen-lockfile"], {
+      cwd: worktreePath,
+    });
+  }
+  step("deps-at-head", depsDecision.detail);
+
   // --- 4. run the check -----------------------------------------------------
   const checkPath = join(worktreePath, resolved.path);
   if (!existsSync(checkPath)) {
@@ -605,26 +713,28 @@ function main(): void {
   );
 }
 
-try {
-  main();
-} catch (err) {
-  if (err instanceof VerifyLaneError) {
-    process.stderr.write(`\n  [FAIL] ${err.step}: ${err.message}\n`);
-    if (err.detail) {
-      process.stderr.write(
-        "\n" +
-          err.detail
-            .split("\n")
-            .map((line) => (line.trim() ? `         ${line}` : ""))
-            .join("\n") +
-          "\n",
-      );
+if (import.meta.main) {
+  try {
+    main();
+  } catch (err) {
+    if (err instanceof VerifyLaneError) {
+      process.stderr.write(`\n  [FAIL] ${err.step}: ${err.message}\n`);
+      if (err.detail) {
+        process.stderr.write(
+          "\n" +
+            err.detail
+              .split("\n")
+              .map((line) => (line.trim() ? `         ${line}` : ""))
+              .join("\n") +
+            "\n",
+        );
+      }
+      process.stderr.write("\n");
+      process.exit(1);
     }
-    process.stderr.write("\n");
+    process.stderr.write(
+      `\n  [FAIL] unexpected: ${err instanceof Error ? err.stack || err.message : String(err)}\n\n`,
+    );
     process.exit(1);
   }
-  process.stderr.write(
-    `\n  [FAIL] unexpected: ${err instanceof Error ? err.stack || err.message : String(err)}\n\n`,
-  );
-  process.exit(1);
 }
