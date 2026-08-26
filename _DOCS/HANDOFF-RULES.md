@@ -13,10 +13,10 @@ only when a session actually needed it.
 2. **Lanes are 10-15 minutes.** A lane that would run 30 minutes was cut
    wrong, not slow. Re-cut until it fits. Expect MANY lanes landed per round;
    a round that produces one lane was under-dispatched.
-3. **Batches of 5-6 concurrent, never more.** Larger fan-outs overload the
-   machine. One dispatch per worker so each lane is its own visible row.
-   Scopes are disjoint and one file has one owner — two lanes never share a
-   file; entangled files mean sequenced lanes, not parallel ones.
+3. **Batches of 5-10 concurrent** (Rico ruling 2026-08-26). One dispatch per
+   worker so each lane is its own visible row. Scopes are disjoint and one
+   file has one owner — two lanes never share a file; entangled files mean
+   sequenced lanes, not parallel ones.
 4. **Failure is a valid outcome WITH RECEIPTS.** A lane that fails but reports
    exactly what it ran, what it saw, and where it stopped is a good outcome.
    The head re-cuts a SMALLER task and sends a new worker carrying what the
@@ -72,7 +72,9 @@ only when a session actually needed it.
     "confirm", "check", "prove".
 16. Worker lanes cannot reach the forge. They have no `gh` and no network, so
     the head carries every receipt to the issue or PR as scribe. Do not brief
-    a lane to comment on an issue.
+    a lane to comment on an issue. Native in-harness Opus lanes DO have `gh`
+    for read-only calls (checks, run logs) unless a hook refuses; only Codex
+    companion lanes have no forge access (observed 2026-08-26).
 17. `_githooks/pre-push` runs `bun test` on the WORKING TREE, not the pushed
     tip (#761). A dirty checkout refuses every push, including a clean
     docs-only branch. Push from a clean clone (a cc-* box, or a fresh clone
@@ -169,3 +171,16 @@ only when a session actually needed it.
     and harvest lane reports into `docs/lane-contract.md`,
     `docs/sme/entries/`, and `docs/issue-graph.md`. (Rico, 2026-08-26:
     "making sure that you have a scribe running.")
+31. **The head consolidates; it never works.** Operator ruling 2026-08-26: the
+    head NEVER codes and NEVER runs the plumbing itself. Everything that is
+    not a decision goes to an army of well-informed Opus 5 low-effort (or
+    no-thinking) lanes in batches of 5-10: CI log triage, receipt runs,
+    worktree teardown, wait-and-poll, Codex result collection, PR body
+    composition, draft text, recon, audits. Each lane returns a RESULTS block
+    of at most 10 lines; the head consolidates the returns, checks them
+    against live state, and makes the decision. A head that reads raw CI logs,
+    dumps recon output into its own context, or re-runs a suite itself to
+    "verify" instead of sending a verifier lane is off-contract. Why: the head
+    compacting twice in one session (2026-08-26) was caused by head-side
+    plumbing output, not by decisions. Rule 1 stays as the principle; this
+    rule is the operational list.
