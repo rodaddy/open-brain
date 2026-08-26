@@ -12,7 +12,7 @@
 // earn a receipt (measured twice on PR #771, which adds oxlint).
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { decideDepsAtHead, DEPENDENCY_MANIFESTS } from "./verify-lane.ts";
 
@@ -70,8 +70,18 @@ describe("git diff --quiet over the dependency manifests", () => {
   let addsDepSha = "";
   let unrelatedSha = "";
 
+  // `-C <repo>` and an explicit --git-dir/--work-tree, NOT a bare cwd. A bare
+  // `cwd` lets git walk UP to the first enclosing repository when the fixture
+  // is not one — which is how a failed `git init` silently committed this
+  // fixture's `base` and `docs only` commits into the surrounding worktree
+  // during authoring, deleting every tracked file in it. Pinning the git dir
+  // makes that walk impossible: git errors instead of finding a parent repo.
   const git = (args: string[]): string => {
-    const r = spawnSync("git", args, { cwd: repo, encoding: "utf-8" });
+    const r = spawnSync(
+      "git",
+      ["--git-dir", join(repo, ".git"), "--work-tree", repo, ...args],
+      { cwd: repo, encoding: "utf-8" },
+    );
     if (r.status !== 0) {
       throw new Error(`git ${args.join(" ")} exited ${r.status}: ${r.stderr}`);
     }
@@ -90,7 +100,22 @@ describe("git diff --quiet over the dependency manifests", () => {
     // A branch that is deliberately NOT "main": the operator's global
     // protected-branch hook refuses commits there, including in a throwaway
     // repository, and the branch name is irrelevant to what this proves.
-    git(["init", "--quiet", "-b", "fixture"]);
+    // `init` runs before the fixture is a repo, so it cannot go through the
+    // pinned helper above. Its success is ASSERTED rather than assumed: an
+    // unchecked init is exactly what let every later git call escape upward.
+    const init = spawnSync("git", ["-C", repo, "init", "--quiet", "-b", "fixture"], {
+      encoding: "utf-8",
+    });
+    if (init.status !== 0) {
+      throw new Error(`git init failed in ${repo}: ${init.stderr}`);
+    }
+    if (!existsSync(join(repo, ".git"))) {
+      throw new Error(
+        `git init reported success but ${join(repo, ".git")} does not exist. ` +
+          "Refusing to run git here: every later call would walk up to the " +
+          "enclosing repository and commit into it.",
+      );
+    }
     git(["config", "user.email", "test@example.invalid"]);
     git(["config", "user.name", "verify-lane test"]);
     git(["config", "core.hooksPath", join(repo, ".git", "no-hooks")]);

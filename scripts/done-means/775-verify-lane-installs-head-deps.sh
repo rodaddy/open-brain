@@ -138,12 +138,29 @@ mkdir -p "$SCRATCH_BASE" || fail_hard "cannot create scratch dir at $SCRATCH_BAS
 FIXTURE="$SCRATCH_BASE/775-deps-fixture-$$-$(date +%s)"
 mkdir -p "$FIXTURE" || fail_hard "cannot create fixture dir at $FIXTURE"
 
-fixture_git() { git -C "$FIXTURE" "$@" >/dev/null 2>&1; }
+# Pin BOTH the git dir and the work tree, never a bare -C. With only -C, git
+# walks UP to the first enclosing repository when the fixture is not one, so a
+# failed init would commit these fixture commits into the surrounding worktree
+# — observed during authoring, and it deleted every tracked file there. With
+# the git dir pinned, that walk cannot happen: git errors instead.
+fixture_git() {
+  git --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" >/dev/null 2>&1
+}
+fixture_git_out() {
+  git --git-dir "$FIXTURE/.git" --work-tree "$FIXTURE" "$@" 2>/dev/null
+}
 
 # "fixture", not "main": the operator's global protected-branch hook refuses
 # commits to main even in a throwaway repo, and the branch name proves nothing.
-if fixture_git init --quiet -b fixture \
-  && fixture_git config user.email "test@example.invalid" \
+# `init` predates the repo, so it cannot use the pinned helper. Its success is
+# ASSERTED (exit code AND the resulting .git) before any other git call runs.
+git -C "$FIXTURE" init --quiet -b fixture >/dev/null 2>&1
+INIT_STATUS=$?
+if [ "$INIT_STATUS" -ne 0 ] || [ ! -d "$FIXTURE/.git" ]; then
+  fail_hard "git init failed in $FIXTURE (exit $INIT_STATUS, .git present: $([ -d "$FIXTURE/.git" ] && echo yes || echo no)). Refusing to run git here — every later call would walk up to the enclosing repository and commit into it."
+fi
+
+if fixture_git config user.email "test@example.invalid" \
   && fixture_git config user.name "775 done-means" \
   && fixture_git config core.hooksPath "$FIXTURE/.git/no-hooks" \
   && fixture_git config commit.gpgsign false; then
@@ -153,25 +170,25 @@ if fixture_git init --quiet -b fixture \
   printf 'base\n'          > "$FIXTURE/README.md"
   fixture_git add .
   fixture_git commit --quiet -m base
-  BASE_SHA="$(git -C "$FIXTURE" rev-parse HEAD 2>/dev/null)"
+  BASE_SHA="$(fixture_git_out rev-parse HEAD)"
 
   # A head that adds a devDependency — #771's shape.
   printf '{"name":"t","devDependencies":{"oxlint":"1.0.0"}}\n' > "$FIXTURE/package.json"
   printf 'lock-v1\noxlint\n'                                   > "$FIXTURE/bun.lock"
   fixture_git add .
   fixture_git commit --quiet -m "add oxlint"
-  DEP_SHA="$(git -C "$FIXTURE" rev-parse HEAD 2>/dev/null)"
+  DEP_SHA="$(fixture_git_out rev-parse HEAD)"
 
   # A head that touches neither manifest.
   fixture_git reset --hard --quiet "$BASE_SHA"
   printf 'changed\n' > "$FIXTURE/README.md"
   fixture_git add .
   fixture_git commit --quiet -m "docs only"
-  DOC_SHA="$(git -C "$FIXTURE" rev-parse HEAD 2>/dev/null)"
+  DOC_SHA="$(fixture_git_out rev-parse HEAD)"
 
-  git -C "$FIXTURE" diff --quiet "$BASE_SHA" "$DEP_SHA" -- package.json bun.lock
+  fixture_git diff --quiet "$BASE_SHA" "$DEP_SHA" -- package.json bun.lock
   DEP_STATUS=$?
-  git -C "$FIXTURE" diff --quiet "$BASE_SHA" "$DOC_SHA" -- package.json bun.lock
+  fixture_git diff --quiet "$BASE_SHA" "$DOC_SHA" -- package.json bun.lock
   DOC_STATUS=$?
 
   if [ "$DEP_STATUS" -eq 1 ] && [ "$DOC_STATUS" -eq 0 ]; then
