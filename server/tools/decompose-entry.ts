@@ -72,6 +72,179 @@ interface ReplacementWriteResult {
   readonly intraBatchDuplicates: string[];
 }
 
+/** Frozen `decompose_entry` argument contract: the names, types, and rule values are the API. */
+const decomposeEntryInputSchema = {
+  table: tableEnum,
+  id: z.string().uuid(),
+  max_chunk_chars: z
+    .number()
+    .int()
+    .min(500)
+    .max(8000)
+    .optional()
+    .describe("Maximum proposed replacement size in characters"),
+  overlap_chars: z
+    .number()
+    .int()
+    .min(0)
+    .max(1000)
+    .optional()
+    .describe("Character overlap between proposed replacements"),
+  dry_run: z
+    .boolean()
+    .optional()
+    .describe("Defaults true. false requires apply_mode=write_replacements."),
+  apply_mode: z
+    .enum(["write_replacements"])
+    .optional()
+    .describe("Required with dry_run=false to write replacement thoughts"),
+};
+
+/** Tool annotations; a plan never mutates and an apply is additive, so a repeat is idempotent. */
+const decomposeEntryAnnotations = {
+  title: "Decompose Entry",
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+type DecomposeEntryArgs = z.infer<
+  z.ZodObject<typeof decomposeEntryInputSchema>
+>;
+
+/** Chunk sizing after defaults, or a caller-facing reason the pair is unusable. */
+interface ChunkSizing {
+  readonly maxChunkChars: number;
+  readonly overlapChars: number;
+  readonly rejection?: string;
+}
+
+/**
+ * Resolve the request's guard rails before any database work.
+ *
+ * An apply request missing its explicit mode is refused outright rather than
+ * quietly downgraded to a plan, and an overlap that cannot produce progress is
+ * refused rather than silently clamped.
+ */
+function resolveChunkSizing(args: DecomposeEntryArgs): ChunkSizing {
+  const maxChunkChars = args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
+  const overlapChars =
+    args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
+  if (overlapChars >= maxChunkChars) {
+    return {
+      maxChunkChars,
+      overlapChars,
+      rejection: "overlap_chars must be less than max_chunk_chars",
+    };
+  }
+  return { maxChunkChars, overlapChars };
+}
+
+/** @returns The source row, or `undefined` when it is absent or archived. */
+async function loadSourceRow(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  args: DecomposeEntryArgs,
+): Promise<
+  { id: unknown; namespace: unknown; content_text: unknown } | undefined
+> {
+  const predicate = namespacePredicate(identity, "read", 2);
+  const { rows } = await dependencies.pool.query(
+    `SELECT id, namespace, ${SOURCE_CONTENT_SQL[args.table]} AS content_text
+       FROM ${args.table}
+      WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
+    [args.id, ...predicate.values],
+  );
+  return rows[0];
+}
+
+/** The zeroed-but-successful apply body for a plan that proposed nothing. */
+function emptyApplyResult(plan: DecompositionPlan): Record<string, unknown> {
+  return {
+    ...plan,
+    dry_run: false,
+    written_ids: [],
+    skipped_duplicates: [],
+    intra_batch_duplicates: [],
+    fully_written: true,
+    apply_summary: {
+      requested_writes: 0,
+      written_count: 0,
+      preexisting_duplicate_count: 0,
+      intra_batch_duplicate_count: 0,
+      fully_written: true,
+      source_row_mutation: "unchanged",
+    },
+  };
+}
+
+/** Write the planned replacements and shape the applied response body. */
+async function applyPlan(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  namespace: string,
+  plan: DecompositionPlan,
+): Promise<Record<string, unknown>> {
+  const applied = await writeReplacementThoughts(
+    dependencies,
+    identity,
+    namespace,
+    plan,
+  );
+  dependencies.logger.info(
+    { tool: "decompose_entry", written: applied.writtenIds.length },
+    "tool_result",
+  );
+  const applySummary = buildApplySummary(plan, applied);
+  return {
+    ...plan,
+    status: "applied",
+    dry_run: false,
+    written_ids: applied.writtenIds,
+    skipped_duplicates: applied.skippedDuplicates,
+    intra_batch_duplicates: applied.intraBatchDuplicates,
+    fully_written: applySummary.fully_written,
+    apply_summary: applySummary,
+  };
+}
+
+async function handleDecomposeEntry(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  args: DecomposeEntryArgs,
+): Promise<ReturnType<typeof textResult>> {
+  const applying = args.dry_run === false;
+  if (applying && args.apply_mode !== "write_replacements") {
+    return errorResult("dry_run=false requires apply_mode=write_replacements");
+  }
+
+  const sizing = resolveChunkSizing(args);
+  if (sizing.rejection) return errorResult(sizing.rejection);
+
+  const row = await loadSourceRow(dependencies, identity, args);
+  if (!row) return errorResult("Entry not found or archived");
+
+  const namespace = String(row.namespace);
+  const plan = planEntryDecomposition({
+    table: args.table,
+    id: String(row.id),
+    namespace,
+    content: String(row.content_text ?? ""),
+    maxChunkChars: sizing.maxChunkChars,
+    overlapChars: sizing.overlapChars,
+  });
+
+  if (!applying) return textResult(plan);
+
+  const denial = applyDenialReason(identity, namespace);
+  if (denial) return errorResult(`Permission denied: ${denial}`);
+
+  if (plan.proposed_replacements.length === 0) {
+    return textResult(emptyApplyResult(plan));
+  }
+  return textResult(await applyPlan(dependencies, identity, namespace, plan));
+}
+
 export function registerDecomposeEntryTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
@@ -82,124 +255,15 @@ export function registerDecomposeEntryTool(
       description:
         "Plan dry-run-first decomposition of an oversized entry into smaller linked thoughts. " +
         "No writes occur unless dry_run=false and apply_mode=write_replacements.",
-      inputSchema: {
-        table: tableEnum,
-        id: z.string().uuid(),
-        max_chunk_chars: z
-          .number()
-          .int()
-          .min(500)
-          .max(8000)
-          .optional()
-          .describe("Maximum proposed replacement size in characters"),
-        overlap_chars: z
-          .number()
-          .int()
-          .min(0)
-          .max(1000)
-          .optional()
-          .describe("Character overlap between proposed replacements"),
-        dry_run: z
-          .boolean()
-          .optional()
-          .describe("Defaults true. false requires apply_mode=write_replacements."),
-        apply_mode: z
-          .enum(["write_replacements"])
-          .optional()
-          .describe("Required with dry_run=false to write replacement thoughts"),
-      },
-      annotations: {
-        title: "Decompose Entry",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
+      inputSchema: decomposeEntryInputSchema,
+      annotations: decomposeEntryAnnotations,
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
       if (!identity || !canRead(identity.role, args.table)) {
         return errorResult(`Permission denied: cannot read ${args.table}`);
       }
-
-      // Checked BEFORE any work: an apply request that is missing its explicit
-      // mode is refused outright rather than quietly downgraded to a plan.
-      const applying = args.dry_run === false;
-      if (applying && args.apply_mode !== "write_replacements") {
-        return errorResult("dry_run=false requires apply_mode=write_replacements");
-      }
-
-      const maxChunkChars = args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
-      const overlapChars = args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
-      if (overlapChars >= maxChunkChars) {
-        return errorResult("overlap_chars must be less than max_chunk_chars");
-      }
-
-      const predicate = namespacePredicate(identity, "read", 2);
-      const { rows } = await dependencies.pool.query(
-        `SELECT id, namespace, ${SOURCE_CONTENT_SQL[args.table]} AS content_text
-           FROM ${args.table}
-          WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-        [args.id, ...predicate.values],
-      );
-      const row = rows[0];
-      if (!row) return errorResult("Entry not found or archived");
-
-      const namespace = String(row.namespace);
-      const plan = planEntryDecomposition({
-        table: args.table,
-        id: String(row.id),
-        namespace,
-        content: String(row.content_text ?? ""),
-        maxChunkChars,
-        overlapChars,
-      });
-
-      if (!applying) return textResult(plan);
-
-      const denial = applyDenialReason(identity, namespace);
-      if (denial) return errorResult(`Permission denied: ${denial}`);
-
-      // Nothing to write is still a successful apply, reported with a zeroed
-      // summary so a caller can distinguish it from a refusal.
-      if (plan.proposed_replacements.length === 0) {
-        return textResult({
-          ...plan,
-          dry_run: false,
-          written_ids: [],
-          skipped_duplicates: [],
-          intra_batch_duplicates: [],
-          fully_written: true,
-          apply_summary: {
-            requested_writes: 0,
-            written_count: 0,
-            preexisting_duplicate_count: 0,
-            intra_batch_duplicate_count: 0,
-            fully_written: true,
-            source_row_mutation: "unchanged",
-          },
-        });
-      }
-
-      const applied = await writeReplacementThoughts(
-        dependencies,
-        identity,
-        namespace,
-        plan,
-      );
-      dependencies.logger.info(
-        { tool: "decompose_entry", written: applied.writtenIds.length },
-        "tool_result",
-      );
-      return textResult({
-        ...plan,
-        status: "applied",
-        dry_run: false,
-        written_ids: applied.writtenIds,
-        skipped_duplicates: applied.skippedDuplicates,
-        intra_batch_duplicates: applied.intraBatchDuplicates,
-        fully_written: buildApplySummary(plan, applied).fully_written,
-        apply_summary: buildApplySummary(plan, applied),
-      });
+      return handleDecomposeEntry(dependencies, identity, args);
     },
   );
 }
@@ -245,7 +309,7 @@ async function writeReplacementThoughts(
         intraBatchDuplicates.push(alreadyWritten);
         continue;
       }
-      const insertedId = await insertReplacement(
+      const insertedId = await insertReplacement({
         client,
         dependencies,
         identity,
@@ -253,7 +317,7 @@ async function writeReplacementThoughts(
         plan,
         proposal,
         hash,
-      );
+      });
       if (insertedId) {
         writtenIds.push(insertedId);
         writtenIdsByHash.set(hash, insertedId);
@@ -277,16 +341,27 @@ async function writeReplacementThoughts(
   }
 }
 
+/** Everything one replacement insert needs; grouped so the call site stays readable. */
+interface ReplacementInsert {
+  readonly client: PoolClient;
+  readonly dependencies: MemoryToolDependencies;
+  readonly identity: AuthIdentity;
+  readonly namespace: string;
+  readonly plan: DecompositionPlan;
+  readonly proposal: ReplacementProposal;
+  readonly hash: string;
+}
+
 /** @returns The new row id, or `undefined` when the hash already existed. */
-async function insertReplacement(
-  client: PoolClient,
-  dependencies: MemoryToolDependencies,
-  identity: AuthIdentity,
-  namespace: string,
-  plan: DecompositionPlan,
-  proposal: ReplacementProposal,
-  hash: string,
-): Promise<string | undefined> {
+async function insertReplacement({
+  client,
+  dependencies,
+  identity,
+  namespace,
+  plan,
+  proposal,
+  hash,
+}: ReplacementInsert): Promise<string | undefined> {
   const embedding = await dependencies.embedFn(proposal.content);
   const { rows } = await client.query(
     `INSERT INTO thoughts
