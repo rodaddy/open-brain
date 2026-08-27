@@ -2075,3 +2075,107 @@ This is the second instance of the same defect in the same module: #447 was the 
 - **Where a copy genuinely cannot be folded in — a separate deployment tree, an applied migration's `CHECK` (immutable history), another language — the drift test IS the enforcement.** Copies that agree because something asserts they agree are a different world from copies that agree because nobody has touched one yet.
 - **Check the fold for `GROUP BY`-shaped blindness generally.** Any aggregate that reports per-category health from returned rows alone cannot see a category with no rows. The expected categories must be seeded before the fold, and the seed must come from the authority that defines them.
 - **When widening such a seed, read the existing test fixtures as evidence of the old world.** Two tests here encoded the two-role assumption and failed on the corrected behaviour — the failures were the fix working, not a regression, but a lane that "fixed" the fixtures without reading them would have narrowed the seed back.
+
+## [2026-08-08] A repaired or rewritten check has never failed in its current form
+
+**Severity:** HIGH
+**Source:** PR #640 (#625 sweep-heartbeat lane), PR #639 (#563 bounded-recall lane), PR #642 (#451 tiered-coverage lane)
+**Scope:** every `scripts/done-means/*.sh` and its `.driver.ts`; any acceptance clause edited after its first RED run
+**Status:** active
+
+### Pattern
+
+RED is a property of a specific version of a check, not of the check's name. Edit a clause — repair it, rewrite its instrument, swap a matcher — and the RED transcript you captured belongs to the old text. The new text has never been observed failing, so nothing distinguishes "this clause discriminates" from "this clause measures nothing and reports PASS."
+
+Three independent lanes hit this in one week, each by a different mechanism:
+
+- **Optional chaining on an API that does not exist.** #625's clause (a) called `sweep.runOnce?.()` on a method the subject never defined. The call short-circuited to `undefined`, the clause attempted nothing, and the aggregate verdict would have read PASS while proving zero.
+- **A rewritten instrument.** #563's clause 5 was rewritten after its first RED and re-run only green. A correct-looking aggregate FAIL from the other clauses hid the fact that clause 5 measured nothing.
+- **A negative match whose command was broken.** #451's clause used `rg -E`, which is `--encoding` and errors out. Inside an `if/elif` verdict chain the non-zero exit is indistinguishable from "pattern not found," so the chain advanced to PASS. This is the second `rg -E` incident in the ratchet and the first that manufactured a false GREEN rather than a visible error.
+
+### What to do
+
+- Re-prove RED after ANY edit to a check, including a one-line repair. The clause is new; treat it as new.
+- When a clause drives a subject, assert that the drive actually happened — a return value, a counter, an observable side effect — not merely that nothing threw.
+- Mutation-test every clause whose PASS comes from a NEGATIVE match. Such a clause passes both when the thing is genuinely absent and when the check itself is broken; only injecting the violation separates the two.
+- Never read an aggregate FAIL as evidence that each clause ran. Read WHY each individual clause reported what it reported.
+
+### Corollary
+
+Every check with an exception or allowlist mechanism needs a negative control: inject a real violation into an excepted path and confirm the check still fails. The #636 gate piped violations into `| while read`, which cannot count across the subshell — it printed its own VIOLATION lines and exited 0. A gate that reports failure and passes anyway is worse than no gate.
+
+## [2026-08-08] Name the layer that produced the symptom before writing the fix
+
+**Severity:** HIGH
+**Source:** PR #629 (merge-gate lane and the clause-8 repair), PR #638 (#637 gate-precision lane)
+**Scope:** verify-lane, done-means clauses that invoke repo tooling, recursion and re-entry guards, any fix aimed at a guard
+**Status:** active
+
+### Pattern
+
+A RED transcript proves a symptom, not a cause. Five distinct fixes across two lanes were aimed at the wrong layer, and every one of them looked justified from the failure text alone.
+
+- **A clause that measures its own guard.** #629's clause 8 ran verify-lane nested inside verify-lane. The re-entry guard (`MGVL_VERIFY_LANE_PRS`) fired BEFORE done-means resolution, so the nested probe died at the guard and never reached the error text the clause asserted on. The RED was real and its stated cause was wrong — which sent the next agent to fix code that was never broken. The misdirection is the dangerous half, worse than the failure.
+- **Two guard fixes against a selection defect.** The #629 lane burned two recursion-guard attempts before seeing the live clause was picking "whatever PR is open" — which was the PR containing the clause itself. The defect was SELECTION, not recursion.
+- **A message-text fix against a pre-emption defect**, in the same lane.
+- **An assertion that was itself the bug.** #637's first driver asserted a specific refusal banner; RED revealed a sibling clause already refusing those cases correctly. Satisfying the naive assertion would have weakened a layer that was never broken.
+
+### What to do
+
+- Before writing a fix, state in one sentence which layer produced the observed symptom and what evidence places it there. If the evidence is only "the clause said so," that is not evidence of a layer.
+- A clause must CLEAR the ambient state its subject reacts to, or it measures the guard. Named-env coupling is the residual risk: clause 8's correctness now depends on clearing two specifically named variables, and a future guard reading a different name silently regresses it to measuring the guard again. No test enforces the coupling.
+- When a tool tests repo state at a pinned SHA, ask which VERSION of every involved script actually executes. verify-lane runs the done-means check FROM the PR-head worktree, so a fix committed after that head does not exist where the check runs.
+- When an assertion fails, check whether the assertion is the defect before changing the subject.
+- Hold precision-check fixtures in DATA FILES, never inline in code or in commands. The #637 lane was refused twelve times by the very hook it was repairing — on an `import` path, a file rename, and a read-only `rg` — because the fixture text lived inline. Every agent editing a checker is otherwise refused by the guard under repair.
+- Copy `.env` into any bare worktree you run verify-lane from; bootstrap refuses loudly without it and posts no receipt.
+
+## [2026-08-09] A pin derived before integration is stale the moment anything else merges
+
+**Severity:** HIGH
+**Source:** PR #687 (#681 integration), PR #688 (#675 integration), PR #701 (#271 tripwire heal) — three consecutive integrations, same two collisions
+**Scope:** `EXPECTED_ENTRY_COUNT` and every hand-derived pin; `order:` in `docs/sme/entries/*.md`; `scripts/build-sme-indexes.ts`
+**Status:** active
+
+### Pattern
+
+Two branches can each derive a pinned count HONESTLY and both still be wrong after the merge. PR #687 measured `EXPECTED_ENTRY_COUNT` as 235 on its own tree and was correct there; PR #701 then landed its own entry and main became 235 too. The merged truth is 236.
+
+The freshness of a measurement is not a property of how carefully it was taken. It is a property of WHEN. A lane working alone cannot see this at all.
+
+The companion failure is worse, because git reports it as success. Both branches independently chose `order: 68`, in two DIFFERENT entry files, so there was nothing for a textual merge to conflict on. The tree merged clean and the duplicate surfaced only when `build-sme-indexes.ts` was run by hand and warned. Three integrations in a row hit both collisions, which makes them a PROPERTY of running lanes in parallel, not an unlucky merge.
+
+Root cause of the `order` half: it is a shared sequential ID allocated by reading the current maximum, which every concurrent lane reads identically. It will keep colliding as long as lanes run in parallel.
+
+### What to do
+
+- **Re-measure every pin AFTER integrating the upstream default branch.** Never carry a branch's own derivation across a merge, and never sum two branches' numbers.
+- **Re-run the branch's own tooling after integrating**, even on a conflict-free merge. The class of defect a merge introduces is precisely the class no textual merge can see. A generated-file conflict is regenerated; a generated-file NON-conflict still needs the build.
+- **A PR that moves a pinned value must re-run the other assertions of that value, including in files its diff never touches.** #691 bumped a tool contract 2 -> 3 with all its own gates green; the pin-holder was a test in an untouched file, so the branch was green and the merge was red. That is a controller defect — the cross-file pin check belongs in the merge pass.
+- Resolve a duplicate `order` by moving it to the next free number, not by renumbering by date: `order` is an explicit sort field independent of the entry's date, and the corpus is deliberately not date-sorted.
+- Enforcement gap, still open: `build-sme-indexes.ts` warns on a duplicate `order` and exits 0. A warning is the right severity for merge-time discovery and the wrong one for a gate — a merge that never runs the build ships the duplicate.
+- `FETCH_HEAD` is per-worktree. `git merge FETCH_HEAD` in a freshly-added worktree dies with `could not open .git/worktrees/<name>/FETCH_HEAD` when the fetch ran elsewhere. Fetch inside the worktree you merge in; note the error names a missing FILE, which reads as a broken repository at a glance.
+
+## [2026-08-08] Prove absence by the variable the code reads, and re-run rather than re-quote
+
+**Severity:** HIGH
+**Source:** PR #629 round-4 harvest — a CONTROLLER defect, the Langfuse false-absence claim; same class as #618
+**Scope:** `server/observability/langfuse-tracing.ts`, every configuration-absence claim, controller reports
+**Status:** active
+
+### Pattern
+
+The controller asserted "Langfuse unconfigured" after searching the environment files for `LANGFUSE_*`. The sink reads `OPENBRAIN_TRACING_*` (`server/observability/langfuse-tracing.ts:601-604`), which was set and ENABLED the entire time — 806 traces landed in the window claimed dark.
+
+Searching for the PRODUCT NAME instead of the variable the code actually reads is the same defect class as #618 (matching vocabulary instead of the operation). Committed by the head, not by a lane, which is the part worth naming: controller reports are subject to this exactly as lane reports are.
+
+The second half compounded it. The wrong claim was made once from a bad search and then REPEATED hours later by quoting the earlier conclusion rather than re-running the check. A verification conclusion is only as fresh as its last EXECUTION.
+
+### What to do
+
+- To claim a configuration is absent: find the `process.env.X` read in source FIRST, then search for `X`. Never search for the product, service, or vendor name.
+- Re-quote nothing. Re-run it. An earlier conclusion in your own transcript is not evidence; it is a memory of evidence.
+- A green clause is not evidence until it has been seen to fail. Both self-caught defects in the #451 lane were invisible in a fully-green run and surfaced only under deliberate mutation.
+- Check the enum and the database CHECK constraint before designing a new dimension: `usage_kind="recall"` would have required a Zod enum change AND a migration, and two searches found the pin before any code was written. Read the constraint, not just the field.
+- Verify "pre-existing" by stashing and re-running, not by asserting. The #609 full-suite differential applies cheaply at any scale.
+- An outage path is testable without an outage: a closed port in 7100-7199 yields a real connection refusal with no waiting and no wall-clock assertion. Reusable for any gate distinguishing unreachable from empty.
+- Wall-clock assertions (`toBeLessThan(1000)` ms) are CI flake generators — three runs produced three different unrelated timing failures, all proven main-owned via the #609 differential and filed (#632, #634) instead of absorbed.

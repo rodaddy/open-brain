@@ -1207,6 +1207,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   work; the finding to check is whether the HOST half is real, not the
   fake secret.
 
+
+graduated: bullets 1, 2, 4 and 7 -> docs/sme/entries/2026-08-08-a-placeholder-only-neutralises-a-value-nothing-compares-to-reality.md (gotcha-agent order 66); bullet 3 -> docs/sme/entries/2026-08-08-a-repaired-or-rewritten-check-has-never-failed-in-its-current-form.md; bullet 5 -> standing contract clause 1 (worker output is PROPOSED until the controller re-runs); bullet 6 -> history-only, the deploy-runner variable is required with no fallback and was ratified in the same session.
+provenance: PR #645.
 ### 2026-08-08 (round 9) — harvest of the #451 tiered-coverage lane (PR #642)
 
 - **`rg -E` can manufacture a false GREEN, not just an error.** Inside an
@@ -1237,6 +1240,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   outage shape untested; session_id/session_key equivalence assumed, enforced
   nowhere.
 
+
+graduated: bullets 1 and 2 -> docs/sme/entries/2026-08-08-a-repaired-or-rewritten-check-has-never-failed-in-its-current-form.md; bullets 3, 4 and 5 -> docs/sme/entries/2026-08-08-prove-absence-by-the-variable-the-code-reads-and-re-run-never-re-quote.md; bullet 6 -> history-only, gaps named in PR #642 and carried by done-means 451-tiered-coverage.sh.
+provenance: PR #642.
 ### 2026-08-08 (round 8) — harvest of the #625 (PR #640) and #563 (PR #639) lanes
 
 - **A done-means clause can silently measure its own harness — optional
@@ -1280,6 +1286,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   control clause get added alongside (the #384/#612 checks drive the live
   clone)?
 
+
+graduated: bullets 1, 2 and 3 -> docs/sme/entries/2026-08-08-a-repaired-or-rewritten-check-has-never-failed-in-its-current-form.md; bullet 4 -> AGENTS.md Coding Standards (nothing is adjusted silently) and docs/sme/entries/2026-08-08-nothing-is-adjusted-silently-tools-announce-every-self-made-decision.md; bullet 5 -> done-means 625-sweep-heartbeat.sh; bullet 6 -> docs/sme/entries/2026-08-09-a-gate-that-judges-from-a-tree-other-than-the-one-under-review.md; bullet 7 -> docs/sme/entries/2026-08-09-an-exit-code-is-not-a-verdict-until-you-know-the-subject-ran.md; bullets 8 and 9 -> history-only, resolved by done-means 637-gate-precision.sh and the #625 ruling.
+provenance: PRs #640, #639.
 ### 2026-08-08 (round 7) — harvest of the #637 gate-precision lane (PR #638) and the Sol runtime failures
 
 - **A guard's own repair is the hardest thing to write past it.** The #637 lane
@@ -1312,6 +1321,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   flagged it as known residual risk rather than silently narrowing or keeping
   it. Needs a ruling at the next decisions pass.
 
+
+graduated: bullets 1, 2 and 3 -> docs/sme/entries/2026-08-08-name-the-layer-that-produced-the-symptom-before-writing-the-fix.md; bullet 4 -> docs/sme/entries/2026-08-09-a-gate-that-judges-from-a-tree-other-than-the-one-under-review.md; bullet 5 -> standing contract clause 1 (inherited work is PROPOSED until re-verified); bullet 6 -> history-only, the PR #638 exemption was carried to the decisions pass.
+provenance: PR #638.
 ### 2026-08-08 (round 6) — harvest of the #629 clause-8 fix (the check that measured its own guard)
 
 - **A done-means check that exercises its own tooling inherits that tooling's
@@ -1337,6 +1349,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   missing-.env failure the script exists to prevent, and no receipt was
   posted. Copy `.env` into any bare worktree you run verify-lane from.
 
+
+graduated: bullets 1, 2, 3 and 4 -> docs/sme/entries/2026-08-08-name-the-layer-that-produced-the-symptom-before-writing-the-fix.md.
+provenance: PR #629.
 ### 2026-08-08 (round 5) — harvest of the merge-gate lane (PR #629) and the Terra ruling
 
 - **A repo guard cannot protect a run that checks out an older commit of the
@@ -1363,6 +1378,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   constraint appears only in a secondary copy, check the canonical source
   before repeating it.
 
+
+graduated: bullets 1 and 2 -> docs/sme/entries/2026-08-09-a-gate-that-judges-from-a-tree-other-than-the-one-under-review.md and docs/sme/entries/2026-08-08-name-the-layer-that-produced-the-symptom-before-writing-the-fix.md; bullet 3 -> docs/sme/entries/2026-08-08-prove-absence-by-the-variable-the-code-reads-and-re-run-never-re-quote.md; bullet 4 -> standing contract clause 9 (refusals are rules working; report, do not fight); bullet 5 -> _DOCS/MODEL_ROUTING.md is canonical, secondary copies are not.
+provenance: PR #629.
 ### 2026-08-08 (round 4) — harvest of a CONTROLLER defect (Langfuse false-absence claim)
 
 - **Prove absence by the variable the CODE reads, never the product name.**
@@ -1379,6 +1397,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   nothing; re-run it. Controller reports are subject to this exactly as lane
   reports are.
 
+
+graduated: both bullets -> docs/sme/entries/2026-08-08-prove-absence-by-the-variable-the-code-reads-and-re-run-never-re-quote.md.
+provenance: PR #629 round-4 harvest.
 ### 2026-08-08 (round 3) — harvest of the enforcement-build lanes (PRs #628, #630, #631)
 
 - **`lane-bootstrap` prints the worktree path but does not change your
@@ -1397,8 +1418,13 @@ Newest first. Every entry: what changed, and the observation that forced it.
 - **Process canon now lives on `main`** (PR #631): lanes read
   `docs/lane-contract.md` and `docs/controller-contract.md` from their own
   worktree; the absolute-path bridge is retired.
+
+graduated: bullets 1, 2 and 3 -> docs/sme/entries/2026-08-08-lane-tooling-gotchas-the-shell-the-validator-and-the-worktree.md; bullet 4 -> standing contract clause 3 and scripts/validate-pr-body.ts (the Done-means field is enforced, not forward-compliance); bullet 5 -> history-only, docs/lane-contract.md and docs/controller-contract.md now live on main and lanes read them from their own worktree.
+provenance: PRs #628, #630, #631.
 ### 2026-08-08 (round 10b, lane-authored) — the #636 continuation lane's own harvest (detail companion to round 10; overlapping bullets kept for their specifics)
 
+
+graduated: bullets 1 through 8 -> docs/sme/entries/2026-08-08-a-placeholder-only-neutralises-a-value-nothing-compares-to-reality.md (the full seven-instance taxonomy) and done-means 636-neutrality.sh with its allowlist and line-exception files; the negative-control bullet also -> docs/sme/entries/2026-08-08-a-repaired-or-rewritten-check-has-never-failed-in-its-current-form.md; the closing gate-refusal bullet -> standing contract clause 9. provenance: PR #645.
 ### NOTE (2026-08-18 rotation merge) — the round numbering forked
 
 Between 2026-08-09 and 2026-08-18 two integration lines advanced in parallel:
@@ -1438,6 +1464,8 @@ global; numbering is unified from round 30 up.
   duplicate to the next free number" the correct resolution instead of
   renumbering by date.
 
+
+graduated: bullets 1, 2 and 4 -> docs/sme/entries/2026-08-09-a-pin-derived-before-integration-is-stale-the-moment-anything-else-merges.md; bullet 3 (per-worktree FETCH_HEAD) -> the same entry's closing note. provenance: PR #688.
 ### 2026-08-09 (round 28) — harvest of the #681 integration (PR #687), a merge-order collision
 
 - **Two branches can each derive a pinned count HONESTLY and still be wrong
@@ -1466,6 +1494,8 @@ global; numbering is unified from round 30 up.
   scheme is the root cause and it will keep colliding as long as lanes run in
   parallel. Flagged for the decisions pass, not worked around here.
 
+
+graduated: all three bullets -> docs/sme/entries/2026-08-09-a-pin-derived-before-integration-is-stale-the-moment-anything-else-merges.md. provenance: PR #687.
 ### 2026-08-09 (round 27) — harvest of the #271 tripwire heal (PR #701), a CONTROLLER merge defect
 
 - **A failing assertion turns off every clause after it in the same test, and
@@ -1561,6 +1591,8 @@ global; numbering is unified from round 30 up.
   (`docs/CONFIG_REFERENCE.md`, "Host identity in /health") is what confirmed
   the RFC1918 root cause. The gate paid for itself.
 
+
+graduated: bullets 1 and 2 -> docs/sme/entries/2026-08-09-a-failing-assertion-turns-off-every-clause-after-it-in-the-same-test.md and done-means 271-tripwire-acknowledges-contract-moves.sh; bullets 4, 5, 6 and 7 -> docs/sme/entries/2026-08-09-an-exit-code-is-not-a-verdict-until-you-know-the-subject-ran.md; bullets 3 and 8 -> docs/sme/entries/2026-08-09-a-pin-derived-before-integration-is-stale-the-moment-anything-else-merges.md. provenance: PR #701.
 ### 2026-08-08 (latest) — harvest of the #612 lane (PR #624)
 
 - **`rm` of ANY spelling is banned — including single-file `rm -f`.** The
@@ -1588,6 +1620,8 @@ global; numbering is unified from round 30 up.
   the default transport that was the defect. Exercise the production default
   path at least once.
 
+
+graduated: bullets 1 and 2 -> standing contract clause 7 (teardown; no rm, ever, anywhere) and docs/sme/entries/2026-08-08-lane-tooling-gotchas-the-shell-the-validator-and-the-worktree.md; bullet 3 -> the same tooling entry (no absolute machine paths); bullets 4 and 5 -> done-means 612-component-lines-reach-logs.sh, whose control clause z is the live-window proof; bullet 6 -> docs/sme/entries/2026-08-06-instrumentation-on-a-tree-whose-wrapper-is-never-installed-is-dead-code.md and docs/sme/entries/2026-08-08-injecting-a-test-destination-can-bypass-the-composition-that-is-broken.md. provenance: PR #624.
 ### 2026-08-08 (later) — harvest of the #614 lane (PR #623) and its ruling
 
 - **Deviating from a recorded decision is allowed exactly one way: implement
@@ -1605,6 +1639,8 @@ global; numbering is unified from round 30 up.
   when the git guard (#618) rejects `push -u` — more specific, not a variant
   retry.
 
+
+graduated: bullet 1 -> standing contract clause 5 (nothing silent) and clause 8 (self-reported violations are harvested, never punished); bullet 2 -> history-only, ledger item 20 records the narrow auto-removal exception; bullet 3 -> docs/sme/entries/2026-08-08-lane-tooling-gotchas-the-shell-the-validator-and-the-worktree.md. provenance: PR #623.
 ### 2026-08-08 — harvest of the tooling + fixture lanes (PRs #615, #616, #617, #619, #620, #621)
 
 - **`validate-pr-body.ts` reads `PR_BODY`/`PR_TITLE` from ENV, not argv or
@@ -1649,6 +1685,8 @@ global; numbering is unified from round 30 up.
   only green is decoration. (#615, #620 practice; SME
   `sme.duplicated_selection_lists_diverge` corollary.)
 
+
+graduated: bullets 1, 2, 3, 4, 5, 8, 9, 10 and 11 -> docs/sme/entries/2026-08-08-lane-tooling-gotchas-the-shell-the-validator-and-the-worktree.md; bullets 6 and 7 (git-guard and design-lookup false positives) -> standing contract clause 9, refusals are rules working and each firing is reported. provenance: PRs #615, #616, #617, #619, #620, #621.
 ### 2026-08-07 — founding round (PRs #609, #610, #611 and the decisions pass)
 
 - Red-first done-means checks with controller re-verification became the
@@ -1664,3 +1702,5 @@ global; numbering is unified from round 30 up.
 - SME capture moved to one-file-per-entry (item 13) after three same-file
   union merges in one night; additions raise the pinned count in the same
   commit, on purpose.
+
+graduated: bullet 1 -> standing contract clause 1 (RLVR shape) and clause 6 (the #609 differential); bullet 2 -> standing contract clause 3, superseded by the template plus local validation and enforced by .claude/hooks/pr-body-gate.ts; bullet 3 -> standing contract clause 2 (scripts/lane-bootstrap.ts); bullet 4 -> docs/sme/README.md capture rules and scripts/build-sme-indexes.ts. provenance: PRs #609, #610, #611.
