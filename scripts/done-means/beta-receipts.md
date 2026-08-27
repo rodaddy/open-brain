@@ -39,10 +39,10 @@ v1.3-beta").
 Notes on the reds:
 
 - **#2 is a true positive against an expected shape.** The five hits are
-  `<lane>` and `<path>` inside command examples the lane contract deliberately
+  angle-bracket `lane` and `path` tokens inside command examples the lane contract deliberately
   shows as templates (lines 72, 201, 351, 352, 1392). Not fixed by this lane:
   the placeholders check has an `--allow <tok>` flag, and whether to allow
-  `<path>`/`<lane>` here or rewrite the examples is a decisions-pass call, not
+  those two tokens here or rewrite the examples is a decisions-pass call, not
   a lane's.
 - **#9 is the expected migration receipt**, exactly as the amendment says
   ("that failure is the migration reminder, not a bug"). The legacy ledger is
