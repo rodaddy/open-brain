@@ -219,3 +219,20 @@ only when a session actually needed it.
     path before pushing, and its brief names `contracts/` as a composition
     site next to `server/main.ts`. A collector that sees a real failure
     compares it with the main run for the PR's base sha before blaming the PR.
+34. **`sed -i` with no backup suffix (`sed` on PATH is GNU; `-i ''` is a
+    BSD-ism that fails there); a lane never deletes its own leftovers
+    either.** The #866 lane wrote `sed -i.bak` backups and then ran
+    `fd -e bak . server -x rm {}` to clear them (self-reported, 2026-08-26).
+    The no-delete rule has no agent-owned-file carve-out: write no backup, or
+    `mv` it to `{temp_workspace}/open-brain/_archive/`. Briefs that mention
+    `sed` say `sed -i ''`.
+35. **`server/config.test.ts` refuses every edit until #868 lands.** With the
+    repo hooks installed (`_githooks/install.sh`, which
+    `750-l2b2-lint-refuses-process-env.sh` requires) the pre-commit gate
+    lints a staged file whole, and that file carries
+    pre-existing `max-lines` (652) and `node/no-process-env` (x6, its
+    `withEnv` helper) violations. Any lane whose change touches it — every
+    change to a config group's field set does, via the count assertion at
+    `:901` — is blocked at commit. Sequence #868 (split the file, drop the
+    `process.env` helper) before such a lane; a lint exemption for test files
+    is a rung reopening and needs Rico.
