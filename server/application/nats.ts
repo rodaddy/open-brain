@@ -30,7 +30,7 @@ import {
 } from "../../src/nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import type { ToolDeps } from "../../src/tools/index.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 import type { BackgroundTraceEmitter } from "../../src/background-tracing.ts";
 import type { BackgroundRuntime } from "./index.ts";
 

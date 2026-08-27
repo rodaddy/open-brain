@@ -126,7 +126,7 @@ import type {
   BackgroundTraceBody,
   BackgroundTraceEmitter,
 } from "../../src/background-tracing.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 
 /**
  * Re-exported so this module stays the single import surface for the tracing

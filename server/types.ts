@@ -1,0 +1,59 @@
+// Origin: src/types.ts. Copied here so no server module imports from src/ (L5, #864).
+export type Role =
+  "admin" | "agent" | "discord" | "ob-admin" | "promoter" | "readonly";
+export type Table =
+  "thoughts" | "decisions" | "relationships" | "projects" | "sessions";
+// Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql
+export type LinkRelation =
+  | "artifact"
+  | "depends_on"
+  | "supersedes"
+  | "caused_by"
+  | "same_lane"
+  | "adjacent"
+  | "mentions"
+  | "implemented_by"
+  | "blocked_by"
+  | "decided_by"
+  | "relates_to"
+  | "contradicts"
+  | "duplicates"
+  | "supplements";
+export type Tier = "hot" | "warm" | "cold";
+export type Permission = "read" | "write" | "delete";
+
+export interface AuthInfo {
+  role: Role;
+  clientId: string;
+  tokenClientId?: string;
+  agentId?: string;
+  namespaceSource?: "token" | "header";
+}
+
+export interface PoolHealth {
+  connected: boolean;
+  total: number;
+  idle: number;
+  waiting: number;
+}
+
+export interface HealthStatus {
+  status: "healthy" | "degraded";
+  /** Machine hostname — the human half of "which brain did I reach?". */
+  hostname: string;
+  server_ip: string;
+  server_ips: string[];
+  /** Deploy stamp short sha; absent on a tree that was never deployed. */
+  revision?: string;
+  database: PoolHealth;
+  embedding: { configured: boolean; connected: boolean };
+  nats: {
+    requested_transport: "http" | "nats";
+    availability: "available" | "not_runtime_available";
+    context_pack_subject: string;
+    fallback_http: boolean;
+    consecutive_failures: number;
+    last_error: string | null;
+  };
+  timestamp: string;
+}

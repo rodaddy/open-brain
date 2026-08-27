@@ -11,7 +11,7 @@
  * arguments, a result, and an identity it returns a plain object, with no SDK,
  * server, socket, or async-local state involved.
  */
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 import { maskTraceValue } from "./trace-masking.ts";
 import type {
   McpTraceStatus,

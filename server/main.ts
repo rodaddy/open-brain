@@ -82,7 +82,7 @@ import {
 } from "../src/maintenance-bootstrap.ts";
 import { getOperatorDoctorStatus } from "../src/operator-doctor.ts";
 import type { ToolDeps } from "../src/tools/index.ts";
-import type { AuthInfo } from "../src/types.ts";
+import type { AuthInfo } from "./types.ts";
 
 /** Default listening port, unchanged from `src/index.ts:349`. */
 const DEFAULT_PORT = 3100;
