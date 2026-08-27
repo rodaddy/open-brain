@@ -38,7 +38,6 @@ function extendedConfig(overrides: Record<string, string | undefined> = {}) {
   return result.config;
 }
 
-
 /**
  * START-EQUIVALENCE: the schema must answer what the READER answers.
  *
@@ -266,6 +265,8 @@ describe("shared-namespace helpers require the validated name set", () => {
     legacySharedNamespace: "collab",
     legacyFallbackEnabled: false,
     fallbackMinResults: 5,
+    sharedNamespace: "shared-kb-v2",
+    allowLegacySharedWrites: false,
   };
 
   it("uses the passed set", () => {
@@ -296,7 +297,7 @@ describe("shared-namespace helpers require the validated name set", () => {
     );
   });
 
-  it("carries the same five fields as the validated config group", () => {
+  it("carries the same fields as the validated config group", () => {
     expect(sharedNamespaceConfig(NAMES)).toEqual(NAMES);
     expect(Object.keys(extendedConfig({}).sharedNamespaceNames).sort()).toEqual(
       Object.keys(NAMES).sort(),

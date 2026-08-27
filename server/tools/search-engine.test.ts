@@ -67,7 +67,9 @@ async function timeoutObservedFor(
     executeSearch(dependencies, ["thoughts"], "anything", 5, "vector"),
   ).rejects.toThrow();
   expect(warnings).toHaveLength(1);
-  return warnings[0]!.timeout_ms;
+  const [first] = warnings;
+  if (!first) throw new Error("expected one recorded warning");
+  return first.timeout_ms;
 }
 
 describe("search embedding timeout injection", () => {
@@ -112,6 +114,8 @@ const INJECTED_NAMES = {
   legacySharedNamespace: "",
   legacyFallbackEnabled: false,
   fallbackMinResults: 5,
+  sharedNamespace: "lane5-physical-shared",
+  allowLegacySharedWrites: false,
 } as const;
 
 function poolReturningPhysicalRow(): Pool {

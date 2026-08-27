@@ -17,4 +17,6 @@ export const DEFAULT_SHARED_NAMESPACE_NAMES: SharedNamespaceGroup = {
   legacySharedNamespace: "",
   legacyFallbackEnabled: false,
   fallbackMinResults: 5,
+  sharedNamespace: "shared-kb",
+  allowLegacySharedWrites: false,
 };

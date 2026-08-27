@@ -27,6 +27,8 @@ const INJECTED_NAMES: SharedNamespaceConfig = {
   legacySharedNamespace: "",
   legacyFallbackEnabled: false,
   fallbackMinResults: 5,
+  sharedNamespace: "lane3-physical-shared",
+  allowLegacySharedWrites: false,
 };
 
 const REACHED_POOL = "reached-the-pool";

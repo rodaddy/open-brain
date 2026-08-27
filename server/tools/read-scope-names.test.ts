@@ -26,6 +26,8 @@ const injected: SharedNamespaceConfig = {
   legacySharedNamespace: "",
   legacyFallbackEnabled: false,
   fallbackMinResults: 5,
+  sharedNamespace: "lane3-physical-kb",
+  allowLegacySharedWrites: false,
 };
 
 const identity: AuthIdentity = {
