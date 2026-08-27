@@ -485,12 +485,34 @@ if ! mkdir -p "$TEST_LOG_DIR" 2>/dev/null; then
   exit 1
 fi
 
-echo "  bun test ... (stdout+stderr -> $TEST_LOG, replayed below; #712)"
+# THE RUNNER IS `test:isolated`, NOT BARE `bun test` (issues #878, #880)
+#
+# Under the #878 ruling a Postgres test no longer skips itself when no database
+# is configured: `scripts/test-support/require-test-database.ts` throws
+# `test_database_required` when OPENBRAIN_TEST_DATABASE_URL is unset or empty.
+# A bare `bun test` here sets nothing, so from the moment the first converted
+# Postgres test landed on main — `server/tools/reporting.pg.test.ts` at
+# 3468bdf8 — this hook refused EVERY push, including pushes whose diff was
+# markdown. Measured at that head: exit 1, `error: test_database_required:
+# OPENBRAIN_TEST_DATABASE_URL is unset; run bun run test:isolated`.
+#
+# That is the #705/#712 family again: a gate failing for a reason unrelated to
+# the change in hand, with text identical to a genuinely broken branch, which is
+# the condition that makes `--no-verify` habitual.
+#
+# `bun run test:isolated` (scripts/test-isolated.ts) is the repo's own answer and
+# is not a new mechanism: it creates a uniquely-named database, migrates it,
+# exports OPENBRAIN_TEST_DATABASE_URL, runs `bun test` with the arguments passed
+# through, and drops the database on the way out including on SIGINT/SIGTERM.
+# The working-tree semantics of this step are unchanged — it still judges the
+# tree as it sits on disk, not the pushed commits (#761 is that separate issue
+# and is deliberately not widened here).
+echo "  bun run test:isolated ... (stdout+stderr -> $TEST_LOG, replayed below; #712, #878, #880)"
 
 # `set -e` is on, so the exit code is captured explicitly rather than letting a
 # non-zero status kill the hook before the log can be replayed and classified.
 TEST_EXIT=0
-bun test > "$TEST_LOG" 2>&1 || TEST_EXIT=$?
+bun run test:isolated > "$TEST_LOG" 2>&1 || TEST_EXIT=$?
 
 # Replay what the operator would have seen. `cat` writes to the hook's OWN
 # stdout, which may still be git's pipe -- but a truncated REPLAY cannot change
