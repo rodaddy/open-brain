@@ -1,0 +1,4 @@
+deliverable:   a thing landed
+claim-states:  thing.sh: WRITTEN
+verified:      ./check.sh x -> exit 0, ok
+deviations:    none

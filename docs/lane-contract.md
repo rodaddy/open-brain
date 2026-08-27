@@ -6,6 +6,9 @@ did it." This file is the single briefing source for RLVR worker lanes in this
 repo. The controller's dispatch prompt states the task, the deliverable, and
 the done-means design; for everything else it POINTS HERE instead of restating.
 
+Graph Mode v1.3-beta, opted in 2026-08-27 (pilot); beta checks under
+`scripts/done-means/beta/`.
+
 The ratchet rule (ledger item 19, `docs/issue-graph.md`): after every lane
 run, the controller harvests the lane's refusals, workarounds, self-caught
 defects, and surprises into the Tightenings changelog below — with provenance —
