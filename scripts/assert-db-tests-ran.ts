@@ -108,12 +108,32 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     minTests: 3,
   },
   // The maintenance queue runner's lease boundary, proven through the composed
-  // `server/` runtime. This entry matters more than most: both invariants it
-  // covers fail SILENTLY -- a row sits `running` under a live lease with no
+  // `server/` runtime. These entries matter more than most: the invariants they
+  // cover fail SILENTLY -- a row sits `running` under a live lease with no
   // handler, nothing throws, and nothing is logged -- so a skipped run and a
   // passing run look identical from the outside. That is precisely the shape
   // this guard exists for.
-  { name: "maintenance runtime lease boundary (live Postgres)", minTests: 5 },
+  //
+  // #889 split the single lease-boundary suite by subject, so the one entry
+  // that stood here became the four below. Each is named separately on purpose:
+  // a single entry covering all six tests would stay satisfied if an entire
+  // subject stopped running, as long as the others made up the count.
+  {
+    name: "maintenance runtime shutdown drain (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "maintenance runtime lease expiry (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "maintenance runtime failure classification (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "maintenance runtime composition (live Postgres)",
+    minTests: 2,
+  },
   // The rewrite's real process entrypoint (`server/main.ts`), charter Phase 5.
   // Registered for the strongest version of this guard's reason: these are the
   // ONLY suites that start the entrypoint as a process -- real config parse,
@@ -154,9 +174,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 65 -> 74 when #878 registered the two source-registry suites (8) and the
 // entrypoint split redistributed its own tests to 3 + 2 + 3, then 74 -> 77 when
 // #878 registered the migration 028 lease_expired compat suite's 3, then
-// 77 -> 79 when #878 registered the two migration-025 suites at 1 each), so the
-// global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 79;
+// 77 -> 79 when #878 registered the two migration-025 suites at 1 each, then
+// 79 -> 80 when #889 split the maintenance lease-boundary suite by subject and
+// its single entry of 5 became four entries summing to 6), so the global floor
+// cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 80;
 
 export interface SuiteStats {
   tests: number;
