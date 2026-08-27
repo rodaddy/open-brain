@@ -323,19 +323,49 @@ async function createScratchDatabase(): Promise<ScratchPool> {
  * this suite made, never the dogfood database or a neighbouring run.
  */
 async function dropScratchDatabase(pool: ScratchPool | undefined): Promise<void> {
+  const t0 = Date.now();
+  const since = () => `${Date.now() - t0}ms`;
+  const probe = (msg: string) =>
+    console.error(`[retire-collab afterAll] ${msg} ${since()}`);
+
+  probe(
+    `enter pool=${pool ? "present" : "absent"} ` +
+      `total=${pool?.totalCount ?? "n/a"} idle=${pool?.idleCount ?? "n/a"} ` +
+      `waiting=${pool?.waitingCount ?? "n/a"} admin=${requireAdminUrl().replace(/:[^:@/]*@/, ":***@")}`,
+  );
+
+  probe("pool.end start");
   if (pool) await pool.end();
+  probe("pool.end done");
+
+  probe("admin connect start");
   const admin = new Client({ connectionString: requireAdminUrl() });
   await admin.connect();
+  probe("admin connect done");
   try {
+    probe("pg_stat_activity count start");
+    const attached = await admin.query(
+      `SELECT COUNT(*)::int AS c FROM pg_stat_activity WHERE datname = $1`,
+      [SCRATCH_DB],
+    );
+    probe(`pg_stat_activity count done attached=${attached.rows[0].c}`);
+
+    probe("terminate start");
     await admin.query(
       `SELECT pg_terminate_backend(pid)
          FROM pg_stat_activity
         WHERE datname = $1 AND pid <> pg_backend_pid()`,
       [SCRATCH_DB],
     );
+    probe("terminate done");
+
+    probe("drop start");
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
+    probe("drop done");
   } finally {
+    probe("admin end start");
     await admin.end();
+    probe("admin end done");
   }
 }
 
