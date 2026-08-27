@@ -278,6 +278,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   },
   { name: "list_stale result ordering (live Postgres)", minTests: 1 },
   { name: "list_stale scoping predicates (live Postgres)", minTests: 3 },
+  // The exact-scope checkpoint lifecycle (#878). The lane row, its metadata,
+  // and the predicate that rejects a hostile scope claim on an owned session
+  // key exist only in Postgres, so a skipped run leaves the isolation half of
+  // `session_start`/`session_wrap` entirely unexercised while CI reports green.
+  // Registered here as that suite stopped skipping itself.
+  {
+    name: "exact-scope checkpoint lifecycle (live Postgres)",
+    minTests: 2,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -307,9 +316,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // stopped skipping itself, then 223 -> 230 when #878 registered the three
 // bulk_set_tier suites (3 + 1 + 3) as that file stopped skipping itself, then
 // 230 -> 236 when #878 registered the three subject-split list_stale suites
-// (2 + 1 + 3) as that file stopped skipping itself), so the global floor
-// cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 236;
+// (2 + 1 + 3) as that file stopped skipping itself, then 236 -> 238 when
+// #878 registered the exact-scope checkpoint lifecycle suite's 2 as it too
+// stopped skipping itself), so the global floor cannot silently fall behind
+// the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 238;
 
 export interface SuiteStats {
   tests: number;
