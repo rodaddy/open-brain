@@ -327,3 +327,30 @@ only when a session actually needed it.
     worktree. `scripts/done-means/handover-validates.sh` runs the same check,
     so a handover PR cannot merge while anything is left behind. A handover
     never names cleanup for the next session.
+48. **The controller re-run is the handover's done-check invocation,
+    verbatim.** `878-pg-tests-require-database.sh` discovers its subject as
+    `*.pg.test.ts` from the merge-base diff, so a split that lands as
+    `*.test.ts` files yields `SUBJECT: none`, exit 1, and no receipt; the
+    session-9 collector ran the bare script on #933 and reported "not
+    verified" on a PR that passes under `CHANGED_FILES`. A collector passes
+    the `CHANGED_FILES` form the handover names (derive it from the PR's
+    `*.test.ts` paths when the handover leaves it as `<the split files>`).
+49. **Lint the origin/main copy before cutting a conversion lane.** The
+    pre-commit gate lints staged files whole, so a lane inherits every
+    pre-existing oxlint finding in a file it touches: three of five session-9
+    batch-1 lanes overran the 15-minute timebox on that inherited work and
+    one stopped red on 19 `no-non-null-assertion` findings inside bodies its
+    brief forbade touching. Sizing a lane includes
+    `./node_modules/.bin/oxlint --deny-warnings <file>` on the origin/main
+    copy, and the brief names the allowed fix patterns: `expectDefined`
+    guard in the helper module, `it` bodies hoisted to named module-scope
+    functions, `as unknown as T`, helpers that take `pool` and create none.
+50. **Workflow rows carry the session.** Session 9's rows read "session-7"
+    because the reusable `*.workflow.js` were copied with their `meta`
+    labels unchanged, and Rico could not tell which session was running.
+    Each script carries `const SESSION = 'session9'` feeding the agent
+    label; State 2 of every handover names the copy-and-relabel command
+    (`cp` the scripts into `_scratch/session<N>/`, then
+    `perl -pi -e 's/session-9/session-<N>/g; s/session9/session<N>/g'`),
+    and a Workflow row showing another session's tag is a defect fixed
+    before dispatch.
