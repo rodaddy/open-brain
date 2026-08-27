@@ -4,8 +4,9 @@
  * the real CHECK constraint on last_error_category, and the real CASE forks in
  * MaintenanceQueue.fail.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo convention); skips when unset so a
- * DB-less CI job passes while the db-integration job runs it against Postgres.
+ * REQUIRES the test database, and fails hard without it (operator ruling
+ * 2026-08-27, issue #878): a suite that skips itself reports a false green.
+ * `bun run test:isolated` supplies it.
  *
  * The two facts proven end to end:
  *  1. A terminal handler failure dead-letters on attempt 1 — before the retry
@@ -23,7 +24,7 @@ import {
   expect,
   it,
 } from "bun:test";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import { runMigrations } from "./db/migrate.ts";
 import {
   MaintenanceQueue,
@@ -31,42 +32,38 @@ import {
   MaintenanceTerminalError,
   type MaintenanceJob,
 } from "./maintenance-queue.ts";
+import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 // Every job this suite enqueues shares this idempotency-key prefix so cleanup
 // deletes exactly the queue rows this suite owns and nothing else.
 const JOB_KEY_PREFIX = "lane346-queue-";
 
-dbDescribe("maintenance queue terminal dead-letter (live Postgres)", () => {
-  let pool: Pool;
-  let queue: MaintenanceQueue;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
+let queue: MaintenanceQueue;
 
-  beforeAll(async () => {
-    const { Pool } = await import("pg");
-    pool = new Pool({ connectionString: DB_URL });
-    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await runMigrations(pool);
-    queue = new MaintenanceQueue(pool);
-  });
+beforeAll(async () => {
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await runMigrations(pool);
+  queue = new MaintenanceQueue(pool);
+});
 
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
 
-  async function cleanup(): Promise<void> {
-    await pool.query(
-      "DELETE FROM maintenance_jobs WHERE idempotency_key LIKE $1",
-      [`${JOB_KEY_PREFIX}%`],
-    );
-  }
+async function cleanup(): Promise<void> {
+  await pool.query(
+    "DELETE FROM maintenance_jobs WHERE idempotency_key LIKE $1",
+    [`${JOB_KEY_PREFIX}%`],
+  );
+}
 
-  beforeEach(cleanup);
+beforeEach(cleanup);
 
-  /** Enqueue one bounded test job and claim it so it is running at attempts=1. */
-  async function enqueueAndClaim(key: string): Promise<MaintenanceJob> {
+/** Enqueue one bounded test job and claim it so it is running at attempts=1. */
+async function enqueueAndClaim(key: string): Promise<MaintenanceJob> {
     await queue.enqueue({
       kind: "maintenance.test",
       version: 1,
@@ -92,6 +89,7 @@ dbDescribe("maintenance queue terminal dead-letter (live Postgres)", () => {
     return rows[0];
   }
 
+describe("maintenance queue terminal dead-letter (live Postgres)", () => {
   it("dead-letters a terminal failure on attempt 1, before the retry bound", async () => {
     const job = await enqueueAndClaim("terminal-1");
     expect(job.attempts).toBe(1);
@@ -152,6 +150,9 @@ dbDescribe("maintenance queue terminal dead-letter (live Postgres)", () => {
     expect(row.last_error_category).toBe("terminal");
   });
 
+});
+
+describe("maintenance queue handler lease renewal (live Postgres)", () => {
   it("renews a live handler lease across competing claim windows", async () => {
     await queue.enqueue({
       kind: "maintenance.heartbeat-test",

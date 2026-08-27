@@ -21,9 +21,9 @@
  * carrying the auth-derived namespace through the lane join exposes every
  * agent's session history to every other namespace.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo dbDescribe convention). Note that
- * without it these SKIP SILENTLY -- a green `bun test` run with the variable
- * unset has proven nothing here.
+ * REQUIRES the test database, and fails hard without it (operator ruling
+ * 2026-08-27, issue #878): a suite that skips itself reports a false green.
+ * `bun run test:isolated` supplies it.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
@@ -33,10 +33,10 @@ import {
   executeSearch as executeSearchServer,
   readableSearchSources,
 } from "../../../server/tools/search-engine.ts";
+import pino from "pino";
 import { createMockEmbed } from "./test-helpers.ts";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 const CREATED_BY = "session-events-recall-pg-test";
 const OWNER_NS = "test-433-owner";
@@ -46,59 +46,72 @@ const OTHER_NS = "test-433-other";
 // on its own, so a vector hit cannot mask a lexical path that was never wired.
 const embed = createMockEmbed(null);
 
-dbDescribe("session-event recall visibility (#433 defect 1)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
-  const deps = { pool: pool as any, embedFn: embed };
+/** The subset of a search result row these assertions read. */
+type SearchRow = {
+  source_type?: unknown;
+  source_ref?: unknown;
+  namespace?: unknown;
+  content_preview?: unknown;
+};
 
-  beforeAll(async () => {
-    await runMigrations(pool as any);
-  });
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  afterEach(async () => {
-    await cleanup();
-  });
+const deps = { pool, embedFn: embed, logger: pino({ level: "silent" }) };
 
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+beforeAll(async () => {
+  await runMigrations(pool);
+});
 
-  async function cleanup(): Promise<void> {
-    await pool.query(
-      `DELETE FROM ob_session_events
-        WHERE lane_id IN (SELECT id FROM ob_session_lanes WHERE created_by = $1)`,
-      [CREATED_BY],
-    );
-    await pool.query("DELETE FROM ob_session_lanes WHERE created_by = $1", [
-      CREATED_BY,
-    ]);
-  }
+afterEach(async () => {
+  await cleanup();
+});
 
-  /** Seed one lane in `namespace` holding one event whose content is `content`. */
-  async function seedEvent(
-    namespace: string,
-    content: string,
-  ): Promise<string> {
-    const { rows } = await pool.query<{ id: string }>(
-      `INSERT INTO ob_session_lanes (session_key, namespace, created_by)
-       VALUES ($1, $2, $3) RETURNING id`,
-      [`${CREATED_BY}-${namespace}-${content.slice(0, 12)}`, namespace, CREATED_BY],
-    );
-    const laneId = rows[0]!.id;
-    await pool.query(
-      `INSERT INTO ob_session_events (lane_id, event_type, content, importance, created_by)
-       VALUES ($1, 'fact', $2, 'hot', $3)`,
-      [laneId, content, CREATED_BY],
-    );
-    return laneId;
-  }
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
 
-  function markerRows(rows: readonly any[], marker: string): any[] {
-    return rows.filter((row) =>
-      String(row.content_preview ?? "").includes(marker),
-    );
-  }
+async function cleanup(): Promise<void> {
+  await pool.query(
+    `DELETE FROM ob_session_events
+      WHERE lane_id IN (SELECT id FROM ob_session_lanes WHERE created_by = $1)`,
+    [CREATED_BY],
+  );
+  await pool.query("DELETE FROM ob_session_lanes WHERE created_by = $1", [
+    CREATED_BY,
+  ]);
+}
 
+/** Seed one lane in `namespace` holding one event whose content is `content`. */
+async function seedEvent(
+  namespace: string,
+  content: string,
+): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO ob_session_lanes (session_key, namespace, created_by)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [`${CREATED_BY}-${namespace}-${content.slice(0, 12)}`, namespace, CREATED_BY],
+  );
+  const laneId = rows[0]?.id as string | undefined;
+  if (!laneId) throw new Error("seed lane insert returned no id");
+  await pool.query(
+    `INSERT INTO ob_session_events (lane_id, event_type, content, importance, created_by)
+     VALUES ($1, 'fact', $2, 'hot', $3)`,
+    [laneId, content, CREATED_BY],
+  );
+  return laneId;
+}
+
+function markerRows(
+  rows: readonly SearchRow[],
+  marker: string,
+): SearchRow[] {
+  return rows.filter((row) =>
+    String(row.content_preview ?? "").includes(marker),
+  );
+}
+
+describe("session-event recall visibility (#433 defect 1)", () => {
   it("brain_answer's source list reaches the session-event corpus", () => {
     // The regression that started #433 was a table list, so pin the list. Both
     // serving trees are asserted because both are live: server/main.ts is the
@@ -125,13 +138,16 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
     expect(readableSearchSources("discord")).not.toContain("session_events");
   });
 
+});
+
+describe("session-event recall against live Postgres (#433 defect 1)", () => {
   it("surfaces a session event from the src serving tree", async () => {
     const marker = "marker433src";
     await seedEvent(OWNER_NS, `${marker} a thing that happened this session`);
 
     const rows = await executeSearch(
       deps,
-      readableSearchTables("admin") as any,
+      readableSearchTables("admin"),
       marker,
       25,
       "keyword",
@@ -142,11 +158,11 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
 
     const hits = markerRows(rows, marker);
     expect(hits.length).toBe(1);
-    expect(hits[0]!.source_type).toBe("session_event");
+    expect(hits[0]?.source_type).toBe("session_event");
     // brain_answer refuses to cite a row without citation metadata, so an
     // invisible-to-citation row would be as useless as an unsearchable one.
-    expect(hits[0]!.source_ref).toBeTruthy();
-    expect(hits[0]!.namespace).toBe(OWNER_NS);
+    expect(hits[0]?.source_ref).toBeTruthy();
+    expect(hits[0]?.namespace).toBe(OWNER_NS);
   });
 
   it("surfaces a session event from the server serving tree", async () => {
@@ -154,8 +170,8 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
     await seedEvent(OWNER_NS, `${marker} a thing that happened this session`);
 
     const rows = await executeSearchServer(
-      deps as any,
-      readableSearchSources("admin") as any,
+      deps,
+      readableSearchSources("admin"),
       marker,
       25,
       "keyword",
@@ -166,8 +182,8 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
 
     const hits = markerRows(rows, marker);
     expect(hits.length).toBe(1);
-    expect(hits[0]!.source_type).toBe("session_event");
-    expect(hits[0]!.namespace).toBe(OWNER_NS);
+    expect(hits[0]?.source_type).toBe("session_event");
+    expect(hits[0]?.namespace).toBe(OWNER_NS);
   });
 
   it("does not leak another namespace's session events (src tree)", async () => {
@@ -180,7 +196,7 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
 
     const rows = await executeSearch(
       deps,
-      readableSearchTables("admin") as any,
+      readableSearchTables("admin"),
       marker,
       25,
       "keyword",
@@ -197,8 +213,8 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
     await seedEvent(OWNER_NS, `${marker} private to the owning namespace`);
 
     const rows = await executeSearchServer(
-      deps as any,
-      readableSearchSources("admin") as any,
+      deps,
+      readableSearchSources("admin"),
       marker,
       25,
       "keyword",
@@ -221,7 +237,7 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
 
     const rows = await executeSearch(
       deps,
-      readableSearchTables("admin") as any,
+      readableSearchTables("admin"),
       shared,
       25,
       "keyword",
@@ -232,7 +248,7 @@ dbDescribe("session-event recall visibility (#433 defect 1)", () => {
 
     const hits = markerRows(rows, shared);
     expect(hits.length).toBe(1);
-    expect(hits[0]!.namespace).toBe(OWNER_NS);
-    expect(String(hits[0]!.content_preview)).toContain("owned by the caller");
+    expect(hits[0]?.namespace).toBe(OWNER_NS);
+    expect(String(hits[0]?.content_preview)).toContain("owned by the caller");
   });
 });
