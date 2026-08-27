@@ -25,7 +25,8 @@ import {
   canonicalNamespace,
   physicalNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+  type SharedNamespaceConfig,
+} from "./shared-namespace.ts";
 import {
   explicitSharedNominationSqlPredicate,
   isExplicitSharedNomination,
@@ -119,9 +120,11 @@ interface ScanArgs {
  * gate runs first so an unprivileged caller never learns whether the namespace
  * it named exists.
  *
+ * @param sharedNamespaceNames Resolved shared-namespace names from the composition root.
  * @returns The resolved scope, or a `denied` message to return verbatim.
  */
 function resolveScanScope(
+  sharedNamespaceNames: SharedNamespaceConfig,
   identity: AuthIdentity | null | undefined,
   args: ScanArgs,
 ): { scope: ScanScope } | { denied: string } {
@@ -134,24 +137,28 @@ function resolveScanScope(
     return { denied: "Permission denied: namespace read access denied" };
   }
 
-  const shared = sharedNamespaceConfig();
-  const target = args.target_namespace ?? shared.sharedNamespace;
+  const target = args.target_namespace ?? sharedNamespaceNames.sharedNamespace;
   if (!canTargetNamespace(identity, "read", target)) {
     return { denied: "Permission denied: target namespace read access denied" };
   }
 
-  const targetPhysical = physicalNamespace(target);
+  // The scanned namespace is bound as a PARAMETER on every statement, not
+  // resolved once and trusted: it is the only thing scoping this read, and
+  // the role gate above proves the caller may target it, not that a later
+  // statement stays inside it.
+  const scanned = physicalNamespace(args.namespace, sharedNamespaceNames);
+  const targetPhysical = physicalNamespace(target, sharedNamespaceNames);
+  const targetCanonical = canonicalNamespace(
+    targetPhysical,
+    sharedNamespaceNames,
+  );
   return {
     scope: {
       tables: args.table ? [args.table as ResourceTable] : ALL_TABLES,
       perTable: args.limit ?? DEFAULT_ENTRIES_PER_TABLE,
-      // The scanned namespace is bound as a PARAMETER on every statement, not
-      // resolved once and trusted: it is the only thing scoping this read, and
-      // the role gate above proves the caller may target it, not that a later
-      // statement stays inside it.
-      scanned: physicalNamespace(args.namespace),
+      scanned,
       targetPhysical,
-      targetCanonical: canonicalNamespace(targetPhysical),
+      targetCanonical,
       since: args.since,
     },
   };
@@ -253,7 +260,11 @@ async function handleScanNamespace(
   identity: AuthIdentity | null | undefined,
   args: ScanArgs,
 ) {
-  const resolved = resolveScanScope(identity, args);
+  const resolved = resolveScanScope(
+    sharedNamespaceConfig(dependencies.sharedNamespaceNames),
+    identity,
+    args,
+  );
   if ("denied" in resolved) return errorResult(resolved.denied);
   const { scope } = resolved;
 

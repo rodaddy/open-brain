@@ -21,7 +21,7 @@ import {
 import {
   isSharedNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+} from "./shared-namespace.ts";
 import {
   FACT_TYPES,
   canonicalId,
@@ -292,7 +292,9 @@ async function handleListRepoFacts(
 
   const rowCap = args.limit ?? 50;
   const offset = args.offset ?? 0;
-  const config = sharedNamespaceConfig();
+  const sharedNamespaceNames = sharedNamespaceConfig(
+    dependencies.sharedNamespaceNames,
+  );
 
   /** Run the fact query against one explicit namespace scope. */
   const queryRows = async (
@@ -323,7 +325,7 @@ async function handleListRepoFacts(
     scope,
     offset,
     rowCap,
-    config,
+    sharedNamespaceNames,
     queryRows,
   });
   dependencies.logger.info(
@@ -345,24 +347,25 @@ async function readWithLegacyFallback(input: {
   scope: string | readonly string[] | undefined;
   offset: number;
   rowCap: number;
-  config: ReturnType<typeof sharedNamespaceConfig>;
+  sharedNamespaceNames: ReturnType<typeof sharedNamespaceConfig>;
   queryRows: (
     scope: string | readonly string[] | undefined,
     offset: number,
   ) => Promise<Array<Record<string, unknown>>>;
 }): Promise<Array<Record<string, unknown>>> {
-  const { scope, offset, rowCap, config, queryRows } = input;
+  const { scope, offset, rowCap, sharedNamespaceNames, queryRows } = input;
   const fallbackAvailable =
-    config.legacyFallbackEnabled &&
-    config.legacySharedNamespace !== "" &&
+    sharedNamespaceNames.legacyFallbackEnabled &&
+    sharedNamespaceNames.legacySharedNamespace !== "" &&
     offset === 0;
 
   if (!fallbackAvailable) return queryRows(scope, offset);
 
   const touchesShared =
     typeof scope === "string"
-      ? isSharedNamespace(scope)
-      : Array.isArray(scope) && scope.includes(config.physicalSharedNamespace);
+      ? isSharedNamespace(scope, sharedNamespaceNames)
+      : Array.isArray(scope) &&
+        scope.includes(sharedNamespaceNames.physicalSharedNamespace);
   if (!touchesShared) return queryRows(scope, offset);
 
   const primary = await queryRows(scope, 0);
@@ -371,13 +374,16 @@ async function readWithLegacyFallback(input: {
   const sharedRows =
     typeof scope === "string"
       ? primary
-      : await queryRows(config.physicalSharedNamespace, 0);
+      : await queryRows(sharedNamespaceNames.physicalSharedNamespace, 0);
   if (
     sharedRows.length >= rowCap ||
-    sharedRows.length >= config.fallbackMinResults
+    sharedRows.length >= sharedNamespaceNames.fallbackMinResults
   ) {
     return primary;
   }
-  const legacyRows = await queryRows(config.legacySharedNamespace, 0);
+  const legacyRows = await queryRows(
+    sharedNamespaceNames.legacySharedNamespace,
+    0,
+  );
   return mergeRepoFactFallbackRows(primary, legacyRows, rowCap);
 }
