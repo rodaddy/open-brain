@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 import { registerPromoteShared } from "../promote-shared.ts";
 import { contentHash } from "../../embedding.ts";
 import type { ToolDeps } from "../index.ts";
@@ -15,6 +16,17 @@ const FAKE_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 
 function createMockEmbed(result: number[] | null = Array(768).fill(0.1)) {
   return async (_text: string) => result;
+}
+
+/**
+ * The first text block of a tool result.
+ *
+ * Every assertion in this file reads the same field, and the MCP result type is
+ * a union, so the narrowing lives here once instead of at each call site.
+ */
+function textOf(res: { content?: unknown } | Record<string, unknown>): string {
+  const blocks = res.content as Array<{ text?: string }> | undefined;
+  return blocks?.[0]?.text ?? "";
 }
 
 /**
@@ -32,12 +44,12 @@ function createMockPool(opts: {
     opts.row === undefined
       ? { id: SOURCE_ID, content: LONG_FACT, namespace: "bilby", content_hash: contentHash(LONG_FACT) }
       : opts.row;
-  const writes: Array<{ sql: string; params: any[] }> = [];
-  const reads: Array<{ sql: string; params: any[] }> = [];
+  const writes: Array<{ sql: string; params: unknown[] }> = [];
+  const reads: Array<{ sql: string; params: unknown[] }> = [];
   const pool = {
     reads,
     writes,
-    query: async (sql: string, params: any[] = []) => {
+    query: async (sql: string, params: unknown[] = []) => {
       reads.push({ sql, params });
       if (sql.startsWith("INSERT")) {
         writes.push({ sql, params });
@@ -65,18 +77,21 @@ function createMockPool(opts: {
 }
 
 async function setupToolClient(
-  mockPool: { query: (...args: any[]) => Promise<{ rows: any[] }> },
+  mockPool: { query: (...args: never[]) => Promise<{ rows: unknown[] }> },
   auth: AuthInfo,
 ): Promise<{ client: Client; cleanup: () => Promise<void> }> {
   const server = new McpServer({ name: "test", version: "1.0.0" });
-  const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
+  const deps: ToolDeps = { pool: mockPool as unknown as ToolDeps["pool"], embedFn: createMockEmbed() };
   registerPromoteShared(server, deps);
 
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message: any, options?: any) =>
-    originalSend(message, { ...options, authInfo: auth });
+  clientTransport.send = (message: Parameters<typeof originalSend>[0], options?: Record<string, unknown>) =>
+    originalSend(message, {
+      ...options,
+      authInfo: auth,
+    } as unknown as Parameters<typeof originalSend>[1]);
 
   const client = new Client({ name: "test-client", version: "1.0.0" });
   await server.connect(serverTransport);
@@ -104,9 +119,9 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("Permission denied");
+      expect(textOf(res)).toContain("Permission denied");
       // Refused before any DB read/write.
-      expect((mockPool as any).writes.length).toBe(0);
+      expect(mockPool.writes.length).toBe(0);
     } finally {
       await cleanup();
     }
@@ -115,7 +130,7 @@ describe("promote_shared", () => {
   it("denies when auth is missing entirely", async () => {
     const mockPool = createMockPool({});
     const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: mockPool as any, embedFn: createMockEmbed() };
+    const deps: ToolDeps = { pool: mockPool as unknown as ToolDeps["pool"], embedFn: createMockEmbed() };
     registerPromoteShared(server, deps);
     const [ct, st] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "tc", version: "1.0.0" });
@@ -127,7 +142,7 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("Permission denied");
+      expect(textOf(res)).toContain("Permission denied");
     } finally {
       await client.close();
       await server.close();
@@ -149,6 +164,10 @@ describe("promote_shared", () => {
     }
   });
 
+});
+
+// ── ALLOW (the identities that may promote) ──
+describe("promote_shared promoter identities", () => {
   it("ALLOWS the promoter role (dry-run, no write)", async () => {
     const mockPool = createMockPool({});
     const auth: AuthInfo = {
@@ -164,11 +183,11 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID },
       });
       expect(res.isError).toBeFalsy();
-      const parsed = JSON.parse((res.content as any)[0].text);
+      const parsed = JSON.parse(textOf(res));
       expect(parsed.classification).toBe("share");
       expect(parsed.status).toBe("dry_run");
       // Dry-run performs no INSERT.
-      expect((mockPool as any).writes.length).toBe(0);
+      expect(mockPool.writes.length).toBe(0);
     } finally {
       await cleanup();
     }
@@ -192,9 +211,9 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
       });
       expect(res.isError).toBeFalsy();
-      const parsed = JSON.parse((res.content as any)[0].text);
+      const parsed = JSON.parse(textOf(res));
       expect(parsed.status).toBe("promoted");
-      expect((mockPool as any).writes.length).toBe(1);
+      expect(mockPool.writes.length).toBe(1);
     } finally {
       await cleanup();
     }
@@ -217,15 +236,18 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("Permission denied");
-      expect((mockPool as any).writes.length).toBe(0);
+      expect(textOf(res)).toContain("Permission denied");
+      expect(mockPool.writes.length).toBe(0);
     } finally {
       await cleanup();
     }
   });
+});
 
-  // ── SECRET / PRIVATE REFUSAL (even for a promoter) ──
-
+// ── SECRET / PRIVATE REFUSAL (even for a promoter) ──
+// A separate subject from the entry gate above: these entries pass the role
+// check and are refused on CONTENT, so they belong in their own describe.
+describe("promote_shared content refusal", () => {
   it("REFUSES a secret-bearing entry even for a promoter", async () => {
     const mockPool = createMockPool({
       row: {
@@ -248,9 +270,9 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("reject-secret");
+      expect(textOf(res)).toContain("reject-secret");
       // Never inserted into shared truth.
-      expect((mockPool as any).writes.length).toBe(0);
+      expect(mockPool.writes.length).toBe(0);
     } finally {
       await cleanup();
     }
@@ -279,13 +301,16 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("reject-private");
-      expect((mockPool as any).writes.length).toBe(0);
+      expect(textOf(res)).toContain("reject-private");
+      expect(mockPool.writes.length).toBe(0);
     } finally {
       await cleanup();
     }
   });
+});
 
+// ── SOURCE LOOKUP AND NAMESPACE SCOPING ──
+describe("promote_shared source lookup", () => {
   it("returns not-found for a missing source entry", async () => {
     const mockPool = createMockPool({ row: null });
     const auth: AuthInfo = {
@@ -301,7 +326,7 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("not found");
+      expect(textOf(res)).toContain("not found");
     } finally {
       await cleanup();
     }
@@ -330,10 +355,10 @@ describe("promote_shared", () => {
         arguments: { table: "thoughts", id: SOURCE_ID, dry_run: false },
       });
       expect(res.isError).toBe(true);
-      expect((res.content as any)[0].text).toContain("not found");
-      expect((mockPool as any).writes.length).toBe(0);
-      expect((mockPool as any).reads[0].sql).toContain("namespace = ANY");
-      expect((mockPool as any).reads[0].params[1]).toEqual([
+      expect(textOf(res)).toContain("not found");
+      expect(mockPool.writes.length).toBe(0);
+      expect(mockPool.reads[0]?.sql).toContain("namespace = ANY");
+      expect(mockPool.reads[0]?.params[1]).toEqual([
         "skippy",
         "shared-kb",
       ]);
@@ -343,15 +368,16 @@ describe("promote_shared", () => {
   });
 });
 
-// ── DB-BACKED INTEGRATION ──
-// Gated on OPENBRAIN_TEST_DATABASE_URL. Proves a nominated own-namespace thought
-// lands in shared-kb with provenance and is idempotent on re-run.
-//   OPENBRAIN_TEST_DATABASE_URL=postgres://... bun test src/tools/__tests__/promote-shared.test.ts
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
-dbDescribe("promote_shared (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
+// ── DB-BACKED INTEGRATION ──
+// Proves a nominated own-namespace thought lands in shared-kb with provenance
+// and is idempotent on re-run.
+//
+// REQUIRES the test database and fails hard without it (operator ruling
+// 2026-08-27, issue #878). It must point at an isolated test/playground
+// database, never the dogfood database. `bun run test:isolated` sets it.
+describe("promote_shared (live Postgres)", () => {
+  const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
   const ns = "test-promote-shared-live";
 
   async function callPromoteShared(
@@ -359,11 +385,11 @@ dbDescribe("promote_shared (live Postgres)", () => {
     auth: AuthInfo,
   ) {
     const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: pool as any, embedFn: createMockEmbed() };
+    const deps: ToolDeps = { pool: pool as ToolDeps["pool"], embedFn: createMockEmbed() };
     registerPromoteShared(server, deps);
     const [ct, st] = InMemoryTransport.createLinkedPair();
     const original = ct.send.bind(ct);
-    ct.send = (m: any, o?: any) => original(m, { ...o, authInfo: auth });
+    ct.send = (m: Parameters<typeof original>[0], o?: Record<string, unknown>) => original(m, { ...o, authInfo: auth } as unknown as Parameters<typeof original>[1]);
     const client = new Client({ name: "tc", version: "1.0.0" });
     await server.connect(st);
     await client.connect(ct);
@@ -423,7 +449,7 @@ dbDescribe("promote_shared (live Postgres)", () => {
       auth,
     );
     expect(first.isError).toBeFalsy();
-    expect(JSON.parse((first.content as any)[0].text).status).toBe("promoted");
+    expect(JSON.parse(textOf(first)).status).toBe("promoted");
 
     const { rows } = await pool.query(
       "SELECT promoted_from FROM thoughts WHERE namespace = 'shared-kb' AND content = $1",
@@ -438,7 +464,7 @@ dbDescribe("promote_shared (live Postgres)", () => {
       { table: "thoughts", id, dry_run: false },
       auth,
     );
-    expect(JSON.parse((second.content as any)[0].text).status).toBe("duplicate");
+    expect(JSON.parse(textOf(second)).status).toBe("duplicate");
     const { rows: after } = await pool.query(
       "SELECT count(*)::int AS n FROM thoughts WHERE namespace = 'shared-kb' AND content = $1",
       [content],
