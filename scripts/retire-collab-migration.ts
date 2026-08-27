@@ -103,9 +103,9 @@ const THOUGHT_COPY_COLUMNS = [
   "promoted_from",
 ] as const;
 
-type StepName = "thoughts" | "entities" | "lanes";
+export type StepName = "thoughts" | "entities" | "lanes";
 
-interface Args {
+export interface Args {
   execute: boolean;
   acknowledgeOutOfScope: boolean;
   steps: Set<StepName>;
@@ -167,7 +167,10 @@ export interface Queryable {
   query(
     sql: string,
     params?: unknown[],
-  ): Promise<{ rows: any[]; rowCount?: number | null }>;
+  ): Promise<{
+    rows: Record<string, unknown>[];
+    rowCount?: number | null;
+  }>;
 }
 
 function usage(exitCode = 2): never {

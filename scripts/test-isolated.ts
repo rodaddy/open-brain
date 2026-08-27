@@ -19,6 +19,21 @@
  * OPENBRAIN_TEST_DATABASE_URL at it, runs `bun test` with whatever arguments
  * were passed, prints the database name, and drops the database on the way out.
  *
+ * IT ALSO SUPPLIES WHAT THE OTHER PG SUITES ASK FOR (#904, #878). Two suites
+ * skip on variables this runner never set, so they never ran locally:
+ *
+ *  - OPENBRAIN_SCRATCH_ADMIN_URL — the admin connection this script ALREADY
+ *    holds (it runs createdb/dropdb with it), published rather than rebuilt, so
+ *    `scripts/retire-collab-migration.test.ts` can create and drop its own
+ *    scratch database.
+ *  - OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL — a per-run
+ *    `open_brain_local_<suffix>` database owned by the shared
+ *    `open_brain_local_clone` role, built the way `.github/workflows/ci.yml`
+ *    builds it, so `scripts/local-clone.test.ts` exercises a real loopback
+ *    clone. The clone DATABASE is dropped on exit alongside the main one; the
+ *    ROLE is shared across runs and the operator runbook, so it is created only
+ *    when absent and is never dropped here.
+ *
  * DESIGN CONSTRAINTS:
  *
  *  - NOTHING NEW IS INVENTED. The creation mechanism is the one CI already
@@ -54,6 +69,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  adminUrl,
+  CLONE_DB_PREFIX,
+  provisionCloneDatabase,
+  type CloneProvision,
+} from "./test-support/clone-database.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -136,14 +157,16 @@ function resolveDbConfig(): DbConfig {
  * Collision-proof by construction: pid + time + random, same shape as
  * lane-bootstrap's. Two concurrent runs never share a database, which is the
  * whole point — a fixed name would reintroduce the shared-state contamination
- * this script exists to remove. Comfortably inside Postgres's 63-byte
- * identifier bound, so there is no silent truncation to explain.
+ * this script exists to remove. Short enough that Postgres's 63-byte identifier
+ * rule never rewrites it, so there is nothing silently reshaped to explain.
+ *
+ * The suffix is returned bare rather than prefixed, because the clone database
+ * (#904) is named from the SAME suffix: one run, one identity, two databases.
  */
-function makeDbName(): string {
-  const suffix = `${process.pid}_${Date.now().toString(36)}${Math.floor(Math.random() * 1296)
+function makeRunSuffix(): string {
+  return `${process.pid}_${Date.now().toString(36)}${Math.floor(Math.random() * 1296)
     .toString(36)
     .padStart(2, "0")}`;
-  return `${DB_PREFIX}${suffix}`;
 }
 
 function pgEnv(cfg: DbConfig): NodeJS.ProcessEnv {
@@ -169,7 +192,8 @@ function dropCommand(cfg: DbConfig, dbName: string): string {
 
 const testArgs = process.argv.slice(2);
 const cfg = resolveDbConfig();
-const dbName = makeDbName();
+const runSuffix = makeRunSuffix();
+const dbName = `${DB_PREFIX}${runSuffix}`;
 
 // Printed BEFORE creation, so an interrupt at any point after this line leaves
 // the operator holding the name. A tool that names its database only on success
@@ -181,6 +205,8 @@ process.stdout.write(
     "ISOLATED TEST RUN (#614)",
     "─".repeat(72),
     `  database:  ${dbName}  (created for this run, dropped on exit)`,
+    `  clone:     ${CLONE_DB_PREFIX}${runSuffix}  (created for this run, dropped on exit)`,
+    `  clone role: open_brain_local_clone  (shared; created if absent, never dropped)`,
     `  host:      ${cfg.host}:${cfg.port}`,
     `  scope:     ${testArgs.length ? testArgs.join(" ") : "full suite"}`,
     `  if this run is killed, drop it with:`,
@@ -192,36 +218,31 @@ process.stdout.write(
 
 let created = false;
 let torndown = false;
+/**
+ * The per-run clone database (#904), once provisioned. Only the DATABASE is
+ * tracked for teardown: the `open_brain_local_clone` ROLE is shared with
+ * concurrent runs and with the operator runbook, so this script creates it when
+ * absent and never drops it.
+ */
+let clone: CloneProvision | null = null;
 
 /**
  * Drop the database this process created. Guarded by the prefix so it can only
  * ever name a database from makeDbName(). Synchronous on purpose: it has to
  * complete inside a signal handler and inside process.on("exit").
  */
-function teardown(reason: string): void {
-  if (torndown || !created) return;
-  torndown = true;
-  if (!dbName.startsWith(DB_PREFIX)) {
+function dropOne(name: string, prefix: string, reason: string): void {
+  if (!name.startsWith(prefix)) {
     // Unreachable by construction; kept because the cost of being wrong here is
     // dropping a database that matters.
     process.stderr.write(
-      `\n  [REFUSED] teardown: "${dbName}" lacks the ${DB_PREFIX} prefix; not dropping.\n`,
+      `\n  [REFUSED] teardown: "${name}" lacks the ${prefix} prefix; not dropping.\n`,
     );
     return;
   }
   const result = spawnSync(
     "dropdb",
-    [
-      "--if-exists",
-      "--force",
-      "-h",
-      cfg.host,
-      "-p",
-      cfg.port,
-      "-U",
-      cfg.user,
-      dbName,
-    ],
+    ["--if-exists", "--force", "-h", cfg.host, "-p", cfg.port, "-U", cfg.user, name],
     { env: pgEnv(cfg), encoding: "utf-8" },
   );
   if (result.error || result.status !== 0) {
@@ -231,17 +252,29 @@ function teardown(reason: string): void {
         "",
         "!".repeat(72),
         `ORPHANED DATABASE — teardown (${reason}) could not drop it.`,
-        `  name: ${dbName}`,
+        `  name: ${name}`,
         `  err:  ${result.error?.message ?? ((result.stderr || "").trim() || `dropdb exited ${result.status}`)}`,
         "  drop it yourself with:",
-        `    ${dropCommand(cfg, dbName)}`,
+        `    ${dropCommand(cfg, name)}`,
         "!".repeat(72),
         "",
       ].join("\n"),
     );
     return;
   }
-  process.stdout.write(`\n  [ok]   teardown (${reason}): ${dbName} dropped\n`);
+  process.stdout.write(`\n  [ok]   teardown (${reason}): ${name} dropped\n`);
+}
+
+/**
+ * Drop everything this run created: the isolated database, and the #904 clone
+ * database when one was provisioned. Both go through the same guarded path, so
+ * the clone inherits the loud-orphan behavior and the signal handling for free.
+ */
+function teardown(reason: string): void {
+  if (torndown || !created) return;
+  torndown = true;
+  if (clone) dropOne(clone.database, CLONE_DB_PREFIX, `${reason}/clone`);
+  dropOne(dbName, DB_PREFIX, reason);
 }
 
 process.on("exit", () => teardown("exit"));
@@ -303,14 +336,56 @@ process.on("uncaughtException", (err) => {
   note("db-migrate", `migrations applied to ${dbName}`);
 }
 
+// --- local clone (#904) ----------------------------------------------------
+// `scripts/local-clone.test.ts` skipped every local run because nothing here
+// supplied OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL — a suite that never runs is
+// the false green #878 is about. The provisioning is CI's own recipe; see
+// scripts/test-support/clone-database.ts for why the ROLE outlives the run.
+{
+  const provisioned = provisionCloneDatabase(cfg, runSuffix);
+  if ("error" in provisioned) {
+    fail("db-clone", provisioned.error);
+  }
+  clone = provisioned;
+  // Nothing is adjusted silently: every choice the provisioner made is printed.
+  for (const notice of provisioned.notices) note("db-clone", notice);
+  note("db-clone", `${provisioned.database} created, owned by ${provisioned.role}`);
+
+  const result = spawnSync("bun", ["run", "migrate"], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      DB_HOST: cfg.host,
+      DB_PORT: cfg.port,
+      DB_USER: cfg.user,
+      DB_NAME: provisioned.database,
+      ...(cfg.password ? { DB_PASSWORD: cfg.password } : {}),
+    },
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  if (result.error) fail("db-clone-migrate", `could not execute bun run migrate: ${result.error.message}`);
+  if (result.status !== 0) fail("db-clone-migrate", `clone migrations exited ${result.status}`);
+  note("db-clone-migrate", `migrations applied to ${provisioned.database}`);
+}
+
 // --- run tests -------------------------------------------------------------
 // `bun test` itself is unchanged; it is handed the isolated URL through the
 // env var the tests already honour. Anything after `--`/the script name is
 // passed straight through, so `bun run test:isolated src/x.pg.test.ts` and any
 // other bun test flag work exactly as they do bare.
+// Narrowed rather than asserted: provisioning above calls fail() on any error,
+// so `clone` is set by here, and this makes that readable to the checker too.
+if (!clone) fail("db-clone", "clone provisioning did not complete");
+const cloneUrl = clone.url;
+
 const testEnv: NodeJS.ProcessEnv = {
   ...process.env,
   OPENBRAIN_TEST_DATABASE_URL: dbUrlFor(cfg, dbName),
+  // #904: the two vars the other pg suites gate on. The admin URL is the same
+  // credential used for createdb/dropdb above, pointed at the `postgres`
+  // maintenance database; the clone URL names the per-run clone.
+  OPENBRAIN_SCRATCH_ADMIN_URL: adminUrl(cfg),
+  OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL: cloneUrl,
   DB_HOST: cfg.host,
   DB_PORT: cfg.port,
   DB_USER: cfg.user,
