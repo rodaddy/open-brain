@@ -32,3 +32,41 @@ export function requireTestDatabaseUrl(): string {
   }
   return url;
 }
+
+/**
+ * Returns the local-clone test database connection string, or throws when unset.
+ *
+ * The local-clone boundary suite reaches a real loopback clone, which is a
+ * different database from the migrated test one -- issue #904 gives it the same
+ * demand-do-not-hope treatment `requireTestDatabaseUrl` gives `.pg.test.ts`.
+ *
+ * @throws {Error} `test_database_required` when the variable is missing or empty.
+ */
+export function requireLocalCloneTestDatabaseUrl(): string {
+  const url = process.env.OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "test_database_required: OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL is unset; run bun run test:isolated",
+    );
+  }
+  return url;
+}
+
+/**
+ * Returns the scratch admin connection string, or throws when it is unset.
+ *
+ * The retire-collab suite builds and drops its own scratch databases from the
+ * real migrations, so it needs an owner/superuser connection rather than the
+ * migrated test database.
+ *
+ * @throws {Error} `test_database_required` when the variable is missing or empty.
+ */
+export function requireScratchAdminUrl(): string {
+  const url = process.env.OPENBRAIN_SCRATCH_ADMIN_URL;
+  if (!url) {
+    throw new Error(
+      "test_database_required: OPENBRAIN_SCRATCH_ADMIN_URL is unset; run bun run test:isolated",
+    );
+  }
+  return url;
+}

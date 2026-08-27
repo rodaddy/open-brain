@@ -58,6 +58,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     minTests: 3,
   },
   { name: "local clone real PostgreSQL boundary (live Postgres)", minTests: 1 },
+  {
+    name: "retire-collab-migration scratch Postgres real migrations (live Postgres)",
+    minTests: 6,
+  },
   // The cross-provider parity fixtures (#878). Every recorded tool response for
   // both providers is replayed here, so this is the single suite that proves the
   // two implementations still answer identically. It was env-gated and never
@@ -368,9 +372,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // idempotency suite's 1, then 241 -> 245 when #878 registered the three
 // graph-derivation suites' 1 + 2 + 1, then 245 -> 249 when #878 registered the
 // two subject-split agent_context_pack guidance/repo_facts suites' 2 + 2 as
-// that file stopped skipping itself), so the global floor cannot silently fall
-// behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 249;
+// that file stopped skipping itself, then 249 -> 255 when #904 registered the
+// retire-collab scratch-migration suite's 6 as that file stopped skipping
+// itself), so the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 255;
 
 export interface SuiteStats {
   tests: number;
