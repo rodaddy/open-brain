@@ -27,12 +27,23 @@ from openbrain.apps.capture.watermark import (
     WatermarkStore,
 )
 
-#: A live Claude Code transcript, if this checkout has one.
+#: A committed transcript in the shape Claude Code actually writes (#764).
 #:
-#: Tests using it are skipped when absent, so the suite still passes on a clean
-#: machine -- but on a developer's machine they run against the real thing,
-#: which is what caught every wrong assumption about record shape on 2026-07-31.
-LIVE_TRANSCRIPT_DIR = Path.home() / ".claude" / "projects"
+#: These tests used to read whatever file was LARGEST under the runner's
+#: ``~/.claude``, which made them a property of the machine rather than of the
+#: code: on 2026-08-27 the largest file on several CI runners was a session in
+#: which every ``user`` record was an API error, so zero operator turns were
+#: found and ``assert 1 < 1`` failed on five unrelated PRs. The fixture carries
+#: the same three record classes the live measurement found -- operator turns,
+#: tool results replayed as ``user``, and an API-error record -- with
+#: synthesized content, so the assertions keep their meaning while the outcome
+#: no longer depends on the host.
+FIXTURE_TRANSCRIPT = (
+    Path(__file__).parent
+    / "fixtures"
+    / "transcripts"
+    / "session-with-operator-turns.jsonl"
+)
 
 #: A second process that takes the write lock, announces it, and holds briefly.
 #:
@@ -687,45 +698,43 @@ class TestModuleIndependence:
         assert raw_turn_from_line(operator_line("u1", "x")) is not None
 
 
-@pytest.mark.skipif(
-    not LIVE_TRANSCRIPT_DIR.is_dir(), reason="no live Claude Code transcripts present"
-)
 class TestAgainstARealTranscript:
-    """The assumptions this module encodes, checked against a real file.
+    """The assumptions this module encodes, checked against a real record shape.
 
     Every rule in records.py came from measuring a live transcript. These keep
     that honest: if Claude Code changes the format, this fails here rather than
-    silently capturing nothing in production.
+    silently capturing nothing in production. The file is committed rather than
+    discovered on the host, so a failure names a change in the code and never a
+    change in whatever session happened to be biggest on the runner (#764).
     """
 
     @staticmethod
-    def largest_transcript() -> Path | None:
-        candidates = [
-            path
-            for path in LIVE_TRANSCRIPT_DIR.rglob("*.jsonl")
-            if path.stat().st_size > 0
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda path: path.stat().st_size)
+    def transcript() -> Path:
+        return FIXTURE_TRANSCRIPT
 
     async def test_operator_turns_are_found_and_tool_results_are_not(self) -> None:
-        path = self.largest_transcript()
-        if path is None:
-            pytest.skip("no non-empty transcript found")
+        path = self.transcript()
 
         result = await read_since(path, BEGINNING_OF_FILE)
         user_records = sum(
             1
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line.startswith('{"type":"user"') or '"type":"user"' in line
+            if '"type":"user"' in line
         )
+        operator_turns = [turn for turn in result.turns if turn.is_human_prompt]
 
-        assert result.turns, "no operator turns found in a real transcript"
-        assert len(result.turns) < user_records, (
+        assert operator_turns, "no operator turns found in the transcript"
+        assert len(operator_turns) < user_records, (
             "every `user` record was treated as an operator turn; "
             "tool results are leaking into the lane"
         )
+        # The fixture holds six `user` records: three the operator typed, two
+        # tool results replayed under the user role, and one API-error record.
+        assert [turn.content for turn in operator_turns] == [
+            "first operator question",
+            "second operator question",
+            "third operator question",
+        ]
 
     @pytest.mark.parametrize("split_at", [0.1, 0.5, 0.9])
     async def test_reading_in_two_parts_matches_reading_in_one(
@@ -738,11 +747,9 @@ class TestAgainstARealTranscript:
         different points, because a boundary that happens to land between turns
         would prove nothing about one that lands mid-turn.
         """
-        live = self.largest_transcript()
-        if live is None:
-            pytest.skip("no non-empty transcript found")
+        live = self.transcript()
 
-        # Work on a copy: nothing in this suite writes near a live transcript.
+        # Work on a copy: nothing in this suite writes near the source file.
         path = tmp_path / "real.jsonl"
         path.write_bytes(live.read_bytes())
 
@@ -764,9 +771,7 @@ class TestAgainstARealTranscript:
         assert head.turns + tail.turns == whole.turns
 
     async def test_no_turn_uuid_is_duplicated(self) -> None:
-        path = self.largest_transcript()
-        if path is None:
-            pytest.skip("no non-empty transcript found")
+        path = self.transcript()
 
         turns = (await read_since(path, BEGINNING_OF_FILE)).turns
         uuids = [turn.turn_uuid for turn in turns]
@@ -774,9 +779,7 @@ class TestAgainstARealTranscript:
         assert len(uuids) == len(set(uuids))
 
     async def test_every_captured_turn_has_content(self) -> None:
-        path = self.largest_transcript()
-        if path is None:
-            pytest.skip("no non-empty transcript found")
+        path = self.transcript()
 
         for turn in (await read_since(path, BEGINNING_OF_FILE)).turns:
             assert isinstance(turn.content, str)
