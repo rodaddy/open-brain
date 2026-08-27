@@ -22,7 +22,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
-import { canonicalNamespace } from "../../src/shared-namespace.ts";
+import { canonicalNamespace } from "./shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import {
   authIdentity,
   errorResult,
@@ -275,6 +276,7 @@ interface FoldedTableStats {
 function foldTableStats(
   perTable: readonly TableStats[],
   raw: boolean | undefined,
+  names: SharedNamespaceConfig | undefined,
 ): FoldedTableStats {
   const folded: FoldedTableStats = {
     entryCounts: {},
@@ -301,7 +303,9 @@ function foldTableStats(
         table: stats.table,
         // Legacy `collab` is folded into the canonical shared name unless
         // the caller explicitly asked for physical names.
-        namespace: raw ? entry.namespace : canonicalNamespace(entry.namespace),
+        namespace: raw
+          ? entry.namespace
+          : canonicalNamespace(entry.namespace, names),
         count: entry.count,
       });
     }
@@ -349,7 +353,8 @@ async function handleGetStats(
     topAccessedEntries(dependencies, identity, accessible),
   ]);
 
-  const folded = foldTableStats(perTable, args.raw);
+  const { sharedNamespaceNames } = dependencies;
+  const folded = foldTableStats(perTable, args.raw, sharedNamespaceNames);
   const namespaces = rankNamespaces(folded.namespaceRows);
 
   dependencies.logger.info(
