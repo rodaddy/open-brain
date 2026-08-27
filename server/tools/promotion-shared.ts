@@ -22,7 +22,7 @@
  * pair differ in log event fields, error mapping, and result shape.
  */
 import type { AuthIdentity } from "../auth/types.ts";
-import type { SharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 
 /**
  * The pre-rename shared namespace.

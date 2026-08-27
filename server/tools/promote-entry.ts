@@ -35,7 +35,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
-import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 import { promoteEntry } from "../../src/promotion-service.ts";
 import {
   authIdentity,
@@ -113,8 +114,9 @@ interface PromoteEntryArgs {
  */
 function resolvePromotionTarget(
   requested: string | undefined,
+  names: SharedNamespaceConfig | undefined,
 ): { target: string } | { refusal: string } {
-  const shared = sharedNamespaceConfig();
+  const shared = sharedNamespaceConfig(names);
   // The default is the PHYSICAL shared namespace here, where `promote_shared`
   // defaults to the canonical one; the two differ under a split config and
   // that difference is behavior, so each tool keeps its own default.
@@ -239,7 +241,10 @@ export function registerPromoteEntryTool(
         );
       }
 
-      const resolved = resolvePromotionTarget(args.target_namespace);
+      const resolved = resolvePromotionTarget(
+        args.target_namespace,
+        dependencies.sharedNamespaceNames,
+      );
       if ("refusal" in resolved) return errorResult(resolved.refusal);
 
       return runPromotion({
