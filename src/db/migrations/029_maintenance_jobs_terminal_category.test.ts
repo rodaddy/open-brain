@@ -1,3 +1,15 @@
+/**
+ * Live-Postgres upgrade-path test for migration 029.
+ *
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). A suite that skips itself exits 0 and is
+ * indistinguishable from one that ran and passed, so the environment read now
+ * throws `test_database_required` instead. `bun run test:isolated` sets it.
+ *
+ * The database-backed helpers sit at module scope rather than inside the
+ * describe callback so the callback stays within the repo's per-function line
+ * rule; they close over the single module-scope client either way.
+ */
 import {
   afterAll,
   beforeAll,
@@ -7,9 +19,8 @@ import {
   it,
 } from "bun:test";
 import { Client } from "pg";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 const migration026Url = new URL("026_maintenance_queue.sql", import.meta.url);
 const migration029Url = new URL(
   "029_maintenance_jobs_terminal_category.sql",
@@ -51,7 +62,8 @@ function extractLastErrorCategorySet(sql: string): Set<string> {
       "could not locate a `last_error_category IN (...)` list in the migration SQL",
     );
   }
-  const values = [...match[1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+  const inList = match[1] ?? "";
+  const values = [...inList.matchAll(/'([^']*)'/g)].map((m) => m[1] ?? "");
   if (values.length === 0) {
     throw new Error(
       "found a `last_error_category IN (...)` list but it contained no quoted values",
@@ -82,144 +94,139 @@ describe("029 / 026 last_error_category allow-lists stay in sync", () => {
   });
 });
 
-dbDescribe(
-  "029 maintenance_jobs terminal category compat (live Postgres)",
-  () => {
-    const client = new Client({ connectionString: DB_URL });
+const client = new Client({ connectionString: requireTestDatabaseUrl() });
 
-    async function applyMigration026(): Promise<void> {
-      await client.query(await Bun.file(migration026Url).text());
-    }
+async function applyMigration026(): Promise<void> {
+  await client.query(await Bun.file(migration026Url).text());
+}
 
-    async function applyMigration029(): Promise<void> {
-      await client.query(await Bun.file(migration029Url).text());
-    }
+async function applyMigration029(): Promise<void> {
+  await client.query(await Bun.file(migration029Url).text());
+}
 
-    async function cleanup(): Promise<void> {
-      await client.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
-        namespace,
-      ]);
-    }
+async function cleanup(): Promise<void> {
+  await client.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
+    namespace,
+  ]);
+}
 
-    // Rewind the persisted constraint to the shape a database that applied an
-    // earlier revision of 026/028 (before 'terminal') carries forward, so the
-    // regression proves the real upgrade path rather than the fresh-DB path.
-    async function installPreTerminalConstraint(): Promise<void> {
-      const inList = PRE_TERMINAL_CATEGORIES.map((c) => `'${c}'`).join(", ");
-      await client.query(
-        `ALTER TABLE maintenance_jobs DROP CONSTRAINT IF EXISTS ${CONSTRAINT_NAME}`,
-      );
-      await client.query(
-        `ALTER TABLE maintenance_jobs
-         ADD CONSTRAINT ${CONSTRAINT_NAME}
-         CHECK (last_error_category IN (${inList}))`,
-      );
-    }
+// Rewind the persisted constraint to the shape a database that applied an
+// earlier revision of 026/028 (before 'terminal') carries forward, so the
+// regression proves the real upgrade path rather than the fresh-DB path.
+async function installPreTerminalConstraint(): Promise<void> {
+  const inList = PRE_TERMINAL_CATEGORIES.map((c) => `'${c}'`).join(", ");
+  await client.query(
+    `ALTER TABLE maintenance_jobs DROP CONSTRAINT IF EXISTS ${CONSTRAINT_NAME}`,
+  );
+  await client.query(
+    `ALTER TABLE maintenance_jobs
+     ADD CONSTRAINT ${CONSTRAINT_NAME}
+     CHECK (last_error_category IN (${inList}))`,
+  );
+}
 
-    async function insertWithCategory(
-      idempotencyKey: string,
-      category: string | null,
-    ): Promise<void> {
-      await client.query(
-        `INSERT INTO maintenance_jobs
-         (job_kind, job_version, idempotency_key, namespace, last_error_category)
-       VALUES ($1, 1, $2, $3, $4)`,
-        ["maintenance.test", idempotencyKey, namespace, category],
-      );
-    }
+async function insertWithCategory(
+  idempotencyKey: string,
+  category: string | null,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO maintenance_jobs
+     (job_kind, job_version, idempotency_key, namespace, last_error_category)
+   VALUES ($1, 1, $2, $3, $4)`,
+    ["maintenance.test", idempotencyKey, namespace, category],
+  );
+}
 
-    beforeAll(async () => {
-      await client.connect();
-      await client.query("SELECT pg_advisory_lock($1)", [TEST_SCHEMA_LOCK]);
-      await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
-      await client.query(`CREATE SCHEMA ${TEST_SCHEMA}`);
-      await client.query(`SET search_path TO ${TEST_SCHEMA}, public`);
-      await client.query(
-        `CREATE OR REPLACE FUNCTION ${TEST_SCHEMA}.update_updated_at()
+describe("029 maintenance_jobs terminal category compat (live Postgres)", () => {
+  beforeAll(async () => {
+    await client.connect();
+    await client.query("SELECT pg_advisory_lock($1)", [TEST_SCHEMA_LOCK]);
+    await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    await client.query(`CREATE SCHEMA ${TEST_SCHEMA}`);
+    await client.query(`SET search_path TO ${TEST_SCHEMA}, public`);
+    await client.query(
+      `CREATE OR REPLACE FUNCTION ${TEST_SCHEMA}.update_updated_at()
          RETURNS TRIGGER AS $$
          BEGIN
            NEW.updated_at = NOW();
            RETURN NEW;
          END;
          $$ LANGUAGE plpgsql`,
-      );
-    });
+    );
+  });
 
-    beforeEach(async () => {
-      await applyMigration026();
-      await cleanup();
-      await installPreTerminalConstraint();
-    });
+  beforeEach(async () => {
+    await applyMigration026();
+    await cleanup();
+    await installPreTerminalConstraint();
+  });
 
-    afterAll(async () => {
+  afterAll(async () => {
+    try {
+      await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    } finally {
       try {
-        await client.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+        await client.query("SELECT pg_advisory_unlock($1)", [TEST_SCHEMA_LOCK]);
       } finally {
-        try {
-          await client.query("SELECT pg_advisory_unlock($1)", [
-            TEST_SCHEMA_LOCK,
-          ]);
-        } finally {
-          await client.end();
-        }
+        await client.end();
       }
-    });
+    }
+  });
 
-    it("rejects terminal before the migration and accepts it after — proving the upgrade repair", async () => {
-      await expect(
-        insertWithCategory("029-before", "terminal"),
-      ).rejects.toThrow(/last_error_category/);
+  it("rejects terminal before the migration and accepts it after — proving the upgrade repair", async () => {
+    await expect(insertWithCategory("029-before", "terminal")).rejects.toThrow(
+      /last_error_category/,
+    );
 
-      await applyMigration029();
+    await applyMigration029();
 
-      await insertWithCategory("029-after", "terminal");
-      const { rows } = await client.query(
-        `SELECT last_error_category FROM maintenance_jobs
+    await insertWithCategory("029-after", "terminal");
+    const { rows } = await client.query(
+      `SELECT last_error_category FROM maintenance_jobs
         WHERE namespace = $1 AND idempotency_key = $2`,
-        [namespace, "029-after"],
-      );
-      expect(rows).toHaveLength(1);
-      expect(rows[0].last_error_category).toBe("terminal");
-    });
+      [namespace, "029-after"],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].last_error_category).toBe("terminal");
+  });
 
-    it("preserves every previously allowed category and still rejects unknown values", async () => {
-      for (const category of PRE_TERMINAL_CATEGORIES) {
-        await insertWithCategory(`029-preserve-${category}`, category);
-      }
-      await insertWithCategory("029-preserve-null", null);
+  it("preserves every previously allowed category and still rejects unknown values", async () => {
+    for (const category of PRE_TERMINAL_CATEGORIES) {
+      await insertWithCategory(`029-preserve-${category}`, category);
+    }
+    await insertWithCategory("029-preserve-null", null);
 
-      await applyMigration029();
+    await applyMigration029();
 
-      const { rows } = await client.query(
-        `SELECT idempotency_key, last_error_category FROM maintenance_jobs
+    const { rows } = await client.query(
+      `SELECT idempotency_key, last_error_category FROM maintenance_jobs
         WHERE namespace = $1
         ORDER BY idempotency_key`,
-        [namespace],
-      );
-      const persisted = new Map(
-        rows.map((r) => [r.idempotency_key as string, r.last_error_category]),
-      );
-      for (const category of PRE_TERMINAL_CATEGORIES) {
-        expect(persisted.get(`029-preserve-${category}`)).toBe(category);
-      }
-      expect(persisted.get("029-preserve-null")).toBeNull();
+      [namespace],
+    );
+    const persisted = new Map(
+      rows.map((r) => [r.idempotency_key as string, r.last_error_category]),
+    );
+    for (const category of PRE_TERMINAL_CATEGORIES) {
+      expect(persisted.get(`029-preserve-${category}`)).toBe(category);
+    }
+    expect(persisted.get("029-preserve-null")).toBeNull();
 
-      await expect(
-        insertWithCategory("029-preserve-bogus", "not_a_real_category"),
-      ).rejects.toThrow(/last_error_category/);
-    });
+    await expect(
+      insertWithCategory("029-preserve-bogus", "not_a_real_category"),
+    ).rejects.toThrow(/last_error_category/);
+  });
 
-    it("is idempotent — re-running the repair leaves the constraint intact", async () => {
-      await applyMigration029();
-      await applyMigration029();
+  it("is idempotent — re-running the repair leaves the constraint intact", async () => {
+    await applyMigration029();
+    await applyMigration029();
 
-      await insertWithCategory("029-idempotent", "terminal");
-      const { rows } = await client.query(
-        `SELECT count(*)::int AS n FROM maintenance_jobs
+    await insertWithCategory("029-idempotent", "terminal");
+    const { rows } = await client.query(
+      `SELECT count(*)::int AS n FROM maintenance_jobs
         WHERE namespace = $1 AND idempotency_key = $2`,
-        [namespace, "029-idempotent"],
-      );
-      expect(rows[0].n).toBe(1);
-    });
-  },
-);
+      [namespace, "029-idempotent"],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+});
