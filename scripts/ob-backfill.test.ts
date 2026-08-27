@@ -4,14 +4,12 @@ import { containsSecret, SECRET_PATTERNS } from "../src/sharing.ts";
 import { buildDecisionLogParams, sanitize } from "./ob-backfill.ts";
 
 const FAKE_SK = "sk" + "-" + "abcdefghijklmnopqrstuvwxyz0123456789";
-const FAKE_GITHUB_PAT =
-  "github" + "_pat_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ";
+const FAKE_GITHUB_PAT = "github" + "_pat_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ";
 const FAKE_GH_PAT = "ghp_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ";
 const FAKE_AWS_ACCESS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 const FAKE_AWS_SECRET = "Aa0/".repeat(10);
 const FAKE_GOOGLE_API_KEY = "AIza" + "A".repeat(35);
-const FAKE_JWT =
-  "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZXN0In0." + "abcdefghijklmnop";
+const FAKE_JWT = "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZXN0In0." + "abcdefghijklmnop";
 const FAKE_PRIVATE_KEY =
   "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----";
 const FAKE_URL = "postgres://admin:hunter2pw@10.0.0.1:5432/app";
@@ -40,30 +38,74 @@ const SECRET_CASES = [
   `access_token=${FAKE_LONG_LABELED_SECRET}`,
 ] as const;
 
+// The sanitize scans are held to their GROWTH SHAPE, not to a wall-clock
+// count: an absolute millisecond assertion fails on a slow shared runner with
+// no regression anywhere (#916, #834). Each scan is measured at N and at 4N of
+// the same input shape and the quotient is asserted, so the machine's speed
+// that minute cancels out. Quadratic work would land near 16, linear near 4;
+// 8 sits between them with room for noise.
+const GROWTH_RATIO_MAX = 8;
+const TOKEN_DENSE_N = 12_000;
+const URL_DENSE_N = 4_000;
+
+const tokenDenseInput = (size: number): string =>
+  Array.from({ length: size }, (_, index) => `Ab${index % 10}cd`).join(" ");
+
+const urlDenseInput = (size: number): string =>
+  Array.from({ length: size }, (_, index) => `https://example.com/${index}`).join(" ");
+
+// The denominator is guarded by Math.max at the call site, so a sub-millisecond
+// small run cannot inflate the quotient.
+const measureSanitize = (input: string): { sanitized: string; elapsedMs: number } => {
+  const startedAt = performance.now();
+  const sanitized = sanitize(input);
+  return { sanitized, elapsedMs: performance.now() - startedAt };
+};
+
+// Hoisted out of the describe body: the suite's assertions live in named
+// functions so the describe callback stays under the length rule and the
+// pattern/case cross-check reads as two plain loops rather than nested
+// callbacks.
+const expectPatternsAndCasesCoverEachOther = (): void => {
+  for (const pattern of SECRET_PATTERNS) {
+    let matched = false;
+    for (const secretCase of SECRET_CASES) {
+      if (pattern.test(secretCase)) matched = true;
+    }
+    expect(matched).toBe(true);
+  }
+  for (const secretCase of SECRET_CASES) {
+    let matched = false;
+    for (const pattern of SECRET_PATTERNS) {
+      if (pattern.test(secretCase)) matched = true;
+    }
+    expect(matched).toBe(true);
+  }
+};
+
+const expectEachSecretCaseRedacted = (): void => {
+  for (const secretCase of SECRET_CASES) {
+    const sanitized = sanitize(
+      [
+        `transcript detail ${secretCase}`,
+        "regular file path src/tools/session-save.ts",
+      ].join("\n"),
+    );
+
+    expect(sanitized).not.toContain(secretCase);
+    expect(sanitized).toContain("[REDACTED]");
+    if (sanitized !== "[REDACTED]") {
+      expect(sanitized).toContain("regular file path src/tools/session-save.ts");
+    }
+    expect(sanitized).not.toContain("\n");
+    expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
+  }
+};
+
 describe("ob-backfill sanitize", () => {
   it("redacts each shared secret pattern before OB writes", () => {
-    SECRET_PATTERNS.forEach((pattern) => {
-      expect(SECRET_CASES.some((secretCase) => pattern.test(secretCase))).toBe(true);
-    });
-    SECRET_CASES.forEach((secretCase) => {
-      expect(SECRET_PATTERNS.some((pattern) => pattern.test(secretCase))).toBe(true);
-    });
-
-    for (const secretCase of SECRET_CASES) {
-      const sanitized = sanitize(
-        [`transcript detail ${secretCase}`, "regular file path src/tools/session-save.ts"].join(
-          "\n",
-        ),
-      );
-
-      expect(sanitized).not.toContain(secretCase);
-      expect(sanitized).toContain("[REDACTED]");
-      if (sanitized !== "[REDACTED]") {
-        expect(sanitized).toContain("regular file path src/tools/session-save.ts");
-      }
-      expect(sanitized).not.toContain("\n");
-      expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
-    }
+    expectPatternsAndCasesCoverEachOther();
+    expectEachSecretCaseRedacted();
   });
 
   it("redacts repeated same-shape secrets before OB writes", () => {
@@ -131,6 +173,54 @@ describe("ob-backfill sanitize", () => {
     expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
   });
 
+  it("redacts wrapped ssh credential URLs", () => {
+    const wrappedSshUrl = [
+      "ssh://admin:hunter2",
+      "\n",
+      "pw@example.test",
+      "/repo",
+    ].join("");
+    const sanitized = sanitize(`wrapped ${wrappedSshUrl} tail`);
+
+    expect(sanitized).toBe("[REDACTED]");
+    expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
+  });
+
+  it("does not leave labeled wrapped-secret tails in cleartext", () => {
+    const fragments = FAKE_SK.match(/.{1,2}/g);
+    if (!fragments) throw new Error("Expected fake secret fragments");
+
+    const sanitized = sanitize(`apikey=${fragments.join(" ")}`);
+
+    expect(sanitized).toBe("[REDACTED]");
+    for (const index of Array.from({ length: FAKE_SK.length - 5 }, (_, i) => i)) {
+      expect(sanitized).not.toContain(FAKE_SK.slice(index, index + 6));
+    }
+  });
+
+  it("redacts credential URLs without joining across benign URL prose", () => {
+    const sanitized = sanitize(
+      "see https://good.example/path and postgres://user:pass123@host/db done",
+    );
+
+    expect(sanitized).not.toBe("[REDACTED]");
+    expect(sanitized).toContain("https://good.example/path");
+    expect(sanitized).toContain("[REDACTED]");
+    expect(sanitized).toContain("done");
+    expect(containsSecret(sanitized)).toBe(false);
+  });
+
+  it("preserves benign label prose instead of redacting the whole field", () => {
+    const text = "token: the meeting is at 3pm and everyone should attend the sync";
+    const sanitized = sanitize(text);
+
+    expect(sanitized).not.toBe("[REDACTED]");
+    expect(sanitized).toContain("meeting is at 3pm");
+    expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
+  });
+});
+// length rule: these four cases all concern secrets broken across a line wrap.
+describe("ob-backfill sanitize wrapped secrets", () => {
   it("redacts wrapped bearer and mcp-session-id tails", () => {
     const wrappedBearer = [
       "Authorization",
@@ -201,74 +291,31 @@ describe("ob-backfill sanitize", () => {
       }
     }
   });
+});
 
-  it("redacts wrapped ssh credential URLs", () => {
-    const wrappedSshUrl = [
-      "ssh://admin:hunter2",
-      "\n",
-      "pw@example.test",
-      "/repo",
-    ].join("");
-    const sanitized = sanitize(`wrapped ${wrappedSshUrl} tail`);
+// The two growth-shape scans get their own describe so each body stays under
+// the length rule.
+describe("ob-backfill sanitize scan growth", () => {
+  it("scans token-dense transcripts, growing about linearly with input size", () => {
+    const small = measureSanitize(tokenDenseInput(TOKEN_DENSE_N));
+    const large = measureSanitize(tokenDenseInput(TOKEN_DENSE_N * 4));
 
-    expect(sanitized).toBe("[REDACTED]");
-    expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
+    expect(small.sanitized).toContain("Ab0cd");
+    expect(large.sanitized).toContain("Ab0cd");
+
+    const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
   });
 
-  it("does not leave labeled wrapped-secret tails in cleartext", () => {
-    const fragments = FAKE_SK.match(/.{1,2}/g);
-    if (!fragments) throw new Error("Expected fake secret fragments");
+  it("scans URL-dense transcripts, growing about linearly with input size", () => {
+    const small = measureSanitize(urlDenseInput(URL_DENSE_N));
+    const large = measureSanitize(urlDenseInput(URL_DENSE_N * 4));
 
-    const sanitized = sanitize(`apikey=${fragments.join(" ")}`);
+    expect(small.sanitized).toContain("https://example.com/0");
+    expect(large.sanitized).toContain("https://example.com/0");
 
-    expect(sanitized).toBe("[REDACTED]");
-    for (const index of Array.from({ length: FAKE_SK.length - 5 }, (_, i) => i)) {
-      expect(sanitized).not.toContain(FAKE_SK.slice(index, index + 6));
-    }
-  });
-
-  it("redacts credential URLs without joining across benign URL prose", () => {
-    const sanitized = sanitize(
-      "see https://good.example/path and postgres://user:pass123@host/db done",
-    );
-
-    expect(sanitized).not.toBe("[REDACTED]");
-    expect(sanitized).toContain("https://good.example/path");
-    expect(sanitized).toContain("[REDACTED]");
-    expect(sanitized).toContain("done");
-    expect(containsSecret(sanitized)).toBe(false);
-  });
-
-  it("preserves benign label prose instead of redacting the whole field", () => {
-    const text = "token: the meeting is at 3pm and everyone should attend the sync";
-    const sanitized = sanitize(text);
-
-    expect(sanitized).not.toBe("[REDACTED]");
-    expect(sanitized).toContain("meeting is at 3pm");
-    expect(containsSecret(sanitized.replace(/\s+/g, ""))).toBe(false);
-  });
-
-  it("scans token-dense transcripts without quadratic blowup", () => {
-    const dense = Array.from({ length: 12_000 }, (_, index) => `Ab${index % 10}cd`).join(
-      " ",
-    );
-    const startedAt = performance.now();
-    const sanitized = sanitize(dense);
-
-    expect(sanitized).toContain("Ab0cd");
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
-  });
-
-  it("scans URL-dense transcripts without quadratic prefix-join work", () => {
-    const dense = Array.from(
-      { length: 4_000 },
-      (_, index) => `https://example.com/${index}`,
-    ).join(" ");
-    const startedAt = performance.now();
-    const sanitized = sanitize(dense);
-
-    expect(sanitized).toContain("https://example.com/0");
-    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
   });
 });
 
@@ -279,10 +326,7 @@ describe("ob-backfill decision params", () => {
       " because ",
       "pw@example.test:5432/app",
     ].join("");
-    const params = buildDecisionLogParams(
-      splitCredentialUrl,
-      "open-brain",
-    );
+    const params = buildDecisionLogParams(splitCredentialUrl, "open-brain");
 
     expect(params.title).toBe("[REDACTED]");
     expect(params.rationale).toBe("");
@@ -313,3 +357,5 @@ describe("ob-backfill decision params", () => {
     expect(containsSecret(params.tags.join(" "))).toBe(false);
   });
 });
+
+// Split out of "ob-backfill sanitize" so each describe body stays under the
