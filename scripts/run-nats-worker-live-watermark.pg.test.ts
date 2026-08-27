@@ -77,13 +77,14 @@
  * behavior and is expected to FAIL until an observer is built by default. This
  * file does not implement it.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo dbDescribe convention). Run it the
- * trustworthy way, per AGENTS.md:
+ * REQUIRES OPENBRAIN_TEST_DATABASE_URL and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). Run it the trustworthy way, per AGENTS.md:
  *
  *   bun run test:isolated scripts/run-nats-worker-live-watermark.pg.test.ts
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "./test-support/require-test-database.ts";
 import { runMigrations } from "../src/db/migrate.ts";
 import { createNatsBridgeHealth } from "../src/nats-bridge.ts";
 import {
@@ -92,8 +93,6 @@ import {
 } from "../src/nats-worker.ts";
 import { startNatsWorkerProcess } from "./run-nats-worker.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 /** Namespace/author marker so this file's rows are identifiable and removable. */
 const CREATED_BY = "wm-live-observer-pg-test";
@@ -254,11 +253,11 @@ function requireBlock(body: Record<string, unknown>): EmbedWatermarkBlock {
   return block as EmbedWatermarkBlock;
 }
 
-dbDescribe(
+describe(
   "nats worker composes a LIVE embed watermark observer by default (#724 item 3)",
   () => {
     beforeAll(async () => {
-      pool = new Pool({ connectionString: DB_URL });
+      pool = new Pool({ connectionString: requireTestDatabaseUrl() });
       await runMigrations(pool);
     });
 

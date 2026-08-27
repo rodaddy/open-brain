@@ -26,20 +26,20 @@
  *  6. Frozen-namespace and same-namespace rejections are enforced, and the
  *     kill switch blocks apply mode while leaving dry-run available.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo dbDescribe convention).
+ * REQUIRES OPENBRAIN_TEST_DATABASE_URL and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). `bun run test:isolated` sets it.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 import { runMigrations } from "../../db/migrate.ts";
 import { registerPromoteEntry } from "../promote-entry.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 const CREATED_BY = "dream-promote-entry-pg-test";
 const SOURCE_NS = "dream-promote-source-ns";
@@ -52,94 +52,99 @@ const promoterAuth: AuthInfo = {
   clientId: "promoter-client",
 };
 
-dbDescribe("promote_entry (live Postgres)", () => {
-  let pool: Pool;
+/** First text block of an MCP tool result, or "" when the result carries none. */
+function textOf(result: Record<string, unknown>): string {
+  return (result.content as Array<{ text: string }> | undefined)?.[0]?.text ?? "";
+}
 
-  beforeAll(async () => {
-    pool = new Pool({ connectionString: DB_URL });
-    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await runMigrations(pool);
-    await cleanup();
-  });
+let pool: Pool;
 
-  afterEach(async () => {
-    delete process.env.OPENBRAIN_PROMOTION_KILL_SWITCH;
-    await cleanup();
-  });
+beforeAll(async () => {
+  pool = new Pool({ connectionString: requireTestDatabaseUrl() });
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await runMigrations(pool);
+  await cleanup();
+});
 
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+afterEach(async () => {
+  delete process.env.OPENBRAIN_PROMOTION_KILL_SWITCH;
+  await cleanup();
+});
 
-  async function cleanup(): Promise<void> {
-    // Promoted copies inherit created_by from the source, so this deletes the
-    // copies as well as the originals.
-    for (const table of ["thoughts", "decisions"]) {
-      await pool.query(`DELETE FROM ${table} WHERE created_by = $1`, [
-        CREATED_BY,
-      ]);
-    }
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
+
+async function cleanup(): Promise<void> {
+  // Promoted copies inherit created_by from the source, so this deletes the
+  // copies as well as the originals.
+  for (const table of ["thoughts", "decisions"]) {
+    await pool.query(`DELETE FROM ${table} WHERE created_by = $1`, [
+      CREATED_BY,
+    ]);
   }
+}
 
-  async function seedThought(opts: {
-    namespace: string;
-    content: string;
-    contentHash?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<string> {
-    const { rows } = await pool.query(
-      `INSERT INTO thoughts (content, created_by, namespace, content_hash, extracted_metadata)
-       VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id`,
-      [
-        opts.content,
-        CREATED_BY,
-        opts.namespace,
-        opts.contentHash ?? null,
-        JSON.stringify(opts.metadata ?? {}),
-      ],
-    );
-    return rows[0].id as string;
+async function seedThought(opts: {
+  namespace: string;
+  content: string;
+  contentHash?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO thoughts (content, created_by, namespace, content_hash, extracted_metadata)
+     VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id`,
+    [
+      opts.content,
+      CREATED_BY,
+      opts.namespace,
+      opts.contentHash ?? null,
+      JSON.stringify(opts.metadata ?? {}),
+    ],
+  );
+  return rows[0].id as string;
+}
+
+async function countIn(namespace: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM thoughts WHERE namespace = $1 AND created_by = $2`,
+    [namespace, CREATED_BY],
+  );
+  return rows[0].n as number;
+}
+
+async function callPromote(auth: AuthInfo, args: Record<string, unknown>) {
+  const server = new McpServer({ name: "test", version: "1.0.0" });
+  const deps: ToolDeps = { pool, embedFn: async () => null };
+  registerPromoteEntry(server, deps);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const originalSend = clientTransport.send.bind(clientTransport);
+  clientTransport.send = (message, options) =>
+    originalSend(message, { ...options, authInfo: auth } as never);
+
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    return await client.callTool({
+      name: "promote_entry",
+      arguments: args,
+    });
+  } finally {
+    await client.close();
+    await server.close();
   }
+}
 
-  async function countIn(namespace: string): Promise<number> {
-    const { rows } = await pool.query(
-      `SELECT count(*)::int AS n FROM thoughts WHERE namespace = $1 AND created_by = $2`,
-      [namespace, CREATED_BY],
-    );
-    return rows[0].n as number;
-  }
+function parse(result: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(textOf(result));
+}
 
-  async function callPromote(auth: AuthInfo, args: Record<string, unknown>) {
-    const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: pool as any, embedFn: async () => null };
-    registerPromoteEntry(server, deps);
-
-    const [clientTransport, serverTransport] =
-      InMemoryTransport.createLinkedPair();
-    const originalSend = clientTransport.send.bind(clientTransport);
-    clientTransport.send = (message: any, options?: any) =>
-      originalSend(message, { ...options, authInfo: auth });
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-
-    try {
-      return await client.callTool({
-        name: "promote_entry",
-        arguments: args,
-      });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  }
-
-  function parse(result: any): any {
-    return JSON.parse((result.content as any)[0].text);
-  }
-
+describe("promote_entry copy semantics (live Postgres)", () => {
   it("dry_run reports a planned promotion and inserts nothing", async () => {
     // The DreamEngine safety guarantee, proven by row count rather than by the
     // report's own claim about itself.
@@ -251,6 +256,9 @@ dbDescribe("promote_entry (live Postgres)", () => {
     expect(src[0].extracted_metadata.share_candidate).toBe(true);
   });
 
+});
+
+describe("promote_entry provenance and duplicate detection (live Postgres)", () => {
   it("persists provenance to the promoted_from column", async () => {
     const id = await seedThought({
       namespace: SOURCE_NS,
@@ -312,7 +320,9 @@ dbDescribe("promote_entry (live Postgres)", () => {
     // Still exactly the one pre-existing row.
     expect(await countIn(TARGET_NS)).toBe(1);
   });
+});
 
+describe("promote_entry rejections and the kill switch (live Postgres)", () => {
   it("refuses to promote an entry into its own namespace", async () => {
     const id = await seedThought({
       namespace: SOURCE_NS,
@@ -328,7 +338,7 @@ dbDescribe("promote_entry (live Postgres)", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toContain("already in namespace");
+    expect(textOf(result)).toContain("already in namespace");
     expect(await countIn(SOURCE_NS)).toBe(1);
   });
 
@@ -350,7 +360,7 @@ dbDescribe("promote_entry (live Postgres)", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toContain("not found or archived");
+    expect(textOf(result)).toContain("not found or archived");
     expect(await countIn(TARGET_NS)).toBe(0);
   });
 
@@ -373,7 +383,7 @@ dbDescribe("promote_entry (live Postgres)", () => {
       dry_run: false,
     });
     expect(applied.isError).toBe(true);
-    expect((applied.content as any)[0].text).toContain("KILL_SWITCH");
+    expect(textOf(applied)).toContain("KILL_SWITCH");
     expect(await countIn(TARGET_NS)).toBe(0);
 
     const planned = await callPromote(promoterAuth, {
