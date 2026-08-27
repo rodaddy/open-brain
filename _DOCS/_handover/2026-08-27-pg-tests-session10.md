@@ -31,7 +31,8 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 - #916 CLOSED (#934); #912 #915 OPEN, runner-side; #827 OPEN (State 8) — RUNNING (`gh issue list --state open`)
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session9/{lane,git,drain,scribe}.workflow.js`, `collect.sh` (derives CHANGED_FILES from the PR), `common-rules.txt` R1-R9 — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`)
-- Drain: origin holds `main` plus open-PR heads; eleven clones detached at `fa82bdf5`, no stash, no extra worktree; ten clones and the root checkout carry a generated `.qmd/index.yml` edit — UNVERIFIED as drained (`check-drained.sh .` exits 1 on that file until the loop in HANDED-OVER UNKNOWNS runs)
+- Drain: origin holds `main` plus open-PR heads; eleven clones detached at `fa82bdf5`, no stash, no extra worktree, their private qmd indexes moved to `_tmp/open-brain/_archive/clone-qmd-indexes-2026-08-27/` (620 MB, Rico deletes); only `.qmd/index.yml` reads modified in them — UNVERIFIED as drained (`check-drained.sh .` exits 1 on that file; see HANDED-OVER UNKNOWNS)
+- Root checkout carries one untracked agent draft, `scripts/done-means/qmd-root-only-gate-fires.sh` (a gate check Rico superseded with his own hook); keep or drop is Rico's — WRITTEN (`git status --short`)
 - Round 39, two SME entries, decisions rows 3-4, session-9 beta receipts: harvest commit on `docs/pg-tests-session9` — WRITTEN (this document's PR)
 Re-probe before dispatching anything (live state beats this doc):
 - `git log --oneline origin/main -1` → expect fa82bdf5 or later with this PR merged
@@ -101,7 +102,7 @@ into the lane; tick the map checkbox in the same motion.
 Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
-- `.qmd/index.yml`: every `aqmd up` rewrites its three `models:` lines to `https://llama-swap.rodaddy.live/v1#...`; the git guard refuses `git checkout --`, so ten clones and the root checkout read dirty and `check-drained.sh` fails — Rico runs `for n in 1 2 4 5 6 7 8 9 10 11; do git -C /Volumes/ThunderBolt/_tmp/open-brain/_worktrees/lane-$n checkout -- .qmd/index.yml; done` plus the same in the root checkout, or rules on committing the fleet endpoints / ignoring the file.
+- `.qmd/index.yml`: qmd writes the fleet `models:` lines over the committed copy by design, so clones that ran `aqmd` read modified and `check-drained.sh` counts it as dirt (#936 done-means red on that half only). Rico is adding a hook and librarian-side enforcement; NO session touches `.qmd/` or runs `aqmd` outside the root checkout (rule 51). Whether the drain check ignores that file is Rico's ruling.
 - Four files over 800 lines stay on #878 after this slice (append-session-event 2779, search-brain-relational-retrieval 1095, sdk-protocol.pg 847, lane-upsert 838); append-session-event needs its own plan before a lane.
 - decisions rows 3-4 (`docs/decisions.md`) need Rico: brief-pack's `--max-tightenings 2` knob; lane-report/check.sh's `CI` false positive and the RESULTS-block rebase reports.
 - Q1, since session 3: `.claude/agents/tracking-scribe.md` writes ONLY to the root checkout; session 9 ran it as a Workflow lane on the root checkout's clean docs branch — Rico confirms that as the standing shape.
@@ -110,4 +111,5 @@ Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 - Q8: #888 Forge migration — Rico decides when planning starts and whether it displaces #878 work.
 - #915: the self-hosted `check` runner's PostgreSQL 17 versus the stack's 18 is a runner change (Rico's); `scripts/local-clone.test.ts` asserts `>= 17` until then.
 - Parked: dev#98 hook-env crossing checkpoint, `_DOCS/_parked/dev98-hook-env-crossing.md`; resume or drop is Rico's call.
+- #937 (aqmd allowlist) was filed from the `.qmd/index.sqlite` view; Rico says the index now lives in Postgres, so its premise may be wrong — close or keep is Rico's call.
 - The drain lane reported `check-drained.sh` exit 0 from lane-3; the head's run from the root exits 1 on the `.qmd/index.yml` edits — a lane's PASS claim is PROPOSED until the head re-runs it (HANDOVER-BASE §1).
