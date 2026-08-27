@@ -111,6 +111,14 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "source registry isolation and retirement (live Postgres)",
     minTests: 3,
   },
+  // The issue #337 tag-clobber regression, which shares migration 027's file
+  // and its database. It was never registered here, so a Postgres
+  // misconfiguration skipped it silently -- and a lost tag is exactly the kind
+  // of defect that leaves no trace at the exit code.
+  {
+    name: "backgroundExtract tag merge against live row (live Postgres)",
+    minTests: 2,
+  },
   // The maintenance queue runner's lease boundary, proven through the composed
   // `server/` runtime. These entries matter more than most: the invariants they
   // cover fail SILENTLY -- a row sits `running` under a live lease with no
@@ -182,9 +190,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 79 -> 80 when #889 split the maintenance lease-boundary suite by subject and
 // its single entry of 5 became four entries summing to 6, then 80 -> 83 when
 // #878 registered the migration 029 terminal-category compat suite's 3 as that
-// suite stopped skipping itself), so the global floor cannot silently fall
-// behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 83;
+// suite stopped skipping itself, then 83 -> 85 when #878 also registered the
+// backgroundExtract tag-merge suite that shares migration 027's file and had
+// never been named here), so the global floor cannot silently fall behind the
+// per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 85;
 
 export interface SuiteStats {
   tests: number;
