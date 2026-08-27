@@ -15,6 +15,7 @@ import {
   type Args,
   type StepName,
 } from "./retire-collab-migration.ts";
+import { requireScratchAdminUrl } from "./test-support/require-test-database.ts";
 
 const { Client, Pool } = pg;
 
@@ -165,26 +166,19 @@ describe("retire-collab-migration transaction", () => {
 // Scratch-DB integration tests built from the REAL repo migrations
 // (src/db/migrations/*.sql via runMigrations), so schema drift between the
 // script and production cannot hide behind an invented fixture schema.
-// Gated on OPENBRAIN_SCRATCH_ADMIN_URL — a superuser/owner connection string
+// Demands OPENBRAIN_SCRATCH_ADMIN_URL — a superuser/owner connection string
 // that can CREATE/DROP DATABASE (e.g. postgres://localhost/postgres). Never
 // point this at a live OB database.
+//
+// Issue #904: absent the variable this file throws `test_database_required` at
+// module scope and takes the run down with it. It used to swap in a skipping
+// describe, which reported a skip that is indistinguishable at the exit code
+// from a suite that ran and passed. The former OPENBRAIN_SCRATCH_DATABASE_URL
+// fallback went with it: one variable names this connection, and a second
+// spelling is one more way for a runner to look configured while being wrong.
 // -----------------------------------------------------------------------------
-const ADMIN_URL =
-  process.env.OPENBRAIN_SCRATCH_ADMIN_URL ??
-  process.env.OPENBRAIN_SCRATCH_DATABASE_URL;
-const dbDescribe = ADMIN_URL ? describe : describe.skip;
-
-/**
- * The scratch suite only runs when ADMIN_URL is set, but `dbDescribe` carries
- * that gate at runtime and not in the type. Reading it through here keeps the
- * hooks free of assertions and names the variable if the gate ever regresses.
- */
-function requireAdminUrl(): string {
-  if (!ADMIN_URL) {
-    throw new Error("OPENBRAIN_SCRATCH_ADMIN_URL must be set for this suite");
-  }
-  return ADMIN_URL;
-}
+const requireAdminUrl = requireScratchAdminUrl;
+requireAdminUrl();
 
 const SCRATCH_DB = `ob_retire_collab_scratch_${Date.now()}`;
 
@@ -455,7 +449,7 @@ async function expectLanesMigrated(pool: ScratchPool): Promise<void> {
   expect(endedStamped.rows[0].c).toBe(0);
 }
 
-dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => {
+describe("retire-collab-migration scratch Postgres real migrations (live Postgres)", () => {
   let pool: InstanceType<typeof Pool>;
 
   beforeAll(async () => {

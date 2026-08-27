@@ -49,7 +49,14 @@
 # Four clauses, and all four must pass
 # ---------------------------------------------------------------------------
 # CLAUSE 1 -- NO SELF-SKIPPING MACHINERY SURVIVES, per file.
-#   Zero CODE references to the literal `OPENBRAIN_TEST_DATABASE_URL`, and zero
+#   Issue #904 widened this from one variable to three. A file may demand any of
+#   `OPENBRAIN_TEST_DATABASE_URL`, `OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL`, or
+#   `OPENBRAIN_SCRATCH_ADMIN_URL` -- they name different databases, so the clone
+#   and scratch suites are not served by the migrated test one. Whichever it
+#   uses, the environment read belongs in the helper and not in the test file,
+#   so a code reference to ANY of the three still fails this clause.
+#
+#   Zero CODE-line `process.env.<VAR>` reads of those three, and zero
 #   to `describe.skip`, `skipIf`, or `dbDescribe`. Comment lines are exempt:
 #   a converted file's header still explains what it requires and why, and
 #   reading prose as machinery would push authors to delete the explanation.
@@ -59,7 +66,8 @@
 # CLAUSE 2 -- THE HELPER IS ACTUALLY IMPORTED.
 #   Clause 1 alone is satisfiable by deleting the environment read and leaving
 #   the suite connecting to nothing, which is worse than the defect. So clause 2
-#   demands the identifier `requireTestDatabaseUrl` on an import line whose
+#   demands one of `requireTestDatabaseUrl`, `requireLocalCloneTestDatabaseUrl`,
+#   or `requireScratchAdminUrl` on an import line whose
 #   module path ends in the basename `require-test-database`. Matching the
 #   IDENTIFIER and the BASENAME rather than a fixed relative path is what lets
 #   files at different depths under server/ and src/ satisfy the same clause --
@@ -67,8 +75,9 @@
 #   same import.
 #
 # CLAUSE 3 -- THE HARD FAIL IS OBSERVED, not merely arranged, per file.
-#   Clauses 1 and 2 read source. Clause 3 runs the thing: with the variable
-#   explicitly removed from the environment, `bun test <file>` must exit
+#   Clauses 1 and 2 read source. Clause 3 runs the thing: with the variable THAT
+#   FILE DEMANDS -- read back from the helper it imports, per #904 -- explicitly
+#   removed from the environment, `bun test <file>` must exit
 #   NON-ZERO and its combined output must contain `test_database_required`.
 #   Both halves matter. Non-zero alone is satisfiable by any unrelated crash,
 #   and the string alone could appear in a run that still exited 0. Together
@@ -102,10 +111,27 @@ command -v env >/dev/null 2>&1 || fail_hard "env not on PATH"
 [ -d "$REPO_ROOT/.git" ] || [ -f "$REPO_ROOT/.git" ] || fail_hard "not a git repo at $REPO_ROOT"
 
 BANNED_MACHINERY='describe\.skip|skipIf|dbDescribe'
-ENV_LITERAL='OPENBRAIN_TEST_DATABASE_URL'
-HELPER_IDENT='requireTestDatabaseUrl'
+# A file may demand ANY ONE of the three database variables (issue #904): the
+# migrated test database, the local-clone database, or the scratch admin
+# connection. They name different databases, so a suite that needs the clone is
+# not satisfied by the test one. Clause 1 bans a CODE reference to whichever it
+# uses -- the read belongs in the helper -- and clause 3 unsets that same one.
+ENV_LITERALS='OPENBRAIN_TEST_DATABASE_URL OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL OPENBRAIN_SCRATCH_ADMIN_URL'
+HELPER_IDENT='requireTestDatabaseUrl|requireLocalCloneTestDatabaseUrl|requireScratchAdminUrl'
 HELPER_BASENAME='require-test-database'
 HARD_FAIL_STRING='test_database_required'
+
+# Which variable a file demands, read from the helper it imports. Prints the
+# variable name, or nothing when the file imports no helper at all.
+demanded_variable_of() {
+  if rg -qF 'requireLocalCloneTestDatabaseUrl' "$1" 2>/dev/null; then
+    printf 'OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL\n'
+  elif rg -qF 'requireScratchAdminUrl' "$1" 2>/dev/null; then
+    printf 'OPENBRAIN_SCRATCH_ADMIN_URL\n'
+  elif rg -qF 'requireTestDatabaseUrl' "$1" 2>/dev/null; then
+    printf 'OPENBRAIN_TEST_DATABASE_URL\n'
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # SUBJECT -- the test files changed against origin/main.
@@ -163,15 +189,25 @@ while IFS= read -r FILE; do
   # CLAUSE 1 -- no environment read and no conditional describe, on code lines.
   # -------------------------------------------------------------------------
   CODE="$(cd "$REPO_ROOT" && code_lines_of "$FILE")"
-  ENV_HITS="$(printf '%s\n' "$CODE" | rg -nF "$ENV_LITERAL" || true)"
+  # `process.env.<VAR>` is the defect -- the READ a converted file must not
+  # still perform. Naming the variable in an error message is the opposite of
+  # the defect (issue #904: the local-clone shape checks report which rule a
+  # misconfigured runner broke), so the bare name on a code line is not a hit.
+  ENV_HITS=""
+  for LITERAL in $ENV_LITERALS; do
+    HIT="$(printf '%s\n' "$CODE" | rg -nF "process.env.$LITERAL" || true)"
+    [ -n "$HIT" ] && ENV_HITS="$ENV_HITS$HIT
+"
+  done
+  ENV_HITS="$(printf '%s' "$ENV_HITS" | rg -v '^$' || true)"
   MACHINERY_HITS="$(printf '%s\n' "$CODE" | rg -n "$BANNED_MACHINERY" || true)"
   if [ -n "$ENV_HITS" ] || [ -n "$MACHINERY_HITS" ]; then
     printf 'CLAUSE 1 [%s]: FAIL -- self-skipping machinery survives on code lines:\n' "$FILE"
     printf '%s\n' "$ENV_HITS" "$MACHINERY_HITS" | rg -v '^$' | sed 's/^/    /'
     CLAUSE1=FAIL
   else
-    printf 'CLAUSE 1 [%s]: PASS -- 0 code references to %s, describe.skip, skipIf, dbDescribe\n' \
-      "$FILE" "$ENV_LITERAL"
+    printf 'CLAUSE 1 [%s]: PASS -- 0 code-line process.env reads of %s, and no describe.skip, skipIf, dbDescribe\n' \
+      "$FILE" "$(printf '%s' "$ENV_LITERALS" | tr ' ' '/')"
   fi
 
   # -------------------------------------------------------------------------
@@ -179,6 +215,7 @@ while IFS= read -r FILE; do
   # -------------------------------------------------------------------------
   IMPORT_HITS="$(cd "$REPO_ROOT" && rg -n "$HELPER_IDENT" "$FILE" 2>/dev/null \
     | rg -F "$HELPER_BASENAME" || true)"
+  DEMANDED="$(cd "$REPO_ROOT" && demanded_variable_of "$FILE")"
   if [ -n "$IMPORT_HITS" ]; then
     printf 'CLAUSE 2 [%s]: PASS -- imports %s from a %s module\n' \
       "$FILE" "$HELPER_IDENT" "$HELPER_BASENAME"
@@ -191,7 +228,18 @@ while IFS= read -r FILE; do
   # -------------------------------------------------------------------------
   # CLAUSE 3 -- the hard fail is observed with the variable removed.
   # -------------------------------------------------------------------------
-  RUN_OUT="$(cd "$REPO_ROOT" && env -u OPENBRAIN_TEST_DATABASE_URL bun test "$FILE" 2>&1)"
+  # Unset the variable THIS file demands, not a fixed one: unsetting the test
+  # database while a clone suite reads the clone variable would leave the guard
+  # unfired and the run green, which is the very outcome clause 3 exists to
+  # disprove. A file that imports no helper failed clause 2 already; unsetting
+  # all three keeps its clause-3 verdict honest rather than accidentally green.
+  if [ -n "$DEMANDED" ]; then
+    RUN_OUT="$(cd "$REPO_ROOT" && env -u "$DEMANDED" bun test "$FILE" 2>&1)"
+  else
+    RUN_OUT="$(cd "$REPO_ROOT" && env -u OPENBRAIN_TEST_DATABASE_URL \
+      -u OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL \
+      -u OPENBRAIN_SCRATCH_ADMIN_URL bun test "$FILE" 2>&1)"
+  fi
   RUN_STATUS=$?
   RUN_HAS_STRING=no
   printf '%s\n' "$RUN_OUT" | rg -qF "$HARD_FAIL_STRING" && RUN_HAS_STRING=yes
