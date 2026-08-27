@@ -194,6 +194,26 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "032 raw turns retention and provenance (live Postgres)",
     minTests: 7,
   },
+  // Migrations 038/039. The CHECK constraints, the dedupe unique index, and the
+  // ON DELETE CASCADE are database guarantees a fake cannot enforce, so an
+  // unnoticed non-run here means nothing is proving them. The file's suites are
+  // FLAT for this guard's sake: its testcase-level cross-check keys on the JUnit
+  // `classname`, which for a nested suite carries the inner name only, so a
+  // wrapping describe would register here as a suite that executed nothing and
+  // fail even on a fully green run. All four are named; registering a subset
+  // would let the rest vanish unnoticed.
+  {
+    name:
+      "the operator queue is enforced by the database, not by convention " +
+      "(live Postgres)",
+    minTests: 6,
+  },
+  { name: "039 said-at timestamps (live Postgres)", minTests: 4 },
+  { name: "038 candidate_reinforcement writes (live Postgres)", minTests: 5 },
+  {
+    name: "038 candidate_reinforcement lifecycle (live Postgres)",
+    minTests: 4,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -214,9 +234,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // backgroundExtract tag-merge suite that shares migration 027's file and had
 // never been named here, then 85 -> 91 when #878 registered the migration 031
 // upgrade-path suite and its 6, then 91 -> 108 when #878 registered the four
-// migration 032 raw-turns suites' 2 + 4 + 4 + 7), so the global floor cannot
-// silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 108;
+// migration 032 raw-turns suites' 2 + 4 + 4 + 7, then 108 -> 127 when #878
+// registered the migrations 038/039 reinforcement + said-at file's four
+// flattened suites at 6 + 4 + 5 + 4), so the global floor cannot silently
+// fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 127;
 
 export interface SuiteStats {
   tests: number;
