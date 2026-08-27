@@ -73,7 +73,26 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // proves usage rows are saved, queryable, and -- most importantly -- invisible
   // across the namespace boundary. `skill_usage_log` has no namespace column, so
   // that boundary lives entirely in a join this suite is what checks.
-  { name: "skill usage telemetry (live Postgres)", minTests: 9 },
+  // Split by subject in #878 out of one "skill usage telemetry" suite; the two
+  // halves together cover exactly what that one entry did, so both are named
+  // here. Registering only one would let the other vanish unnoticed.
+  { name: "skill usage recording and reporting (live Postgres)", minTests: 4 },
+  {
+    name: "skill usage isolation and permissions (live Postgres)",
+    minTests: 5,
+  },
+  // The source registry's revision, approval, isolation, and retirement paths,
+  // split by subject in #878 out of one "source registry lifecycle" suite.
+  // Env-gated like every suite above, and never registered here before, so a
+  // Postgres misconfiguration silently skipped all eight of these.
+  {
+    name: "source registry revision and approval (live Postgres)",
+    minTests: 5,
+  },
+  {
+    name: "source registry isolation and retirement (live Postgres)",
+    minTests: 3,
+  },
   // The maintenance queue runner's lease boundary, proven through the composed
   // `server/` runtime. This entry matters more than most: both invariants it
   // covers fail SILENTLY -- a row sits `running` under a live lease with no
@@ -88,10 +107,17 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // listener -- so a silently skipped run reports a green build for a startup
   // path nothing ever executed. Every other `server/` suite hand-assembles the
   // application and would stay green with a completely broken `startServer`.
-  { name: "rewrite entrypoint start-equivalence (live Postgres)", minTests: 5 },
+  // #878 split the start-equivalence suite by subject: the audit and runtime
+  // composition tests moved into their own suite, so start-equivalence itself
+  // now runs 3 rather than 8. Both halves are named here for the reason above.
+  { name: "rewrite entrypoint start-equivalence (live Postgres)", minTests: 3 },
+  {
+    name: "rewrite entrypoint audit and runtime composition (live Postgres)",
+    minTests: 2,
+  },
   {
     name: "rewrite entrypoint startup and shutdown ordering (live Postgres)",
-    minTests: 2,
+    minTests: 3,
   },
 ];
 
@@ -101,9 +127,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // its 8, then 12 once that suite also covered the realtime append tools and the
 // two-worker front, then 44 -> 53 when the #469 skill-usage telemetry suite
 // added its 9, then 53 -> 58 when the maintenance lease-boundary suite added
-// its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2), so
-// the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 65;
+// its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2, then
+// 65 -> 74 when #878 registered the two source-registry suites (8) and the
+// entrypoint split redistributed its own tests to 3 + 2 + 3), so the global
+// floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 74;
 
 export interface SuiteStats {
   tests: number;
@@ -124,8 +152,8 @@ function attr(tag: string, name: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
-export function evaluateJunit(xml: string): GuardResult {
-  // Collect per-suite stats from <testsuite ...> opening tags.
+// Collect per-suite stats from <testsuite ...> opening tags.
+function collectSuiteStats(xml: string): Map<string, SuiteStats> {
   const suiteStats = new Map<string, SuiteStats>();
   for (const tag of xml.match(/<testsuite\b[^>]*>/g) ?? []) {
     const name = attr(tag, "name");
@@ -143,22 +171,38 @@ export function evaluateJunit(xml: string): GuardResult {
       skipped: prev.skipped + Number(attr(tag, "skipped") ?? "0"),
     });
   }
+  return suiteStats;
+}
 
-  // Inspect individual live-Postgres <testcase> blocks as an independent
-  // cross-check on the suite-level attributes. A skipped testcase carries a
-  // <skipped .../> child or skipped="true"; an errored one carries an
-  // <error .../> child.
+interface TestcaseTally {
+  executedLiveTestcases: number;
+  erroredLiveTestcases: number;
+  executedLiveTestcasesBySuite: Map<string, number>;
+}
+
+// Inspect individual live-Postgres <testcase> blocks as an independent
+// cross-check on the suite-level attributes. A skipped testcase carries a
+// <skipped .../> child or skipped="true"; an errored one carries an
+// <error .../> child.
+// The suite name of one <testcase> block when it is a live-Postgres case that
+// actually executed, and undefined for every other block.
+function executedLiveSuiteName(block: string): string | undefined {
+  const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
+  const classname = attr(open, "classname") ?? "";
+  if (!classname.includes("(live Postgres)")) return undefined;
+  const isSkipped =
+    /<skipped\b/.test(block) || attr(open, "skipped") === "true";
+  return isSkipped ? undefined : classname;
+}
+
+function tallyTestcases(xml: string): TestcaseTally {
   let executedLiveTestcases = 0;
   let erroredLiveTestcases = 0;
   const executedLiveTestcasesBySuite = new Map<string, number>();
   const testcaseRe = /<testcase\b[^>]*?(\/>|>[\s\S]*?<\/testcase>)/g;
   for (const block of xml.match(testcaseRe) ?? []) {
-    const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
-    const classname = attr(open, "classname") ?? "";
-    if (!classname.includes("(live Postgres)")) continue;
-    const isSkipped =
-      /<skipped\b/.test(block) || attr(open, "skipped") === "true";
-    if (isSkipped) continue;
+    const classname = executedLiveSuiteName(block);
+    if (classname === undefined) continue;
     executedLiveTestcases += 1;
     executedLiveTestcasesBySuite.set(
       classname,
@@ -166,10 +210,21 @@ export function evaluateJunit(xml: string): GuardResult {
     );
     if (/<error\b/.test(block)) erroredLiveTestcases += 1;
   }
+  return {
+    executedLiveTestcases,
+    erroredLiveTestcases,
+    executedLiveTestcasesBySuite,
+  };
+}
 
+// Every way one required suite can fail the guard, as error strings.
+function checkRequiredSuite(
+  req: { name: string; minTests: number },
+  suiteStats: Map<string, SuiteStats>,
+  executedLiveTestcasesBySuite: Map<string, number>,
+): string[] {
   const errors: string[] = [];
-
-  for (const req of REQUIRED_SUITES) {
+  {
     const s = suiteStats.get(req.name);
     if (!s) {
       errors.push(
@@ -177,7 +232,7 @@ export function evaluateJunit(xml: string): GuardResult {
           `never registered). The CI Postgres / OPENBRAIN_TEST_DATABASE_URL ` +
           `is not wired correctly.`,
       );
-      continue;
+      return errors;
     }
     if (s.skipped > 0) {
       errors.push(
@@ -204,6 +259,24 @@ export function evaluateJunit(xml: string): GuardResult {
           `testcases, expected at least ${req.minTests}.`,
       );
     }
+  }
+  return errors;
+}
+
+export function evaluateJunit(xml: string): GuardResult {
+  const suiteStats = collectSuiteStats(xml);
+  const {
+    executedLiveTestcases,
+    erroredLiveTestcases,
+    executedLiveTestcasesBySuite,
+  } = tallyTestcases(xml);
+
+  const errors: string[] = [];
+
+  for (const req of REQUIRED_SUITES) {
+    errors.push(
+      ...checkRequiredSuite(req, suiteStats, executedLiveTestcasesBySuite),
+    );
   }
 
   if (erroredLiveTestcases > 0) {
@@ -265,8 +338,8 @@ function main(): void {
       `(0 skipped, 0 failed, 0 errored).`,
   );
   for (const req of REQUIRED_SUITES) {
-    const s = result.suiteStats.get(req.name)!;
-    console.log(`  - ${req.name}: ${s.tests} tests`);
+    const s = result.suiteStats.get(req.name);
+    console.log(`  - ${req.name}: ${s?.tests ?? 0} tests`);
   }
 }
 
