@@ -70,4 +70,17 @@ if (( failed )); then
   echo "FAIL: a handover document does not conform"
   exit 1
 fi
-echo "PASS: ${#files[@]} handover document(s) conform"
+
+# HANDOVER-RULES rule 47: the authoring session drains. Merged branches on
+# origin or in a lane clone, a stash, a dirty clone, or a registered worktree
+# fail the handover PR here, on the Development machine that verifies it.
+DRAINED=/Volumes/ThunderBolt/Development/_ob/skills/handover-author/scripts/check-drained.sh
+if [[ ! -f $DRAINED ]]; then
+  echo "FAIL: drain check not found at $DRAINED"
+  exit 1
+fi
+if ! /opt/homebrew/bin/bash "$DRAINED" .; then
+  echo "FAIL: the repo is not drained (rule 47)"
+  exit 1
+fi
+echo "PASS: ${#files[@]} handover document(s) conform and the repo is drained"
