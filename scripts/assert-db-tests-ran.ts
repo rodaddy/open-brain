@@ -267,6 +267,17 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "bulk_set_tier transaction atomicity (live Postgres)",
     minTests: 3,
   },
+  // list_stale, the dream planner's candidate query (#878). A fake pool hands
+  // back a pre-sorted array, so the staleness cutoff, the COALESCE fallback,
+  // and the ordering are all supplied by the fixture rather than computed --
+  // only these live suites exercise the query itself. Registered as three
+  // subject-split entries: threshold, ordering, scoping.
+  {
+    name: "list_stale staleness threshold (live Postgres)",
+    minTests: 2,
+  },
+  { name: "list_stale result ordering (live Postgres)", minTests: 1 },
+  { name: "list_stale scoping predicates (live Postgres)", minTests: 3 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -294,9 +305,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // #878 registered the cross-provider parity suite's 75, then 218 -> 223 when
 // #878 registered the three decompose_entry suites (2 + 1 + 2) as that file
 // stopped skipping itself, then 223 -> 230 when #878 registered the three
-// bulk_set_tier suites (3 + 1 + 3) as that file stopped skipping itself), so
-// the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 230;
+// bulk_set_tier suites (3 + 1 + 3) as that file stopped skipping itself, then
+// 230 -> 236 when #878 registered the three subject-split list_stale suites
+// (2 + 1 + 3) as that file stopped skipping itself), so the global floor
+// cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 236;
 
 export interface SuiteStats {
   tests: number;
