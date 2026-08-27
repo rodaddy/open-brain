@@ -16,30 +16,44 @@
  * operator reading the transcript can see exactly what the child received.
  * Passwords are not printed.
  *
+ * A missing variable throws the same named error shape
+ * `scripts/test-support/require-test-database.ts` uses --
+ * `test_database_required: <VAR> is unset; run bun run test:isolated` -- rather
+ * than failing a bare `expect`. The distinction matters to whoever reads the
+ * failure: a bare assertion reads as "this test is wrong", while the named
+ * error names the actual cause, that the SUPPLIER did not export what the
+ * suite demands. `test_database_required` is the string to search for when it
+ * fires, in this file and in that one alike.
+ *
  * This file lives under `scripts/`, where `.oxlintrc.json` allows the
  * environment read and `console`.
  */
 
 import { describe, expect, it } from "bun:test";
 
+/**
+ * Returns the named environment variable, or throws when it is unset.
+ *
+ * @throws {Error} `test_database_required` when the variable is missing or empty.
+ */
+function requireSuppliedUrl(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`test_database_required: ${name} is unset; run bun run test:isolated`);
+  }
+  return value;
+}
+
 describe("isolated runner environment contract (#904)", () => {
   it("exports OPENBRAIN_SCRATCH_ADMIN_URL", () => {
-    const admin = process.env.OPENBRAIN_SCRATCH_ADMIN_URL;
-    expect(admin, "OPENBRAIN_SCRATCH_ADMIN_URL is unset; run bun run test:isolated").toBeTruthy();
-    if (!admin) throw new Error("OPENBRAIN_SCRATCH_ADMIN_URL is unset");
+    const admin = requireSuppliedUrl("OPENBRAIN_SCRATCH_ADMIN_URL");
     const url = new URL(admin);
     expect(["postgres:", "postgresql:"]).toContain(url.protocol);
     console.log(`OPENBRAIN_SCRATCH_ADMIN_URL -> ${url.username}@${url.host}${url.pathname}`);
   });
 
   it("exports a OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL the clone suite accepts", () => {
-    const raw = process.env.OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL;
-    expect(
-      raw,
-      "OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL is unset; run bun run test:isolated",
-    ).toBeTruthy();
-
-    if (!raw) throw new Error("OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL is unset");
+    const raw = requireSuppliedUrl("OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL");
     const url = new URL(raw);
     const host = url.hostname === "[::1]" ? "::1" : url.hostname;
     const database = decodeURIComponent(url.pathname.replace(/^\//, ""));

@@ -35,6 +35,13 @@ jobs:
       DB_PASSWORD: test
       DB_NAME: open_brain_test_${{ github.run_id }}_${{ github.run_attempt }}
       DB_NAME_TEST: open_brain_test_migrations_${{ github.run_id }}_${{ github.run_attempt }}
+      # The local-clone boundary suite requires its own fresh database owned by
+      # the exact non-superuser role the runbook names, mirroring the
+      # `db-integration` job below. Per-run names for the same reason the two
+      # databases above carry them.
+      DB_NAME_LOCAL_CLONE: open_brain_local_test_clone_${{ github.run_id }}_${{ github.run_attempt }}
+      DB_USER_LOCAL_CLONE: open_brain_local_clone
+      DB_PASSWORD_LOCAL_CLONE: local-clone-ci
       # Enable the env-gated real-Pool integration tests in CI (issue #165).
       # Without this, every `dbDescribe`-gated suite (lane_upsert, the #161
       # cursor-stall promoter tests) silently SKIPs and the SQL write paths get
@@ -42,6 +49,12 @@ jobs:
       # Each workflow run owns its database so simultaneous push/pull_request runs
       # cannot delete or clean up rows underneath one another.
       OPENBRAIN_TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/open_brain_test_${{ github.run_id }}_${{ github.run_attempt }}
+      # Ruling #878: tests never skip, so the suite runner supplies what the
+      # tests demand. Both URLs are assembled from the credentials this job
+      # already uses for `createdb` below — no new secret, and nothing here that
+      # is not already in this job's env.
+      OPENBRAIN_SCRATCH_ADMIN_URL: postgres://test:test@127.0.0.1:5432/postgres
+      OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL: postgres://open_brain_local_clone:local-clone-ci@127.0.0.1:5432/open_brain_local_test_clone_${{ github.run_id }}_${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v6
 
@@ -73,6 +86,40 @@ jobs:
           PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME_TEST}" \
             -v ON_ERROR_STOP=1 \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          # The local-clone role is cluster-wide, and unlike the ephemeral
+          # container in `db-integration` this runner's Postgres is persistent,
+          # so a previous or concurrent run may already have created it. Create
+          # it only when absent, then set the password unconditionally so the
+          # URL below authenticates whichever branch ran. `:'var'` interpolation
+          # is used rather than shell expansion so the password never reaches
+          # argv; it is deliberately NOT dollar-quoted, because psql does not
+          # substitute variables inside a `$$` body.
+          role_exists="$(PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres \
+            -Atc "SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER_LOCAL_CLONE}';")"
+          if [ "${role_exists}" != "1" ]; then
+            PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres \
+              -v ON_ERROR_STOP=1 \
+              -v clone_role="${DB_USER_LOCAL_CLONE}" \
+              -v clone_password="${DB_PASSWORD_LOCAL_CLONE}" <<'SQL'
+          CREATE ROLE :"clone_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'clone_password';
+          SQL
+          else
+            PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres \
+              -v ON_ERROR_STOP=1 \
+              -v clone_role="${DB_USER_LOCAL_CLONE}" \
+              -v clone_password="${DB_PASSWORD_LOCAL_CLONE}" <<'SQL'
+          ALTER ROLE :"clone_role" LOGIN PASSWORD :'clone_password';
+          SQL
+          fi
+          PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE ${DB_NAME_LOCAL_CLONE} OWNER ${DB_USER_LOCAL_CLONE} ENCODING 'UTF8' TEMPLATE template0;"
+          # Administrative bootstrap only: the clone user stays a non-superuser
+          # and restores into this fresh database.
+          PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME_LOCAL_CLONE}" \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
 
       - name: Run migrations
         run: bun run migrate
@@ -85,6 +132,7 @@ jobs:
         run: |
           PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME}"
           PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_TEST}"
+          PGPASSWORD="${DB_PASSWORD}" dropdb --if-exists --force -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${DB_NAME_LOCAL_CLONE}"
 
   # Issue #165: authoritative DB-backed integration gate.
   #
@@ -229,6 +277,8 @@ jobs:
         run: |
           export OPENBRAIN_TEST_DATABASE_URL="postgres://ci:ci@127.0.0.1:${DB_PORT}/open_brain_ci"
           export OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL="postgres://${DB_USER_LOCAL_CLONE}:${DB_PASSWORD_LOCAL_CLONE}@127.0.0.1:${DB_PORT}/${DB_NAME_LOCAL_CLONE}"
+          # Same admin credentials this job used for every CREATE DATABASE above.
+          export OPENBRAIN_SCRATCH_ADMIN_URL="postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/postgres"
           bun test \
             --reporter=junit \
             --reporter-outfile=${{ runner.temp }}/junit-db.xml
@@ -265,6 +315,7 @@ jobs:
           # credential) so no user:pass URI literal lives in the workflow.
           export OPENBRAIN_TEST_DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/${DB_NAME}"
           export OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL="postgres://${DB_USER_LOCAL_CLONE}:${DB_PASSWORD_LOCAL_CLONE}@127.0.0.1:${DB_PORT}/${DB_NAME_LOCAL_CLONE}"
+          export OPENBRAIN_SCRATCH_ADMIN_URL="postgres://${DB_USER}:${DB_PASSWORD}@127.0.0.1:${DB_PORT}/postgres"
           export OPENBRAIN_BACKUP_DRILL=1
           export OPENBRAIN_PG_DUMP_BIN="docker exec -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_dump"
           export OPENBRAIN_PG_RESTORE_BIN="docker exec -i -e PGPASSWORD ${OB_CI_PG_CONTAINER} pg_restore"
