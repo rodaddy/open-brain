@@ -1,0 +1,10 @@
+{"type":"last-prompt","prompt":"placeholder"}
+{"type":"user","uuid":"u1","promptSource":"typed","sessionId":"s1","cwd":"/repo","parentUuid":null,"message":{"role":"user","content":"first operator question"}}
+{"type":"assistant","uuid":"a1","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"first reply"}]}}
+{"type":"user","uuid":"t1","sessionId":"s1","userType":"external","message":{"role":"user","content":[{"type":"tool_result","content":"placeholder output"}]}}
+{"type":"user","uuid":"u2","promptSource":"typed","sessionId":"s1","cwd":"/repo","parentUuid":"a1","message":{"role":"user","content":"second operator question"}}
+{"type":"assistant","uuid":"a2","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"second reply"}]}}
+{"type":"user","uuid":"t2","sessionId":"s1","userType":"external","message":{"role":"user","content":[{"type":"tool_result","content":"more placeholder output"}]}}
+{"type":"user","uuid":"e1","sessionId":"s1","isApiErrorMessage":true,"message":{"role":"user","content":"API Error: Request timed out."}}
+{"type":"user","uuid":"u3","promptSource":"queued","sessionId":"s1","cwd":"/repo","parentUuid":"a2","message":{"role":"user","content":"third operator question"}}
+{"type":"assistant","uuid":"a3","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"third reply"}]}}
