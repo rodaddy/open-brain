@@ -119,6 +119,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "rewrite entrypoint startup and shutdown ordering (live Postgres)",
     minTests: 3,
   },
+  // Migration 028's upgrade-path repair (#878). The defect it covers exists
+  // ONLY on a database upgraded across an earlier revision of 026, so a fresh
+  // schema proves nothing and a skipped run proves less: the queue's
+  // dead-letter category would be rejected in production while CI stayed
+  // green. Registered here so the run is proven, not assumed.
+  {
+    name: "028 maintenance_jobs lease_expired compat (live Postgres)",
+    minTests: 3,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -129,9 +138,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // added its 9, then 53 -> 58 when the maintenance lease-boundary suite added
 // its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2, then
 // 65 -> 74 when #878 registered the two source-registry suites (8) and the
-// entrypoint split redistributed its own tests to 3 + 2 + 3), so the global
-// floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 74;
+// entrypoint split redistributed its own tests to 3 + 2 + 3, then 74 -> 77 when
+// #878 registered the migration 028 lease_expired compat suite's 3), so the
+// global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 77;
 
 export interface SuiteStats {
   tests: number;
