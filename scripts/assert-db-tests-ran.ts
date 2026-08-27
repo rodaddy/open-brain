@@ -40,7 +40,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "append_session_event create_if_missing (live Postgres)",
     minTests: 4,
   },
-  { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 8 },
+  { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 1 },
+  {
+    name: "runSharedPromoter clustering and cursor loops (live Postgres)",
+    minTests: 8,
+  },
   {
     name: "search_brain relational retrieval eval fixture (live Postgres)",
     minTests: 2,
@@ -437,9 +441,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // subject-split ingest_conversation_facts write-path and isolation suites'
 // 3 + 3 as that file stopped skipping itself, then 272 -> 284 when #878
 // registered the two 026 maintenance queue suites' 6 + 6 as that file
-// stopped skipping itself), so the global floor cannot silently fall behind
-// the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 284;
+// stopped skipping itself, then 284 -> 285 when #878 re-measured the
+// runSharedPromoter cursor-stall suite at its emitted 1 and registered the
+// clustering and cursor loops suite's 8 as that file stopped skipping
+// itself), so the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 285;
 
 export interface SuiteStats {
   tests: number;
