@@ -31,7 +31,6 @@ import { describe, expect, it } from "bun:test";
 import { Writable } from "node:stream";
 import type { DestinationStream } from "pino";
 import { withCorrelation } from "./context.ts";
-import { withLogging, logged } from "./decorate.ts";
 import { createLogger } from "./logger.ts";
 
 const CONFIG = {
@@ -81,8 +80,36 @@ function firstFailure(
   return found as Record<string, unknown>;
 }
 
+/**
+ * The seam under test does not exist yet, so it is loaded through a variable
+ * path at run time. A static `import` would make `bunx tsc --noEmit` fail with
+ * TS2307 and take CI down with it; the dynamic form keeps the type check green
+ * while the test still fails RED at run time until `./decorate.ts` lands,
+ * which is exactly what clause 4 of the done-means check reports.
+ */
+interface DecorateModule {
+  withLogging: <Args extends unknown[], Result>(
+    options: { logger: ReturnType<typeof createLogger>; name: string },
+    fn: (...args: Args) => Promise<Result>,
+  ) => (...args: Args) => Promise<Result>;
+  logged: (options: {
+    logger: () => ReturnType<typeof createLogger>;
+    name: string;
+  }) => <Method extends (...args: never[]) => Promise<unknown>>(
+    target: Method,
+    context: ClassMethodDecoratorContext,
+  ) => Method;
+}
+
+const DECORATE_MODULE_PATH = "./decorate.ts";
+
+async function loadDecorate(): Promise<DecorateModule> {
+  return (await import(DECORATE_MODULE_PATH)) as DecorateModule;
+}
+
 describe("logging decoration seam", () => {
   it("logs a thrown error with its stack and the ambient correlation id", async () => {
+    const { withLogging } = await loadDecorate();
     const capture = captureLogger();
     const explode = withLogging(
       { logger: capture.logger, name: "explode" },
@@ -104,6 +131,7 @@ describe("logging decoration seam", () => {
   });
 
   it("passes arguments and the return value through on the success path", async () => {
+    const { withLogging } = await loadDecorate();
     const capture = captureLogger();
     const add = withLogging(
       { logger: capture.logger, name: "add" },
@@ -122,6 +150,7 @@ describe("logging decoration seam", () => {
   });
 
   it("logs a thrown error from a decorated method the same way", async () => {
+    const { logged } = await loadDecorate();
     const capture = captureLogger();
     const capturedLogger = capture.logger;
 
