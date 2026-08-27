@@ -85,6 +85,20 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "025 leaves unrecognized lane shapes unchanged (live Postgres)",
     minTests: 1,
   },
+  // Migration 026's maintenance queue (#878). Env-gated like the suites above
+  // and never registered here, so a Postgres misconfiguration silently skipped
+  // every proof this queue has: idempotent enqueue, single-claimant leasing,
+  // deterministic retry scheduling, and the dead-letter transition. Split by
+  // subject in #878 into enqueue/claim and retry/dead-letter, so both halves
+  // are named here -- registering one would let the other vanish unnoticed.
+  {
+    name: "026 maintenance queue enqueue and claim (live Postgres)",
+    minTests: 6,
+  },
+  {
+    name: "026 maintenance queue retry and dead-letter (live Postgres)",
+    minTests: 6,
+  },
   {
     name: "server ID queries enforce namespace isolation (live Postgres)",
     minTests: 4,
@@ -421,9 +435,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // when #878 registered the get_entry compact render suite's 1 as that file
 // stopped skipping itself, then 266 -> 272 when #878 registered the two
 // subject-split ingest_conversation_facts write-path and isolation suites'
-// 3 + 3 as that file stopped skipping itself), so the global floor cannot
-// silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 272;
+// 3 + 3 as that file stopped skipping itself, then 272 -> 284 when #878
+// registered the two 026 maintenance queue suites' 6 + 6 as that file
+// stopped skipping itself), so the global floor cannot silently fall behind
+// the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 284;
 
 export interface SuiteStats {
   tests: number;
