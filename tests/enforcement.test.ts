@@ -40,7 +40,7 @@
  * - `.oxlintrc.json` -- the config under test, owned by another lane
  */
 
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -67,9 +67,26 @@ const CONFIG_PRESENT = existsSync(OXLINT_CONFIG);
  * run would then find these deliberately-broken files and fail the build on
  * them; `/tmp` is wrong because it is sandbox-local and invisible to every
  * other process. The temp workspace is the sanctioned third option.
+ *
+ * The workspace root is resolved from the environment because the hard-coded
+ * `/Volumes/...` path is a Mac-only volume and a Linux CI runner cannot create
+ * it. `RUNNER_TEMP` is accepted first on CI: the runner owns that directory for
+ * the life of the job and nothing else reads it, so it carries none of the
+ * cross-process invisibility that rules out `/tmp`.
+ *
+ * The directory is created in `beforeAll` rather than at module load so that
+ * merely importing this file can never throw.
  */
-const SCRATCH = "/Volumes/ThunderBolt/_tmp/open-brain/_scratch/enforcement";
-mkdirSync(SCRATCH, { recursive: true });
+const SCRATCH = join(
+  process.env.RUNNER_TEMP ??
+    process.env.OPENBRAIN_TEMP_WORKSPACE ??
+    "/Volumes/ThunderBolt/_tmp/open-brain",
+  "_scratch/enforcement",
+);
+
+beforeAll(() => {
+  mkdirSync(SCRATCH, { recursive: true });
+});
 
 /** Counter backing `lint`'s unique default snippet name. See `lint`. */
 let nextSnippetId = 0;
