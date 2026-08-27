@@ -20,7 +20,6 @@ import {
 } from "@langfuse/tracing";
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
-import { logger } from "../../src/logger.ts";
 import type { BackgroundObservation } from "../../src/background-tracing.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
@@ -32,6 +31,7 @@ import { repoRelease } from "./trace-release.ts";
 import type {
   McpTracingConfig,
   TraceBody,
+  TracingLogger,
   TracingSink,
 } from "./trace-types.ts";
 
@@ -190,7 +190,10 @@ function emitChildObservation(
   child.end(new Date(observation.endedAt));
 }
 
-export function defaultSinkFactory(config: McpTracingConfig): TracingSink {
+export function defaultSinkFactory(
+  config: McpTracingConfig,
+  logger: TracingLogger,
+): TracingSink {
   // The SDK's own logger writes export failures straight to `console.error`
   // with the raw error attached (`@langfuse/core` Logger.error), which would
   // route a transport message — potentially carrying the endpoint, a request
@@ -246,7 +249,7 @@ export function defaultSinkFactory(config: McpTracingConfig): TracingSink {
   // The traces are counted as they are enqueued below, so counting the batch
   // here as well would double-count them.
   setGlobalErrorHandler((err: unknown) => {
-    reportSinkFailure(tracker, err, false);
+    reportSinkFailure(logger, tracker, err, false);
   });
 
   // THE RECOVERY EDGE, which the error handler above cannot see.
@@ -288,7 +291,7 @@ export function defaultSinkFactory(config: McpTracingConfig): TracingSink {
         // The probe span above guarantees the queue was non-empty, so a resolve
         // here really is the endpoint answering.
         tracker.noteDelivered();
-        reportSinkSuccess(tracker);
+        reportSinkSuccess(logger, tracker);
       })
       // Still down — and deliberately NOT `recordFailure`, which would count
       // this probe as a dropped trace and inflate the recovery line with
@@ -337,7 +340,7 @@ export function defaultSinkFactory(config: McpTracingConfig): TracingSink {
       try {
         await processor.forceFlush();
       } catch (err: unknown) {
-        reportSinkFailure(tracker, err, false);
+        reportSinkFailure(logger, tracker, err, false);
       }
     },
     shutdown(): Promise<void> {
@@ -368,31 +371,37 @@ export function defaultSinkFactory(config: McpTracingConfig): TracingSink {
  */
 export async function shutdownSink(
   sink: TracingSink,
+  logger: TracingLogger,
   timeoutMs: number = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 ): Promise<void> {
-  const outcome = await withDeadline(drainSink(sink), timeoutMs);
+  const outcome = await withDeadline(drainSink(sink, logger), timeoutMs);
   if (outcome === "timeout") {
     // Content-free: the deadline itself, never a payload, a key, or a
     // transport error message.
-    logger.warn("mcp_tool_tracing_shutdown_timeout", { timeoutMs });
+    logger.warn({ timeoutMs }, "mcp_tool_tracing_shutdown_timeout");
   }
 }
 
 /** The drain pair, each failure logged content-free and never rethrown. */
-async function drainSink(sink: TracingSink): Promise<void> {
+async function drainSink(
+  sink: TracingSink,
+  logger: TracingLogger,
+): Promise<void> {
   try {
     await sink.forceFlush();
   } catch (err: unknown) {
-    logger.warn("mcp_tool_tracing_flush_failed", {
-      error: tracingErrorLabel(err),
-    });
+    logger.warn(
+      { error: tracingErrorLabel(err) },
+      "mcp_tool_tracing_flush_failed",
+    );
   }
   try {
     await sink.shutdown();
   } catch (err: unknown) {
-    logger.warn("mcp_tool_tracing_shutdown_failed", {
-      error: tracingErrorLabel(err),
-    });
+    logger.warn(
+      { error: tracingErrorLabel(err) },
+      "mcp_tool_tracing_shutdown_failed",
+    );
   }
 }
 

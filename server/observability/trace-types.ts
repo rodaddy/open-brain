@@ -70,8 +70,33 @@ export interface TracingSink {
   readonly health?: SinkHealthTracker;
 }
 
+/**
+ * The whole logging surface this lane uses, declared structurally.
+ *
+ * Two fields-then-message methods, which is the Pino call shape the composition
+ * root's logger already has. Structural rather than an import so this lane
+ * depends on the SHAPE it needs and not on the
+ * root's logging composition, and so a test can hand in a two-method recorder
+ * without a transport, a destination, or a correlation context.
+ */
+export interface TracingLogger {
+  info(fields: Record<string, unknown>, message: string): void;
+  warn(fields: Record<string, unknown>, message: string): void;
+}
+
 export interface McpTracingDeps {
   config?: McpTracingConfig;
+  /**
+   * The logger this lane reports its own health through.
+   *
+   * Received from the composition root rather than imported, so the process has
+   * ONE logger and this lane cannot acquire a second view of the log
+   * destination or the correlation context (#860, L3). Required in practice at
+   * every entry point that can log; the field is optional here only because
+   * `McpTracingDeps` is also the shape a test passes when it exercises a path
+   * that never logs.
+   */
+  logger?: TracingLogger;
   /**
    * An already-built sink to share.
    *

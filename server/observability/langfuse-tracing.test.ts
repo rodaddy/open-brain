@@ -12,6 +12,40 @@
  * seam `McpAuditDeps.now` provides for the audit lane.
  */
 import { describe, expect, test } from "bun:test";
+import { logger as legacyLogger } from "../../src/logger.ts";
+import { tracingLoggerFrom } from "./trace-logger-adapter.ts";
+
+/**
+ * The lane logger these tests drive: the legacy singleton in the fields-first
+ * shape the entry points now take. Kept pointed at the real logger so the
+ * `console`-based capture below still sees the same lines it always did.
+ */
+const consoleTracingLogger = tracingLoggerFrom(legacyLogger);
+import type { TracingLogger } from "./trace-types.ts";
+
+/** A two-method recorder standing in for the composition root logger. */
+function recordingLogger(): TracingLogger & {
+  readonly lines: {
+    level: string;
+    fields: Record<string, unknown>;
+    message: string;
+  }[];
+} {
+  const lines: {
+    level: string;
+    fields: Record<string, unknown>;
+    message: string;
+  }[] = [];
+  return {
+    lines,
+    info: (fields, message) => {
+      lines.push({ level: "info", fields, message });
+    },
+    warn: (fields, message) => {
+      lines.push({ level: "warn", fields, message });
+    },
+  };
+}
 import { tracingGroup } from "../config/env-groups.ts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -228,49 +262,62 @@ function qmdSpawn(docs: unknown[]): typeof Bun.spawn {
 
 describe("readMcpTracingConfig", () => {
   test("is disabled with no environment at all", () => {
-    const config = readMcpTracingConfig({});
+    const config = readMcpTracingConfig({}, recordingLogger());
     expect(config.enabled).toBe(false);
     expect(config.maskingEnabled).toBe(true);
   });
 
   test("masking is disabled only by the explicit zero value", () => {
     expect(
-      readMcpTracingConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" })
-        .maskingEnabled,
+      readMcpTracingConfig(
+        { OPENBRAIN_TRACING_MASKING_ENABLED: "0" },
+        recordingLogger(),
+      ).maskingEnabled,
     ).toBe(false);
     expect(
-      readMcpTracingConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" })
-        .maskingEnabled,
+      readMcpTracingConfig(
+        { OPENBRAIN_TRACING_MASKING_ENABLED: "false" },
+        recordingLogger(),
+      ).maskingEnabled,
     ).toBe(true);
   });
 
   test("is disabled when the coordinates are present but the flag is not set", () => {
-    const config = readMcpTracingConfig({
-      OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
-      OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
-      OPENBRAIN_TRACING_SECRET_KEY: "sk",
-    });
+    const config = readMcpTracingConfig(
+      {
+        OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
+        OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
+        OPENBRAIN_TRACING_SECRET_KEY: "sk",
+      },
+      recordingLogger(),
+    );
     expect(config.enabled).toBe(false);
   });
 
   test("is disabled when the flag is set but a coordinate is missing", () => {
-    const config = readMcpTracingConfig({
-      OPENBRAIN_TRACING_ENABLED: "1",
-      OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
-      OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
-    });
+    const config = readMcpTracingConfig(
+      {
+        OPENBRAIN_TRACING_ENABLED: "1",
+        OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
+        OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
+      },
+      recordingLogger(),
+    );
     expect(config.enabled).toBe(false);
     expect(config.secretKey).toBe("");
   });
 
   test("a whitespace-only coordinate counts as missing, not present", () => {
     expect(
-      readMcpTracingConfig({
-        OPENBRAIN_TRACING_ENABLED: "1",
-        OPENBRAIN_TRACING_ENDPOINT: "  ",
-        OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
-        OPENBRAIN_TRACING_SECRET_KEY: "sk",
-      }).enabled,
+      readMcpTracingConfig(
+        {
+          OPENBRAIN_TRACING_ENABLED: "1",
+          OPENBRAIN_TRACING_ENDPOINT: "  ",
+          OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
+          OPENBRAIN_TRACING_SECRET_KEY: "sk",
+        },
+        recordingLogger(),
+      ).enabled,
     ).toBe(false);
   });
 
@@ -285,12 +332,15 @@ describe("readMcpTracingConfig", () => {
       lines.push(parts.map((part) => String(part)).join(" "));
     };
     try {
-      readMcpTracingConfig({
-        OPENBRAIN_TRACING_ENABLED: "1",
-        OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
-        OPENBRAIN_TRACING_PUBLIC_KEY: "pk-lf-visible",
-        OPENBRAIN_TRACING_SECRET_KEY: "",
-      });
+      readMcpTracingConfig(
+        {
+          OPENBRAIN_TRACING_ENABLED: "1",
+          OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
+          OPENBRAIN_TRACING_PUBLIC_KEY: "pk-lf-visible",
+          OPENBRAIN_TRACING_SECRET_KEY: "",
+        },
+        tracingLoggerFrom(legacyLogger),
+      );
     } finally {
       console.warn = originalWarn;
     }
@@ -309,23 +359,29 @@ describe("readMcpTracingConfig", () => {
 
   test("only the exact flag value enables it", () => {
     expect(
-      readMcpTracingConfig({
-        OPENBRAIN_TRACING_ENABLED: "true",
-        OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
-        OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
-        OPENBRAIN_TRACING_SECRET_KEY: "sk",
-      }).enabled,
+      readMcpTracingConfig(
+        {
+          OPENBRAIN_TRACING_ENABLED: "true",
+          OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
+          OPENBRAIN_TRACING_PUBLIC_KEY: "pk",
+          OPENBRAIN_TRACING_SECRET_KEY: "sk",
+        },
+        recordingLogger(),
+      ).enabled,
     ).toBe(false);
   });
 
   test("enables with the flag and all three coordinates", () => {
     expect(
-      readMcpTracingConfig({
-        OPENBRAIN_TRACING_ENABLED: "1",
-        OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
-        OPENBRAIN_TRACING_PUBLIC_KEY: "pk-lf-1",
-        OPENBRAIN_TRACING_SECRET_KEY: "sk-lf-1",
-      }),
+      readMcpTracingConfig(
+        {
+          OPENBRAIN_TRACING_ENABLED: "1",
+          OPENBRAIN_TRACING_ENDPOINT: "http://host:3000",
+          OPENBRAIN_TRACING_PUBLIC_KEY: "pk-lf-1",
+          OPENBRAIN_TRACING_SECRET_KEY: "sk-lf-1",
+        },
+        recordingLogger(),
+      ),
     ).toEqual({
       enabled: true,
       maskingEnabled: true,
@@ -368,6 +424,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -413,6 +470,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -478,6 +536,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -527,6 +586,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -586,6 +646,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -616,6 +677,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -644,6 +706,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -682,6 +745,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -739,6 +803,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -768,6 +833,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -792,6 +858,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -833,6 +900,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -914,6 +982,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -933,6 +1002,7 @@ describe("installMcpTracing", () => {
   test("a sink that throws on every method leaves the result byte-identical and never throws", async () => {
     const { server, handlers } = fakeServer();
     const handle = installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: throwingSink,
     });
@@ -958,6 +1028,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -991,6 +1062,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, originalRegisterTool } = fakeServer();
     const handle = installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: { ...ENABLED_CONFIG, enabled: false },
       createSink: () => sink,
     });
@@ -1005,10 +1077,12 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -1024,6 +1098,7 @@ describe("installMcpTracing", () => {
   test("a sink factory that throws degrades to no tracing instead of failing install", () => {
     const { server, originalRegisterTool } = fakeServer();
     const handle = installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => {
         throw new Error("bad base url");
@@ -1037,6 +1112,7 @@ describe("installMcpTracing", () => {
     const sink = recordingSink();
     const { server } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -1094,6 +1170,7 @@ describe("child observation export", () => {
 describe("createTracingRuntime — the composition root's seam", () => {
   test("disabled config yields no sink and a no-op shutdown", async () => {
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: { ...ENABLED_CONFIG, enabled: false },
       createSink: recordingSink,
     });
@@ -1104,6 +1181,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
   test("one shared sink serves many per-session servers and drains once", async () => {
     const sink = recordingSink();
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
@@ -1120,6 +1198,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
     const built = [fakeServer(), fakeServer()];
     for (const { server } of built) {
       const handle = installMcpTracing(server, {
+        logger: consoleTracingLogger,
         config: ENABLED_CONFIG,
         sink: runtime.sink!,
       });
@@ -1143,6 +1222,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
 
   test("a sink whose flush and shutdown both reject still resolves", async () => {
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: throwingSink,
     });
@@ -1155,6 +1235,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
   // exercised it.
   test("a sink that never settles cannot hold shutdown open", async () => {
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: hangingSink,
       shutdownTimeoutMs: 25,
@@ -1174,6 +1255,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
     };
     try {
       const runtime = createTracingRuntime({
+        logger: consoleTracingLogger,
         config: ENABLED_CONFIG,
         createSink: hangingSink,
         shutdownTimeoutMs: 25,
@@ -1194,6 +1276,7 @@ describe("createTracingRuntime — the composition root's seam", () => {
   test("a per-session install with a hanging own sink still drains bounded", async () => {
     const { server } = fakeServer();
     const handle = installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: hangingSink,
       shutdownTimeoutMs: 25,
@@ -1230,6 +1313,7 @@ describe("outage alerts fire on state change only", () => {
     healthOptions?: { cooldownMs?: number; now?: () => number },
   ): () => Promise<void> {
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
       ...(healthOptions === undefined ? {} : { healthOptions }),
@@ -1237,6 +1321,7 @@ describe("outage alerts fire on state change only", () => {
     const { server, handlers } = fakeServer();
     // The `main.ts` shape: config plus the process's ONE shared sink.
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       sink: runtime.sink!,
     });
@@ -1298,12 +1383,14 @@ describe("outage alerts fire on state change only", () => {
     // ever run on the shared path: N sessions must not mean N suspend lines.
     const sink = flakySink();
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
     const calls = [0, 1, 2].map(() => {
       const { server, handlers } = fakeServer();
       installMcpTracing(server, {
+        logger: consoleTracingLogger,
         config: ENABLED_CONFIG,
         sink: runtime.sink!,
       });
@@ -1384,11 +1471,13 @@ describe("outage alerts fire on state change only", () => {
   test("tool calls still return their own result verbatim throughout an outage", async () => {
     const sink = flakySink();
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       createSink: () => sink,
     });
     const { server, handlers } = fakeServer();
     installMcpTracing(server, {
+      logger: consoleTracingLogger,
       config: ENABLED_CONFIG,
       sink: runtime.sink!,
     });
@@ -1483,7 +1572,11 @@ describe("outage alerts fire on state change only", () => {
 describe("background job tracing", () => {
   test("uses the shared masking boundary for root and child observations", () => {
     const sink = recordingSink();
-    const runtime = createTracingRuntime({ config: ENABLED_CONFIG, sink });
+    const runtime = createTracingRuntime({
+      config: ENABLED_CONFIG,
+      sink,
+      logger: consoleTracingLogger,
+    });
     runtime.background!.emitBackground({
       name: "memory.distill",
       input: { prompt: "password=fake-background-secret" },
@@ -1527,6 +1620,7 @@ describe("background job tracing", () => {
 
   test("does not expose a background emitter when tracing is disabled", () => {
     const runtime = createTracingRuntime({
+      logger: consoleTracingLogger,
       config: { ...ENABLED_CONFIG, enabled: false },
     });
     expect(runtime.background).toBeUndefined();
@@ -1567,7 +1661,10 @@ describe("the SDK's own logger cannot bypass the content-free discipline", () =>
 
     // Building the real sink installs the suppression. `createSink` is NOT
     // injected here on purpose: the point is that the DEFAULT factory does it.
-    createTracingRuntime({ config: ENABLED_CONFIG });
+    createTracingRuntime({
+      config: ENABLED_CONFIG,
+      logger: consoleTracingLogger,
+    });
 
     const gated = getGlobalLogger() as unknown as Gated;
     expect(gated.shouldLog(LogLevel.ERROR)).toBe(false);
@@ -1624,6 +1721,8 @@ const REAL_SINK_PROBE_SCRIPT = String.raw`
         "./server/observability/langfuse-tracing.ts"
       );
       const runtime = createTracingRuntime({
+        // This probe runs in its own process, so it composes its own logger.
+        logger: { info: () => {}, warn: () => {} },
         config: {
           enabled: true,
           maskingEnabled: true,
@@ -2008,7 +2107,10 @@ describe("tracing configuration arrives from the composition root (#825)", () =>
     const previousEndpoint = process.env.OPENBRAIN_TRACING_ENDPOINT;
     process.env.OPENBRAIN_TRACING_ENDPOINT = "http://from-ambient-env:9999";
     try {
-      const runtime = createTracingRuntime({ config: fromValidatedConfig });
+      const runtime = createTracingRuntime({
+        config: fromValidatedConfig,
+        logger: consoleTracingLogger,
+      });
       expect(runtime.config.endpoint).toBe("http://from-config:3000");
       expect(runtime.config.publicKey).toBe("pk-from-config");
       expect(runtime.config.maskingEnabled).toBe(false);

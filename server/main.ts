@@ -205,6 +205,7 @@ function createServerFactory(input: {
       installMcpTracing(server, {
         config: input.tracing.config,
         sink: input.tracing.sink,
+        logger: input.logger,
       });
     }
     registerMemoryTools(server, {
@@ -549,7 +550,7 @@ export async function startServer(
   // set all four OPENBRAIN_TRACING_* variables; `createTracingRuntime` never
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
-  const tracing = createTracingRuntime({ config: config.tracing });
+  const tracing = createTracingRuntime({ config: config.tracing, logger });
   logger.info(
     { enabled: tracing.sink !== undefined },
     "mcp_tracing_configured",

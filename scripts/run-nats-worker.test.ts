@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { silentTracingLogger } from "../server/observability/trace-logger-fixture.ts";
 import { createNatsBridgeHealth } from "../src/nats-bridge.ts";
 import {
   readNatsWorkerBoundary,
@@ -22,7 +23,10 @@ const ENABLED_CONFIG: McpTracingConfig = {
   secretKey: "sk-test",
 };
 
-function recordingSink(): TracingSink & { bodies: TraceBody[]; shutdowns: number } {
+function recordingSink(): TracingSink & {
+  bodies: TraceBody[];
+  shutdowns: number;
+} {
   const bodies: TraceBody[] = [];
   return {
     bodies,
@@ -63,7 +67,12 @@ describe("startNatsWorkerProcess", () => {
       buildTokens: () =>
         new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
       createDbPool: () => ({ end: async () => undefined }) as any,
-      createTracing: () => createTracingRuntime({ config: ENABLED_CONFIG, sink }),
+      createTracing: () =>
+        createTracingRuntime({
+          config: ENABLED_CONFIG,
+          sink,
+          logger: silentTracingLogger(),
+        }),
       startWorker: async (options: StartNatsWorkerOptions) => {
         options.tracing?.emitBackground(body);
         return runtime;

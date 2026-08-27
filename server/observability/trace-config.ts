@@ -5,8 +5,7 @@
  * handed in — an env record and a tool call's arguments — with no SDK, server,
  * or async-local state involved, which is what makes them assertable directly.
  */
-import { logger } from "../../src/logger.ts";
-import type { McpTracingConfig } from "./trace-types.ts";
+import type { McpTracingConfig, TracingLogger } from "./trace-types.ts";
 
 /** One tracing coordinate, trimmed, with absent and blank both reading as "". */
 function trimmedEnv(
@@ -31,6 +30,7 @@ function trimmedEnv(
  */
 export function readMcpTracingConfig(
   env: Record<string, string | undefined>,
+  logger: TracingLogger,
 ): McpTracingConfig {
   const endpoint = trimmedEnv(env, "OPENBRAIN_TRACING_ENDPOINT");
   const publicKey = trimmedEnv(env, "OPENBRAIN_TRACING_PUBLIC_KEY");
@@ -47,11 +47,14 @@ export function readMcpTracingConfig(
     // line telling an operator WHICH variable they mistyped into noise. The
     // values are booleans by construction, so no key material can travel here
     // regardless of the name.
-    logger.warn("mcp_tool_tracing_config_incomplete", {
-      endpointSet: endpoint.length > 0,
-      publicIdSet: publicKey.length > 0,
-      privateIdSet: secretKey.length > 0,
-    });
+    logger.warn(
+      {
+        endpointSet: endpoint.length > 0,
+        publicIdSet: publicKey.length > 0,
+        privateIdSet: secretKey.length > 0,
+      },
+      "mcp_tool_tracing_config_incomplete",
+    );
   }
   return {
     enabled: flagged && complete,
