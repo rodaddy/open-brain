@@ -255,13 +255,20 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
   );
 }
 
-// Bun's default 5s per-hook allowance is not enough for these two hooks, and
-// the shortfall only shows in a full-suite run where the server is also serving
-// every other suite: `beforeAll` creates a database and then applies all 49
-// files in src/db/migrations one transaction at a time (src/db/migrate.ts:45),
-// and `afterAll` waits on `DROP DATABASE ... WITH (FORCE)`. Both are sized here
-// against that real work rather than left on the default, which surfaced as an
-// unnamed `a beforeEach/afterEach hook timed out` failure at 5004ms (#912).
+// Bun's default 5s per-hook allowance is not enough for `beforeAll`, and the
+// shortfall only shows in a full-suite run where the server is also serving
+// every other suite: it creates a database and then applies all 49 files in
+// src/db/migrations one transaction at a time (src/db/migrate.ts:45). That is
+// real work, so the setup hook is sized against it rather than left on the
+// default, which surfaced as an unnamed hook failure at 5004ms (#912).
+//
+// `afterAll` is a different story and its allowance is NOT sized against real
+// work: dropping a database the suite just finished with is sub-second when it
+// is not waiting on a straggling backend, and `dropScratchDatabase` now removes
+// the straggler instead of waiting it out. The allowance is kept generous only
+// so a genuinely loaded server does not turn a slow drop into a red suite; if
+// this hook ever approaches it again, the drop is blocked, not slow, and the
+// question to ask is which session is still attached.
 const SCRATCH_SETUP_TIMEOUT_MS = 120_000;
 const SCRATCH_TEARDOWN_TIMEOUT_MS = 30_000;
 
@@ -294,13 +301,42 @@ async function createScratchDatabase(): Promise<ScratchPool> {
   return pool;
 }
 
-/** Closes the pool and drops the scratch database. */
+/**
+ * Closes the pool and drops the scratch database.
+ *
+ * `await pool.end()` settles when the CLIENT has released its sockets, which is
+ * not the same instant the SERVER has finished tearing the backends down. Any
+ * backend still attached to the scratch database when `DROP DATABASE` arrives
+ * makes the drop WAIT for it rather than fail fast, and `WITH (FORCE)` does not
+ * close that window on its own: it terminates what it can see at the moment it
+ * runs, so a backend mid-teardown is still there to be waited on. On this
+ * machine (PostgreSQL 18) the race never lost and the drop returned in ~150ms;
+ * on the self-hosted runner (PostgreSQL 17) it lost twice in two runs and sat
+ * for the full 30s the hook allows, surfacing as an unnamed `afterAll` failure
+ * at 30004ms (#912).
+ *
+ * So release SERVER-SIDE first, exactly as `scripts/done-means/677-scheduled-
+ * backup.sh:222-228` already does for the same symptom: `pg_terminate_backend`
+ * every session attached to this database, scoped by `datname` to the
+ * timestamped name this file created, then drop. Scoping by `datname` is what
+ * makes it safe — it can only ever disconnect sessions attached to a database
+ * this suite made, never the dogfood database or a neighbouring run.
+ */
 async function dropScratchDatabase(pool: ScratchPool | undefined): Promise<void> {
   if (pool) await pool.end();
   const admin = new Client({ connectionString: requireAdminUrl() });
   await admin.connect();
-  await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
-  await admin.end();
+  try {
+    await admin.query(
+      `SELECT pg_terminate_backend(pid)
+         FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [SCRATCH_DB],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
+  } finally {
+    await admin.end();
+  }
 }
 
 /** The plan a dry-run must report: counts populated, nothing yet performed. */
