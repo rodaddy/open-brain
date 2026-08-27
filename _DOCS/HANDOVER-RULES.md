@@ -290,3 +290,29 @@ only when a session actually needed it.
     the PR never touched (#889). The collector reruns the failed job once,
     files the race with file:line and the run id, and merges on green; the
     python-capture flake (#764) hit five PRs this way before its fix lane ran.
+43. **The anti-skip manifest serializes every conversion PR; rebase one at a
+    time with a git lane.** `MIN_TOTAL_LIVE_TESTCASES` must equal the sum of
+    `minTests` (its own test enforces it), so every #878 PR conflicts on
+    `scripts/assert-db-tests-ran.ts`. Merge order is: rebase lane (keep
+    main's manifest plus the branch's entries, floor = main + delta, sum
+    check), collect, next PR. A lane's brief states "floor +N" and the
+    entry's `minTests` is the count the suite EMITS, verified from JUnit,
+    not a tally (#905 carried 77 for a suite that emits 75).
+44. **The PR body Done-means field is a bare script path.**
+    `scripts/validate-pr-body.ts:138-152` resolves the field as one path in
+    the tree, so `CHANGED_FILES=... bash scripts/done-means/x.sh` is
+    refused. The field carries `scripts/done-means/x.sh`; the full
+    invocation goes on the prose line beneath it (#917, #918, #919).
+45. **A wall-clock or disk-bound assertion on the shared runner is a
+    distribution tail, not a regression.** The `check` job runs on the
+    self-hosted runner's own PostgreSQL 17 and disk (#915): a 48-migration
+    `DROP DATABASE` took 23.7-30s there and 0.7s on the pg18 container
+    (#912), and a 1000ms scan threshold tripped at 1024ms (#916). Handle per
+    rule 42; a fix sizes the allowance to the measured tail with the
+    measurement in a comment, or asserts growth shape instead of seconds.
+46. **The wrap census is a command, not a memory.** Batch B's
+    `ingest-raw-turn.test.ts` was listed as converted for a session and was
+    not (#919). Before authoring a handover run
+    `git grep -l 'describe.skip\|skipIf' origin/main -- '*.test.ts'` and
+    read each hit; a comment mentioning the old guard is fine, a live
+    `dbDescribe` is a lane.
