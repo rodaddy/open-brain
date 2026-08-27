@@ -296,6 +296,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "exact-scope checkpoint lifecycle (live Postgres)",
     minTests: 2,
   },
+  // The maintenance sweep idempotency suite, registered by #878 when it stopped
+  // skipping itself without a database. Its one testcase drives the
+  // UNIQUE(job_kind, idempotency_key) conflict path, which exists only in
+  // Postgres and reported a silent zero before.
+  { name: "maintenance sweep idempotency (live Postgres)", minTests: 1 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -329,8 +334,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // #878 registered the exact-scope checkpoint lifecycle suite's 2 as it too
 // stopped skipping itself, then 238 -> 240 when #878 registered the #297
 // namespace isolation negative matrix suite's 2 as that suite stopped skipping
-// itself), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 240;
+// itself, then 240 -> 241 when #878 registered the maintenance sweep
+// idempotency suite's 1), so the global floor cannot silently fall behind
+// the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 241;
 
 export interface SuiteStats {
   tests: number;
