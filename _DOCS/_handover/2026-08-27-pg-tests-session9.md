@@ -13,6 +13,12 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
   bind: head never works, own clones, FIVE lanes, no `rm`, no `--no-verify`,
   manifest in the same commit, one rebase lane per PR, census by command, the
   authoring session drains.
+- Graph Mode v1.3-beta runs here from the Development canon
+  (docs/controller-contract.md, "Graph Mode v1.3-beta"): every lane brief is
+  packed with brief-pack (an OVER BUDGET refusal means re-cut the lane in two,
+  never edit the brief); every lane report passes lane-report/check.sh before
+  its PR merges; ratchet-bound, decisions, and placeholders run at each harvest;
+  the five-field report format lives in _scratch/session7/lane.workflow.js.
 
 ## State 1 — ORIENT
 - `origin/main` is `692900a2` (#919); session 8 merged #893-#919 — MERGED (`git log --oneline origin/main -1`)
@@ -33,6 +39,9 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
   `origin/main` with no stash — RUNNING (`check-drained.sh .` exits 0)
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session7/{lane,recon,git}.workflow.js`, `collect.sh` — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`)
+- Beta cutover landed: #925 canon path, #926 #927 #928 graduated 32 Tightenings
+  rounds, ratchet exit 0 at live=13; rollback tag `pre-v13-beta-cutover` at
+  125d3522 — MERGED (`git tag -l pre-v13-beta-cutover`)
 Re-probe before dispatching anything (live state beats this doc):
 - `git log --oneline origin/main -1` → expect 692900a2 or later with this PR merged
 - `gh pr list --state open --json number` → only #892, #745, #739 (not this program)

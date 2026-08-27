@@ -6,8 +6,9 @@ did it." This file is the single briefing source for RLVR worker lanes in this
 repo. The controller's dispatch prompt states the task, the deliverable, and
 the done-means design; for everything else it POINTS HERE instead of restating.
 
-Graph Mode v1.3-beta, opted in 2026-08-27 (pilot); beta checks under
-`scripts/done-means/beta/`.
+Graph Mode v1.3-beta, opted in 2026-08-27 (pilot); beta checks run from
+`/Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/` (never copied;
+Rico ruling 2026-08-27).
 
 The ratchet rule (ledger item 19, `docs/issue-graph.md`): after every lane
 run, the controller harvests the lane's refusals, workarounds, self-caught
@@ -162,6 +163,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   the typechecker and a schema-level test stay green because the SQL is still
   valid and the arity still matches. The catching check is reading the emitted
   SQL and param order against the pre-change file. (PR #811)
+provenance: PR #797-#814 (the #780 wave 2 file lanes).
 
 ### 2026-08-26 (round 37) — harvest of the L2b-1 config-injection lane (PR #779) and the search-all lint lane (PR #780)
 
@@ -209,6 +211,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   legacy `src/tools/search-all.ts` twin was deliberately left untouched. Two
   callers that merely look alike get differenced first; the extraction is what
   you do once they are proven the same, not the way you find out.
+provenance: PR #779; PR #780.
 
 ### 2026-08-26 (round 36) — harvest of lane 1 of the #780 sweep (PR #782), the #779 review, and the session-2 collection pass
 
@@ -241,6 +244,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
 - **The harvest gate reads the whole Bash line.** `gh pr comment ... &&
   gh pr merge ...` is refused because the merge is present before the comment
   has landed; the comment and the merge are two separate calls.
+provenance: PR #782; the #779 review.
 
 ### 2026-08-26 (round 35) — harvest of the L2a config-schema lane (PR #778)
 
@@ -280,6 +284,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   added.** The fixer retired five hand-constant assertions the reader-driven
   table subsumes so `server/config.test.ts` still passed the rule; the next
   rung adds a sibling `*.test.ts` per group instead of removing assertions.
+provenance: PR #778.
 
 ### 2026-08-26 (round 34) — harvest of the verify-lane deps-at-head lane (PR #776, #775)
 
@@ -331,6 +336,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   up as untracked. The escape above passed its own clauses green while
   corrupting the branch it ran on; only inspecting the enclosing repo caught
   it.
+provenance: PR #776; PR #775.
 
 ### 2026-08-26 (round 33) — harvest of the plans lane (PR #772) and the L1 lint-gate lane (PR #771)
 
@@ -356,6 +362,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   A fresh worktree needs `bun install --frozen-lockfile` before pre-push
   `tsc` can run (`bun-types` ENOENT). `db-integration` still fails on
   #608/#632 (one defect, two issues); `gh run rerun --failed` clears it.
+provenance: PR #772; PR #771.
 
 ### 2026-08-18 (round 32) — harvest of the live-observer completion lane (PR #737)
 
@@ -376,6 +383,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
 - **Anti-stub assertions are RANGES derived from seeded offsets**, not
   equality constants — a hard-coded health block cannot satisfy stale +
   healthy + idle simultaneously.
+provenance: PR #737.
 
 ### 2026-08-17 (round 31) — harvest of the #724 wave (PRs #727-#732, forensics lane, Development-repo lane E)
 
@@ -428,6 +436,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
 - **A SALVAGED "UNTESTED" LABEL IS A CLAIM LIKE ANY OTHER: re-verify, then
   amend the message if verification flips it** (lane #721 did; content
   untouched, message corrected — announced, not silent).
+provenance: PR #727-#732 (the #724 wave).
 
 ### 2026-08-10 (round 30) — harvest of the #716 issue-artifacts landing lane
 
@@ -469,6 +478,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   CLI-closed node and an artifact that records a CLOSED stamp with no reasoning
   — do not treat it as optional when a PR happens to exist either, since the
   linkage that would carry it is exactly what this flow drops.
+provenance: the #716 issue-artifacts landing lane; no PR number in the heading.
 
 ### 2026-08-10 (round 29) — harvest of the #709 hook-feeds-head-ref lane
 
@@ -525,6 +535,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   stopped carrying information**, and that is the state #712 leaves the push
   path in. Filing it is cheaper than the habit it would otherwise train; #705's
   own commit message predicted this exact slide into routine bypass.
+provenance: the #709 hook-feeds-head-ref lane; no PR number in the heading.
 
 ### 2026-08-10 (round 29) — harvest of the #712 pre-push WriteFailed lane
 
@@ -585,6 +596,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   integration target (rebuilt with `git checkout -B` instead), and a Write
   refused pending a subject-relevant lookup. Neither was retried as a spelling
   variant.
+provenance: the #712 pre-push WriteFailed lane; no PR number in the heading.
 
 ### 2026-08-09 (round 28) — harvest of the #705/#706 gate-fix lane (PR #708)
 
@@ -642,6 +654,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   and a Write; the git guard on a commit whose heredoc mentioned protected
   branches). Handled the sanctioned way — do the lookup, write the message
   file in a separate call — never a retried spelling. Round 24's practice held.
+provenance: PR #708.
 
 ### 2026-08-09 (round 27) — operator ruling: a completed node shows its outcome (ledger item 32), harvested from the artifact-resolution lane
 
@@ -690,6 +703,7 @@ Newest first. Every entry: what changed, and the observation that forced it.
   into an artifact they became top-level sections of the ISSUE, so the
   PR's structure masqueraded as the issue's. Blockquoting the embedded
   body keeps every line inside its section and byte-identical.
+provenance: operator ruling 2026-08-09, ledger item 32; no PR number in the heading.
 
 ### 2026-08-08 (round 26) — operator ruling on test-data cleanup (ledger item 31)
 

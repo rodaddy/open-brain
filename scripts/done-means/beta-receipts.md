@@ -213,3 +213,42 @@ lane did not restyle would bury the resync diff.
   `# | Item | State | Resolution` table and genuinely needs migration to the
   nine columns. `docs/decisions.md`, the forward nine-column ledger, still
   passes (row 10).
+
+## Run receipts, 2026-08-27 (cutover to canon, PRs #925-#927)
+
+Checks run from the Development canon path, never a copy. The ratchet rows
+walk the graduation sequence: the same check, the same file, three landings.
+Exit codes captured with `rc=$?` on its own line.
+
+| # | command | exit | last line |
+|---|---|---|---|
+| 1 | `ratchet-bound/check.sh docs/lane-contract.md` at `125d3522` | **1** | `live=45 graduated=0 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` after #926 | **1** | `live=29 graduated=16 bound=15 source=default shape=heading` |
+| 3 | `ratchet-bound/check.sh docs/lane-contract.md` after #927 | **1** | `live=13 graduated=32 bound=15 source=default shape=heading`, plus 13 `FAIL provenance` lines (rounds 27-38) |
+| 4 | `ratchet-bound/check.sh docs/lane-contract.md` after this pull request | 0 | `live=13 graduated=32 bound=15 source=default shape=heading` |
+| 5 | `brief-pack/pack.sh` on the State 3 get-entry task at `125d3522` | **1** | `OVER BUDGET: 10821 > 8000`, with `Tightenings (ranked)` at 8129 |
+| 6 | `brief-pack/pack.sh --task <the same get-entry task> --lane-contract docs/lane-contract.md --done-means scripts/done-means/878-pg-tests-require-database.sh --out <scratch>` re-run on this branch | **1** | `OVER BUDGET: 10162 > 8000`, with `Tightenings (ranked)` at 7486 |
+| 7 | `lane-report/check.sh` on lane-2's real report (#925) | **1** | `FAIL claim-states: disallowed state word(s): PR` |
+| 8 | `lane-report/check.sh` on lane-3's real report (#926) | **1** | `FAIL claim-states: disallowed state word(s): PR` |
+| 9 | `lane-report/check.sh` on lane-3's real report (#927) | **1** | `FAIL trailing-content: line 1` (a line before `deliverable:`) |
+
+## Pilot findings
+
+- **The `claim-states` uppercase scan reads `PR` as a state word.** Two of
+  three real lane reports tripped it on rows 7 and 8, on a correct field that
+  merely cited a pull request. The lane brief now says "pull request #n" so a
+  report can name its own artifact; the canon README already names this clause
+  as the one to loosen.
+- **`brief-pack` refused the first real brief because the Tightenings section
+  alone was 8129 tokens**, which is what forced the graduation of 32 rounds
+  across #926 and #927. Row 6 shows the same task re-packed on this branch at
+  7486 for that section and 10162 overall — still a refusal, and still the
+  right one. The pilot exit criterion "an `OVER BUDGET` refusal that led to a
+  smaller lane" is met with these numbers.
+- **`ratchet-bound` tripped and 32 entries graduated.** Rows 1 through 4 are
+  the whole arc: 45 live and nothing graduated, then 29, then 13 with the
+  provenance gap exposed, then green. Exit criterion met.
+- **Three lane reports failed `lane-report` and were recorded, not sent back.**
+  Their pull requests were already verified by verify-lane, so re-running the
+  lanes would have proved nothing the merge pass had not already proved. The
+  failures are rows 7 through 9 rather than a silent pass.
