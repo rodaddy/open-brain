@@ -21,8 +21,8 @@
  * against. Asserting them one at a time against separate hand-built fixtures is
  * exactly how the gap this file closes stayed invisible.
  *
- * DATABASE. Skips loudly (`describe.skip`) without `OPENBRAIN_TEST_DATABASE_URL`,
- * which must point at an isolated test database — NEVER the dogfood one. The
+ * DATABASE. REQUIRES the test-database variable and fails hard without it
+ * (operator ruling 2026-08-27, issue #878). It must point at an isolated test database — NEVER the dogfood one. The
  * anti-skip guard (`scripts/assert-db-tests-ran.ts`) fails the job if this suite
  * does not actually execute, because a silent skip here would report a green
  * build for an entrypoint nothing had started.
@@ -32,15 +32,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
 import { parseServerConfig, type ServerConfig } from "./config.ts";
 import { startServer, type StartedServer } from "./main.ts";
 import type { SingleWorkerHealth } from "./transport/index.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
+const DB_URL = requireTestDatabaseUrl();
 
 const TOKEN = `entrypoint-proof-${process.pid}`;
-const NAMESPACE = `entrypoint-proof-${process.pid}-${Date.now()}`;
+const _NAMESPACE = `entrypoint-proof-${process.pid}-${Date.now()}`;
 
 function silentLogger() {
   return pino({ level: "silent" });
@@ -60,7 +60,7 @@ function silentLogger() {
  * which is itself the assertion that it did not try to rewrite history.
  */
 function testConfig(): ServerConfig {
-  const url = new URL(DB_URL!);
+  const url = new URL(DB_URL);
   const result = parseServerConfig({
     DB_HOST: url.hostname,
     DB_PORT: url.port || "5432",
@@ -78,35 +78,37 @@ function testConfig(): ServerConfig {
     AUTH_TOKEN_AGENT: TOKEN,
   });
   if (!result.ok) {
-    throw new Error(`invalid test configuration: ${JSON.stringify(result.issues)}`);
+    throw new Error(
+      `invalid test configuration: ${JSON.stringify(result.issues)}`,
+    );
   }
   return result.config;
 }
 
 let started: StartedServer | undefined;
 let base = "";
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: DB_URL });
 
-dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
-  beforeAll(async () => {
-    started = await startServer({
-      config: testConfig(),
-      // Port 0 asks the kernel for an ephemeral port. Nothing well-known binds,
-      // so this can run beside the dogfood service without contending for 3100.
-      port: 0,
-      bindHost: "127.0.0.1",
-      logger: silentLogger(),
-      allowedOrigins: [],
-    });
-    base = `http://127.0.0.1:${started.port}`;
+beforeAll(async () => {
+  started = await startServer({
+    config: testConfig(),
+    // Port 0 asks the kernel for an ephemeral port. Nothing well-known binds,
+    // so this can run beside the dogfood service without contending for 3100.
+    port: 0,
+    bindHost: "127.0.0.1",
+    logger: silentLogger(),
+    allowedOrigins: [],
   });
+  base = `http://127.0.0.1:${started.port}`;
+});
 
-  afterAll(async () => {
-    await started?.shutdown();
-    started = undefined;
-    await pool?.end();
-  });
+afterAll(async () => {
+  await started?.shutdown();
+  started = undefined;
+  await pool.end();
+});
 
+describe("rewrite entrypoint start-equivalence (live Postgres)", () => {
   test("binds an ephemeral port and answers the frozen /health shape", async () => {
     const response = await fetch(`${base}/health`);
     // 200 healthy or 503 degraded are both valid: the embedding provider may
@@ -165,17 +167,21 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
     });
     expect(response.status).toBe(401);
   });
+});
 
+describe("rewrite entrypoint audit and runtime composition (live Postgres)", () => {
   test("answers a real MCP tool call and writes the audit row for it", async () => {
-    if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
     const before = await pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM mcp_tool_audit_log WHERE operation = $1",
       ["get_contract"],
     );
 
-    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
-      requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
-    });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${base}/mcp`),
+      {
+        requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+      },
+    );
     const client = new Client({ name: "entrypoint-proof", version: "1.0.0" });
     // `connect` performs the real initialize handshake over real HTTP against
     // the listener the entrypoint opened.
@@ -204,11 +210,11 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
         "SELECT count(*)::text AS count FROM mcp_tool_audit_log WHERE operation = $1",
         ["get_contract"],
       );
-      if (Number(after.rows[0]!.count) > Number(before.rows[0]!.count)) break;
+      if (Number(after.rows[0]?.count) > Number(before.rows[0]?.count)) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    expect(Number(after.rows[0]!.count)).toBeGreaterThan(
-      Number(before.rows[0]!.count),
+    expect(Number(after.rows[0]?.count)).toBeGreaterThan(
+      Number(before.rows[0]?.count),
     );
 
     // The row must carry the identity the BEARER TOKEN resolved to, not
@@ -247,7 +253,7 @@ dbDescribe("rewrite entrypoint start-equivalence (live Postgres)", () => {
   });
 });
 
-dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", () => {
+describe("rewrite entrypoint startup and shutdown ordering (live Postgres)", () => {
   test("starts on an environment whose optional secrets are present but empty", async () => {
     // The 2026-08-02 deploy failure, as a live boot rather than a unit parse.
     // `server/config.test.ts` pins the parse-boundary semantics for all eight
@@ -256,7 +262,7 @@ dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", (
     // the previous fixtures never exercised — every env they built either set
     // an optional secret to a real value or omitted the key entirely, so the
     // shape that broke production (`EMBEDDING_API_KEY=`, empty) had no test.
-    const url = new URL(DB_URL!);
+    const url = new URL(DB_URL);
     const result = parseServerConfig({
       DB_HOST: url.hostname,
       DB_PORT: url.port || "5432",
@@ -264,9 +270,9 @@ dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", (
       DB_USER: decodeURIComponent(url.username) || "postgres",
       LOG_FILE: "logs/open-brain-entrypoint-empty-secret-test.log",
       // A concrete LAN address, NOT loopback: `/health` exists to tell a client
-    // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
-    // identity resolution deliberately falls through it to real detection.
-    OPEN_BRAIN_SERVER_IP: "192.0.2.99",
+      // WHICH machine it reached, so `127.0.0.1` is not a valid answer and
+      // identity resolution deliberately falls through it to real detection.
+      OPEN_BRAIN_SERVER_IP: "192.0.2.99",
       OPENBRAIN_MIGRATIONS_DIR: "src/db/migrations",
       AUTH_TOKEN_AGENT: TOKEN,
       // Exactly the local clone env's shape: the MLX embedding server needs no
@@ -296,7 +302,9 @@ dbDescribe("rewrite entrypoint startup and shutdown ordering (live Postgres)", (
       );
       // The empty admin token must not have been registered as a credential:
       // a blank bearer token accepted as `admin` would be an auth hole.
-      expect(result.config.authTokens.map(({ role }) => role)).toEqual(["agent"]);
+      expect(result.config.authTokens.map(({ role }) => role)).toEqual([
+        "agent",
+      ]);
       // Empty password/key were dropped rather than passed to pg / the provider.
       expect("password" in result.config.database).toBe(false);
       expect("embeddingApiKey" in result.config.transport).toBe(false);

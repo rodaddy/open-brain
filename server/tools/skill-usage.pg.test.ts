@@ -16,8 +16,8 @@
  * seeds a foreign namespace's invocations and proves the report cannot see
  * them, in both the counted rows and the never-used list.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
+ * REQUIRES the test-database variable, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -26,11 +26,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerSkillUsageTools } from "./skill-usage.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `skill-usage-pg-${process.pid}`;
 const OTHER_NAMESPACE = `${NAMESPACE}-other`;
@@ -52,14 +51,14 @@ async function callTool(
   args: Record<string, unknown>,
   role: "agent" | "readonly" = "agent",
 ): Promise<{ isError: boolean; body: Record<string, unknown> }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "skill-usage-test", version: "1.0.0" });
   registerSkillUsageTools(server, {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -90,30 +89,38 @@ function rowsFor(body: Record<string, unknown>, slug: string): UsageRow[] {
   return (body.usage as UsageRow[]).filter((row) => row.skill_slug === slug);
 }
 
-dbDescribe("skill usage telemetry (live Postgres)", () => {
-  beforeAll(async () => {
-    // A foreign namespace's invocations, seeded through the tool so the entity
-    // and log row are built exactly the way production builds them.
-    await callTool("record_skill_usage", OTHER_NAMESPACE, {
-      skill_slug: "foreign-only-skill",
-      agent: "other-agent",
-      repo: "other-repo",
-      runtime: "codex",
-    });
-  });
+/** The single row a one-row assertion has already proven is present. */
+function onlyRow(rows: UsageRow[]): UsageRow {
+  const row = rows[0];
+  if (row === undefined) throw new Error("expected exactly one usage row");
+  return row;
+}
 
-  afterAll(async () => {
-    await pool?.query(
-      `DELETE FROM skill_usage_log
+beforeAll(async () => {
+  // A foreign namespace's invocations, seeded through the tool so the entity
+  // and log row are built exactly the way production builds them.
+  await callTool("record_skill_usage", OTHER_NAMESPACE, {
+    skill_slug: "foreign-only-skill",
+    agent: "other-agent",
+    repo: "other-repo",
+    runtime: "codex",
+  });
+});
+
+afterAll(async () => {
+  await pool.query(
+    `DELETE FROM skill_usage_log
         WHERE entity_id IN (SELECT id FROM ob_entities WHERE namespace = ANY($1::text[]))`,
-      [[NAMESPACE, OTHER_NAMESPACE]],
-    );
-    await pool?.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool?.end();
-  });
+    [[NAMESPACE, OTHER_NAMESPACE]],
+  );
+  await pool.query(
+    `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
+    [[NAMESPACE, OTHER_NAMESPACE]],
+  );
+  await pool.end();
+});
 
+describe("skill usage recording and reporting (live Postgres)", () => {
   test("records an invocation and reads it back through the report", async () => {
     const recorded = await callTool("record_skill_usage", NAMESPACE, {
       skill_slug: "brain",
@@ -129,12 +136,12 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     expect(report.isError).toBe(false);
     const rows = rowsFor(report.body, "brain");
     expect(rows.length).toBe(1);
-    expect(rows[0]!.invocations).toBe(1);
-    expect(rows[0]!.agent).toBe("claude-opus-5");
-    expect(rows[0]!.repo).toBe("open-brain");
-    expect(rows[0]!.runtime).toBe("claude-code");
-    expect(rows[0]!.usage_kind).toBe("skill");
-    expect(Number.isNaN(Date.parse(rows[0]!.last_used_at))).toBe(false);
+    expect(onlyRow(rows).invocations).toBe(1);
+    expect(onlyRow(rows).agent).toBe("claude-opus-5");
+    expect(onlyRow(rows).repo).toBe("open-brain");
+    expect(onlyRow(rows).runtime).toBe("claude-code");
+    expect(onlyRow(rows).usage_kind).toBe("skill");
+    expect(Number.isNaN(Date.parse(onlyRow(rows).last_used_at))).toBe(false);
   });
 
   test("counts repeat invocations of the same skill", async () => {
@@ -149,7 +156,7 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     const report = await callTool("skill_usage_report", NAMESPACE, {});
     const rows = rowsFor(report.body, "wayfinder");
     expect(rows.length).toBe(1);
-    expect(rows[0]!.invocations).toBe(3);
+    expect(onlyRow(rows).invocations).toBe(3);
   });
 
   test("separates the same skill by agent, repo, and runtime", async () => {
@@ -201,7 +208,9 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     );
     expect(skillSlugs).not.toContain("law-0");
   });
+});
 
+describe("skill usage isolation and permissions (live Postgres)", () => {
   test("hides another namespace's usage from the report and the never-used list", async () => {
     // The whole point of the join-and-scope rule. `foreign-only-skill` was
     // recorded under OTHER_NAMESPACE in beforeAll; nothing about it may reach a
@@ -209,7 +218,9 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     // through the never-used list, which reads `ob_entities` directly and so
     // needs its own predicate.
     const report = await callTool("skill_usage_report", NAMESPACE, {});
-    const slugs = (report.body.usage as UsageRow[]).map((row) => row.skill_slug);
+    const slugs = (report.body.usage as UsageRow[]).map(
+      (row) => row.skill_slug,
+    );
     expect(slugs).not.toContain("foreign-only-skill");
     expect(report.body.never_used as string[]).not.toContain(
       "skill.foreign-only-skill",
@@ -232,15 +243,19 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     });
     // Age that one invocation out of the reporting window. The entity stays;
     // only the log row moves, which is exactly the never-used condition.
-    await pool!.query(
+    await pool.query(
       `UPDATE skill_usage_log
           SET invoked_at = NOW() - INTERVAL '90 days'
         WHERE skill_slug = 'long-idle-skill'`,
     );
     const report = await callTool("skill_usage_report", NAMESPACE, { days: 7 });
-    const slugs = (report.body.usage as UsageRow[]).map((row) => row.skill_slug);
+    const slugs = (report.body.usage as UsageRow[]).map(
+      (row) => row.skill_slug,
+    );
     expect(slugs).not.toContain("long-idle-skill");
-    expect(report.body.never_used as string[]).toContain("skill.long-idle-skill");
+    expect(report.body.never_used as string[]).toContain(
+      "skill.long-idle-skill",
+    );
   });
 
   test("reports the prior window's count so the trend is two facts, not a verdict", async () => {
@@ -255,7 +270,7 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
       runtime: "claude-code",
     });
     // Push one of the two back into the prior window.
-    await pool!.query(
+    await pool.query(
       `UPDATE skill_usage_log
           SET invoked_at = NOW() - INTERVAL '10 days'
         WHERE id = (SELECT MIN(id) FROM skill_usage_log
@@ -264,11 +279,11 @@ dbDescribe("skill usage telemetry (live Postgres)", () => {
     const report = await callTool("skill_usage_report", NAMESPACE, { days: 7 });
     const rows = rowsFor(report.body, "trend-skill");
     expect(rows.length).toBe(1);
-    expect(rows[0]!.invocations).toBe(1);
-    expect(rows[0]!.prior_window_invocations).toBe(1);
+    expect(onlyRow(rows).invocations).toBe(1);
+    expect(onlyRow(rows).prior_window_invocations).toBe(1);
     // Facts only: the report must not hand back a judgement word alongside them.
-    expect(Object.keys(rows[0]!)).not.toContain("recommendation");
-    expect(Object.keys(rows[0]!)).not.toContain("category");
+    expect(Object.keys(onlyRow(rows))).not.toContain("recommendation");
+    expect(Object.keys(onlyRow(rows))).not.toContain("category");
   });
 
   test("denies recording to a namespace the caller cannot write", async () => {
