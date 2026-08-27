@@ -354,3 +354,14 @@ only when a session actually needed it.
     `perl -pi -e 's/session-9/session-<N>/g; s/session9/session<N>/g'`),
     and a Workflow row showing another session's tag is a defect fixed
     before dispatch.
+51. **One qmd index: the root checkout's. Never run `aqmd search`, `aqmd up`,
+    or bare `aqmd` inside a lane clone** (Rico, 2026-08-27: "the only place
+    you should have that stuff is in the root of this repo"). `aqmd` scopes
+    by walking up to the nearest `.qmd/index.yml` (`_ob/bin/aqmd:23-25`),
+    and every clone carries that tracked file, so a search run in a clone
+    builds and embeds a private 43-81 MB index there; eleven of them (620 MB)
+    were found after session 9, every one created by a lane brief that said
+    `aqmd search`. Inside a clone the design-lookup gate is satisfied with
+    `aqmd in open-brain "<question>"`, which queries the root index by name
+    (`_ob/bin/aqmd:453`) and writes nothing in the clone. `aqmd up` runs
+    once, at wrap, from the root checkout.

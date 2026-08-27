@@ -8,8 +8,8 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 - Anything neither the base nor this document covers → ask Rico before acting.
 - Output discipline: minimum verbosity, only the context needed, output tokens
   low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (356 lines on
-  this branch). It overrides the base; this document overrides it. Rules 28-50
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (367 lines on
+  this branch). It overrides the base; this document overrides it. Rules 28-51
   bind: head never works, own clones, FIVE lanes, no `rm`, no `--no-verify`,
   manifest in the same commit, one rebase lane per PR, census by command, the
   authoring session drains, the done-check invocation verbatim, oxlint on the
@@ -53,7 +53,7 @@ Done-check: `git log -1 --stat`
 Tier: T1 — shared test file; CI manifest changes
 Deliverable: `src/graph-derivation-handler.live.test.ts` split by subject into files each under 500 lines, every live suite plain `describe` ending `(live Postgres)` on `requireTestDatabaseUrl()`, whole files lint-clean by the R7-R9 patterns only (`expectDefined` guard, `it` bodies hoisted to module-scope functions, `as unknown as T`, helpers take `pool` and create none), manifest entries at emitted counts, floor +N in the same commit; one PR
 Scope: that file and its split siblings, `scripts/assert-db-tests-ran.ts`; own clone
-Must NOT: `--no-verify`; change the code under test; leave any file over 500 lines; carry a suite name that does not end `(live Postgres)`
+Must NOT: `--no-verify`; change the code under test; leave any file over 500 lines; carry a suite name that does not end `(live Postgres)`; run `aqmd search`, `aqmd up`, or bare `aqmd` in the clone (rule 51: `aqmd in open-brain "<question>"` is the lookup)
 Record: PR, then #878 comment on merge
 Done-check: `CHANGED_FILES="<the split files>" bash scripts/done-means/878-pg-tests-require-database.sh` → exit 0 (RED: fa82bdf5, clauses 1-3 FAIL on the original file)
 
