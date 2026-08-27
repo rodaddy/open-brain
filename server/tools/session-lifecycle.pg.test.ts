@@ -9,8 +9,8 @@
  * more events than the bounds and prove the row counts, so the old behavior
  * fails them.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -19,11 +19,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerSessionLifecycleTools } from "./session-lifecycle.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `session-lifecycle-pg-${process.pid}`;
 const SESSION_KEY = `${NAMESPACE}-lane`;
@@ -42,39 +41,58 @@ interface StartEnvelope {
   is_new: boolean;
 }
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
   return JSON.parse(await callToolText(name, args));
 }
 
 /** The tool's raw text. Error results are sentences, not JSON envelopes. */
-async function callToolText(name: string, args: Record<string, unknown>): Promise<string> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
-  const server = new McpServer({ name: "session-lifecycle-test", version: "1.0.0" });
+async function callToolText(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const server = new McpServer({
+    name: "session-lifecycle-test",
+    version: "1.0.0",
+  });
   registerSessionLifecycleTools(server, {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
       ...options,
-      authInfo: { role: "agent", clientId: NAMESPACE, namespaceSource: "token" },
+      authInfo: {
+        role: "agent",
+        clientId: NAMESPACE,
+        namespaceSource: "token",
+      },
     } as never);
-  const client = new Client({ name: "session-lifecycle-test", version: "1.0.0" });
-  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+  const client = new Client({
+    name: "session-lifecycle-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    client.connect(clientTransport),
+    server.connect(serverTransport),
+  ]);
   const result = await client.callTool({ name, arguments: args });
-  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  const text =
+    (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
   await client.close();
   return text;
 }
 
-dbDescribe("session lifecycle event bounds (#515)", () => {
+describe("session lifecycle event bounds (#515)", () => {
   let laneId: string;
 
   beforeAll(async () => {
-    if (!pool) return;
     const lane = await pool.query(
       `INSERT INTO ob_session_lanes
          (session_key, namespace, status, metadata, created_by)
@@ -94,8 +112,9 @@ dbDescribe("session lifecycle event bounds (#515)", () => {
   });
 
   afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM ob_session_events WHERE lane_id = $1`, [laneId]);
+    await pool.query(`DELETE FROM ob_session_events WHERE lane_id = $1`, [
+      laneId,
+    ]);
     await pool.query(`DELETE FROM ob_session_lanes WHERE id = $1`, [laneId]);
     // `pool` is module-level and shared by every suite's callTool(); closing it
     // here made the #646 suite fail with "Cannot use a pool after calling end",
@@ -156,7 +175,7 @@ dbDescribe("session lifecycle event bounds (#515)", () => {
  * The old behavior fails the first two tests here: it returned NULL scope
  * columns unchanged, and it never refused a conflicting lane.
  */
-dbDescribe("session_start exact-scope establishment (#646)", () => {
+describe("session_start exact-scope establishment (#646)", () => {
   const SCOPE = {
     agent: "agent-646",
     platform: "cli-646",
@@ -165,10 +184,13 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
   };
   const partialKey = `${NAMESPACE}-646-partial`;
   const conflictKey = `${NAMESPACE}-646-conflict`;
-  const scopePool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+  const scopePool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  const seed = async (sessionKey: string, agent: string | null): Promise<void> => {
-    await scopePool?.query(
+  const seed = async (
+    sessionKey: string,
+    agent: string | null,
+  ): Promise<void> => {
+    await scopePool.query(
       `INSERT INTO ob_session_lanes
          (session_key, namespace, status, agent, metadata, created_by)
        VALUES ($1, $2, 'active', $3, '{}'::jsonb, $2)`,
@@ -177,7 +199,6 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
   };
 
   beforeAll(async () => {
-    if (!scopePool) return;
     // The shape a head session leaves behind: an agent, and nothing else.
     await seed(partialKey, "openbrain-capture");
     // A lane that genuinely belongs to a different scope.
@@ -185,11 +206,10 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
   });
 
   afterAll(async () => {
-    if (!scopePool) return;
-    await scopePool.query(`DELETE FROM ob_session_lanes WHERE namespace = $1 AND session_key = ANY($2)`, [
-      NAMESPACE,
-      [partialKey, conflictKey],
-    ]);
+    await scopePool.query(
+      `DELETE FROM ob_session_lanes WHERE namespace = $1 AND session_key = ANY($2)`,
+      [NAMESPACE, [partialKey, conflictKey]],
+    );
     await scopePool.end();
   });
 
@@ -199,7 +219,12 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
       ...SCOPE,
       agent: "openbrain-capture", // matches the lane; the NULLs are what fill in
     })) as StartEnvelope & {
-      lane: { agent: string; source: string; channel_id: string; metadata: Record<string, unknown> };
+      lane: {
+        agent: string;
+        source: string;
+        channel_id: string;
+        metadata: Record<string, unknown>;
+      };
     };
 
     expect(started.is_new).toBe(false);
@@ -208,7 +233,7 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
     expect(started.lane.metadata.server_id).toBe(SCOPE.server_id);
 
     // Durably written, not just reflected in the response.
-    const row = await scopePool!.query(
+    const row = await scopePool.query(
       `SELECT source, channel_id, metadata->>'server_id' AS server_id
          FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
       [NAMESPACE, partialKey],
@@ -229,7 +254,7 @@ dbDescribe("session_start exact-scope establishment (#646)", () => {
     expect(text).toContain("does not match");
 
     // And the conflicting lane is left exactly as it was — never re-pointed.
-    const row = await scopePool!.query(
+    const row = await scopePool.query(
       `SELECT agent, source FROM ob_session_lanes WHERE namespace = $1 AND session_key = $2`,
       [NAMESPACE, conflictKey],
     );

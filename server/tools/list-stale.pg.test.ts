@@ -7,8 +7,8 @@
  * rows so the `last_accessed_at`-falls-back-to-`created_at` rule, the tier
  * filter, pagination, and the namespace boundary are each exercised with data.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -17,11 +17,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerTieringTools } from "./tiering.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `list-stale-pg-${process.pid}`;
 const OTHER_NAMESPACE = `${NAMESPACE}-other`;
@@ -43,25 +42,32 @@ async function callListStale(
   namespace: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "list-stale-test", version: "1.0.0" });
   registerTieringTools(server, {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
       ...options,
-      authInfo: { role: "agent", clientId: namespace, namespaceSource: "token" },
+      authInfo: {
+        role: "agent",
+        clientId: namespace,
+        namespaceSource: "token",
+      },
     } as never);
   const client = new Client({ name: "list-stale-test", version: "1.0.0" });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const result = await client.callTool({ name: "list_stale", arguments: args });
+    const result = await client.callTool({
+      name: "list_stale",
+      arguments: args,
+    });
     const text = (result.content as Array<{ text: string }>)[0]?.text;
     if (text === undefined) throw new Error("list_stale returned no content");
     return JSON.parse(text);
@@ -71,59 +77,65 @@ async function callListStale(
   }
 }
 
-dbDescribe("list_stale (live Postgres)", () => {
-  let neverAccessedId = "";
-  let longAgoId = "";
-  let freshId = "";
-  let coldId = "";
+/**
+ * Ids of the seeded rows, filled by the module-scope `beforeAll`.
+ *
+ * The two describes below split by SUBJECT over ONE shared fixture -- the
+ * staleness predicate itself, then the envelope and boundary rules that read
+ * the same rows. Seeding is module-scope rather than duplicated per describe.
+ */
+let neverAccessedId = "";
+let longAgoId = "";
+let freshId = "";
+let coldId = "";
 
-  beforeAll(async () => {
-    // Never accessed, created long ago: stale only if the query falls back to
-    // created_at. A COALESCE-less predicate would drop this row.
-    const neverAccessed = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
+beforeAll(async () => {
+  // Never accessed, created long ago: stale only if the query falls back to
+  // created_at. A COALESCE-less predicate would drop this row.
+  const neverAccessed = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
        VALUES ($1, $2, $2, 'hot', 0, NULL, NOW() - INTERVAL '200 days') RETURNING id`,
-      ["list-stale never accessed", NAMESPACE],
-    );
-    neverAccessedId = neverAccessed.rows[0].id;
+    ["list-stale never accessed", NAMESPACE],
+  );
+  neverAccessedId = neverAccessed.rows[0].id;
 
-    const longAgo = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
+  const longAgo = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
        VALUES ($1, $2, $2, 'warm', 4, NOW() - INTERVAL '100 days', NOW() - INTERVAL '300 days') RETURNING id`,
-      ["list-stale accessed long ago", NAMESPACE],
-    );
-    longAgoId = longAgo.rows[0].id;
+    ["list-stale accessed long ago", NAMESPACE],
+  );
+  longAgoId = longAgo.rows[0].id;
 
-    // Accessed yesterday: must NEVER appear at a 30-day threshold.
-    const fresh = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
+  // Accessed yesterday: must NEVER appear at a 30-day threshold.
+  const fresh = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
        VALUES ($1, $2, $2, 'hot', 9, NOW() - INTERVAL '1 day', NOW() - INTERVAL '400 days') RETURNING id`,
-      ["list-stale fresh", NAMESPACE],
-    );
-    freshId = fresh.rows[0].id;
+    ["list-stale fresh", NAMESPACE],
+  );
+  freshId = fresh.rows[0].id;
 
-    const cold = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
+  const cold = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
        VALUES ($1, $2, $2, 'cold', 0, NULL, NOW() - INTERVAL '250 days') RETURNING id`,
-      ["list-stale cold tier", NAMESPACE],
-    );
-    coldId = cold.rows[0].id;
+    ["list-stale cold tier", NAMESPACE],
+  );
+  coldId = cold.rows[0].id;
 
-    await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
+  await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by, tier, access_count, last_accessed_at, created_at)
        VALUES ($1, $2, $2, 'warm', 0, NULL, NOW() - INTERVAL '500 days')`,
-      ["list-stale foreign entry", OTHER_NAMESPACE],
-    );
-  });
+    ["list-stale foreign entry", OTHER_NAMESPACE],
+  );
+});
 
-  afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
+  await pool.end();
+});
 
+describe("list_stale staleness predicate (live Postgres)", () => {
   test("falls back to created_at for entries that were never accessed", async () => {
     const result = (await callListStale(NAMESPACE, {
       table: "thoughts",
@@ -161,7 +173,9 @@ dbDescribe("list_stale (live Postgres)", () => {
     expect(ids).toEqual([coldId]);
     expect(result.total_count).toBe(1);
   });
+});
 
+describe("list_stale envelope, paging and namespace boundary (live Postgres)", () => {
   test("envelope counts the whole match set, not just the returned page", async () => {
     const page = (await callListStale(NAMESPACE, {
       table: "thoughts",
