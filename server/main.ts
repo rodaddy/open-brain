@@ -58,6 +58,7 @@ import {
 } from "./config.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { createDatabase, type Database } from "./db/pool.ts";
+import { withLogging } from "./logging/decorate.ts";
 import { createLogger } from "./logging/logger.ts";
 import {
   createTracingRuntime,
@@ -117,6 +118,44 @@ export interface StartServerOptions {
 }
 
 /**
+ * Wrap every tool handler this server registers with the logging seam.
+ *
+ * Installed at the composition root and NOWHERE else. A per-tool application
+ * would put the same three lines in thirty files and go stale the first time
+ * someone adds the thirty-first, so the wrap happens once, where registration
+ * itself passes through: `server.registerTool`. `installMcpAudit` and
+ * `installMcpTracing` earn their guarantee the same way and for the same
+ * reason, which is why this runs beside them and BEFORE `registerMemoryTools`
+ * — a tool registered before the wrapper is installed is a tool whose calls
+ * are never logged.
+ *
+ * `withLogging` rethrows, so nothing about a handler's contract moves. The
+ * errors tools convert into `isError` results are RETURNED, not thrown, so
+ * they travel back to the caller byte-for-byte as before and are recorded as
+ * an ordinary exit; only a genuine throw produces the failure line.
+ */
+export function installToolLogging(server: McpServer, logger: Logger): void {
+  const original = server.registerTool.bind(server) as (
+    ...args: unknown[]
+  ) => unknown;
+  server.registerTool = ((
+    name: string,
+    configOrDescription: unknown,
+    cb?: unknown,
+  ) => {
+    if (typeof cb !== "function") {
+      return original(name, configOrDescription, cb);
+    }
+    const callback = cb as (...args: never[]) => unknown;
+    return original(
+      name,
+      configOrDescription,
+      withLogging({ logger, name: `tool.${name}` }, callback),
+    );
+  }) as typeof server.registerTool;
+}
+
+/**
  * Build the per-session MCP server factory.
  *
  * A FRESH `McpServer` per session, not one shared instance: the SDK binds a
@@ -158,6 +197,7 @@ function createServerFactory(input: {
   const toolLogger = logger.child({ component: "tools" });
   return () => {
     const server = new McpServer({ name: "open-brain", version: "1.0.0" });
+    installToolLogging(server, toolLogger);
     installMcpAudit(server, { pool });
     // `sink` undefined means tracing is off for this process; the install then
     // never wraps `registerTool` and costs nothing.
