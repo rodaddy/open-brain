@@ -272,7 +272,9 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
 // what else is hammering that disk before suspecting a stuck session —
 // `dropScratchDatabase` already proves the session count is zero.
 const SCRATCH_SETUP_TIMEOUT_MS = 120_000;
-const SCRATCH_TEARDOWN_TIMEOUT_MS = 30_000;
+// Teardown gets the same allowance as setup: the measured tail is a 23.7s
+// DROP DATABASE on the shared runner disk (#912/#915), so do not lower this.
+const SCRATCH_TEARDOWN_TIMEOUT_MS = 120_000;
 
 /**
  * Every step section is populated when all three steps run, so a missing one is
