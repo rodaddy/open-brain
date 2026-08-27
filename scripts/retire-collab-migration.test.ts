@@ -262,13 +262,15 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
 // real work, so the setup hook is sized against it rather than left on the
 // default, which surfaced as an unnamed hook failure at 5004ms (#912).
 //
-// `afterAll` is a different story and its allowance is NOT sized against real
-// work: dropping a database the suite just finished with is sub-second when it
-// is not waiting on a straggling backend, and `dropScratchDatabase` now removes
-// the straggler instead of waiting it out. The allowance is kept generous only
-// so a genuinely loaded server does not turn a slow drop into a red suite; if
-// this hook ever approaches it again, the drop is blocked, not slow, and the
-// question to ask is which session is still attached.
+// `afterAll` IS sized against real work, contrary to what this comment claimed
+// before the step timings came back from CI (#912): dropping this database
+// unlinks a 48-migration directory and forces a checkpoint, and on the shared
+// runner cluster that is disk-bound rather than instant. Measured in one run:
+// 744ms against the ephemeral PostgreSQL 18, 23691ms against the contended
+// PostgreSQL 17 the `check` job shares. So the allowance absorbs I/O
+// contention, not a blocked drop. If this hook ever approaches it again, ask
+// what else is hammering that disk before suspecting a stuck session —
+// `dropScratchDatabase` already proves the session count is zero.
 const SCRATCH_SETUP_TIMEOUT_MS = 120_000;
 const SCRATCH_TEARDOWN_TIMEOUT_MS = 30_000;
 
@@ -304,68 +306,42 @@ async function createScratchDatabase(): Promise<ScratchPool> {
 /**
  * Closes the pool and drops the scratch database.
  *
- * `await pool.end()` settles when the CLIENT has released its sockets, which is
- * not the same instant the SERVER has finished tearing the backends down. Any
- * backend still attached to the scratch database when `DROP DATABASE` arrives
- * makes the drop WAIT for it rather than fail fast, and `WITH (FORCE)` does not
- * close that window on its own: it terminates what it can see at the moment it
- * runs, so a backend mid-teardown is still there to be waited on. On this
- * machine (PostgreSQL 18) the race never lost and the drop returned in ~150ms;
- * on the self-hosted runner (PostgreSQL 17) it lost twice in two runs and sat
- * for the full 30s the hook allows, surfacing as an unnamed `afterAll` failure
- * at 30004ms (#912).
+ * The `pg_terminate_backend` sweep stays because it is correct and nearly free,
+ * but it is NOT what made this hook time out at 30004ms on the self-hosted
+ * runner (#912). Timing every step on CI settled that: `pool.end()` returned in
+ * 1ms, `pg_stat_activity` reported `attached=0`, the terminate was a 2ms no-op,
+ * and `DROP DATABASE` alone burned 23691ms. With nothing attached, the drop was
+ * never waiting on a session — it was waiting on the disk.
  *
- * So release SERVER-SIDE first, exactly as `scripts/done-means/677-scheduled-
- * backup.sh:222-228` already does for the same symptom: `pg_terminate_backend`
- * every session attached to this database, scoped by `datname` to the
- * timestamped name this file created, then drop. Scoping by `datname` is what
- * makes it safe — it can only ever disconnect sessions attached to a database
- * this suite made, never the dogfood database or a neighbouring run.
+ * `WITH (FORCE)` was the cost. It exists to evict other sessions, so with none
+ * to evict it bought nothing here while taking the heavier drop path, and the
+ * `check` job runs against the runner's long-lived shared PostgreSQL 17 whose
+ * disk is busy serving the concurrent `db-integration` job. The same drop on
+ * that job's own ephemeral PostgreSQL 18 took 744ms in the very same run, which
+ * is the size of the I/O contention rather than a version difference. Dropping
+ * a 48-migration database unlinks the whole directory and forces a checkpoint,
+ * so a contended disk is felt directly.
+ *
+ * Plain `DROP DATABASE IF EXISTS`, after an explicit terminate, is therefore
+ * both the cheaper and the more honest statement: the sweep handles sessions,
+ * the drop handles storage. Scoping the sweep by `datname` is what keeps it
+ * safe — it can only ever disconnect sessions attached to a database this suite
+ * created, never the dogfood database or a neighbouring run.
  */
 async function dropScratchDatabase(pool: ScratchPool | undefined): Promise<void> {
-  const t0 = Date.now();
-  const since = () => `${Date.now() - t0}ms`;
-  const probe = (msg: string) =>
-    console.error(`[retire-collab afterAll] ${msg} ${since()}`);
-
-  probe(
-    `enter pool=${pool ? "present" : "absent"} ` +
-      `total=${pool?.totalCount ?? "n/a"} idle=${pool?.idleCount ?? "n/a"} ` +
-      `waiting=${pool?.waitingCount ?? "n/a"} admin=${requireAdminUrl().replace(/:[^:@/]*@/, ":***@")}`,
-  );
-
-  probe("pool.end start");
   if (pool) await pool.end();
-  probe("pool.end done");
-
-  probe("admin connect start");
   const admin = new Client({ connectionString: requireAdminUrl() });
   await admin.connect();
-  probe("admin connect done");
   try {
-    probe("pg_stat_activity count start");
-    const attached = await admin.query(
-      `SELECT COUNT(*)::int AS c FROM pg_stat_activity WHERE datname = $1`,
-      [SCRATCH_DB],
-    );
-    probe(`pg_stat_activity count done attached=${attached.rows[0].c}`);
-
-    probe("terminate start");
     await admin.query(
       `SELECT pg_terminate_backend(pid)
          FROM pg_stat_activity
         WHERE datname = $1 AND pid <> pg_backend_pid()`,
       [SCRATCH_DB],
     );
-    probe("terminate done");
-
-    probe("drop start");
-    await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
-    probe("drop done");
+    await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB}`);
   } finally {
-    probe("admin end start");
     await admin.end();
-    probe("admin end done");
   }
 }
 
