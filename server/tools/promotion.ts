@@ -24,10 +24,11 @@ import { canRead } from "../auth/permissions.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import {
   canonicalNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+} from "./shared-namespace.ts";
 import { classifyShareCandidate } from "../../src/sharing.ts";
 import { promoteEntry } from "../../src/promotion-service.ts";
 import {
@@ -176,12 +177,13 @@ function countNamespaceRows(
 function foldNamespaceCounts(
   results: Record<string, unknown>[][],
   raw: boolean | undefined,
+  names: SharedNamespaceConfig,
 ): Array<{ namespace: string } & NamespaceTotals> {
   const byNamespace = new Map<string, NamespaceTotals>();
   for (const rows of results) {
     for (const row of rows) {
       const physical = String(row.namespace);
-      const name = raw ? physical : canonicalNamespace(physical);
+      const name = raw ? physical : canonicalNamespace(physical, names);
       const entry = byNamespace.get(name) ?? { total: 0, per_table: {} };
       const count = Number(row.count);
       entry.total += count;
@@ -216,7 +218,11 @@ async function handleListNamespaces(
   }
 
   const results = await countNamespaceRows(dependencies, identity, accessible);
-  const namespaces = foldNamespaceCounts(results, args.raw);
+  const namespaces = foldNamespaceCounts(
+    results,
+    args.raw,
+    sharedNamespaceConfig(dependencies.sharedNamespaceNames),
+  );
 
   dependencies.logger.info(
     { tool: "list_namespaces", namespaceCount: namespaces.length },
@@ -254,7 +260,7 @@ function authorizePromotion(
     );
   }
 
-  const shared = sharedNamespaceConfig();
+  const shared = sharedNamespaceConfig(dependencies.sharedNamespaceNames);
   const target = requestedNamespace ?? shared.canonicalSharedNamespace;
   const refusal = legacyTargetRefusal(target, shared);
   if (refusal) return errorResult(refusal);

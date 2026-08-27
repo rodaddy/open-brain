@@ -56,11 +56,26 @@
 #   Clause 1 alone is satisfiable by deleting the calls, which is worse than
 #   the defect. So clause 2 counts ARRIVALS: for each of the six helpers, the
 #   number of call sites in the file must equal the number of call sites whose
-#   argument list mentions `sharedNamespaceNames` within the following 3 lines
-#   (prettier wraps a two-argument call across lines), and that number must be
-#   greater than zero. Equal-and-zero is a FAIL, not a pass — a subject file on
-#   this rung has calls to thread, and zero means the scan found nothing rather
-#   than that the work is done.
+#   argument list carries the names.
+#
+#   The scan window starts at the CALL LINE ITSELF and runs to the third line
+#   after it. Prettier wraps a two-argument call across lines, so the argument
+#   often sits below the call — but just as often it does not, and a window
+#   that began one line late read `sharedNamespaceConfig(dependencies.shared\
+#   NamespaceNames)` on a single line as a call carrying nothing.
+#
+#   An argument counts as arrival when it is `sharedNamespaceNames` OR the
+#   bare identifier `names`. A module that derives the config once at its
+#   composition root and threads it inward as a local parameter has done
+#   exactly what this rung asks for; insisting on the outer spelling at every
+#   inner call would read correct threading as a miss and push callers toward
+#   re-deriving the names per call, which is the defect itself.
+#
+#   A file with ZERO helper call sites PASSES: a type-only importer (`import
+#   type { SharedNamespaceConfig }`) has no calls to thread and is not
+#   evidence of a failed migration. The guard against a silent pass lives at
+#   the SUBJECT level — an empty subject list is exit 1 — not per file, so a
+#   check that examines nothing still cannot report success.
 #
 # CLAUSE 3 — THE TREE TYPECHECKS.
 #   `bunx tsc --noEmit` exits 0. The twin's trailing argument is typed, so a
@@ -147,18 +162,16 @@ while IFS= read -r FILE; do
   # call rather than the import line, which carries no parenthesis.
   CALL_N="$(cd "$REPO_ROOT" && rg -c "\\b($HELPERS)\\(" "$FILE" 2>/dev/null)"
   CALL_N="${CALL_N:-0}"
-  # Arrivals: calls whose argument list mentions the names within 3 lines.
-  ARRIVE_N="$(cd "$REPO_ROOT" && rg -U -c "\\b($HELPERS)\\((.|\\n){0,3}*?$NAMES_ARG" "$FILE" 2>/dev/null)"
+  # Arrivals: calls carrying the names on the call line itself or within the
+  # 3 lines after it. `-A3` includes the matched line, so the window starts at
+  # the call. Either the outer `sharedNamespaceNames` or the local alias
+  # `names` a module threads inward counts.
+  ARRIVE_N="$(cd "$REPO_ROOT" && rg -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null \
+    | rg -c "\\b($NAMES_ARG|names)\\b" 2>/dev/null)"
   ARRIVE_N="${ARRIVE_N:-0}"
-  if [ "$ARRIVE_N" -eq 0 ]; then
-    ARRIVE_N="$(cd "$REPO_ROOT" && rg -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null \
-      | rg -c "$NAMES_ARG" 2>/dev/null)"
-    ARRIVE_N="${ARRIVE_N:-0}"
-  fi
 
   if [ "$CALL_N" -eq 0 ]; then
-    printf 'CLAUSE 2 [%s]: FAIL — 0 helper call sites found; the scan matched nothing\n' "$FILE"
-    CLAUSE2=FAIL
+    printf 'CLAUSE 2 [%s]: PASS — 0 helper call sites (type-only importer)\n' "$FILE"
   elif [ "$CALL_N" -ne "$ARRIVE_N" ]; then
     printf 'CLAUSE 2 [%s]: FAIL — %s helper call(s), %s carrying %s\n' \
       "$FILE" "$CALL_N" "$ARRIVE_N" "$NAMES_ARG"

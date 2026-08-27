@@ -21,6 +21,7 @@ import pino from "pino";
 import { Pool } from "pg";
 import { registerPromotionTools } from "./promotion.ts";
 import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
 const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
 const dbDescribe = DB_URL ? describe : describe.skip;
@@ -42,8 +43,10 @@ async function callTool(
     embedFn: async () => Array(768).fill(0.01) as number[],
     logger: pino({ level: "silent" }),
     embeddingModel: "promotion-test",
+    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -78,7 +81,8 @@ async function sharedCount(content: string): Promise<number> {
   return rows[0].cnt;
 }
 
-const SHAREABLE = "The parity harness resolves each provider through the TOOLS_BOUNDARY seam.";
+const SHAREABLE =
+  "The parity harness resolves each provider through the TOOLS_BOUNDARY seam.";
 /**
  * Content the classifier must refuse, written as a URL with inline userinfo.
  *
@@ -184,7 +188,9 @@ dbDescribe("promote_shared and list_namespaces (live Postgres)", () => {
       "agent",
     );
     expect(isError).toBe(true);
-    expect(String(body.text)).toContain("requires the promoter, admin, or ob-admin identity");
+    expect(String(body.text)).toContain(
+      "requires the promoter, admin, or ob-admin identity",
+    );
   });
 
   test("a promoter reads across namespaces BY DESIGN, unlike a lane identity", async () => {
@@ -213,7 +219,12 @@ dbDescribe("promote_shared and list_namespaces (live Postgres)", () => {
   });
 
   test("list_namespaces reports per-table counts for the caller's lane", async () => {
-    const { isError, body } = await callTool("list_namespaces", NAMESPACE, {}, "admin");
+    const { isError, body } = await callTool(
+      "list_namespaces",
+      NAMESPACE,
+      {},
+      "admin",
+    );
     expect(isError).toBe(false);
     const namespaces = body.namespaces as Array<{
       namespace: string;
