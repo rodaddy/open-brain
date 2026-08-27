@@ -30,6 +30,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   minTests: number;
 }> = [
   { name: "lane_upsert (live Postgres)", minTests: 2 },
+  {
+    name: "029 maintenance_jobs terminal category compat (live Postgres)",
+    minTests: 3,
+  },
   { name: "promote_shared (live Postgres)", minTests: 1 },
   { name: "tier_lane (live Postgres)", minTests: 2 },
   {
@@ -176,9 +180,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // #878 registered the migration 028 lease_expired compat suite's 3, then
 // 77 -> 79 when #878 registered the two migration-025 suites at 1 each, then
 // 79 -> 80 when #889 split the maintenance lease-boundary suite by subject and
-// its single entry of 5 became four entries summing to 6), so the global floor
-// cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 80;
+// its single entry of 5 became four entries summing to 6, then 80 -> 83 when
+// #878 registered the migration 029 terminal-category compat suite's 3 as that
+// suite stopped skipping itself), so the global floor cannot silently fall
+// behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 83;
 
 export interface SuiteStats {
   tests: number;
