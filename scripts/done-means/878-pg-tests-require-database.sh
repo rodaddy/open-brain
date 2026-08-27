@@ -22,7 +22,9 @@
 # GENERIC BY DESIGN -- NO ARGUMENTS
 # ---------------------------------------------------------------------------
 # This check takes no argv. It discovers its own subject: files matching
-# `*.pg.test.ts` changed against the MERGE BASE of origin/main and HEAD.
+# `*.pg.test.ts` changed against the MERGE BASE of origin/main and HEAD. That
+# `*.pg.test.ts` match is the DISCOVERY rule only; see the `CHANGED_FILES`
+# paragraph below for the wider rule an explicit subject is held to.
 # Diffing against the moving tip of origin/main instead would drag in files
 # other branches changed after this one was cut and judge them as if this lane
 # had touched them. The merge base is the branch's own diff.
@@ -36,7 +38,12 @@
 # subject list for free.
 #
 # `CHANGED_FILES` (space-separated) overrides the discovery, which is how the
-# RED receipt is taken before any edit exists to be discovered.
+# RED receipt is taken before any edit exists to be discovered. An overridden
+# subject is held to `*.test.ts` rather than `*.pg.test.ts`: the conversion also
+# covers `*.test.ts` and `*.live.test.ts` files that read the variable, and a
+# caller naming a file explicitly has already chosen its subject. Discovery
+# keeps the narrower `*.pg.test.ts` match so an unrelated changed test file is
+# never dragged in as a conversion subject.
 #
 # ---------------------------------------------------------------------------
 # Four clauses, and all four must pass
@@ -101,7 +108,7 @@ HELPER_BASENAME='require-test-database'
 HARD_FAIL_STRING='test_database_required'
 
 # ---------------------------------------------------------------------------
-# SUBJECT -- the *.pg.test.ts files changed against origin/main.
+# SUBJECT -- the test files changed against origin/main.
 # ---------------------------------------------------------------------------
 if [ -n "${CHANGED_FILES:-}" ]; then
   SUBJECT="$(printf '%s\n' $CHANGED_FILES)"
@@ -110,16 +117,20 @@ else
   MERGE_BASE="$(cd "$REPO_ROOT" && git merge-base origin/main HEAD 2>/dev/null)"
   [ -n "$MERGE_BASE" ] || fail_hard "git merge-base origin/main HEAD produced nothing"
   SUBJECT="$(cd "$REPO_ROOT" && git diff --name-only "$MERGE_BASE" 2>/dev/null)"
+  SUBJECT="$(printf '%s\n' "$SUBJECT" | rg '\.pg\.test\.ts$' || true)"
   SUBJECT_SOURCE="git diff --name-only \$(git merge-base origin/main HEAD)"
 fi
-SUBJECT="$(printf '%s\n' "$SUBJECT" | rg '\.pg\.test\.ts$' || true)"
+# Discovery narrows itself to `*.pg.test.ts` above. An explicit CHANGED_FILES
+# subject is only held to `*.test.ts`, because the conversion also covers
+# `*.test.ts` and `*.live.test.ts` files that read the variable.
+SUBJECT="$(printf '%s\n' "$SUBJECT" | rg '\.test\.ts$' || true)"
 # The helper directory is never a conversion subject, whether discovery or
 # CHANGED_FILES put it there.
 SUBJECT="$(printf '%s\n' "$SUBJECT" | rg -v '^scripts/test-support/' || true)"
 SUBJECT="$(printf '%s\n' "$SUBJECT" | rg -v '^$' || true)"
 
 if [ -z "$SUBJECT" ]; then
-  printf 'SUBJECT: none -- %s produced no *.pg.test.ts files.\n' "$SUBJECT_SOURCE" >&2
+  printf 'SUBJECT: none -- %s produced no test files.\n' "$SUBJECT_SOURCE" >&2
   printf 'A check with nothing to examine is not a pass. Exiting 1.\n' >&2
   exit 1
 fi
