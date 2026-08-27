@@ -1,0 +1,95 @@
+# PROVENANCE — Graph Mode v1.3-beta executables
+
+Copied byte-faithful. This directory is a COPY; canon lives in Development.
+
+- Source repo: `/Volumes/ThunderBolt/Development` (`_ob/skills/graph-mode/beta/`)
+- Source branch: `feat/graph-mode-v1.3-beta`
+- Source commit: `3d1a45a0`
+- Source PR: https://git.rodaddy.live/rtech/development/pulls/3 — **UNMERGED at copy time**
+- Copy date: 2026-08-27
+- Copied by: open-brain beta opt-in lane (claude-code, claude-opus-5)
+
+## Improvements flow ONE WAY
+
+Fixes and improvements discovered while piloting here flow BACK to the
+Development canon (`_ob/skills/graph-mode/beta/`), never the other way and
+never as a local fork. Do not edit these files in place to make a local
+check pass: raise it against the canon, land it there, re-copy. A local
+divergence makes the pilot's receipts uncomparable across repos, which is
+the only thing the pilot is for.
+
+## Manifest (sha256 at copy time)
+
+```
+ef0de6df07eec803d2ae39614ed5e8fa0e5beda434126e545d8feae3eb6df1b2  PROVENANCE.new
+bdc794994a6b33242c46816584b8761f45ad2bad0c46ee24fb4e630cde2f9d8d  README.md
+8f6256a89e958af9df8793ec71ba7cd2a400847c0098a71241ce55d3258c76eb  brief-pack/README.md
+00c8c9af5550123748597f7cce297afcda61ec4c80c2d657a4d8e7a7346d5196  brief-pack/RED.md
+f9e6d987db4c429ee96534811709f606599161d3f3eed8173df23fa02eb047c8  brief-pack/fixtures/decisions.fixture.md
+f6fb6962513b8a131f7f7cbce866e1da99869af8c48147db24c5c69fb47f0c82  brief-pack/fixtures/done-means.fixture.sh
+ac177f8d100cfa3dbfb633538865efbcff3c48e74a0058cb760aab0d925354c5  brief-pack/fixtures/lane-contract.fixture.md
+8aedfa58ae640699f736ffa20f723259cd49f695876da1ffa847877155b76a36  brief-pack/fixtures/loop-policy.fixture.md
+b62ac14009050aafea12414b5429919d5610e7131b89b7b4ce101186a48436e0  brief-pack/fixtures/no-tightenings.fixture.md
+eb3a37201ac9b3e291012096824ab94374a9786f08eb47bf3494d49b127b8268  brief-pack/fixtures/out.brief.md
+82353a0e6065ff8d41f148da582776f692f648594eaba2a8b1d68598a5477a3a  brief-pack/fixtures/real-task.txt
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  brief-pack/fixtures/real.err
+16aa1267646f528ed0fc0bb4f49cc1c640fe166879c2eaff7cd062df9bcb51a1  brief-pack/fixtures/real.out.md
+04d9d12873a9e5c839eb60b1d3c6c8a6cff7b14edda0db5ade68c4df850c056a  brief-pack/fixtures/task.txt
+63c0b4d2bc538165578e94d2f8dc84bdf54a077db5862ac3c89d60b0b6d712e8  brief-pack/lib/brief-pack.ts
+8010f7f8564412b5b85d3dfbca3f3faa52bd605addd7c7d944ef914cf4cee42d  brief-pack/pack.sh
+206d7561fa122b2189582af7a861513cb24456b7c04a33c9c07c3df161b4e573  decisions/README.md
+613bfe17c52166565cafdfd6e4cec2263e59c8aa0ad33187539fabbdc7bc7a2d  decisions/RED.md
+baa7a21c75fcfdedaeba73a79255f66379a848ab3d7b01e026976c5fa7f94bbd  decisions/check.sh
+6f4285b56d86bc7709285f7b4e4232a7288912c2d2778b907f3c13e41c4d8d6d  decisions/fixtures/fail-clause2-conflict.md
+dbd03ef4703178ef2c4156d14ca947fd2614ce627ed16f2bf3ed2e7e6dfd64b7  decisions/fixtures/fail-clause3-falsifier.md
+164e6a49edc1216599e9c7ebdd992d0934e53f7186001953a11cc2f2603f1b36  decisions/fixtures/fail-clause4-rejected.md
+8236f562978f70e0b8f531b3608a9f4ca7f2a61f63001ae8b4dd5c96cca910b6  decisions/fixtures/fail-clause5-supersedes.md
+118c5494d8de700e092b7790ef07b49cab7f58862514ea854376a417b1fcd60e  decisions/fixtures/fail-clause6-retire.md
+46a74cc2974ed9641b7d08b5d455133cee2cec02da7459a86484116058069957  decisions/fixtures/fail-clause7-state.md
+ca89063b2f65c804c5887db4a0adb5fca9000f682b161faf3ca3e68a07d28f15  decisions/fixtures/harness-empty.md
+f80d46e17bfad109729423899a15b3258504f3ea473b6cceac423c7d37a712b0  decisions/fixtures/pass-3rows.md
+393eab9c3e73a17796334712c98e576120c0b540869887229e0a68675ac9adfd  decisions/fixtures/pass-clause6-retire.md
+0cbbc6e83ae3c9f601961237518871d1d0751bfcf374f846f4c8e5367fe6ba09  decisions/lib/decisions-doctor.ts
+dc8fffdfdd44667aff79c37532b64d82e0a8bd20335388d7f3968b50d42871e0  decisions/templates/decisions.md
+b610ceefe38325742e8cf32f33475d7aba67faaa937afd0e5e0deac45ff94a7d  lane-report/README.md
+c02d02fecbddcbe1baccbc8c7e12ec5c20ed90d8117037db33176c04e2a63091  lane-report/RED.md
+54fb0388e86e2e601bd0961797509c05715da988396c35a968abd78d50bd6369  lane-report/check.sh
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  lane-report/fixtures/empty.txt
+5c0ff26f641bc23a5ed87f5c5baaf4025e63430db14b6b208bfbefb78893dbda  lane-report/fixtures/fail-clause1-missing-field.txt
+c349e5b38e619a2cbbbf3d842545a0486bda1a6917c6d5a18ed45c05a50c2996  lane-report/fixtures/fail-clause2-empty-value.txt
+48efc601dcabbc4107c9159080aa459b5f1bd0d70919f0998694f79334b390cd  lane-report/fixtures/fail-clause3-trailing-content.txt
+c37fe25e7bf8b3ce18de037f03e1d7f060a94a779b214261ae83cdac78325e5d  lane-report/fixtures/fail-clause4-bad-state.txt
+0b4fc75f2285f2407ae80088d771148e3a04ec1752bdb128a12db743a9e17bd7  lane-report/fixtures/fail-clause5-no-exit.txt
+28f9f311cfe6888a3a8adb801149d6837c2b901d9ebe2ecd80bb2ddedbccc498  lane-report/fixtures/fail-clause6-blank-deviations.txt
+70fad71c249da7f3dadea4c8444c24928c37382683b90b2077ca8ddaa4fff8aa  lane-report/fixtures/pass.txt
+03416958e690f7541eafd144da5c874ab89284888e60405eae2275bfb1fb1455  lane-report/lib/lane-report.ts
+4d250e40c4f3e469e4bc41e9c83b5bac4408f222b8408dce76794b33ff7c3fe9  loop-policy/README.md
+e3d0a413456d3090b0b0f6dcf4b8baf6b1e320ce1efc491a50f01a716f975aa3  loop-policy/RED.md
+93f112d39355ed6382616ff638817d09d2da17e4caeb5fee4415209083537ca9  loop-policy/check.sh
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  loop-policy/fixtures/empty.md
+c7932d2b51b2b2ee3c4baca300f637a91581d05e2a783a5aa8b1334e71774298  loop-policy/fixtures/fail-max-turns-nonint.md
+dc7a8fb92f2681c0abb4ed92b78c23adad892472cdbca09a64c8567b15eedb9c  loop-policy/fixtures/fail-missing-on-exhaust.md
+95c84cd2525e0d96e21a97fb75135f3254bb6a4026aab89e8dbb1f8bc949983f  loop-policy/fixtures/fail-no-section.md
+af4cdbe727ca5a7093f053e4ab352e3e7f2273d123a85623f637beffe4a10c39  loop-policy/fixtures/fail-on-exhaust-retry.md
+4099e1ea5057381c00a1c287af08c71fe20efbc6df9ec7d61dcaded41d2e6fd1  loop-policy/fixtures/fail-priority-order.md
+0d9464cdb40a25af10c1d9fa04d2512732dfa231356f9de679620509f4189b96  loop-policy/fixtures/pass.md
+1e38ac67c2077ca7a14ca3f93979ecd5170bc5497e500d4fca5796fdbe04a8e6  loop-policy/snippet.js
+e3df845def1da30b412aba1979a406eb6ebac836afa04f1894573e4065b0ea8c  loop-policy/templates/dispatch-plan.template.md
+688a9bfcdcfd86d36657024e796de6f5c3c1b4931ea9de17efe586f875a07f7b  loop-policy/templates/loop-policy.md
+3f107b98a67b71db5394092408d5f75d588943cc25f49e90d5b288d7e1063539  loop-policy/test/snippet.test.js
+96e9fc096c2c4556815f9f3a58066067e88306d4c09d72994011be274a49953b  placeholders/README.md
+fef4ebe612e74d493af3cbcb045ed2bd32427bb671a6afa2c8e230d58eb912a5  placeholders/RED.md
+c15916301e5b5700b7884dc53e2589789750391d0ccce28c02f3c1e5a9cd9bb1  placeholders/check.sh
+81dbb324e1614804afe7a397ff570a373eec226163a4c271ce93fe872e8f694c  placeholders/fixtures/fail-mustache-only.md
+d1289f2001fcc5fc1851186b9a900b704eb8ac17bfe938d8bc9d0a3112d39548  placeholders/fixtures/fail-scaffold-README.md
+c138895a6d9f94484f98dbaafd81f543ff9fd5d51ba961fa78b3dd8b04f2646e  placeholders/fixtures/pass-instantiated-README.md
+3367573c44b52b655c5a94614cf5f9cabaf1011e3799e1f62d3f111b9b402f03  ratchet-bound/README.md
+90b420e9e3cfa6723761c102e4f24be67f28c4380a4773c8a8afd53a5a4a2a0e  ratchet-bound/RED.md
+bcba738041cc28477291a8e3ae72a4cf0f51e1d10a77b82694b3716c026bd0a1  ratchet-bound/check.sh
+02ef2e063caf44eece67ea056097eb0536e4cdb8afa2a8b6bac3c7256cd07fd1  ratchet-bound/fixtures/fail-16-live.md
+07b5f7dbf37cd136e21bd38a969f9b7a1c7179c92170693510c4f328ce7f06a5  ratchet-bound/fixtures/fail-missing-provenance.md
+597f12c856dc4416d85153007121b0a17f59ec683078d66d9bee8c0bdd892b13  ratchet-bound/fixtures/fail-no-section.md
+c5e745272e8bd790df29d18ddc51e926b42d8eb76ca2abf317e0c947c4748fa2  ratchet-bound/fixtures/pass-16-graduated.md
+b97ec0623c5e815f0263af0613325e41628af51b835ca504cb3f3b9560b3f173  ratchet-bound/fixtures/pass-3-live.md
+bfe97213eedddf8e014938c137a18f52c7cb37dc1c448a4bbc63b00cbf5edf4f  ratchet-bound/fixtures/pass-empty.md
+```

@@ -1,0 +1,5 @@
+deliverable:   a thing landed
+claim-states:  thing.sh: WRITTEN
+verified:      ran the check and it looked fine
+deviations:    none
+lessons:       none

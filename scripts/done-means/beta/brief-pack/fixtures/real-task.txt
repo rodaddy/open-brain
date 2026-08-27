@@ -1,0 +1,2 @@
+Harden the exemplar battery so a missing uv exits 3 rather than 1.
+Add a fixture proving the python exemplar RED path.

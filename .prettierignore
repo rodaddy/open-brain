@@ -1,0 +1,4 @@
+# Graph Mode v1.3-beta is a byte-faithful copy of the Development canon
+# (scripts/done-means/beta/PROVENANCE.md). Formatting it here would break the
+# sha256 manifest and make the pilot receipts uncomparable across repos.
+scripts/done-means/beta/
