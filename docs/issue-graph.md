@@ -272,6 +272,8 @@ next run builds on top of them.
 
 ## Ledger
 
+Legacy shape. New rulings go in `docs/decisions.md` (v1.3-beta); this file is history.
+
 Per `_ob/skills/what-did-i-not-ask/_DOCS/grill-with-docs-procedure.md` §124.
 Item → state → where the resolution is written. Deferred items are marked
 deferred, never silently dropped.
