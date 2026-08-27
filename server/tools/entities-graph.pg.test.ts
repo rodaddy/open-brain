@@ -7,9 +7,9 @@
  * rules call out. These tests seed rows owned by a foreign namespace and prove
  * each tool refuses to read, list, mutate, or hydrate them.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
- * dogfood database.
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
+ * database, never the dogfood database. `bun run test:isolated` sets it.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -17,12 +17,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerEntityTools } from "./entities.ts";
 import { registerPeopleTools } from "./people.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `graph-pg-${process.pid}`;
 const OTHER_NAMESPACE = `${NAMESPACE}-other`;
@@ -33,7 +32,6 @@ async function callTool(
   args: Record<string, unknown>,
   role = "agent",
 ): Promise<{ isError: boolean; body: unknown }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "graph-test", version: "1.0.0" });
   const dependencies = {
     pool,
@@ -43,7 +41,8 @@ async function callTool(
   };
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -69,49 +68,51 @@ async function callTool(
   }
 }
 
-dbDescribe("graph and people namespace isolation (live Postgres)", () => {
-  let foreignEntityId = "";
-  let foreignLinkTargetId = "";
+/** Ids of the foreign-namespace rows, filled by the module-scope `beforeAll`. */
+let foreignEntityId = "";
+let foreignLinkTargetId = "";
 
-  beforeAll(async () => {
-    const foreign = await pool!.query(
-      `INSERT INTO ob_entities (entity_type, name, namespace, created_by, metadata)
+beforeAll(async () => {
+  const foreign = await pool.query(
+    `INSERT INTO ob_entities (entity_type, name, namespace, created_by, metadata)
        VALUES ('host', 'foreign-only-entity', $1, $1, '{}'::jsonb) RETURNING id`,
-      [OTHER_NAMESPACE],
-    );
-    foreignEntityId = foreign.rows[0].id;
-    const target = await pool!.query(
-      `INSERT INTO ob_entities (entity_type, name, namespace, created_by, metadata)
+    [OTHER_NAMESPACE],
+  );
+  foreignEntityId = foreign.rows[0].id;
+  const target = await pool.query(
+    `INSERT INTO ob_entities (entity_type, name, namespace, created_by, metadata)
        VALUES ('host', 'foreign-link-target', $1, $1, '{}'::jsonb) RETURNING id`,
-      [OTHER_NAMESPACE],
-    );
-    foreignLinkTargetId = target.rows[0].id;
-    await pool!.query(
-      `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, weight, namespace, metadata, created_by)
+    [OTHER_NAMESPACE],
+  );
+  foreignLinkTargetId = target.rows[0].id;
+  await pool.query(
+    `INSERT INTO ob_links (from_type, from_id, to_type, to_id, relation, weight, namespace, metadata, created_by)
        VALUES ('entity', $1, 'entity', $2, 'relates_to', 1.0, $3, '{}'::jsonb, $3)`,
-      [foreignEntityId, foreignLinkTargetId, OTHER_NAMESPACE],
-    );
-    await pool!.query(
-      `INSERT INTO relationships (person_name, context, namespace, created_by)
+    [foreignEntityId, foreignLinkTargetId, OTHER_NAMESPACE],
+  );
+  await pool.query(
+    `INSERT INTO relationships (person_name, context, namespace, created_by)
        VALUES ('Foreign Person', 'lives in another lane', $1, $1)`,
-      [OTHER_NAMESPACE],
-    );
-  });
+    [OTHER_NAMESPACE],
+  );
+});
 
-  afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM ob_links WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.query(`DELETE FROM relationships WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.query(`DELETE FROM ob_links WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
+  await pool.query(
+    `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
+    [[NAMESPACE, OTHER_NAMESPACE]],
+  );
+  await pool.query(
+    `DELETE FROM relationships WHERE namespace = ANY($1::text[])`,
+    [[NAMESPACE, OTHER_NAMESPACE]],
+  );
+  await pool.end();
+});
 
+describe("entity and link tools (live Postgres)", () => {
   test("list_entities never returns a foreign-namespace row", async () => {
     const { isError, body } = await callTool("list_entities", NAMESPACE, {});
     expect(isError).toBe(false);
@@ -136,7 +137,7 @@ dbDescribe("graph and people namespace isolation (live Postgres)", () => {
     });
     expect(isError).toBe(true);
     expect(String(body)).toContain("Permission denied");
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS cnt FROM ob_entities WHERE namespace = $1 AND name = 'isolation-probe'`,
       [OTHER_NAMESPACE],
     );
@@ -154,7 +155,9 @@ dbDescribe("graph and people namespace isolation (live Postgres)", () => {
     });
     expect((first.body as { is_new: boolean }).is_new).toBe(true);
     expect((second.body as { is_new: boolean }).is_new).toBe(false);
-    expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id);
+    expect((second.body as { id: string }).id).toBe(
+      (first.body as { id: string }).id,
+    );
   });
 
   test("unlink_entities cannot archive a foreign namespace's link", async () => {
@@ -173,7 +176,7 @@ dbDescribe("graph and people namespace isolation (live Postgres)", () => {
     // Admin may delete, but the predicate binds to the caller's own lane, so
     // the foreign link is simply not found -- and must remain active.
     expect(body).toBe("Already unlinked or not found");
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT archived_at FROM ob_links WHERE namespace = $1`,
       [OTHER_NAMESPACE],
     );
@@ -186,14 +189,16 @@ dbDescribe("graph and people namespace isolation (live Postgres)", () => {
     });
     expect(isError).toBe(false);
     expect((body as { matched: number }).matched).toBe(0);
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS cnt FROM ob_entities
         WHERE namespace = $1 AND embedding IS NOT NULL`,
       [OTHER_NAMESPACE],
     );
     expect(rows[0].cnt).toBe(0);
   });
+});
 
+describe("people tools (live Postgres)", () => {
   test("find_person never returns a person from another lane", async () => {
     const { isError, body } = await callTool("find_person", NAMESPACE, {
       query: "Foreign",

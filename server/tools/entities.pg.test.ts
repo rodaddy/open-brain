@@ -7,8 +7,9 @@
  * tests seed exactly that row, so a dropped predicate fails here instead of
  * leaking across namespaces in production.
  *
- * Skips loudly when `OPENBRAIN_TEST_DATABASE_URL` is unset. It must point at an
- * isolated test/playground database, never the dogfood database.
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
+ * database, never the dogfood database. `bun run test:isolated` sets it.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,11 +17,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerEntityTools } from "./entities.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `entities-pg-${process.pid}`;
 const FOREIGN_NAMESPACE = `${NAMESPACE}-foreign`;
@@ -29,25 +29,32 @@ async function getEntity(
   namespace: string,
   id: string,
 ): Promise<{ isError: boolean; text: string }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "entities-test", version: "1.0.0" });
   registerEntityTools(server, {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
       ...options,
-      authInfo: { role: "agent", clientId: namespace, namespaceSource: "token" },
+      authInfo: {
+        role: "agent",
+        clientId: namespace,
+        namespaceSource: "token",
+      },
     } as never);
   const client = new Client({ name: "entities-test", version: "1.0.0" });
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const result = await client.callTool({ name: "get_entity", arguments: { id } });
+    const result = await client.callTool({
+      name: "get_entity",
+      arguments: { id },
+    });
     return {
       isError: result.isError === true,
       text: (result.content as Array<{ text: string }>)[0]?.text ?? "",
@@ -58,25 +65,25 @@ async function getEntity(
   }
 }
 
-dbDescribe("get_entity namespace isolation (live Postgres)", () => {
+describe("get_entity namespace isolation (live Postgres)", () => {
   let ownId = "";
   let foreignId = "";
   let archivedId = "";
 
   beforeAll(async () => {
-    const own = await pool!.query(
+    const own = await pool.query(
       `INSERT INTO ob_entities (entity_type, name, namespace, created_by)
        VALUES ('service', 'own entity', $1, $1) RETURNING id`,
       [NAMESPACE],
     );
     ownId = own.rows[0].id;
-    const foreign = await pool!.query(
+    const foreign = await pool.query(
       `INSERT INTO ob_entities (entity_type, name, namespace, created_by)
        VALUES ('service', 'foreign entity', $1, $1) RETURNING id`,
       [FOREIGN_NAMESPACE],
     );
     foreignId = foreign.rows[0].id;
-    const archived = await pool!.query(
+    const archived = await pool.query(
       `INSERT INTO ob_entities (entity_type, name, namespace, created_by, archived_at)
        VALUES ('service', 'archived entity', $1, $1, NOW()) RETURNING id`,
       [NAMESPACE],
@@ -85,10 +92,10 @@ dbDescribe("get_entity namespace isolation (live Postgres)", () => {
   });
 
   afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, FOREIGN_NAMESPACE],
-    ]);
+    await pool.query(
+      `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
+      [[NAMESPACE, FOREIGN_NAMESPACE]],
+    );
     await pool.end();
   });
 
