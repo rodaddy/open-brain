@@ -58,6 +58,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     minTests: 3,
   },
   { name: "local clone real PostgreSQL boundary (live Postgres)", minTests: 1 },
+  // The cross-provider parity fixtures (#878). Every recorded tool response for
+  // both providers is replayed here, so this is the single suite that proves the
+  // two implementations still answer identically. It was env-gated and never
+  // registered, which meant a Postgres misconfiguration skipped all 75 of those
+  // comparisons and the job stayed green having compared nothing.
+  {
+    name: "server parity fixtures by implemented provider capability (live Postgres)",
+    minTests: 75,
+  },
   // Migration 025 in-place normalization (#878). Env-gated like every suite
   // above and never registered here, so a Postgres misconfiguration silently
   // skipped both proofs: that the migration converges the accepted shapes, and
@@ -250,9 +259,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // migration 032 raw-turns suites' 2 + 4 + 4 + 7, then 108 -> 127 when #878
 // registered the migrations 038/039 reinforcement + said-at file's four
 // flattened suites at 6 + 4 + 5 + 4, then 127 -> 143 when #878 converted the
-// 001_init schema proof and registered its six suites' 16), so the global
-// floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 143;
+// 001_init schema proof and registered its six suites' 16, then 143 -> 218 when
+// #878 registered the cross-provider parity suite's 75), so the global floor
+// cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 218;
 
 export interface SuiteStats {
   tests: number;

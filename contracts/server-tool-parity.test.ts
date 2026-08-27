@@ -1,3 +1,12 @@
+/**
+ * Cross-provider parity fixtures, replayed against a live Postgres database.
+ *
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). A suite that swapped itself for
+ * `describe.skip` reported `0 pass, 77 skip, 0 fail` and exited 0, which is
+ * indistinguishable at the exit code from a run that proved the parity
+ * contract. `bun run test:isolated` supplies the database.
+ */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -8,6 +17,7 @@ import { registerAllTools } from "../src/tools/index.ts";
 import type { AuthInfo } from "../src/types.ts";
 import { registerMemoryTools } from "../server/tools/index.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "../server/tools/shared-namespace-fixture.ts";
+import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
 
 interface FixtureStep {
   tool: string;
@@ -48,9 +58,7 @@ interface ServerFixture {
   steps: FixtureStep[];
 }
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 const fixtureDir = new URL("./server/", import.meta.url);
 const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtures: ServerFixture[] = [];
@@ -154,7 +162,6 @@ async function createClient(
   client: Client;
   close: () => Promise<void>;
 }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = createBrainServer();
   if (provider === "current-src") {
     registerAllTools(server, {
@@ -195,6 +202,48 @@ async function createClient(
       await server.close();
     },
   };
+}
+
+/**
+ * Replay one fixture step against a connected client and assert the recording.
+ *
+ * `replacements` is read AND written: placeholder tokens are substituted into
+ * this step's arguments, and any ids this step's `capture` names are added for
+ * later steps. That is the one mechanism a fixture has for both, so keeping it
+ * mutable here is what lets the caller stay a plain loop.
+ */
+async function runFixtureStep(
+  client: Client,
+  fixtureId: string,
+  step: FixtureStep,
+  replacements: Record<string, string>,
+): Promise<void> {
+  const args = replacePlaceholders(step.arguments, replacements) as Record<
+    string,
+    unknown
+  >;
+  const expected = replacePlaceholders(
+    step.expectation,
+    replacements,
+  ) as FixtureStep["expectation"];
+  const result = await client.callTool({ name: step.tool, arguments: args });
+  const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
+  expect(result.isError === true).toBe(expected.is_error);
+  if (expected.text !== undefined) expect(text).toBe(expected.text);
+  if (expected.json !== undefined) expectObserved(JSON.parse(text), expected.json);
+
+  for (const [name, path] of Object.entries(step.capture ?? {})) {
+    const captured = valueAtPath(JSON.parse(text), path);
+    // A capture that silently resolved to undefined would substitute the
+    // literal string "undefined" into the next step's arguments, turning a
+    // broken fixture into a confusing validation error several steps later.
+    // Fail here, where the cause is visible.
+    expect(
+      typeof captured === "string" && captured.length > 0,
+      `${fixtureId} step ${step.tool}: capture '${name}' found nothing at '${path}'`,
+    ).toBe(true);
+    replacements[`{{${name}}}`] = captured as string;
+  }
 }
 
 // Every fixture describes behavior in an EMPTY ISOLATED namespace. The unique
@@ -302,7 +351,7 @@ const SEEDED_TABLES = [
  * time bomb for whoever next turns on a producer.
  */
 async function deleteSeededRows(): Promise<void> {
-  if (!pool || seededNamespaces.size === 0) return;
+  if (seededNamespaces.size === 0) return;
   const namespaces = [...seededNamespaces];
   for (const table of SEEDED_TABLES) {
     await pool.query(`DELETE FROM ${table} WHERE namespace = ANY($1)`, [
@@ -311,7 +360,7 @@ async function deleteSeededRows(): Promise<void> {
   }
 }
 
-dbDescribe(
+describe(
   "server parity fixtures by implemented provider capability (live Postgres)",
   () => {
     beforeAll(() => {
@@ -365,42 +414,7 @@ dbDescribe(
           const { client, close } = await createClient(provider, auth);
           try {
             for (const step of fixture.steps) {
-              const args = replacePlaceholders(
-                step.arguments,
-                replacements,
-              ) as Record<string, unknown>;
-              const expected = replacePlaceholders(
-                step.expectation,
-                replacements,
-              ) as FixtureStep["expectation"];
-              const result = await client.callTool({
-                name: step.tool,
-                arguments: args,
-              });
-              const text =
-                (result.content as Array<{ text: string }>)[0]?.text ?? "";
-              if (process.env.PARITY_OBSERVE === "1") {
-                process.stdout.write(
-                  `${provider} ${fixture.id} ${step.tool}: ${JSON.stringify({ is_error: result.isError === true, text })}\n`,
-                );
-              }
-              expect(result.isError === true).toBe(expected.is_error);
-              if (expected.text !== undefined) expect(text).toBe(expected.text);
-              if (expected.json !== undefined)
-                expectObserved(JSON.parse(text), expected.json);
-
-              for (const [name, path] of Object.entries(step.capture ?? {})) {
-                const captured = valueAtPath(JSON.parse(text), path);
-                // A capture that silently resolved to undefined would substitute
-                // the literal string "undefined" into the next step's arguments,
-                // turning a broken fixture into a confusing validation error
-                // several steps later. Fail here, where the cause is visible.
-                expect(
-                  typeof captured === "string" && captured.length > 0,
-                  `${fixture.id} step ${step.tool}: capture '${name}' found nothing at '${path}'`,
-                ).toBe(true);
-                replacements[`{{${name}}}`] = captured as string;
-              }
+              await runFixtureStep(client, fixture.id, step, replacements);
             }
           } finally {
             await close();
@@ -412,5 +426,5 @@ dbDescribe(
 );
 
 afterAll(async () => {
-  await pool?.end();
+  await pool.end();
 });
