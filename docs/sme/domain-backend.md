@@ -783,3 +783,107 @@ Reusable review check for any queue/sweep design: name the producer explicitly. 
 Verbatim, from the source:
 
 > `src/maintenance-bootstrap.ts` states it as intent, not accident: "The bootstrap enqueues nothing and defines no recurring sweep: the maintenance runner is a consumer." So the runner consumes a queue that no producer fills.
+
+## [2026-08-08] A prefix-scoped SQL DELETE of provable test residue is the lane's to run
+
+**Severity:** MEDIUM
+**Source:** operator ruling 2026-08-08 (ledger item 31), Tightenings round 26
+**Scope:** `scripts/done-means/*.sh` teardown clauses, eval and fixture cleanup, any lane that seeds rows into the dogfood database
+**Status:** active
+
+### Pattern
+
+Lanes seed rows and then hesitate to remove them, reading the unconditional no-`rm` rule as covering the database. It does not. The operator ruling is explicit: "It's a database, not an RM-RF" — the filesystem rule governs the FILESYSTEM and is unchanged.
+
+A lane may DELETE rows it can PROVE are its own test residue, scoped by a prefix it created.
+
+### What to do
+
+- Prove ownership first: the rows sit under a prefix the lane itself wrote, not merely a prefix that looks test-shaped.
+- Count before. Delete in ONE transaction, children before parents. Verify zero after. Announce all three counts in the report — a silent cleanup is the adjusted-silently failure in a different costume.
+- Rows of uncertain provenance, user data, and anything outside a provably-test prefix stay REPORT-ONLY. Name them in the report and let the operator decide.
+- In this schema a namespace is an emergent property of its rows: there is no registry table, so `archive_entry` soft-delete can never retire one. Twenty-four archived-only eval namespaces are what that looks like after months of teardown that only soft-deleted.
+
+### Why it matters
+
+A teardown that reports success is not evidence of removal — the tally is the thing under test, never the proof. Assert a row COUNT read from OUTSIDE the run, and the count is what the DELETE clause exists to drive to zero.
+
+## [2026-08-08] A revision proof is not a feature-live proof
+
+**Severity:** HIGH
+**Source:** PR #660 (#659 launcher-env lane) and the controller-side discovery, Tightenings round 18
+**Scope:** deploys to core01 and the local clone; launcher env allowlists; `scripts/done-means/659-launcher-env-passthrough.sh`
+**Status:** active
+
+### Pattern
+
+The clone redeploy PASSED its revision proof at the right SHA while the merged feature stayed DARK: the launcher's env allowlist dropped the new config keys. #659 exists because the two were conflated for about ten minutes.
+
+After any deploy meant to light up a feature, read the FEATURE'S OWN signal — a `/health` block, a log event — never just the revision.
+
+### What to do
+
+- **When a merged feature fails in deployment, ask which SEAM the passing check could not see.** #656's done-means drove `createShadowApplication` directly, so the entire launcher spawn chain sat outside its vantage. The check was honest about its seam, and the seam was exactly where the defect lived. Chain-level clauses driving the real launcher through its injected boundaries were cheap, and were the ONLY ones that reproduced the live symptom.
+- **An env allowlist between launcher and child is a standing drop hazard** — third instance of the class (#530 tracing, then `AUTH_TOKEN_USER_`, now capture-health). The fix is ANNOUNCE-ON-DROP, not abolishing the allowlist: six more silently-dropped configured keys surfaced the moment drops became visible.
+- **A done-means check for a NEW export must import it DYNAMICALLY.** A static import at the pre-fix tree dies at module resolution before any clause prints — a false RED identical in shape to a real one, reached by the ORDINARY act of writing a check for a function that does not exist yet. This is the default path, not an edge case.
+- **A scope rule needs both halves in ONE clause, and only a mutation proves it.** "Ambient vars NOT announced AND configured key IS" was the only clause that caught an announce-everything filter. An unscoped drop report is boot noise an operator learns to skip — silence with extra steps. Companion rule: a drop report names KEYS, never values, because the dropped set contains secrets in the general case.
+- **Read WHY each RED clause failed, not just the tally.** Three fixture defects (WAL path, clone root, `QMD_PATH`) failed IDENTICALLY to the defect under test at the shell. A false RED banks confidence in a check that measured nothing.
+- **Suspect your own formatting before a known gate defect.** #641 being real made it the attractive explanation for a validator refusal that was in fact the lane's own backticks-in-a-field-value. Reading the validator's five lines of path resolution beat another workaround attempt.
+
+### Self-reported violation, harvested not punished
+
+A reflexive bare `rm -rf` — argument-less, deleted nothing, its error swallowed by `2>/dev/null` — ran inside an otherwise-correct clean-clone command. The reflex fires INSIDE correct compound commands, which is precisely why the ban is unconditional, and why `2>/dev/null` on a cleanup step deserves suspicion on sight.
+
+## [2026-08-08] A "compose it" lane must ask what the composer can actually see
+
+**Severity:** HIGH
+**Source:** #652 capture-health composition lane, Tightenings round 14
+**Scope:** `/health` inputs, `server/main.ts` composition, `scripts/done-means/652-capture-health-composed.sh`
+**Status:** active
+
+### Pattern
+
+The reader wanted watermark bytes and spool depth — client-side per-hook files a SERVER cannot enumerate. Passing an honest-looking `0` for an unobservable count is not neutral: zero-while-sessions-ran IS the wedged fault, so a hardcoded zero would degrade EVERY healthy deployment into a permanent false alarm.
+
+Substitute a value that preserves the PROPERTY (turns arriving is approximately watermark advancing), and publish which faults the vantage point can actually raise. Round 10's TEST-NET lesson in the counts domain.
+
+### What to do
+
+- **A per-role check must SEED the expected roles before folding rows.** `GROUP BY role` returns no group for the dead speaker — the exact entity the check exists to find. A fold over returned rows reports a busy lane and rebuilds #447.
+- **Late-binding needs its own clause.** Two requests against one composed app, with the observation CHANGED between them, was the only clause that caught a boot-captured reading. Any health input composed as a closure carries this clause.
+- **A type added for a future composer is exported at the boundary in the SAME PR.** `tsc` found #648's `TransportCaptureHealth` declared but never barrel-exported — invisible until the first composer tried to import it.
+
+### Corollary: declare your own remaining gap
+
+A WRITTEN-not-RUNNING declaration that names its own missing piece makes the NEXT lane cheap. #648's residual-risk field pointed straight at the composition root, and this lane declared its own gap the same way — `server/main.ts` wiring awaiting an operator config ruling on namespace, window, and refresh cadence.
+
+Hardcoding defaults to satisfy a dispatch expectation would have been the adjusted-silently failure.
+
+## [2026-08-08] Verify which tree the process runs before reading source as truth
+
+**Severity:** HIGH
+**Source:** PR #650 (#646 provider-scope lane), Tightenings round 12
+**Scope:** any lane reasoning about live behavior; `src/` versus `server/main.ts`; `package.json` `start`
+**Status:** active
+
+### Pattern
+
+The lane reasoned about correct-looking code in `src/` while the service was in fact running `server/main.ts`. One call answers it — `lsof -nP -iTCP:<port>` plus `ps -o command` — and `package.json`'s `start` STILL points at the non-serving tree.
+
+A source file that contradicts observed behavior is evidence you are reading the WRONG FILE, not evidence of a mystery.
+
+### What to do
+
+- Resolve the serving tree before treating any source file as the explanation for a live symptom.
+- **A done-means fixture encodes a world-assumption that can be wrong in EITHER direction — query the real distribution before inventing a fixture shape.** The lane's first fixture seeded a conflicting `agent` and read the server's contract-CORRECT refusal as a failure; it nearly "fixed" correct code. All 2011 real lanes carried the matching agent.
+- **A shared test resource closed by an earlier suite's `afterAll` fakes a red.** Distinguish by ASSERTION COUNT: 23 assertions executing means the subject failed; a harness error executes near zero.
+- **`git stash push` on already-committed work stashes NOTHING**, and the follow-up pop grabs someone else's stash. Read the stash output before popping. Second foreign-stash incident; the first was #624.
+- **A live-service-bound receipt is not portable.** A check proving behavior against `127.0.0.1:3100` at revision X proves nothing about any other host or revision, and goes stale on redeploy. Name the binding IN the receipt.
+
+### Corollary: near-miss discipline runs both directions
+
+A phantom finding (a nonexistent import) was re-checked and RETRACTED before reporting. A wrong fixture was corrected and RED re-proven against the pre-fix revision. Both belong in the report — they are the report's job, not its shame.
+
+### Corollary: lazy-heal is a decision, not a default
+
+2011 scope-broken lanes heal on their next capture. No bulk repair was run, and the report SAYS so — bulk-heal remains an operator option rather than a silently-taken default.

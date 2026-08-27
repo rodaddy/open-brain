@@ -494,3 +494,57 @@ A cluster of tooling behaviours that each produced a false green or a lost after
 **Citations to artifacts that do not exist yet are fabrications.** A PR number guessed before `gh pr create` is a guess in the grammar of a fact. Write the reference after the artifact exists.
 
 **Mutation-test the gate itself when the PR's claim IS the gate.** Reintroduce each real failure mode and watch the gate fail; a gate observed only green is decoration.
+
+## [2026-08-08] PIPESTATUS outside the pipeline's shell prints empty and reads as exit 0
+
+**Severity:** MEDIUM
+**Source:** #653 branch-sync lane, Tightenings round 21; sibling of round 19's tee-masking finding
+**Scope:** `scripts/done-means/*.sh`, verify-lane runs, any clause whose whole claim is a non-zero exit
+**Status:** active
+
+### Pattern
+
+`PIPESTATUS` evaluated OUTSIDE the pipeline's own shell prints EMPTY. At a glance that is indistinguishable from exit 0, so a clause whose entire claim is "this refusal exits non-zero" reports success on a run that captured nothing.
+
+It bit twice in one lane: once on a refusal path and once on `tsc`. It is the second spelling of round 19's finding that piping a driver through `tee` masks the exit code.
+
+### What to do
+
+- Redirect to a file and read `$?` directly, or set `pipefail` and re-run clean. Do not read a status through a pipeline you did not construct in the same shell.
+- **Guard the arithmetic.** Empty shell variables in numeric tests abort under `set -u` and truncate every remaining clause, producing a transcript that reads as a crash rather than a verdict. Give JSON reads a sentinel value and test against it.
+- **Write message files in a SEPARATE tool call before a guarded command.** A git-guard refusal aborts the ENTIRE compound command, so heredocs and file writes earlier in the chain never execute — the next step then fails on a missing file and reads as an unrelated bug. Verified as standing practice one round later, with no compound-chain aborts.
+
+### Corollary: record the NEGATIVE results of a rule too
+
+Round 11's "a conflict-free merge is not a clean merge" re-run cost about a minute and came back clean. Reporting only the CATCHES makes a cheap rule look expensive, and a rule that looks expensive gets retired. Log the clean re-runs as deliberately as the ones that found something.
+
+### Corollary: prove the refusal, never the credentialed path
+
+For an uncredentialed continuation lane this is a viable standing split. The gate's refusal enumerates every missing coordinate BY NAME, so a lane with no credentials fully exercises the refusal branch at zero harvest risk; the credentialed leg stays with the controller-dispatched verifier. Brief the ENUMERATED SET, never a count — the briefed "8" went stale the moment two capture fallbacks joined the enumeration and made it 10.
+
+## [2026-08-08] Ask whether the design already exists and was simply never run
+
+**Severity:** MEDIUM
+**Source:** PR #648 (#647 capture-liveness lane), Tightenings round 13
+**Scope:** every build lane's first move; `docs/decisions/`, `docs/sme/entries/`
+**Status:** active
+
+### Pattern
+
+#647 read as "invent a liveness check." `docs/decisions/capture-never-drops-a-turn.md:182-200` had SPECIFIED it — per-role, count-based — for eleven days, carrying its own record that it "was never run."
+
+"Has this been specified and left unrun?" is the FIRST question of any build lane, not a formality. Here the lookup materially changed the deliverable and avoided rebuilding the #447 per-role blind spot.
+
+### What to do
+
+- Search decisions and SME entries for the thing you are about to invent, BEFORE inventing it. A design that exists and was never executed looks exactly like a design that does not exist, from inside the issue text.
+- **A control clause that passes PRE-fix is the signal the check discriminates.** Ten of thirteen clauses red with the two CONTROLS green is stronger evidence than thirteen of thirteen red: a check that fails everywhere proves only that it fails.
+- **Lanes do not use `git stash` for red/green proofs — file-copy instead.** The stash stack is SHARED even when the worktree is exclusively yours. This was the second lane in one session to pop a foreign stash from a bootstrapped worktree, third incident overall; the round-1 "checkout you don't own" wording under-scoped the hazard.
+
+### Corollary: name the capability state honestly
+
+The liveness reader was MERGED code with no process composing it — no live `/health` reported capture until a composition change shipped. WRITTEN-not-RUNNING, stated in the PR rather than implied away.
+
+### Gate-precision datapoints
+
+The design-lookup gate accepted `aqmd` but refused a direct `sqlite3` query of the same index (#637 corpus). The git guard fired on a protected-branch name inside a MERGE-COMMIT MESSAGE — the fifth shape of #618; say "upstream default branch" in prose instead.
