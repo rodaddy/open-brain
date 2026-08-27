@@ -54,6 +54,20 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     minTests: 3,
   },
   { name: "local clone real PostgreSQL boundary (live Postgres)", minTests: 1 },
+  // Migration 025 in-place normalization (#878). Env-gated like every suite
+  // above and never registered here, so a Postgres misconfiguration silently
+  // skipped both proofs: that the migration converges the accepted shapes, and
+  // that it leaves every rejected one byte-for-byte unchanged. Split by subject
+  // in #878, so both halves are named here -- registering one would let the
+  // other vanish unnoticed.
+  {
+    name: "025 normalize legacy Development lanes (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "025 leaves unrecognized lane shapes unchanged (live Postgres)",
+    minTests: 1,
+  },
   {
     name: "server ID queries enforce namespace isolation (live Postgres)",
     minTests: 4,
@@ -139,9 +153,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2, then
 // 65 -> 74 when #878 registered the two source-registry suites (8) and the
 // entrypoint split redistributed its own tests to 3 + 2 + 3, then 74 -> 77 when
-// #878 registered the migration 028 lease_expired compat suite's 3), so the
+// #878 registered the migration 028 lease_expired compat suite's 3, then
+// 77 -> 79 when #878 registered the two migration-025 suites at 1 each), so the
 // global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 77;
+export const MIN_TOTAL_LIVE_TESTCASES = 79;
 
 export interface SuiteStats {
   tests: number;
