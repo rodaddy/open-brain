@@ -31,20 +31,20 @@
  *     to the right entry and source_table -- the correlated subquery's join
  *     conditions, which a fake cannot exercise.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo dbDescribe convention).
+ * REQUIRES OPENBRAIN_TEST_DATABASE_URL and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). `bun run test:isolated` sets it.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 import { runMigrations } from "../../db/migrate.ts";
 import { registerTierRecommendations } from "../tier-recommendations.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 const CREATED_BY = "dream-tier-rec-pg-test";
 const OWNER_NS = "dream-tier-rec-owner-ns";
@@ -55,114 +55,122 @@ const ownerAuth: AuthInfo = {
   namespaceSource: "token",
 };
 
-dbDescribe("tier_recommendations (live Postgres)", () => {
-  let pool: Pool;
+/** First text block of an MCP tool result, or "" when the result carries none. */
+function textOf(result: Record<string, unknown>): string {
+  return (result.content as Array<{ text: string }> | undefined)?.[0]?.text ?? "";
+}
 
-  beforeAll(async () => {
-    pool = new Pool({ connectionString: DB_URL });
-    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await runMigrations(pool);
-    await cleanup();
-  });
+let pool: Pool;
 
-  afterEach(cleanup);
+beforeAll(async () => {
+  pool = new Pool({ connectionString: requireTestDatabaseUrl() });
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await runMigrations(pool);
+  await cleanup();
+});
 
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+afterEach(cleanup);
 
-  async function cleanup(): Promise<void> {
-    // entry_access_log rows are removed first: they reference the thoughts
-    // this suite created, and they carry no created_by of their own.
-    await pool.query(
-      `DELETE FROM entry_access_log
-        WHERE entry_id IN (SELECT id FROM thoughts WHERE created_by = $1)`,
-      [CREATED_BY],
-    );
-    await pool.query(`DELETE FROM thoughts WHERE created_by = $1`, [
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
+
+async function cleanup(): Promise<void> {
+  // entry_access_log rows are removed first: they reference the thoughts
+  // this suite created, and they carry no created_by of their own.
+  await pool.query(
+    `DELETE FROM entry_access_log
+      WHERE entry_id IN (SELECT id FROM thoughts WHERE created_by = $1)`,
+    [CREATED_BY],
+  );
+  await pool.query(`DELETE FROM thoughts WHERE created_by = $1`, [
+    CREATED_BY,
+  ]);
+}
+
+async function seedThought(opts: {
+  content: string;
+  tier?: string;
+  accessCount?: number;
+  accessedDaysAgo?: number | null;
+  namespace?: string;
+}): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO thoughts
+       (content, created_by, namespace, tier, access_count, last_accessed_at)
+     VALUES ($1, $2, $3, $4, $5,
+             CASE WHEN $6::numeric IS NULL THEN NULL
+                  ELSE NOW() - INTERVAL '1 day' * $6 END)
+     RETURNING id`,
+    [
+      opts.content,
       CREATED_BY,
-    ]);
-  }
+      opts.namespace ?? OWNER_NS,
+      opts.tier ?? "warm",
+      opts.accessCount ?? 0,
+      opts.accessedDaysAgo ?? null,
+    ],
+  );
+  return rows[0].id as string;
+}
 
-  async function seedThought(opts: {
-    content: string;
-    tier?: string;
-    accessCount?: number;
-    accessedDaysAgo?: number | null;
-    namespace?: string;
-  }): Promise<string> {
-    const { rows } = await pool.query(
-      `INSERT INTO thoughts
-         (content, created_by, namespace, tier, access_count, last_accessed_at)
-       VALUES ($1, $2, $3, $4, $5,
-               CASE WHEN $6::numeric IS NULL THEN NULL
-                    ELSE NOW() - INTERVAL '1 day' * $6 END)
-       RETURNING id`,
-      [
-        opts.content,
-        CREATED_BY,
-        opts.namespace ?? OWNER_NS,
-        opts.tier ?? "warm",
-        opts.accessCount ?? 0,
-        opts.accessedDaysAgo ?? null,
-      ],
-    );
-    return rows[0].id as string;
-  }
-
-  /** Record `count` accesses for an entry, `daysAgo` before now. */
-  async function logAccesses(
-    entryId: string,
-    count: number,
-    daysAgo: number,
-    sourceTable = "thoughts",
-  ): Promise<void> {
-    for (let i = 0; i < count; i++) {
-      await pool.query(
-        `INSERT INTO entry_access_log (entry_id, source_table, accessed_at)
-         VALUES ($1, $2, NOW() - INTERVAL '1 day' * $3)`,
-        [entryId, sourceTable, daysAgo],
-      );
-    }
-  }
-
-  async function callRecommendations(
-    auth: AuthInfo,
-    args: Record<string, unknown>,
-  ) {
-    const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: pool as any, embedFn: async () => null };
-    registerTierRecommendations(server, deps);
-
-    const [clientTransport, serverTransport] =
-      InMemoryTransport.createLinkedPair();
-    const originalSend = clientTransport.send.bind(clientTransport);
-    clientTransport.send = (message: any, options?: any) =>
-      originalSend(message, { ...options, authInfo: auth });
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-
-    try {
-      return await client.callTool({
-        name: "tier_recommendations",
-        arguments: args,
-      });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  }
-
-  function previews(result: any): string[] {
-    const parsed = JSON.parse((result.content as any)[0].text);
-    return (parsed.recommendations ?? parsed.candidates ?? []).map(
-      (c: any) => c.content_preview,
+/** Record `count` accesses for an entry, `daysAgo` before now. */
+async function logAccesses(
+  entryId: string,
+  count: number,
+  daysAgo: number,
+  sourceTable = "thoughts",
+): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    await pool.query(
+      `INSERT INTO entry_access_log (entry_id, source_table, accessed_at)
+       VALUES ($1, $2, NOW() - INTERVAL '1 day' * $3)`,
+      [entryId, sourceTable, daysAgo],
     );
   }
+}
 
+async function callRecommendations(
+  auth: AuthInfo,
+  args: Record<string, unknown>,
+) {
+  const server = new McpServer({ name: "test", version: "1.0.0" });
+  const deps: ToolDeps = { pool, embedFn: async () => null };
+  registerTierRecommendations(server, deps);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const originalSend = clientTransport.send.bind(clientTransport);
+  clientTransport.send = (message, options) =>
+    originalSend(message, { ...options, authInfo: auth } as never);
+
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    return await client.callTool({
+      name: "tier_recommendations",
+      arguments: args,
+    });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+function previews(result: Record<string, unknown>): string[] {
+  const parsed = JSON.parse(textOf(result)) as {
+    recommendations?: Array<{ content_preview: string }>;
+    candidates?: Array<{ content_preview: string }>;
+  };
+  return (parsed.recommendations ?? parsed.candidates ?? []).map(
+    (c) => c.content_preview,
+  );
+}
+
+describe("tier_recommendations demote selection (live Postgres)", () => {
   it("demotes only warm, rarely-accessed, stale entries", async () => {
     // The candidate: warm, 1 access, last touched 90 days ago.
     await seedThought({
@@ -258,7 +266,9 @@ dbDescribe("tier_recommendations (live Postgres)", () => {
 
     expect(found).toEqual(["zero-accesses", "one-access", "two-accesses"]);
   });
+});
 
+describe("tier_recommendations promote selection (live Postgres)", () => {
   it("promotes on a strict access threshold: five is not enough, six is", async () => {
     // The promote branch counts entry_access_log rows in the window and
     // requires `> 5`. A fixture cannot show the boundary, so both sides are
