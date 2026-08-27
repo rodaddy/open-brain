@@ -1,3 +1,11 @@
+/**
+ * Upgrade-path regression for migration 028's repaired last_error_category
+ * CHECK constraint.
+ *
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
+ * database, never the dogfood database. `bun run test:isolated` sets it.
+ */
 import {
   afterAll,
   beforeAll,
@@ -7,9 +15,8 @@ import {
   it,
 } from "bun:test";
 import { Client } from "pg";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 const migration026Url = new URL("026_maintenance_queue.sql", import.meta.url);
 const migration028Url = new URL(
   "028_maintenance_jobs_lease_expired_compat.sql",
@@ -54,7 +61,9 @@ function extractLastErrorCategorySet(sql: string): Set<string> {
       "could not locate a `last_error_category IN (...)` list in the migration SQL",
     );
   }
-  const values = [...match[1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+  const values = [...(match[1] ?? "").matchAll(/'([^']*)'/g)].flatMap((m) =>
+    m[1] === undefined ? [] : [m[1]],
+  );
   if (values.length === 0) {
     throw new Error(
       "found a `last_error_category IN (...)` list but it contained no quoted values",
@@ -79,56 +88,56 @@ describe("028 / 026 last_error_category allow-lists stay in sync", () => {
   });
 });
 
-dbDescribe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
-  // A dedicated Client (not a Pool) so the schema-scoping search_path set once
-  // at connect time holds for every query in this file. A Pool hands out
-  // arbitrary connections, which would let a query leak back to public.
-  const client = new Client({ connectionString: DB_URL });
+// A dedicated Client (not a Pool) so the schema-scoping search_path set once
+// at connect time holds for every query in this file. A Pool hands out
+// arbitrary connections, which would let a query leak back to public.
+const client = new Client({ connectionString: requireTestDatabaseUrl() });
 
-  async function applyMigration026(): Promise<void> {
-    await client.query(await Bun.file(migration026Url).text());
-  }
+async function applyMigration026(): Promise<void> {
+  await client.query(await Bun.file(migration026Url).text());
+}
 
-  async function applyMigration028(): Promise<void> {
-    await client.query(await Bun.file(migration028Url).text());
-  }
+async function applyMigration028(): Promise<void> {
+  await client.query(await Bun.file(migration028Url).text());
+}
 
-  async function cleanup(): Promise<void> {
-    await client.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
-      namespace,
-    ]);
-  }
+async function cleanup(): Promise<void> {
+  await client.query("DELETE FROM maintenance_jobs WHERE namespace = $1", [
+    namespace,
+  ]);
+}
 
-  // Rewind the persisted constraint to the shape a database that applied an
-  // earlier revision of 026 (before 'lease_expired') carries forward, so the
-  // regression proves the real upgrade path rather than the fresh-DB path.
-  // Scoped to the test schema by search_path — public is never touched.
-  async function installPreLeaseExpiredConstraint(): Promise<void> {
-    // A CHECK constraint definition is DDL and cannot be parameterized, so the
-    // fixture list is inlined from the const above (SQL string literals).
-    const inList = PRE_LEASE_EXPIRED_CATEGORIES.map((c) => `'${c}'`).join(", ");
-    await client.query(
-      `ALTER TABLE maintenance_jobs DROP CONSTRAINT IF EXISTS ${CONSTRAINT_NAME}`,
-    );
-    await client.query(
-      `ALTER TABLE maintenance_jobs
-         ADD CONSTRAINT ${CONSTRAINT_NAME}
-         CHECK (last_error_category IN (${inList}))`,
-    );
-  }
+// Rewind the persisted constraint to the shape a database that applied an
+// earlier revision of 026 (before 'lease_expired') carries forward, so the
+// regression proves the real upgrade path rather than the fresh-DB path.
+// Scoped to the test schema by search_path — public is never touched.
+async function installPreLeaseExpiredConstraint(): Promise<void> {
+  // A CHECK constraint definition is DDL and cannot be parameterized, so the
+  // fixture list is inlined from the const above (SQL string literals).
+  const inList = PRE_LEASE_EXPIRED_CATEGORIES.map((c) => `'${c}'`).join(", ");
+  await client.query(
+    `ALTER TABLE maintenance_jobs DROP CONSTRAINT IF EXISTS ${CONSTRAINT_NAME}`,
+  );
+  await client.query(
+    `ALTER TABLE maintenance_jobs
+       ADD CONSTRAINT ${CONSTRAINT_NAME}
+       CHECK (last_error_category IN (${inList}))`,
+  );
+}
 
-  async function insertWithCategory(
-    idempotencyKey: string,
-    category: string | null,
-  ): Promise<void> {
-    await client.query(
-      `INSERT INTO maintenance_jobs
-         (job_kind, job_version, idempotency_key, namespace, last_error_category)
-       VALUES ($1, 1, $2, $3, $4)`,
-      ["maintenance.test", idempotencyKey, namespace, category],
-    );
-  }
+async function insertWithCategory(
+  idempotencyKey: string,
+  category: string | null,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO maintenance_jobs
+       (job_kind, job_version, idempotency_key, namespace, last_error_category)
+     VALUES ($1, 1, $2, $3, $4)`,
+    ["maintenance.test", idempotencyKey, namespace, category],
+  );
+}
 
+describe("028 maintenance_jobs lease_expired compat (live Postgres)", () => {
   beforeAll(async () => {
     await client.connect();
     // Duplicate CI workflows can share one PostgreSQL database. Hold a
