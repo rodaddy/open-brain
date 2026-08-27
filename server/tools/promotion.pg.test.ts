@@ -9,8 +9,8 @@
  * live: the legacy target is refused, the dry-run default writes nothing, and
  * secret/private content is refused even for an authorized promoter.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -19,13 +19,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerPromotionTools } from "./promotion.ts";
 import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `promotion-pg-${process.pid}`;
 const SHARED = sharedNamespaceConfig();
@@ -36,7 +35,6 @@ async function callTool(
   args: Record<string, unknown>,
   role = "promoter",
 ): Promise<{ isError: boolean; body: Record<string, unknown> }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "promotion-test", version: "1.0.0" });
   registerPromotionTools(server, {
     pool,
@@ -73,7 +71,7 @@ async function callTool(
 }
 
 async function sharedCount(content: string): Promise<number> {
-  const { rows } = await pool!.query(
+  const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS cnt FROM thoughts
       WHERE namespace = $1 AND content = $2 AND archived_at IS NULL`,
     [SHARED.physicalSharedNamespace, content],
@@ -96,33 +94,40 @@ const SHAREABLE =
 const SECRET_ISH =
   "The staging database is reachable at postgres://svc-user:hunter2horse@db.internal:5432/appdb which is why the job works.";
 
-dbDescribe("promote_shared and list_namespaces (live Postgres)", () => {
-  let shareableId = "";
-  let secretId = "";
+/**
+ * Ids of the seeded rows, filled by the module-scope `beforeAll`.
+ *
+ * The two describes below split by SUBJECT over ONE shared fixture -- the
+ * promotion rules themselves, then the identity rules and `list_namespaces`.
+ * They read the same seeded rows, so seeding is module-scope rather than
+ * duplicated per describe.
+ */
+let shareableId = "";
+let secretId = "";
 
-  beforeAll(async () => {
-    const shareable = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
-      [SHAREABLE, NAMESPACE],
-    );
-    shareableId = shareable.rows[0].id;
-    const secret = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
-      [SECRET_ISH, NAMESPACE],
-    );
-    secretId = secret.rows[0].id;
-  });
+beforeAll(async () => {
+  const shareable = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
+    [SHAREABLE, NAMESPACE],
+  );
+  shareableId = shareable.rows[0].id;
+  const secret = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
+    [SECRET_ISH, NAMESPACE],
+  );
+  secretId = secret.rows[0].id;
+});
 
-  afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM thoughts WHERE namespace = $1`, [NAMESPACE]);
-    await pool.query(
-      `DELETE FROM thoughts WHERE namespace = $1 AND content = ANY($2::text[])`,
-      [SHARED.physicalSharedNamespace, [SHAREABLE, SECRET_ISH]],
-    );
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.query(`DELETE FROM thoughts WHERE namespace = $1`, [NAMESPACE]);
+  await pool.query(
+    `DELETE FROM thoughts WHERE namespace = $1 AND content = ANY($2::text[])`,
+    [SHARED.physicalSharedNamespace, [SHAREABLE, SECRET_ISH]],
+  );
+  await pool.end();
+});
 
+describe("promote_shared promotion rules (live Postgres)", () => {
   test("the dry-run default previews and writes NOTHING to shared truth", async () => {
     const before = await sharedCount(SHAREABLE);
     const { isError } = await callTool("promote_shared", NAMESPACE, {
@@ -146,7 +151,7 @@ dbDescribe("promote_shared and list_namespaces (live Postgres)", () => {
     expect(isError).toBe(true);
     expect(String(body.text)).toContain("legacy migration source");
     // And nothing landed under the legacy name either.
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS cnt FROM thoughts WHERE namespace = 'collab' AND content = $1`,
       [SHAREABLE],
     );
@@ -179,7 +184,9 @@ dbDescribe("promote_shared and list_namespaces (live Postgres)", () => {
     expect(String(body.text)).toContain("Refused");
     expect(await sharedCount(SECRET_ISH)).toBe(before);
   });
+});
 
+describe("promotion identity rules and list_namespaces (live Postgres)", () => {
   test("a plain agent identity cannot promote at all", async () => {
     const { isError, body } = await callTool(
       "promote_shared",
