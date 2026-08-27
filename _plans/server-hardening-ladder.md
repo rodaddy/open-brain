@@ -1,9 +1,9 @@
 # server/ hardening ladder — L1 through L6
 
-**Status: L1 MERGED, L2 IN PROGRESS — 2026-08-26.** Ordering approved by the
-operator. L1 is on `origin/main`; L2's schema half (L2a) is on `origin/main`;
-L2b is open and gated by the lint-debt ruling in #780. L3 through L6 are not
-started.
+**Status: L1 MERGED, L2 MERGED, L4 MET, L3 IN PROGRESS — 2026-08-26.** Ordering
+approved by the operator. L1 and both halves of L2 are on `origin/main`, and L4
+is already met on `origin/main` as a side effect of the #780 lint sweep. L5 and
+L6 are not started.
 
 ## What this file is, and what it is NOT
 
@@ -235,6 +235,23 @@ stack and the correlation id.
 ## L4 — Break the five oversize files
 
 **Deliverable.** No non-test file in `server/` over 500 code lines.
+
+**Status: MET 2026-08-26 as a side effect of #780.** The lint sweep split every
+one of the five, not just the two that were pulled forward, so this rung's
+deliverable is already true on `origin/main`. Code lines on `origin/main`,
+blanks and comments stripped:
+
+    461  server/observability/langfuse-tracing.ts
+    478  server/tools/search-engine.ts
+    330  server/tools/agent-context-pack.ts
+    487  server/realtime/recovery-wal.ts
+    361  server/tools/entities.ts
+
+`./node_modules/.bin/oxlint --deny-warnings --ignore-pattern '**/*.test.ts'
+server` exits 0 with `max-lines` at 500 armed (`.oxlintrc.json`), so no
+non-test file in `server/` is over the mark. The two pulled-forward splits are
+`ca349ad` (PR #795, `search-engine.ts`) and `5666c67` (PR #796,
+`langfuse-tracing.ts`).
 
 **Scope is exactly five files.** Code lines, comments and blanks stripped:
 
