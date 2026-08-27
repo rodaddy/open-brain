@@ -357,6 +357,14 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "ingest_raw_turn namespace and auth boundary (live Postgres)",
     minTests: 3,
   },
+  // The get_entry tool test's live suite proves the compact render reads the
+  // full stored content through real Postgres, which the mock-pool suite in
+  // the sibling file cannot execute. Split into its own file in #878 as that
+  // file stopped skipping itself.
+  {
+    name: "get_entry compact render (live Postgres)",
+    minTests: 1,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -397,9 +405,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // that file stopped skipping itself, then 249 -> 255 when #904 registered the
 // retire-collab scratch-migration suite's 6 as that file stopped skipping
 // itself, then 255 -> 265 when #878 registered the four ingest_raw_turn
-// suites' 4 + 1 + 2 + 3 as that file stopped skipping itself), so the global
-// floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 265;
+// suites' 4 + 1 + 2 + 3 as that file stopped skipping itself, then 265 -> 266
+// when #878 registered the get_entry compact render suite's 1 as that file
+// stopped skipping itself), so the global floor cannot silently fall behind
+// the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 266;
 
 export interface SuiteStats {
   tests: number;
@@ -458,8 +468,7 @@ function executedLiveSuiteName(block: string): string | undefined {
   const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
   const classname = attr(open, "classname") ?? "";
   if (!classname.includes("(live Postgres)")) return undefined;
-  const isSkipped =
-    /<skipped\b/.test(block) || attr(open, "skipped") === "true";
+  const isSkipped = /<skipped\b/.test(block) || attr(open, "skipped") === "true";
   return isSkipped ? undefined : classname;
 }
 
@@ -516,8 +525,7 @@ function checkRequiredSuite(
     }
     if (s.tests < req.minTests) {
       errors.push(
-        `"${req.name}" ran ${s.tests} tests, expected at least ` +
-          `${req.minTests}.`,
+        `"${req.name}" ran ${s.tests} tests, expected at least ` + `${req.minTests}.`,
       );
     }
     const executed = executedLiveTestcasesBySuite.get(req.name) ?? 0;
@@ -533,18 +541,13 @@ function checkRequiredSuite(
 
 export function evaluateJunit(xml: string): GuardResult {
   const suiteStats = collectSuiteStats(xml);
-  const {
-    executedLiveTestcases,
-    erroredLiveTestcases,
-    executedLiveTestcasesBySuite,
-  } = tallyTestcases(xml);
+  const { executedLiveTestcases, erroredLiveTestcases, executedLiveTestcasesBySuite } =
+    tallyTestcases(xml);
 
   const errors: string[] = [];
 
   for (const req of REQUIRED_SUITES) {
-    errors.push(
-      ...checkRequiredSuite(req, suiteStats, executedLiveTestcasesBySuite),
-    );
+    errors.push(...checkRequiredSuite(req, suiteStats, executedLiveTestcasesBySuite));
   }
 
   if (erroredLiveTestcases > 0) {
