@@ -1,0 +1,13 @@
+// ACCEPTED. The rewrite max-params exists to produce: one named parameter
+// instead of five positional ones, and the call site now reads as a sentence.
+interface Args {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+}
+
+export function wide(args: Args): number {
+  return args.a + args.b + args.c + args.d + args.e;
+}

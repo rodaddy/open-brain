@@ -1,4 +1,46 @@
+# Build artifacts and caches. Never candidates for formatting.
+node_modules/
+.mypy_cache/
+.pytest_cache/
+.venv/
+__pycache__/
+coverage/
+dist/
+out/
+.qmd/
+_scratch/
+bun.lock
+
+# GENERATED files. Each carries a source-hash or is rebuilt by a script;
+# formatting them forks them from their source and the next regeneration
+# reverts it (AGENTS.md; _DOCS/HANDOFF-RULES.md rule 12).
+_DOCS/STANDARDS-*.md
+docs/sme/*.md
+
 # Graph Mode v1.3-beta is a byte-faithful copy of the Development canon
 # (scripts/done-means/beta/PROVENANCE.md). Formatting it here would break the
 # sha256 manifest and make the pilot receipts uncomparable across repos.
 scripts/done-means/beta/
+
+# Contract fixtures are wire-shape artifacts on a parity path
+# (contracts/parity-paths.txt). Reformatting them is churn with parity
+# ceremony attached and no behavior value. The .ts files in contracts/ ARE
+# formatted.
+contracts/**/*.json
+
+# The Python packages have their own formatter (ruff format, CI job
+# "Check formatting"). Prettier stays out of that tree entirely.
+python/
+
+# Secrets layer: structure tracked, values ignored; nothing to format.
+secrets/
+
+# HTML deliverables under specs/ are rendered artifacts, not source.
+specs/*.html
+
+# Markdown is OUT of the formatter scope for now: 701 files including
+# AGENTS.md, CLAUDE.md, all of _plans/ and the handoffs. Prose reflow is not
+# what adopting the formatter means, and it would bury the code diff.
+# Reopening prose scope is the operator decision recorded in #753; delete
+# this line when it is made.
+*.md
