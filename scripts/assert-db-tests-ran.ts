@@ -104,6 +104,23 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // halves together cover exactly what that one entry did, so both are named
   // here. Registering only one would let the other vanish unnoticed.
   { name: "skill usage recording and reporting (live Postgres)", minTests: 4 },
+  // decompose_entry against a real database (#878). One suite split by subject
+  // into three: planning that must not write, apply that must, and the
+  // duplicate classification only a real transaction can distinguish. It read
+  // the environment itself and skipped when it was unset, so it was never
+  // registered here and a Postgres misconfiguration silently skipped all five.
+  {
+    name: "decompose_entry planning writes nothing (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "decompose_entry apply writes replacements (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "decompose_entry duplicate classification (live Postgres)",
+    minTests: 2,
+  },
   {
     name: "skill usage isolation and permissions (live Postgres)",
     minTests: 5,
@@ -260,9 +277,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // registered the migrations 038/039 reinforcement + said-at file's four
 // flattened suites at 6 + 4 + 5 + 4, then 127 -> 143 when #878 converted the
 // 001_init schema proof and registered its six suites' 16, then 143 -> 218 when
-// #878 registered the cross-provider parity suite's 75), so the global floor
-// cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 218;
+// #878 registered the cross-provider parity suite's 75, then 218 -> 223 when
+// #878 registered the three decompose_entry suites (2 + 1 + 2) as that file
+// stopped skipping itself), so the global floor cannot silently fall behind the
+// per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 223;
 
 export interface SuiteStats {
   tests: number;
