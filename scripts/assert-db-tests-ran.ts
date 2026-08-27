@@ -85,6 +85,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "server ID queries enforce namespace isolation (live Postgres)",
     minTests: 4,
   },
+  // The #297 negative matrix against real Postgres (#878). Converted from an
+  // env-gated self-skip, so it is registered here for the same reason as every
+  // suite above: it is the only proof that the namespace predicate is evaluated
+  // by Postgres itself, and its allow half is what keeps the deny half from
+  // being vacuous.
+  {
+    name: "#297 namespace isolation negative matrix (live Postgres)",
+    minTests: 2,
+  },
   // The charter Phase 5 real-SDK protocol proof. Registered here for the same
   // reason as every suite above: it is env-gated on OPENBRAIN_TEST_DATABASE_URL,
   // so without this entry a CI Postgres misconfiguration would silently skip the
@@ -318,9 +327,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 230 -> 236 when #878 registered the three subject-split list_stale suites
 // (2 + 1 + 3) as that file stopped skipping itself, then 236 -> 238 when
 // #878 registered the exact-scope checkpoint lifecycle suite's 2 as it too
-// stopped skipping itself), so the global floor cannot silently fall behind
-// the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 238;
+// stopped skipping itself, then 238 -> 240 when #878 registered the #297
+// namespace isolation negative matrix suite's 2 as that suite stopped skipping
+// itself), so the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 240;
 
 export interface SuiteStats {
   tests: number;
