@@ -214,6 +214,19 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "038 candidate_reinforcement lifecycle (live Postgres)",
     minTests: 4,
   },
+  // The 001_init schema proof (#878). It reads the catalog back after the
+  // migration runs, so it is the only place a halfvec column that came back as
+  // a plain vector, or an HNSW index built with `vector_cosine_ops`, is caught
+  // at all -- and a schema defect is exactly the kind that stays invisible
+  // until data has already been written against it. Registered as six suites
+  // because the file is six independent subjects over one shared schema; naming
+  // only some of them would let the rest vanish unnoticed.
+  { name: "001_init table existence (live Postgres)", minTests: 2 },
+  { name: "001_init embedding columns (live Postgres)", minTests: 5 },
+  { name: "001_init indexes (live Postgres)", minTests: 2 },
+  { name: "001_init projects table schema (live Postgres)", minTests: 2 },
+  { name: "001_init entity graph schema (live Postgres)", minTests: 4 },
+  { name: "001_init vector round-trip (live Postgres)", minTests: 1 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -236,9 +249,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // upgrade-path suite and its 6, then 91 -> 108 when #878 registered the four
 // migration 032 raw-turns suites' 2 + 4 + 4 + 7, then 108 -> 127 when #878
 // registered the migrations 038/039 reinforcement + said-at file's four
-// flattened suites at 6 + 4 + 5 + 4), so the global floor cannot silently
-// fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 127;
+// flattened suites at 6 + 4 + 5 + 4, then 127 -> 143 when #878 converted the
+// 001_init schema proof and registered its six suites' 16), so the global
+// floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 143;
 
 export interface SuiteStats {
   tests: number;
