@@ -110,3 +110,4 @@ Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 - Q7: lane-7 and lane-8 `stash@{0}` are superseded; dropping them is Rico's, not a lane's.
 - Q8: #888 Forge migration — Rico decides when planning starts and whether it displaces #878 work.
 - #915: the self-hosted `check` runner's PostgreSQL 17 versus the stack's 18 is a runner change (Rico's); `scripts/local-clone.test.ts` asserts `>= 17` until then.
+- Parked: dev#98 hook-env crossing checkpoint, `_DOCS/_parked/dev98-hook-env-crossing.md` (patch embedded, test fails at :326 on main); resume or drop is Rico's call.
