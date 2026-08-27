@@ -12,6 +12,8 @@ import {
   migrateThoughts,
   parseArgs,
   runMigration,
+  type Args,
+  type StepName,
 } from "./retire-collab-migration.ts";
 
 const { Client, Pool } = pg;
@@ -19,6 +21,16 @@ const { Client, Pool } = pg;
 const approvedReleaseEnv = {
   [COLLAB_RETIRE_APPROVAL_ENV]: COLLAB_RETIRE_APPROVAL_VALUE,
 };
+
+/** Builds a full Args from the fields a given test actually varies. */
+function migrationArgs(overrides: Partial<Args> = {}): Args {
+  return {
+    execute: false,
+    acknowledgeOutOfScope: false,
+    steps: new Set<StepName>(["thoughts", "entities", "lanes"]),
+    ...overrides,
+  };
+}
 
 // -----------------------------------------------------------------------------
 // Pure arg-parsing tests (always run).
@@ -77,12 +89,8 @@ describe("retire-collab-migration transaction", () => {
 
     await expect(
       runMigration(
-        pool as any,
-        {
-          execute: true,
-          acknowledgeOutOfScope: false,
-          steps: new Set(["lanes"]),
-        } as any,
+        pool,
+        migrationArgs({ execute: true, steps: new Set<StepName>(["lanes"]) }),
         {},
       ),
     ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
@@ -104,12 +112,8 @@ describe("retire-collab-migration transaction", () => {
 
     await expect(
       runMigration(
-        pool as any,
-        {
-          execute: false,
-          acknowledgeOutOfScope: false,
-          steps: new Set(["lanes"]),
-        } as any,
+        pool,
+        migrationArgs({ steps: new Set<StepName>(["lanes"]) }),
         { DB_HOST: "production-host" },
       ),
     ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
@@ -144,12 +148,8 @@ describe("retire-collab-migration transaction", () => {
 
     await expect(
       runMigration(
-        pool as any,
-        {
-          execute: true,
-          acknowledgeOutOfScope: false,
-          steps: new Set(["lanes"]),
-        } as any,
+        pool,
+        migrationArgs({ execute: true, steps: new Set<StepName>(["lanes"]) }),
         approvedReleaseEnv,
       ),
     ).rejects.toThrow("simulated lane failure");
@@ -173,6 +173,18 @@ const ADMIN_URL =
   process.env.OPENBRAIN_SCRATCH_ADMIN_URL ??
   process.env.OPENBRAIN_SCRATCH_DATABASE_URL;
 const dbDescribe = ADMIN_URL ? describe : describe.skip;
+
+/**
+ * The scratch suite only runs when ADMIN_URL is set, but `dbDescribe` carries
+ * that gate at runtime and not in the type. Reading it through here keeps the
+ * hooks free of assertions and names the variable if the gate ever regresses.
+ */
+function requireAdminUrl(): string {
+  if (!ADMIN_URL) {
+    throw new Error("OPENBRAIN_SCRATCH_ADMIN_URL must be set for this suite");
+  }
+  return ADMIN_URL;
+}
 
 const SCRATCH_DB = `ob_retire_collab_scratch_${Date.now()}`;
 
@@ -243,30 +255,172 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
   );
 }
 
+// Bun's default 5s per-hook allowance is not enough for these two hooks, and
+// the shortfall only shows in a full-suite run where the server is also serving
+// every other suite: `beforeAll` creates a database and then applies all 49
+// files in src/db/migrations one transaction at a time (src/db/migrate.ts:45),
+// and `afterAll` waits on `DROP DATABASE ... WITH (FORCE)`. Both are sized here
+// against that real work rather than left on the default, which surfaced as an
+// unnamed `a beforeEach/afterEach hook timed out` failure at 5004ms (#912).
+const SCRATCH_SETUP_TIMEOUT_MS = 120_000;
+const SCRATCH_TEARDOWN_TIMEOUT_MS = 30_000;
+
+/**
+ * Every step section is populated when all three steps run, so a missing one is
+ * a real defect rather than a shape to tiptoe around with optional chaining.
+ */
+function requireStepReports(report: Awaited<ReturnType<typeof runMigration>>) {
+  const { thoughts, entities, lanes } = report;
+  if (!thoughts || !entities || !lanes) {
+    throw new Error("expected thoughts, entities and lanes step reports");
+  }
+  return { thoughts, entities, lanes };
+}
+
+/** Creates the scratch database, applies the real migrations, seeds fixtures. */
+async function createScratchDatabase(): Promise<ScratchPool> {
+  const adminUrl = requireAdminUrl();
+  const admin = new Client({ connectionString: adminUrl });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
+  await admin.end();
+  const pool = new Pool({
+    connectionString: scratchUrl(adminUrl, SCRATCH_DB),
+    max: 2,
+  });
+  // THE REAL SCHEMA: run the repo's actual migrations, not a hand-built one.
+  await runMigrations(pool);
+  await seedFixtures(pool);
+  return pool;
+}
+
+/** Closes the pool and drops the scratch database. */
+async function dropScratchDatabase(pool: ScratchPool | undefined): Promise<void> {
+  if (pool) await pool.end();
+  const admin = new Client({ connectionString: requireAdminUrl() });
+  await admin.connect();
+  await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
+  await admin.end();
+}
+
+/** The plan a dry-run must report: counts populated, nothing yet performed. */
+function expectDryRunPlan(
+  report: Awaited<ReturnType<typeof runMigration>>,
+): void {
+  const { thoughts, entities, lanes } = requireStepReports(report);
+
+  expect(thoughts.unmirrored_before).toBe(3);
+  expect(thoughts.would_copy).toBe(3);
+  expect(thoughts.copied).toBe(0);
+  expect(thoughts.unmirrored_after).toBe(3);
+
+  expect(entities.collab_repo_facts).toBe(3);
+  expect(entities.would_retag).toBe(1);
+  // one lower(name) conflict + one canonical_id conflict
+  expect(entities.would_archive_conflicts).toBe(2);
+  expect(entities.retagged).toBe(0);
+
+  expect(lanes.collab_unarchived_lanes).toBe(2);
+  expect(lanes.would_archive).toBe(2);
+  expect(lanes.archived).toBe(0);
+}
+
+type ScratchPool = InstanceType<typeof Pool>;
+
+/** Post-execute state of the thoughts table: copies made, snapshot frozen. */
+async function expectThoughtsMigrated(pool: ScratchPool): Promise<void> {
+  // shared-kb now has original 2 active mirrors + 1 reactivated archived mirror + 2 copied.
+  const shared = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
+  );
+  expect(shared.rows[0].c).toBe(5);
+
+  const activeUniqB = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM thoughts
+      WHERE namespace = 'shared-kb'
+        AND content_hash = 'h-uniq-b'
+        AND archived_at IS NULL`,
+  );
+  expect(activeUniqB.rows[0].c).toBe(1);
+
+  // Operational/audit columns preserved on the copied thought.
+  const prov = await pool.query(
+    `SELECT created_by, created_at, tier, usefulness_score, access_count,
+            promoted_from, extracted_metadata, embedding_model
+       FROM thoughts
+      WHERE namespace = 'shared-kb' AND content_hash = 'h-uniq-a'`,
+  );
+  expect(prov.rows[0].created_by).toBe("codex");
+  expect(new Date(prov.rows[0].created_at).toISOString()).toBe(
+    "2026-02-01T00:00:00.000Z",
+  );
+  expect(prov.rows[0].tier).toBe("hot");
+  expect(Number(prov.rows[0].usefulness_score)).toBe(0.9);
+  expect(Number(prov.rows[0].access_count)).toBe(7);
+  expect(prov.rows[0].promoted_from).toEqual({
+    table: "thoughts",
+    id: "src-1",
+  });
+  expect(prov.rows[0].extracted_metadata).toEqual({ topic: "infra" });
+  expect(prov.rows[0].embedding_model).toBe("embeddinggemma-300m-8bit");
+
+  // Collab thoughts left in place (frozen snapshot).
+  const collab = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'collab'`,
+  );
+  expect(collab.rows[0].c).toBe(6);
+}
+
+/** Post-execute state of ob_entities: one re-tagged, two conflicts archived. */
+async function expectEntitiesMigrated(pool: ScratchPool): Promise<void> {
+  // Re-tagged entity moved to shared-kb.
+  const retagged = await pool.query(
+    `SELECT namespace FROM ob_entities WHERE name = 'king-core:unique'`,
+  );
+  expect(retagged.rows[0].namespace).toBe("shared-kb");
+
+  // Name-conflict entity archived in collab.
+  const nameConflict = await pool.query(
+    `SELECT archived_at FROM ob_entities
+      WHERE name = 'king-core:dupe' AND namespace = 'collab'`,
+  );
+  expect(nameConflict.rows[0].archived_at).not.toBeNull();
+
+  // canonical_id-conflict entity (different name, same canonical_id as an
+  // active shared-kb row) archived in collab, NOT re-tagged.
+  const canonConflict = await pool.query(
+    `SELECT namespace, archived_at FROM ob_entities
+      WHERE name = 'king-core:canon-collab-name'`,
+  );
+  expect(canonConflict.rows[0].namespace).toBe("collab");
+  expect(canonConflict.rows[0].archived_at).not.toBeNull();
+}
+
+/** Post-execute state of ob_session_lanes: every collab lane archived. */
+async function expectLanesMigrated(pool: ScratchPool): Promise<void> {
+  // Lanes archived via status + ended_at (real schema has no archived_at).
+  const unarchived = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM ob_session_lanes
+      WHERE namespace = 'collab' AND status <> 'archived'`,
+  );
+  expect(unarchived.rows[0].c).toBe(0);
+  const endedStamped = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM ob_session_lanes
+      WHERE namespace = 'collab' AND ended_at IS NULL`,
+  );
+  expect(endedStamped.rows[0].c).toBe(0);
+}
+
 dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => {
   let pool: InstanceType<typeof Pool>;
 
   beforeAll(async () => {
-    const admin = new Client({ connectionString: ADMIN_URL });
-    await admin.connect();
-    await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
-    await admin.end();
-    pool = new Pool({
-      connectionString: scratchUrl(ADMIN_URL!, SCRATCH_DB),
-      max: 2,
-    });
-    // THE REAL SCHEMA: run the repo's actual migrations, not a hand-built one.
-    await runMigrations(pool);
-    await seedFixtures(pool);
-  });
+    pool = await createScratchDatabase();
+  }, SCRATCH_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    if (pool) await pool.end();
-    const admin = new Client({ connectionString: ADMIN_URL });
-    await admin.connect();
-    await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB} WITH (FORCE)`);
-    await admin.end();
-  });
+    await dropScratchDatabase(pool);
+  }, SCRATCH_TEARDOWN_TIMEOUT_MS);
 
   it("migration 019 drops every 'collab' namespace column default (#167)", async () => {
     // No namespace column anywhere may still default to the frozen namespace.
@@ -306,28 +460,11 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
   });
 
   it("dry-run reports plan + audit without mutating", async () => {
-    const report = await runMigration(pool, {
-      execute: false,
-      acknowledgeOutOfScope: false,
-      steps: new Set(["thoughts", "entities", "lanes"]),
-    } as any);
+    const report = await runMigration(pool, migrationArgs());
     expect(report.dry_run).toBe(true);
     expect(report.audit.total_out_of_scope).toBe(3);
 
-    expect(report.thoughts?.unmirrored_before).toBe(3);
-    expect(report.thoughts?.would_copy).toBe(3);
-    expect(report.thoughts?.copied).toBe(0);
-    expect(report.thoughts?.unmirrored_after).toBe(3);
-
-    expect(report.entities?.collab_repo_facts).toBe(3);
-    expect(report.entities?.would_retag).toBe(1);
-    // one lower(name) conflict + one canonical_id conflict
-    expect(report.entities?.would_archive_conflicts).toBe(2);
-    expect(report.entities?.retagged).toBe(0);
-
-    expect(report.lanes?.collab_unarchived_lanes).toBe(2);
-    expect(report.lanes?.would_archive).toBe(2);
-    expect(report.lanes?.archived).toBe(0);
+    expectDryRunPlan(report);
 
     const sharedCount = await pool.query(
       `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
@@ -339,11 +476,7 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
     await expect(
       runMigration(
         pool,
-        {
-          execute: true,
-          acknowledgeOutOfScope: false,
-          steps: new Set(["thoughts", "entities", "lanes"]),
-        } as any,
+        migrationArgs({ execute: true }),
         approvedReleaseEnv,
       ),
     ).rejects.toThrow("OUTSIDE the migrated scope");
@@ -362,94 +495,20 @@ dbDescribe("retire-collab-migration (scratch Postgres, real migrations)", () => 
   it("executes with --acknowledge-out-of-scope: copies, re-tags, archives", async () => {
     const report = await runMigration(
       pool,
-      {
-        execute: true,
-        acknowledgeOutOfScope: true,
-        steps: new Set(["thoughts", "entities", "lanes"]),
-      } as any,
+      migrationArgs({ execute: true, acknowledgeOutOfScope: true }),
       approvedReleaseEnv,
     );
 
-    expect(report.thoughts?.copied).toBe(3);
-    expect(report.thoughts?.unmirrored_after).toBe(0);
-    expect(report.entities?.retagged).toBe(1);
-    expect(report.entities?.archived_conflicts).toBe(2);
-    expect(report.lanes?.archived).toBe(2);
+    const { thoughts, entities, lanes } = requireStepReports(report);
+    expect(thoughts.copied).toBe(3);
+    expect(thoughts.unmirrored_after).toBe(0);
+    expect(entities.retagged).toBe(1);
+    expect(entities.archived_conflicts).toBe(2);
+    expect(lanes.archived).toBe(2);
 
-    // shared-kb now has original 2 active mirrors + 1 reactivated archived mirror + 2 copied.
-    const shared = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'shared-kb'`,
-    );
-    expect(shared.rows[0].c).toBe(5);
-
-    const activeUniqB = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM thoughts
-        WHERE namespace = 'shared-kb'
-          AND content_hash = 'h-uniq-b'
-          AND archived_at IS NULL`,
-    );
-    expect(activeUniqB.rows[0].c).toBe(1);
-
-    // Operational/audit columns preserved on the copied thought.
-    const prov = await pool.query(
-      `SELECT created_by, created_at, tier, usefulness_score, access_count,
-              promoted_from, extracted_metadata, embedding_model
-         FROM thoughts
-        WHERE namespace = 'shared-kb' AND content_hash = 'h-uniq-a'`,
-    );
-    expect(prov.rows[0].created_by).toBe("codex");
-    expect(new Date(prov.rows[0].created_at).toISOString()).toBe(
-      "2026-02-01T00:00:00.000Z",
-    );
-    expect(prov.rows[0].tier).toBe("hot");
-    expect(Number(prov.rows[0].usefulness_score)).toBe(0.9);
-    expect(Number(prov.rows[0].access_count)).toBe(7);
-    expect(prov.rows[0].promoted_from).toEqual({
-      table: "thoughts",
-      id: "src-1",
-    });
-    expect(prov.rows[0].extracted_metadata).toEqual({ topic: "infra" });
-    expect(prov.rows[0].embedding_model).toBe("embeddinggemma-300m-8bit");
-
-    // Collab thoughts left in place (frozen snapshot).
-    const collab = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM thoughts WHERE namespace = 'collab'`,
-    );
-    expect(collab.rows[0].c).toBe(6);
-
-    // Re-tagged entity moved to shared-kb.
-    const retagged = await pool.query(
-      `SELECT namespace FROM ob_entities WHERE name = 'king-core:unique'`,
-    );
-    expect(retagged.rows[0].namespace).toBe("shared-kb");
-
-    // Name-conflict entity archived in collab.
-    const nameConflict = await pool.query(
-      `SELECT archived_at FROM ob_entities
-        WHERE name = 'king-core:dupe' AND namespace = 'collab'`,
-    );
-    expect(nameConflict.rows[0].archived_at).not.toBeNull();
-
-    // canonical_id-conflict entity (different name, same canonical_id as an
-    // active shared-kb row) archived in collab, NOT re-tagged.
-    const canonConflict = await pool.query(
-      `SELECT namespace, archived_at FROM ob_entities
-        WHERE name = 'king-core:canon-collab-name'`,
-    );
-    expect(canonConflict.rows[0].namespace).toBe("collab");
-    expect(canonConflict.rows[0].archived_at).not.toBeNull();
-
-    // Lanes archived via status + ended_at (real schema has no archived_at).
-    const unarchived = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
-        WHERE namespace = 'collab' AND status <> 'archived'`,
-    );
-    expect(unarchived.rows[0].c).toBe(0);
-    const endedStamped = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM ob_session_lanes
-        WHERE namespace = 'collab' AND ended_at IS NULL`,
-    );
-    expect(endedStamped.rows[0].c).toBe(0);
+    await expectThoughtsMigrated(pool);
+    await expectEntitiesMigrated(pool);
+    await expectLanesMigrated(pool);
   });
 
   it("is idempotent: a second execute copies/retags/archives nothing", async () => {
