@@ -11,8 +11,8 @@
  * approved and active. A caller cannot self-approve, and a retired source can
  * never become eligible again.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
+ * REQUIRES the test-database variable, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -21,11 +21,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerSourceRegistryTools } from "./source-registry.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `source-registry-pg-${process.pid}`;
 const OTHER_NAMESPACE = `${NAMESPACE}-other`;
@@ -47,14 +46,17 @@ async function callTool(
   args: Record<string, unknown>,
   role = "agent",
 ): Promise<{ isError: boolean; body: Envelope }> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
-  const server = new McpServer({ name: "source-registry-test", version: "1.0.0" });
+  const server = new McpServer({
+    name: "source-registry-test",
+    version: "1.0.0",
+  });
   registerSourceRegistryTools(server, {
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -67,34 +69,37 @@ async function callTool(
   try {
     const result = await client.callTool({ name: tool, arguments: args });
     const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-    return { isError: result.isError === true, body: JSON.parse(text) as Envelope };
+    return {
+      isError: result.isError === true,
+      body: JSON.parse(text) as Envelope,
+    };
   } finally {
     await client.close();
     await server.close();
   }
 }
 
-dbDescribe("source registry lifecycle (live Postgres)", () => {
-  let sourceId = "";
+/** The registered source every describe below operates on. */
+let sourceId = "";
 
-  beforeAll(async () => {
-    const created = await callTool("register_source", NAMESPACE, {
-      source_kind: "git",
-      external_id: EXTERNAL_ID,
-      title: "Lifecycle Repo",
-    });
-    sourceId = String(created.body.source?.id ?? "");
-    expect(sourceId).not.toBe("");
+beforeAll(async () => {
+  const created = await callTool("register_source", NAMESPACE, {
+    source_kind: "git",
+    external_id: EXTERNAL_ID,
+    title: "Lifecycle Repo",
   });
+  sourceId = String(created.body.source?.id ?? "");
+  expect(sourceId).not.toBe("");
+});
 
-  afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM ob_sources WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.query(`DELETE FROM ob_sources WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
+  await pool.end();
+});
 
+describe("source registry revision and approval (live Postgres)", () => {
   test("update_source advances the revision and applies the change", async () => {
     const { isError, body } = await callTool("update_source", NAMESPACE, {
       id: sourceId,
@@ -117,7 +122,9 @@ dbDescribe("source registry lifecycle (live Postgres)", () => {
     expect(isError).toBe(true);
     expect(body.code).toBe("stale_revision");
     // The refused write must not have landed.
-    const after = await callTool("list_sources", NAMESPACE, { source_kind: "git" });
+    const after = await callTool("list_sources", NAMESPACE, {
+      source_kind: "git",
+    });
     expect(after.body.sources?.[0]?.title).toBe("Lifecycle Repo Renamed");
   });
 
@@ -128,7 +135,9 @@ dbDescribe("source registry lifecycle (live Postgres)", () => {
       approval_state: "approved",
     });
     expect(isError).toBe(true);
-    const after = await callTool("list_sources", NAMESPACE, { source_kind: "git" });
+    const after = await callTool("list_sources", NAMESPACE, {
+      source_kind: "git",
+    });
     expect(after.body.sources?.[0]?.approval_state).toBe("pending");
   });
 
@@ -160,7 +169,9 @@ dbDescribe("source registry lifecycle (live Postgres)", () => {
     expect(body.eligible).toBe(true);
     expect(body.source?.id).toBe(sourceId);
   });
+});
 
+describe("source registry isolation and retirement (live Postgres)", () => {
   test("another namespace cannot see or reach the source", async () => {
     const listed = await callTool("list_sources", OTHER_NAMESPACE, {
       source_kind: "git",
@@ -183,7 +194,9 @@ dbDescribe("source registry lifecycle (live Postgres)", () => {
   });
 
   test("remove_source retires it and eligibility never returns", async () => {
-    const removed = await callTool("remove_source", NAMESPACE, { id: sourceId });
+    const removed = await callTool("remove_source", NAMESPACE, {
+      id: sourceId,
+    });
     expect(removed.isError).toBe(false);
     expect(removed.body.id).toBe(sourceId);
 
@@ -195,7 +208,7 @@ dbDescribe("source registry lifecycle (live Postgres)", () => {
     expect(body.eligible).toBe(false);
 
     // Provenance is preserved rather than hard-deleted.
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT lifecycle_state FROM ob_sources WHERE id = $1`,
       [sourceId],
     );
