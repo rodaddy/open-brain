@@ -200,7 +200,6 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "028 maintenance_jobs lease_expired compat (live Postgres)",
     minTests: 3,
   },
-  // Migration 031 converts a database that applied an earlier revision of 030
   // from a permanent all-status UNIQUE constraint to a running-only partial
   // index. Registered because the upgrade path it repairs exists only in
   // Postgres: the suite rewinds a real schema to the legacy shape and proves
@@ -253,6 +252,21 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   { name: "001_init projects table schema (live Postgres)", minTests: 2 },
   { name: "001_init entity graph schema (live Postgres)", minTests: 4 },
   { name: "001_init vector round-trip (live Postgres)", minTests: 1 },
+  // The bulk_set_tier live-Postgres proofs (#878). Previously env-gated and
+  // never registered here, so a Postgres misconfiguration silently skipped the
+  // ONE suite that proves the per-row write predicate actually excludes foreign
+  // and archived rows -- the fake-pool suite cannot show that. Split by subject
+  // in #878, so all three halves are named here; registering one would let the
+  // others vanish unnoticed.
+  {
+    name: "bulk_set_tier write predicate reach (live Postgres)",
+    minTests: 3,
+  },
+  { name: "bulk_set_tier reported counts (live Postgres)", minTests: 1 },
+  {
+    name: "bulk_set_tier transaction atomicity (live Postgres)",
+    minTests: 3,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -279,9 +293,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 001_init schema proof and registered its six suites' 16, then 143 -> 218 when
 // #878 registered the cross-provider parity suite's 75, then 218 -> 223 when
 // #878 registered the three decompose_entry suites (2 + 1 + 2) as that file
-// stopped skipping itself), so the global floor cannot silently fall behind the
-// per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 223;
+// stopped skipping itself, then 223 -> 230 when #878 registered the three
+// bulk_set_tier suites (3 + 1 + 3) as that file stopped skipping itself), so
+// the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 230;
 
 export interface SuiteStats {
   tests: number;
