@@ -58,18 +58,30 @@
 #   number of call sites in the file must equal the number of call sites whose
 #   argument list carries the names.
 #
-#   The scan window starts at the CALL LINE ITSELF and runs to the third line
-#   after it. Prettier wraps a two-argument call across lines, so the argument
-#   often sits below the call — but just as often it does not, and a window
-#   that began one line late read `sharedNamespaceConfig(dependencies.shared\
+#   The counting is PER CALL LINE, one window each. For every line `rg -n`
+#   reports a call on, that line plus the three after it is read with `sed -n`
+#   and judged alone. The window starts at the CALL LINE ITSELF because
+#   prettier wraps a two-argument call across lines and the argument often
+#   sits below the call — but just as often it does not, and a window that
+#   began one line late read `sharedNamespaceConfig(dependencies.shared\
 #   NamespaceNames)` on a single line as a call carrying nothing.
+#
+#   One window per call is the part that must not be shortcut. A single regex
+#   swept over the whole file cannot say WHICH call an argument belongs to: it
+#   counts matching lines, so two calls whose windows overlap are read as one
+#   and the total answers no question anyone asked. It undercounts when two
+#   adjacent calls share a names line and overcounts when one call's window
+#   holds several. Both were observed on this very check.
 #
 #   An argument counts as arrival when it is `sharedNamespaceNames` OR the
 #   bare identifier `names`. A module that derives the config once at its
 #   composition root and threads it inward as a local parameter has done
 #   exactly what this rung asks for; insisting on the outer spelling at every
 #   inner call would read correct threading as a miss and push callers toward
-#   re-deriving the names per call, which is the defect itself.
+#   re-deriving the names per call, which is the defect itself. `config` counts
+#   too, but ONLY in a file that is seen assigning it from
+#   `sharedNamespaceConfig(...)` — otherwise the word is too common to mean
+#   anything.
 #
 #   A file with ZERO helper call sites PASSES: a type-only importer (`import
 #   type { SharedNamespaceConfig }`) has no calls to thread and is not
@@ -158,24 +170,47 @@ while IFS= read -r FILE; do
     printf 'CLAUSE 1 [%s]: PASS — 0 references to src/shared-namespace\n' "$FILE"
   fi
 
-  # Departures: every call to one of the six helpers. The `\(` anchors on the
-  # call rather than the import line, which carries no parenthesis.
-  CALL_N="$(cd "$REPO_ROOT" && rg -c "\\b($HELPERS)\\(" "$FILE" 2>/dev/null)"
+  # Departures: every line carrying a call to one of the six helpers. The `\(`
+  # anchors on the call rather than the import line, which carries no
+  # parenthesis. `rg -n` emits one record per matching line, and each record is
+  # judged on its own — two calls three lines apart never share a window.
+  CALL_LINES="$(cd "$REPO_ROOT" && rg -n "\\b($HELPERS)\\(" "$FILE" 2>/dev/null \
+    | cut -d: -f1)"
+  CALL_N="$(printf '%s\n' "$CALL_LINES" | rg -c '^[0-9]' || true)"
   CALL_N="${CALL_N:-0}"
-  # Arrivals: calls carrying the names on the call line itself or within the
-  # 3 lines after it. `-A3` includes the matched line, so the window starts at
-  # the call. Either the outer `sharedNamespaceNames` or the local alias
-  # `names` a module threads inward counts.
-  ARRIVE_N="$(cd "$REPO_ROOT" && rg -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null \
-    | rg -c "\\b($NAMES_ARG|names)\\b" 2>/dev/null)"
-  ARRIVE_N="${ARRIVE_N:-0}"
+
+  # `config` counts as an alias only in a module that actually derives it from
+  # the twin, never as a bare word that happens to appear near a call.
+  ALIAS_RE="$NAMES_ARG|names"
+  if (cd "$REPO_ROOT" && rg -q "\\bconfig\\b[^=]*=\\s*sharedNamespaceConfig\\(" "$FILE" 2>/dev/null); then
+    ALIAS_RE="$ALIAS_RE|config"
+  fi
+
+  # Arrivals: for each call LINE, read that line plus the three after it and ask
+  # whether THAT window carries the names. Counting per call is what keeps two
+  # adjacent call sites from being read as one — a single regex swept over the
+  # whole file merges their windows and reports a count that answers no question.
+  ARRIVE_N=0
+  MISSING_LINES=""
+  for LN in $CALL_LINES; do
+    WINDOW="$(cd "$REPO_ROOT" && sed -n "${LN},$((LN + 3))p" "$FILE" 2>/dev/null)"
+    if printf '%s\n' "$WINDOW" | rg -q "\\b($ALIAS_RE)\\b" 2>/dev/null; then
+      ARRIVE_N=$((ARRIVE_N + 1))
+    else
+      MISSING_LINES="$MISSING_LINES $LN"
+    fi
+  done
 
   if [ "$CALL_N" -eq 0 ]; then
     printf 'CLAUSE 2 [%s]: PASS — 0 helper call sites (type-only importer)\n' "$FILE"
   elif [ "$CALL_N" -ne "$ARRIVE_N" ]; then
     printf 'CLAUSE 2 [%s]: FAIL — %s helper call(s), %s carrying %s\n' \
       "$FILE" "$CALL_N" "$ARRIVE_N" "$NAMES_ARG"
-    (cd "$REPO_ROOT" && rg -n -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null) | sed 's/^/    /'
+    for LN in $MISSING_LINES; do
+      printf '    call at line %s, window %s-%s carries no names:\n' \
+        "$LN" "$LN" "$((LN + 3))"
+      (cd "$REPO_ROOT" && sed -n "${LN},$((LN + 3))p" "$FILE") | sed 's/^/        /'
+    done
     CLAUSE2=FAIL
   else
     printf 'CLAUSE 2 [%s]: PASS — %s helper call(s), all %s carrying %s\n' \
