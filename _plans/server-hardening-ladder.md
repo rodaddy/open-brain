@@ -1,7 +1,7 @@
 # server/ hardening ladder — L1 through L6
 
-**Status: L1 MERGED, L2 MERGED, L4 MET, L3 IN PROGRESS — 2026-08-26.** Ordering
-approved by the operator. L1 and both halves of L2 are on `origin/main`, and L4
+**Status: L1 MERGED, L2 MERGED, L3 MERGED (#863, #865, #867, #869), L4 MET — 2026-08-27.** Ordering
+approved by the operator. L1, both halves of L2, and L3 are on `origin/main`, and L4
 is already met on `origin/main` as a side effect of the #780 lint sweep. L5 and
 L6 are not started.
 
