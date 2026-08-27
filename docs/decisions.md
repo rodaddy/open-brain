@@ -6,7 +6,7 @@ migrated. `docs/decisions/` holds long-form rationale records and is unchanged
 by this file.
 
 Validate with:
-`scripts/done-means/beta/decisions/check.sh docs/decisions.md`
+`/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/decisions/check.sh docs/decisions.md`
 
 One row per decision. Columns, in order:
 
@@ -27,3 +27,4 @@ Rows are append-only; a reversal is a new row with Supersedes set.
 | # | Date | Item | State | Resolution | Rejected | Falsifier | Supersedes | Retires |
 |---|------|------|-------|------------|----------|-----------|------------|---------|
 | 1 | 2026-08-27 | Graph Mode v1.3-beta opt-in | RATIFIED | pilot per Rico 2026-08-27 | wait for ratification (no receipts would ever exist) | pilot exit criteria in the amendment unmet after two runs |  |  |
+| 2 | 2026-08-27 | Beta executables run from canon, not a vendored copy | RATIFIED | run from /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/ (Rico 2026-08-27) | byte-faithful copy with PROVENANCE.md (needed a hand resync per canon fix) | a canon fix that an opted-in repo cannot pick up without a repo change |  |  |

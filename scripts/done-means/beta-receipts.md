@@ -4,6 +4,12 @@ Opted in 2026-08-27. Every beta check run against this repo's REAL artifacts,
 red or green, nothing hidden. Exit grammar: `0` pass, `1` the thing under test
 failed, `3` harness error.
 
+Executables run from the Development canon path
+(`/Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/`) and are never
+copied into this repo (Rico ruling 2026-08-27). Rows below that name a
+`scripts/done-means/beta/` path are history: they record runs made against the
+vendored copy that existed on 2026-08-27, before it was removed.
+
 Nothing here is hook-wired, merge-gated, or in CI. The controller appends to
 this file at every merge pass (`docs/controller-contract.md`, "Graph Mode
 v1.3-beta").
