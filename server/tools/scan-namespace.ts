@@ -25,7 +25,8 @@ import {
   canonicalNamespace,
   physicalNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+  type SharedNamespaceConfig,
+} from "./shared-namespace.ts";
 import {
   explicitSharedNominationSqlPredicate,
   isExplicitSharedNomination,
@@ -119,9 +120,11 @@ interface ScanArgs {
  * gate runs first so an unprivileged caller never learns whether the namespace
  * it named exists.
  *
+ * @param names Validated shared-namespace names from the composition root.
  * @returns The resolved scope, or a `denied` message to return verbatim.
  */
 function resolveScanScope(
+  names: SharedNamespaceConfig | undefined,
   identity: AuthIdentity | null | undefined,
   args: ScanArgs,
 ): { scope: ScanScope } | { denied: string } {
@@ -134,13 +137,13 @@ function resolveScanScope(
     return { denied: "Permission denied: namespace read access denied" };
   }
 
-  const shared = sharedNamespaceConfig();
+  const shared = sharedNamespaceConfig(names);
   const target = args.target_namespace ?? shared.sharedNamespace;
   if (!canTargetNamespace(identity, "read", target)) {
     return { denied: "Permission denied: target namespace read access denied" };
   }
 
-  const targetPhysical = physicalNamespace(target);
+  const targetPhysical = physicalNamespace(target, names);
   return {
     scope: {
       tables: args.table ? [args.table as ResourceTable] : ALL_TABLES,
@@ -149,9 +152,9 @@ function resolveScanScope(
       // resolved once and trusted: it is the only thing scoping this read, and
       // the role gate above proves the caller may target it, not that a later
       // statement stays inside it.
-      scanned: physicalNamespace(args.namespace),
+      scanned: physicalNamespace(args.namespace, names),
       targetPhysical,
-      targetCanonical: canonicalNamespace(targetPhysical),
+      targetCanonical: canonicalNamespace(targetPhysical, names),
       since: args.since,
     },
   };
@@ -253,7 +256,11 @@ async function handleScanNamespace(
   identity: AuthIdentity | null | undefined,
   args: ScanArgs,
 ) {
-  const resolved = resolveScanScope(identity, args);
+  const resolved = resolveScanScope(
+    dependencies.sharedNamespaceNames,
+    identity,
+    args,
+  );
   if ("denied" in resolved) return errorResult(resolved.denied);
   const { scope } = resolved;
 

@@ -21,7 +21,7 @@ import {
 import {
   isSharedNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+} from "./shared-namespace.ts";
 import {
   FACT_TYPES,
   canonicalId,
@@ -292,7 +292,7 @@ async function handleListRepoFacts(
 
   const rowCap = args.limit ?? 50;
   const offset = args.offset ?? 0;
-  const config = sharedNamespaceConfig();
+  const config = sharedNamespaceConfig(dependencies.sharedNamespaceNames);
 
   /** Run the fact query against one explicit namespace scope. */
   const queryRows = async (
@@ -361,7 +361,7 @@ async function readWithLegacyFallback(input: {
 
   const touchesShared =
     typeof scope === "string"
-      ? isSharedNamespace(scope)
+      ? isSharedNamespace(scope, config)
       : Array.isArray(scope) && scope.includes(config.physicalSharedNamespace);
   if (!touchesShared) return queryRows(scope, offset);
 
