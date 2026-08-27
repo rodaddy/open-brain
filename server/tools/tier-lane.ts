@@ -36,10 +36,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthIdentity } from "../auth/types.ts";
 import { canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
-import {
-  canonicalNamespace,
-  physicalNamespace,
-} from "../../src/shared-namespace.ts";
+import { canonicalNamespace, physicalNamespace } from "./shared-namespace.ts";
 import {
   newTierReceipt,
   tierLaneEvent,
@@ -156,7 +153,10 @@ function authorizeTierLane(
     );
   }
 
-  return { identity, namespace: physicalNamespace(requested) };
+  return {
+    identity,
+    namespace: physicalNamespace(requested, dependencies.sharedNamespaceNames),
+  };
 }
 
 /** @returns True when authorization returned a refusal rather than a target. */
@@ -293,7 +293,10 @@ async function handleTierLane(
     );
     return textResult({
       session_key: args.session_key,
-      namespace: canonicalNamespace(namespace),
+      namespace: canonicalNamespace(
+        namespace,
+        dependencies.sharedNamespaceNames,
+      ),
       ...receipt,
     });
   } catch (error) {

@@ -33,7 +33,7 @@ import { canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
-import { physicalNamespace } from "../../src/shared-namespace.ts";
+import { physicalNamespace } from "./shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
 import { containsSecret } from "../../src/sharing.ts";
 import { resolveIngestionEligibility } from "../../src/source-registry.ts";
@@ -154,7 +154,9 @@ function resolveWriteTarget(
     };
   }
 
-  return { namespace: physicalNamespace(requested) };
+  return {
+    namespace: physicalNamespace(requested, dependencies.sharedNamespaceNames),
+  };
 }
 
 /**

@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# DONE-MEANS check for rung L5 of the server/ hardening ladder
+# (`_plans/server-hardening-ladder.md`, issue #864).
+#
+#   bash scripts/done-means/750-l5-shared-namespace-importers.sh
+#
+# ---------------------------------------------------------------------------
+# The defect this gates
+# ---------------------------------------------------------------------------
+# `src/shared-namespace.ts` reads the environment to decide what the shared
+# namespace is called. Every server/tools module that imports from it therefore
+# re-derives those names on its own, at whatever moment its call happens to
+# run, from whatever the environment says then. Two modules can disagree about
+# which physical namespace a write lands in, and nothing errors when they do —
+# the row simply goes somewhere else.
+#
+# The server twin `server/tools/shared-namespace.ts` closes that by taking the
+# names as an argument. It throws when the argument is absent, so the migration
+# cannot half-land silently: a call site that forgets to thread the names fails
+# loudly at runtime instead of quietly re-deriving them.
+#
+# L5 is complete for a module when both halves hold — it no longer imports the
+# environment-reading `src/` copy, AND every call it makes to the twin actually
+# passes the names it was handed by the composition root.
+#
+# ---------------------------------------------------------------------------
+# GENERIC BY DESIGN — NO ARGUMENTS
+# ---------------------------------------------------------------------------
+# This check takes no argv. It discovers its own subject: the non-test files
+# under server/tools changed against origin/main. That is what makes it usable
+# by the sibling lanes on this rung without editing it — each lane changes a
+# different pair of modules, and each gets its own subject list for free.
+#
+# `CHANGED_FILES` (space-separated) overrides the discovery, which is how the
+# RED receipt is taken before any edit exists to be discovered.
+#
+# ---------------------------------------------------------------------------
+# Three clauses, and all three must pass
+# ---------------------------------------------------------------------------
+# CLAUSE 1 — NO MODULE IN THE SUBJECT IMPORTS THE src/ COPY.
+#   Zero references to `src/shared-namespace` in each subject file. That import
+#   is the environment read; while it is present the module can still reach the
+#   old names regardless of what it was handed.
+#
+# CLAUSE 2 — EVERY CALL PASSES THE NAMES (arrival, not departure).
+#   Clause 1 alone is satisfiable by deleting the calls, which is worse than
+#   the defect. So clause 2 counts ARRIVALS: for each of the six helpers, the
+#   number of call sites in the file must equal the number of call sites whose
+#   argument list mentions `sharedNamespaceNames` within the following 3 lines
+#   (prettier wraps a two-argument call across lines), and that number must be
+#   greater than zero. Equal-and-zero is a FAIL, not a pass — a subject file on
+#   this rung has calls to thread, and zero means the scan found nothing rather
+#   than that the work is done.
+#
+# CLAUSE 3 — THE TREE TYPECHECKS.
+#   `bunx tsc --noEmit` exits 0. The twin's trailing argument is typed, so a
+#   call threading the wrong shape is caught here rather than at runtime.
+#
+# An EMPTY subject list is exit 1 with a message, never a silent pass: a check
+# that examines nothing and reports success is the failure mode this whole
+# family of scripts exists to avoid.
+#
+# NO ARGUMENTS.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+fail_hard() {
+  printf 'HARNESS-ERROR: %s\n' "$1" >&2
+  exit 3
+}
+
+command -v rg >/dev/null 2>&1 || fail_hard "rg (ripgrep) not on PATH"
+command -v git >/dev/null 2>&1 || fail_hard "git not on PATH"
+[ -d "$REPO_ROOT/.git" ] || [ -f "$REPO_ROOT/.git" ] || fail_hard "not a git repo at $REPO_ROOT"
+
+HELPERS='canonicalNamespace|physicalNamespace|sharedNamespaceConfig|isSharedNamespace|isLegacySharedNamespace|shouldRejectLegacySharedWrite'
+NAMES_ARG='sharedNamespaceNames'
+
+# ---------------------------------------------------------------------------
+# SUBJECT — the non-test server/tools files changed against origin/main.
+# ---------------------------------------------------------------------------
+if [ -n "${CHANGED_FILES:-}" ]; then
+  SUBJECT="$(printf '%s\n' $CHANGED_FILES)"
+  SUBJECT_SOURCE="CHANGED_FILES override"
+else
+  SUBJECT="$(cd "$REPO_ROOT" && git diff --name-only origin/main -- server/tools 2>/dev/null | rg -v '\.test\.ts$')"
+  SUBJECT_SOURCE="git diff --name-only origin/main -- server/tools (non-test)"
+fi
+SUBJECT="$(printf '%s\n' "$SUBJECT" | rg -v '^$' || true)"
+
+if [ -z "$SUBJECT" ]; then
+  printf 'SUBJECT: none — %s produced no files.\n' "$SUBJECT_SOURCE" >&2
+  printf 'A check with nothing to examine is not a pass. Exiting 1.\n' >&2
+  exit 1
+fi
+
+SUBJECT_N="$(printf '%s\n' "$SUBJECT" | rg -c '^')"
+printf 'SUBJECT (%s file(s), from %s):\n' "$SUBJECT_N" "$SUBJECT_SOURCE"
+printf '%s\n' "$SUBJECT" | sed 's/^/    /'
+printf '\n'
+
+CLAUSE1=PASS
+CLAUSE2=PASS
+
+# ---------------------------------------------------------------------------
+# CLAUSE 1 — no src/shared-namespace import survives in any subject file.
+# CLAUSE 2 — helper calls and names-carrying calls arrive at the same count.
+# ---------------------------------------------------------------------------
+while IFS= read -r FILE; do
+  [ -n "$FILE" ] || continue
+  if [ ! -f "$REPO_ROOT/$FILE" ]; then
+    printf 'CLAUSE 1 [%s]: FAIL — file does not exist\n' "$FILE"
+    CLAUSE1=FAIL
+    continue
+  fi
+
+  SRC_HITS="$(cd "$REPO_ROOT" && rg -nF 'src/shared-namespace' "$FILE" 2>/dev/null)"
+  RG_STATUS=$?
+  [ "$RG_STATUS" -ge 2 ] && fail_hard "rg failed with status $RG_STATUS scanning $FILE"
+  if [ -n "$SRC_HITS" ]; then
+    printf 'CLAUSE 1 [%s]: FAIL — still imports the environment-reading src/ copy:\n' "$FILE"
+    printf '%s\n' "$SRC_HITS" | sed 's/^/    /'
+    CLAUSE1=FAIL
+  else
+    printf 'CLAUSE 1 [%s]: PASS — 0 references to src/shared-namespace\n' "$FILE"
+  fi
+
+  # Departures: every call to one of the six helpers. The `\(` anchors on the
+  # call rather than the import line, which carries no parenthesis.
+  CALL_N="$(cd "$REPO_ROOT" && rg -c "\\b($HELPERS)\\(" "$FILE" 2>/dev/null)"
+  CALL_N="${CALL_N:-0}"
+  # Arrivals: calls whose argument list mentions the names within 3 lines.
+  ARRIVE_N="$(cd "$REPO_ROOT" && rg -U -c "\\b($HELPERS)\\((.|\\n){0,3}*?$NAMES_ARG" "$FILE" 2>/dev/null)"
+  ARRIVE_N="${ARRIVE_N:-0}"
+  if [ "$ARRIVE_N" -eq 0 ]; then
+    ARRIVE_N="$(cd "$REPO_ROOT" && rg -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null \
+      | rg -c "$NAMES_ARG" 2>/dev/null)"
+    ARRIVE_N="${ARRIVE_N:-0}"
+  fi
+
+  if [ "$CALL_N" -eq 0 ]; then
+    printf 'CLAUSE 2 [%s]: FAIL — 0 helper call sites found; the scan matched nothing\n' "$FILE"
+    CLAUSE2=FAIL
+  elif [ "$CALL_N" -ne "$ARRIVE_N" ]; then
+    printf 'CLAUSE 2 [%s]: FAIL — %s helper call(s), %s carrying %s\n' \
+      "$FILE" "$CALL_N" "$ARRIVE_N" "$NAMES_ARG"
+    (cd "$REPO_ROOT" && rg -n -A3 "\\b($HELPERS)\\(" "$FILE" 2>/dev/null) | sed 's/^/    /'
+    CLAUSE2=FAIL
+  else
+    printf 'CLAUSE 2 [%s]: PASS — %s helper call(s), all %s carrying %s\n' \
+      "$FILE" "$CALL_N" "$ARRIVE_N" "$NAMES_ARG"
+  fi
+done <<EOF
+$SUBJECT
+EOF
+
+# ---------------------------------------------------------------------------
+# CLAUSE 3 — the tree typechecks.
+# ---------------------------------------------------------------------------
+CLAUSE3=FAIL
+if ! command -v bunx >/dev/null 2>&1; then
+  fail_hard "bunx not on PATH; clause 3 cannot be judged"
+fi
+TSC_OUT="$(cd "$REPO_ROOT" && bunx tsc --noEmit 2>&1)"
+TSC_STATUS=$?
+if [ "$TSC_STATUS" -eq 0 ]; then
+  CLAUSE3=PASS
+  printf '\nCLAUSE 3 (bunx tsc --noEmit): PASS — exited 0\n'
+else
+  printf '\nCLAUSE 3 (bunx tsc --noEmit): FAIL — exited %s\n' "$TSC_STATUS"
+  printf '%s\n' "$TSC_OUT" | tail -n 12 | sed 's/^/    /'
+fi
+
+printf '\nCLAUSE 1 (no src/shared-namespace import):        %s\n' "$CLAUSE1"
+printf 'CLAUSE 2 (every helper call carries the names):   %s\n' "$CLAUSE2"
+printf 'CLAUSE 3 (bunx tsc --noEmit exits 0):            %s\n' "$CLAUSE3"
+
+if [ "$CLAUSE1" = PASS ] && [ "$CLAUSE2" = PASS ] && [ "$CLAUSE3" = PASS ]; then
+  exit 0
+fi
+exit 1
