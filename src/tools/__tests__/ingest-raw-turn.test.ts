@@ -4,10 +4,11 @@ import { runMigrations } from "../../db/migrate.ts";
 import { isHarnessNoise, registerIngestRawTurn } from "../ingest-raw-turn.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
 // isHarnessNoise is pure, so its coverage runs everywhere. The ingest path
 // itself needs a real database (namespace predicate, ON CONFLICT, jsonb
-// round-trip) and is gated on OPENBRAIN_TEST_DATABASE_URL like 025/027/032.
+// round-trip) and requires OPENBRAIN_TEST_DATABASE_URL rather than skipping.
 describe("harness noise filter", () => {
   it("drops runtime scaffolding that is not dialogue", () => {
     // Measured across 515 transcripts: these are the exact strings that repeat
@@ -44,79 +45,78 @@ describe("harness noise filter", () => {
 // tree; the secret scanner correctly refuses a realistic-looking fixture.
 const FAKE_TOKEN = ["sk", "live", "abcd1234efgh5678ijkl"].join("-");
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
+const nsAlice = "test-ingest-alice";
+const nsBob = "test-ingest-bob";
 
-dbDescribe("ingest_raw_turn (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
-  const nsAlice = "test-ingest-alice";
-  const nsBob = "test-ingest-bob";
+const alice: AuthInfo = {
+  role: "agent",
+  clientId: nsAlice,
+  namespaceSource: "token",
+};
 
-  const alice: AuthInfo = {
-    role: "agent",
-    clientId: nsAlice,
-    namespaceSource: "token",
-  };
+const bob: AuthInfo = {
+  role: "agent",
+  clientId: nsBob,
+  namespaceSource: "token",
+};
 
-  const bob: AuthInfo = {
-    role: "agent",
-    clientId: nsBob,
-    namespaceSource: "token",
-  };
+// Minimal MCP server double: capture the registered handler and call it the
+// way the real server would.
+type Handler = (
+  args: Record<string, unknown>,
+  extra: { authInfo?: AuthInfo },
+) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+let handler: Handler;
 
-  // Minimal MCP server double: capture the registered handler and call it the
-  // way the real server would.
-  type Handler = (
-    args: Record<string, unknown>,
-    extra: { authInfo?: AuthInfo },
-  ) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
-  let handler: Handler;
+const server = {
+  registerTool(_name: string, _schema: unknown, fn: Handler) {
+    handler = fn;
+  },
+} as unknown as Parameters<typeof registerIngestRawTurn>[0];
 
-  const server = {
-    registerTool(_name: string, _schema: unknown, fn: Handler) {
-      handler = fn;
-    },
-  } as unknown as Parameters<typeof registerIngestRawTurn>[0];
-
-  async function ingest(
-    turns: Array<Record<string, unknown>>,
-    auth: AuthInfo = alice,
-    namespace?: string,
-  ): Promise<Record<string, unknown>> {
-    const res = await handler(namespace ? { turns, namespace } : { turns }, {
-      authInfo: auth,
-    });
-    return JSON.parse(res.content[0]!.text) as Record<string, unknown>;
-  }
-
-  function turn(overrides: Record<string, unknown> = {}) {
-    return {
-      turn_uuid: "t-1",
-      turn_index: 0,
-      role: "user",
-      content: "hello",
-      ...overrides,
-    };
-  }
-
-  async function cleanup(): Promise<void> {
-    await pool.query("DELETE FROM ob_raw_turns WHERE namespace = ANY($1)", [
-      [nsAlice, nsBob],
-    ]);
-  }
-
-  beforeAll(async () => {
-    await runMigrations(pool);
-    registerIngestRawTurn(server, { pool } as unknown as ToolDeps);
-    await cleanup();
+async function ingest(
+  turns: Array<Record<string, unknown>>,
+  auth: AuthInfo = alice,
+  namespace?: string,
+): Promise<Record<string, unknown>> {
+  const res = await handler(namespace ? { turns, namespace } : { turns }, {
+    authInfo: auth,
   });
+  return JSON.parse(res.content[0]?.text ?? "{}") as Record<string, unknown>;
+}
 
-  afterEach(cleanup);
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+function turn(overrides: Record<string, unknown> = {}) {
+  return {
+    turn_uuid: "t-1",
+    turn_index: 0,
+    role: "user",
+    content: "hello",
+    ...overrides,
+  };
+}
 
+async function cleanup(): Promise<void> {
+  await pool.query("DELETE FROM ob_raw_turns WHERE namespace = ANY($1)", [
+    [nsAlice, nsBob],
+  ]);
+}
+
+beforeAll(async () => {
+  await runMigrations(pool);
+  registerIngestRawTurn(server, { pool } as unknown as ToolDeps);
+  await cleanup();
+});
+
+afterEach(cleanup);
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
+
+// Split by subject in #878 so each suite is named in the anti-skip manifest and
+// none of them can vanish unnoticed behind another.
+describe("ingest_raw_turn write path (live Postgres)", () => {
   it("ingests both sides of a conversation", async () => {
     // The whole point: the assistant half was never captured before.
     const result = await ingest([
@@ -188,7 +188,9 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
     expect(rows[0].content).toContain("retry");
     expect(rows[0].redaction_applied).toEqual(["secret_value"]);
   });
+});
 
+describe("ingest_raw_turn provenance (live Postgres)", () => {
   it("stores structured provenance and the reply chain", async () => {
     await ingest([
       turn({
@@ -225,20 +227,9 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
     expect(row.valid_at).toEqual(row.occurred_at);
   });
 
-  it("refuses to write outside the caller's namespace", async () => {
-    const res = await handler(
-      { turns: [turn({ turn_uuid: "cross-1" })], namespace: nsBob },
-      { authInfo: alice },
-    );
-    expect(res.isError).toBe(true);
+});
 
-    const { rows } = await pool.query(
-      "SELECT count(*)::int AS n FROM ob_raw_turns WHERE namespace = $1",
-      [nsBob],
-    );
-    expect(rows[0].n).toBe(0);
-  });
-
+describe("ingest_raw_turn session_seq recompute (live Postgres)", () => {
   it("computes session_seq per namespace, never across the boundary", async () => {
     // session_ref is client-supplied and NOT unique across namespaces (the only
     // uniqueness is (namespace, turn_uuid), migration 032). Two namespaces can
@@ -357,11 +348,27 @@ dbDescribe("ingest_raw_turn (live Postgres)", () => {
     expect(after.rows.map((r) => r.session_seq)).toEqual([0, 1]);
     expect(after.rows.map((r) => r.turn_uuid)).toEqual(["rep-1", "rep-2"]);
   });
+});
+
+describe("ingest_raw_turn namespace and auth boundary (live Postgres)", () => {
+  it("refuses to write outside the caller's namespace", async () => {
+    const res = await handler(
+      { turns: [turn({ turn_uuid: "cross-1" })], namespace: nsBob },
+      { authInfo: alice },
+    );
+    expect(res.isError).toBe(true);
+
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM ob_raw_turns WHERE namespace = $1",
+      [nsBob],
+    );
+    expect(rows[0].n).toBe(0);
+  });
 
   it("denies an unauthenticated caller", async () => {
     const res = await handler({ turns: [turn()] }, {});
     expect(res.isError).toBe(true);
-    expect(JSON.parse(res.content[0]!.text).error).toBe("auth_denied");
+    expect(JSON.parse(res.content[0]?.text ?? "{}").error).toBe("auth_denied");
   });
 
   it("reports a batch that was entirely noise without erroring", async () => {
