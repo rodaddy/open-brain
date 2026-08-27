@@ -85,11 +85,16 @@ a table with a valid header and zero data rows, exits 3.
    case-insensitive) where none is referenced by another row's `Supersedes`.
 3. `falsifier` — RATIFIED with an empty Falsifier.
 4. `rejected` — RATIFIED with an empty Rejected.
-5. `supersedes` — a Supersedes referencing a row number that does not exist.
+5. `supersedes` — a Supersedes referencing a row number that does not exist,
+   or referencing the row's OWN number. A self-reference is also excluded when
+   building the superseded set, so it cannot exempt a row from clause 2 (that
+   was a false green — see RED.md, 2026-08-27).
 6. `retire-without-check` — a row with non-empty Retires must find, among
    `git -C <repo> diff --name-only <diff-base>...HEAD` plus `git -C <repo>
-   status --porcelain` paths, at least one path under `scripts/done-means/` or
-   the exact path named in Retires. Git missing, ledger outside a repo, or an
+   status --porcelain` paths, either the exact path named in Retires or a path
+   ending with that path's basename. It used to accept ANY path under
+   `scripts/done-means/`, which let one unrelated touch launder every Retires
+   row in the ledger (RED.md, 2026-08-27). Git missing, ledger outside a repo, or an
    unresolvable ref is `HARNESS ERROR` and exit 3 — never a pass.
 7. `state` — State outside `OPEN, RATIFIED, HELD, REVERSED, SUPERSEDED`.
 
@@ -132,8 +137,16 @@ changed against `origin/main` — so it fails. This lane deliberately does not
 modify `scripts/done-means/`.
 
 `pass-clause6-retire.md` takes the other satisfying shape: its Retires names an
-exact path that this clone currently reports as changed. That makes the passing
-case reproducible with no mutation.
+exact path the host repo reports as changed. That path is the fixture
+directory's OWN sibling (`decisions/fixtures/fail-clause6-retire.md`), which
+makes the passing case reproducible in any repo with no mutation.
+
+It used to retire `_ob/skills/graph-mode/workflows/setup.md`, which is dirty
+only in the Development clone. Copied byte-faithful into the open-brain and
+software-factory pilots, that fixture failed against an unchanged checker
+(2026-08-27). Clause 6 reads the HOST repo's dirty set, so a fixture that
+retires anything outside its own directory is testing the repo it landed in,
+not the clause.
 
 To exercise the `scripts/done-means/` shape instead, do it in a scratch COPY,
 never in this clone:
@@ -156,6 +169,12 @@ Anywhere this skill estimates token counts, the estimate is
 
 ## Known limits
 
+- Tables inside fenced code blocks (``` or ~~~) are skipped by every selection
+  path, INCLUDING the `--section` heading search, so neither a fenced table nor
+  a fenced heading can win. Guarding only the table lookup left the heading
+  hole (RED.md, 2026-08-27). A file that documents the format in an example is
+  not graded as a ledger. A file whose ONLY table is fenced exits 3, not 0 (RED.md,
+  2026-08-27).
 - The doctor judges ONE table per run — the one named by the selection order
   above. A file with two `#`-first-cell tables has its second one unexamined;
   `--section` is the way to aim at it.

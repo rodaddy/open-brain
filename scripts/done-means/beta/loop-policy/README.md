@@ -97,6 +97,16 @@ Estimate tokens anywhere as `ceil(chars / 4)`.
 
 ## Known limits
 
+- A repeated top-level key fails. The store is last-write-wins, so without
+  this a block with two `on_exhaust` lines never rule-checked the first
+  (RED.md, 2026-08-27).
+- The `on_exhaust` no-retry rule strips punctuation before matching and also
+  rejects a list of paraphrases (try again, loop again, start over, from
+  scratch, restart, another pass). It is still a word list: a paraphrase not
+  on it passes, and that remains the honest limit of a text check.
+- CRLF input is handled: the awk strips a trailing `\r` before every match.
+  Before that fix a CRLF dispatch plan with a complete loop policy was
+  reported as having no `## Loop policy` heading (RED.md, 2026-08-27).
 - **`check.sh` is not a YAML parser.** It reads the simple `key: value` and
   two-level nested shape by hand in awk. Flow mappings (`{a: 1}`), inline lists
   (`[a, b]`), multi-line scalars (`|`, `>`), anchors, quoted keys, and comments

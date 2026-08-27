@@ -17,11 +17,19 @@ this check — that is the template doing its job, and it is why `--allow` exist
 ## Usage
 
 ```bash
-./check.sh [--allow <literal>]... <file>...
+./check.sh [--allow <literal>]... [--strict] <file>...
 ```
 
 Every hit prints as `<path>:<line>: <token>`, one per line, to stdout. A
 summary line goes to stderr. The check exits `1` if there is at least one hit.
+
+`--strict` adds `<path>` and `<lane>` to the token list. They are NOT default
+because a standing contract uses them as ordinary prose notation
+(`Done-means: <path>`, `_archive/<lane>/`) and every hit on a real 1396-line
+contract was of that kind. But an instantiated RUN artifact that still carries
+them is exactly the unresolved scaffold this check exists to catch, and the
+default list misses it (RED.md, 2026-08-27). Use `--strict` on run READMEs,
+dispatch plans, and generated ledgers; leave it off for contracts.
 
 `--allow <literal>` may be repeated. It exempts one exact token for that run,
 so a file that legitimately *documents* the token list can be checked without

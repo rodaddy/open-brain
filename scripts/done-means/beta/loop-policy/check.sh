@@ -42,7 +42,12 @@ BEGIN {
   in_np = 0; in_prio = 0; n_prio = 0
 }
 {
+  # Strip a trailing CR so a CRLF file is read the same as an LF one. Without
+  # this the anchored heading match fails on CRLF input and a dispatch plan
+  # that HAS a ## Loop policy section reports it missing (pilot review,
+  # 2026-08-27: the passing fixture converted to CRLF failed).
   line = $0
+  sub(/\r$/, "", line)
 
   # Section tracking: any new "## " heading ends the Loop policy section.
   if (line ~ /^## /) {
@@ -87,6 +92,11 @@ BEGIN {
   if (line !~ /:/) next
   key = line; sub(/:.*$/, "", key); key = trim(key)
   val = line; sub(/^[^:]*:[ \t]*/, "", val); val = trim(val)
+  # A repeated top-level key is a failure, not a last-write-wins overwrite. A
+  # block carrying on_exhaust twice, the FIRST saying "retry the whole thing
+  # from scratch", passed at exit 0 because only the last value was ever rule
+  # checked (adversarial review F1, 2026-08-27).
+  if (seen[key]) dup[key] = 1
   seen[key] = 1; value[key] = val
   if (key == "no_progress") { in_np = 1 }
   if (key == "priority") { in_prio = 1 }
@@ -117,12 +127,24 @@ END {
     else if (!is_posint(np["window"]) || np["window"] + 0 < 1) fail("no_progress.window", "must be an integer >= 1, got \"" np["window"] "\"")
   }
 
+  for (k in dup) fail(k, "key appears more than once; a duplicated key is silently overwritten, so the earlier value is never rule-checked")
+
   if (seen["on_exhaust"]) {
     oe = value["on_exhaust"]
     if (oe == "") fail("on_exhaust", "must be non-empty: name where the run parks")
     else {
       low = tolower(oe)
-      if (low ~ /retry/) fail("on_exhaust", "must not contain \"retry\": exhaustion parks, it does not loop")
+      # Punctuation and paraphrase both defeated a bare /retry/ substring test:
+      # "park, then re-try tomorrow" and "park then loop again from the top"
+      # each passed while describing exactly the behaviour the rule forbids
+      # (adversarial review F2 and F3, 2026-08-27). Separators are collapsed
+      # before matching, and the paraphrases are matched as well.
+      flat = low
+      gsub(/[^a-z0-9]+/, " ", flat)
+      squashed = low
+      gsub(/[^a-z0-9]+/, "", squashed)
+      if (squashed ~ /retry/ || squashed ~ /retries/) fail("on_exhaust", "must not say retry (punctuation does not evade it): exhaustion parks, it does not loop")
+      else if (flat ~ /(try again|run again|loop again|start over|go again|again from the top|from scratch|restart|re run|rerun|resume the loop|another pass|one more pass)/) fail("on_exhaust", "describes looping again (\"" oe "\"): exhaustion parks, it does not loop")
     }
   }
 

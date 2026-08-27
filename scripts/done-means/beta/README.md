@@ -15,7 +15,7 @@ nothing is `3`, never `0`.
 |---|---|---|
 | `lane-report/` | `check.sh <report>` | the five-field lane report parses: field set and order, no empty values, nothing after `lessons:`, claim states in the truth grammar, a `verified:` line carrying `exit N` |
 | `ratchet-bound/` | `check.sh <lane-contract.md> [--bound N]` | live Tightenings at or under the bound, every entry with `provenance:`, `graduated:` entries not counted; entries are `- **YYYY-MM-DD` bullets or `### YYYY-MM-DD` blocks, and a section with content but no recognised entry is exit 3 |
-| `placeholders/` | `check.sh <file>... [--allow <tok>]` | no unresolved scaffold token in an instantiated RUN artifact (run README, dispatch plan, ledger). Not for standing contracts, which use `<path>`-style notation in prose |
+| `placeholders/` | `check.sh <file>... [--allow <tok>] [--strict]` | no unresolved scaffold token in an instantiated RUN artifact (run README, dispatch plan, ledger). Not for standing contracts, which use `<path>`-style notation in prose |
 | `decisions/` | `check.sh <decisions.md> [--repo] [--diff-base] [--section]` and `templates/decisions.md` | the nine-column ledger has no conflicting live rulings, no ruling without falsifier or rejected options, no dangling `Supersedes`, and no `Retires` without a done-means change in the diff |
 | `brief-pack/` | `pack.sh --task --lane-contract --done-means [...]` | a lane brief assembled by ranked inclusion with an explicit excluded list, refused over budget rather than truncated |
 | `loop-policy/` | `check.sh <dispatch-plan.md>`, `snippet.js`, `templates/` | a dispatch plan carries a complete loop policy with a mandatory non-retry `on_exhaust`; the snippet evaluates guards in priority order under an injected clock and budget |

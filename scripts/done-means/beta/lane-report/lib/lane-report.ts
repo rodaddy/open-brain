@@ -59,8 +59,13 @@ export function parse(text: string): { fields: Field[]; tail: string[] } {
       if (line.trim() !== "") tail.push("line " + (i + 1) + ": " + line.trim());
       continue;
     }
-    if (current.key === "lessons" && line.trim() !== "" && !/^\s/.test(line)) {
-      // clause 3: non-blank, non-indented content after the lessons value
+    if (current.key === "lessons" && line.trim() !== "") {
+      // Clause 3: anything after the lessons VALUE is trailing content,
+      // indented or not. Exempting indented lines let a narrative paragraph
+      // ride along after the report simply by being indented three spaces
+      // (adversarial review F6, 2026-08-27). The lessons value is one line by
+      // schema, so a blank-separated or indented continuation is not part of
+      // it; a genuine multi-line lesson belongs on the lessons line itself.
       tail.push("line " + (i + 1) + ": " + line.trim());
       continue;
     }
@@ -75,8 +80,12 @@ function valueOf(fields: Field[], key: string): string | null {
   return hit === undefined ? null : hit.value;
 }
 
+// A value must carry at least one word character. Punctuation alone is not a
+// filled field: a report whose deviations and lessons were each a bare ":"
+// passed every clause (adversarial review fixture f2-colon-value.txt,
+// 2026-08-27), which defeats the point of requiring the field at all.
 function nonEmpty(value: string): boolean {
-  return value.trim() !== "";
+  return /[A-Za-z0-9]/.test(value);
 }
 
 export function validate(text: string): Failure[] {
@@ -144,6 +153,23 @@ export function validate(text: string): Failure[] {
         detail: "disallowed state word(s): " + bad.join(", "),
       });
     }
+    // The all-caps scan misses title case, so "feature is Done and Deployed"
+    // asserted a state above the grammar and passed (adversarial review F5,
+    // 2026-08-27). These words claim completion; the four grammar states are
+    // the only vocabulary allowed to.
+    const titleBanned: string[] = [];
+    const TITLE_WORDS = ["Done", "Complete", "Completed", "Deployed", "Fixed", "Working", "Verified", "Confirmed", "Final", "Ratified", "Locked", "Live", "Shipped"];
+    for (const w of TITLE_WORDS) {
+      if (new RegExp("\\b" + w + "\\b").test(claims) && titleBanned.indexOf(w) === -1) titleBanned.push(w);
+    }
+    if (titleBanned.length > 0) {
+      failures.push({
+        clause: "claim-states",
+        detail:
+          "claims a state outside the grammar: " + titleBanned.join(", ") +
+          " (use RUNNING, MERGED, WRITTEN or PROPOSED)",
+      });
+    }
   }
 
   // Clause 5: verified lines.
@@ -155,7 +181,15 @@ export function validate(text: string): Failure[] {
       const l = vlines[i] ?? "";
       if (l.indexOf("->") === -1) continue;
       const result = l.slice(l.indexOf("->") + 2);
-      if (/\bexit [0-9]+/.test(result) && l.slice(0, l.indexOf("->")).trim() !== "") {
+      // The result must OPEN with the exit code AND not trail off into prose.
+      // Requiring only that it contain "exit 0" let a sentence pass; requiring
+      // only that it OPEN with one still let "exit 0 someday, i never ran it"
+      // pass (adversarial review F4, 2026-08-27, after the morning fix). What
+      // may follow the code is a short factual tail -- a count, a path, a
+      // quoted last line -- not a clause with a verb of intention.
+      const opens = /^\s*exit\s+[0-9]+/.test(result);
+      const hedged = /\b(someday|never ran|didn't run|did not run|would|should|expect|intend|plan to|assume|probably|presumably|i think|thought)\b/i.test(result);
+      if (opens && !hedged && l.slice(0, l.indexOf("->")).trim() !== "") {
         ok++;
       }
     }

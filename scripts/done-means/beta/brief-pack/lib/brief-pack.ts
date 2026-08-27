@@ -69,10 +69,31 @@ function mustRead(path: string, label: string): string {
 // --- args -------------------------------------------------------------
 const argv = process.argv.slice(2);
 const opts: Record<string, string> = {};
+// Every accepted flag, by name. An unknown flag used to be stored and ignored,
+// so a typo (`--budget-token`, `--report-headings`) silently shipped a brief
+// built entirely from defaults while exiting 0 (adversarial review F4,
+// 2026-08-27). A misspelled budget is exactly the case where a silent default
+// is worst.
+const KNOWN_FLAGS: string[] = [
+  "task",
+  "lane-contract",
+  "done-means",
+  "controller-contract",
+  "decisions",
+  "loop-policy",
+  "budget-tokens",
+  "max-tightenings",
+  "max-decisions",
+  "report-heading",
+  "out",
+];
 for (let i = 0; i < argv.length; i += 1) {
   const a = argv[i];
   if (a.slice(0, 2) !== "--") die("unexpected argument: " + a);
   const key = a.slice(2);
+  if (KNOWN_FLAGS.indexOf(key) === -1) {
+    die("unknown flag --" + key + "; known flags are --" + KNOWN_FLAGS.join(" --"));
+  }
   const val = argv[i + 1];
   if (val === undefined) die("missing value for --" + key);
   opts[key] = val;
@@ -87,6 +108,12 @@ const maxDecisions = Number(opts["max-decisions"] ?? "5");
 if (!Number.isFinite(budget) || !Number.isFinite(maxTightenings) || !Number.isFinite(maxDecisions)) {
   die("numeric option is not a number");
 }
+// A cap of 0 packed "(none)" at exit 0 — the same vacuous brief the
+// Tightenings guard exists to stop, just reached through a flag. A negative
+// cap was worse: slice(0, -1) silently dropped exactly one entry and looked
+// like a pass (adversarial review F1 and F4, 2026-08-27).
+if (maxTightenings < 1) die("--max-tightenings must be at least 1, got " + opts["max-tightenings"]);
+if (maxDecisions < 0) die("--max-decisions must be 0 or more, got " + opts["max-decisions"]);
 
 const taskText = opts.task === "-" ? readStdin() : mustRead(opts.task, "--task");
 if (taskText.trim() === "") die("--task is empty");
@@ -159,6 +186,26 @@ function parseEntries(body: string): Entry[] {
 }
 
 const entries = parseEntries(tighteningsBody);
+
+// Vacuous green: the section has substance but nothing parsed as an entry, so
+// the brief would ship "## Tightenings (ranked)" / "(none)" at exit 0 while the
+// contract's real rules sat unread. Same guard ratchet-bound carries, same
+// reason (adversarial review fixture f2-unrecognised-shape.md, 2026-08-27:
+// three live rules as plain bullets, zero ranked, exit 0).
+const tighteningsContent: number = tighteningsBody
+  .split("\n")
+  .filter(function (l: string): boolean {
+    const t = l.trim();
+    return t !== "" && t.slice(0, 4) !== "<!--" && t.slice(0, 3) !== "-->";
+  }).length;
+if (entries.length === 0 && tighteningsContent > 0) {
+  process.stderr.write(
+    "HARNESS ERROR: 0 Tightenings entries recognized in a non-empty section (" +
+      tighteningsContent +
+      " content lines); entries must open with \"- **YYYY-MM-DD\" or \"### YYYY-MM-DD\"\n",
+  );
+  process.exit(3);
+}
 
 function parseDecisions(src: string): Decision[] {
   const out: Decision[] = [];

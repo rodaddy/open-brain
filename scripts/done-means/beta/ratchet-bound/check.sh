@@ -62,7 +62,26 @@ BEGIN {
   content=0; shape=""
 }
 {
+  # Strip a trailing CR so a CRLF file is read the same as an LF one. Without
+  # this every anchored match below fails on CRLF input and a contract that
+  # HAS a ## Tightenings section reports ABSENT -- a check blind to its own
+  # target (pilot review fixture a1-crlf-16-live.md, 2026-08-27).
   line = $0
+  sub(/\r$/, "", line)
+
+  # Fenced lines never contribute to an entry body. A fenced example showing
+  # HOW to graduate ("graduated: (example)") otherwise reclassified its own
+  # live entry as graduated and bought a free slot under the bound -- 16 real
+  # live entries reported as live=15 graduated=1, exit 0 (adversarial review
+  # fixture g4-fenced-grad.md, 2026-08-27). The fence markers themselves are
+  # content for the vacuous-green guard but never entry text.
+  fence_marker = 0
+  if (line ~ /^[ \t]*(```|~~~)/) { in_fence = !in_fence; fence_marker = 1 }
+  if (in_fence || fence_marker) {
+    if (in_sec && line !~ /^[ \t]*$/) content++
+    next
+  }
+
   # A level-2 heading always ends the section; a level-3 heading does not.
   if (line ~ /^## /) {
     if (in_sec) { flush_entry(); in_sec = 0 }
@@ -72,9 +91,24 @@ BEGIN {
   if (!in_sec) next
   sec_text = sec_text " " line
 
-  # Content lines: anything that is not blank and not an HTML comment. Used
-  # only by the vacuous-green guard, so a section of pure prose still counts.
-  if (line !~ /^[ \t]*$/ && line !~ /^[ \t]*<!--/ && line !~ /^[ \t]*-->/) content++
+  # Content lines: anything that is not blank and not inside an HTML comment.
+  # Used only by the vacuous-green guard, so a section of pure prose still
+  # counts. Comment state is tracked across lines: matching only the opening
+  # and closing markers counted the BODY of a multi-line comment as content, so
+  # a section holding only the ratchet own explanatory comment tripped
+  # the guard at exit 3 where README rule 7 says it passes (adversarial review
+  # fixture h2-multiline-comment.md, 2026-08-27).
+  was_comment = in_comment
+  if (in_comment == 0 && line ~ /<!--/ && line !~ /-->/) {
+    in_comment = 1
+  } else {
+    if (in_comment == 1 && line ~ /-->/) { in_comment = 0 }
+  }
+  is_comment = 0
+  if (was_comment == 1 || in_comment == 1) { is_comment = 1 }
+  if (line ~ /^[ \t]*<!--/) { is_comment = 1 }
+  if (line ~ /-->[ \t]*$/) { is_comment = 1 }
+  if (line !~ /^[ \t]*$/ && is_comment == 0) content++
 
   # Shape 1: top-level bullet "- **YYYY-MM-DD".
   if (line ~ /^- \*\*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {

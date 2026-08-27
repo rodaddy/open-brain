@@ -1,0 +1,6 @@
+deliverable:   x
+claim-states:  a: WRITTEN
+verified:      cmd -> exit 0
+deviations:    none
+lessons:       none
+   indented trailing note that is not part of lessons intent

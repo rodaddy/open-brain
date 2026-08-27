@@ -1,0 +1,5 @@
+deliverable:   a thing
+claim-states:  thing: WRITTEN
+verified:      I thought about it -> the docs say a good run should exit 0 someday
+deviations:    none
+lessons:       none

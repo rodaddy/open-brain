@@ -114,3 +114,39 @@ $ ./check.sh <pilot clone>/docs/lane-contract.md
 PASS: no unresolved placeholders
 exit: 0
 ```
+
+## 2026-08-27 adversarial review — the token removal let a real scaffold through
+
+The morning fix dropped the angle-bracket path and lane tokens from the
+default list because all five hits on a 1396-line standing contract were prose
+notation. The review found the cost: an INSTANTIATED run README that still
+carries them now passes clean.
+
+```
+$ ./check.sh fixtures/fail-strict-run-readme.md
+PASS: no unresolved placeholders
+exit: 0
+```
+
+The fixture is a run README whose `Repo root:`, `Lane:` and `Done-means:`
+fields hold the raw tokens where real values belong. That is exactly the
+unresolved scaffold this check exists to catch.
+
+Re-adding them to the default list would restore the false positives on
+standing contracts, so the fix is a `--strict` flag that adds the two tokens
+back for run artifacts:
+
+```
+$ ./check.sh --strict fixtures/fail-strict-run-readme.md
+fixtures/fail-strict-run-readme.md:3: <path>
+fixtures/fail-strict-run-readme.md:4: <lane>
+fixtures/fail-strict-run-readme.md:5: <path>
+FAIL: 3 unresolved placeholder hit(s)
+exit: 1
+```
+
+Why it stays opt-in, shown against a real contract: the same flag on the first
+pilot's lane contract exits 1 on prose notation, while the default exits 0.
+Run artifacts get `--strict`; standing contracts do not.
+
+Three pre-existing fixtures unchanged (1/1/0).

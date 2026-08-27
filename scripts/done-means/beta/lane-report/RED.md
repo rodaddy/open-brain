@@ -125,3 +125,66 @@ The first RED attempt returned `126 permission denied` for every fixture:
 the file was created without the exec bit. `chmod +x check.sh` fixed it and
 the run above is the corrected one. Recorded because a 126 is neither a
 pass nor one of the three legal exits — it is the harness not running at all.
+
+## 2026-08-27 adversarial review — prose satisfied `verified:`, and `:` was a value
+
+Two false greens, both exit 0 on reports that assert nothing.
+
+**Clause 5 accepted a sentence.** It required only that the text after `->`
+CONTAIN `exit <digits>` and that something precede the arrow, so an entirely
+fictional line passed:
+
+```
+$ ./check.sh fixtures/fail-clause5-prose-exit.txt
+lane report valid: 5 fields, all clauses passed
+exit: 0
+```
+
+The offending value is `verified:      I thought about it -> the docs say a
+good run should exit 0 someday`. The result must now OPEN with the exit code
+(`/^\s*exit\s+[0-9]+/`). This remains SHAPE only — the README's standing limit
+that the clause cannot know a command ran is unchanged — but a sentence is no
+longer a receipt.
+
+**Clause 2 counted punctuation as content.** `nonEmpty` was `trim() !== ""`,
+so a bare `:` filled a field:
+
+```
+$ ./check.sh fixtures/fail-clause2-colon-value.txt
+lane report valid: 5 fields, all clauses passed
+exit: 0
+```
+
+deliverable, deviations and lessons were each `:`. A value now needs at least
+one alphanumeric character. Both fixtures exit 1.
+
+Regression: all eight pre-existing fixtures hold (3/1/1/1/1/1/1/0). CRLF input
+was already handled and is now pinned by `fixtures/pass-crlf.txt` (exit 0).
+Checked against the two REAL pilot lane reports on disk, both still exit 0, so
+the tightening does not reject legitimate lane output.
+
+## 2026-08-27 adversarial review — three more, one a repaired fix that still leaked
+
+**F4, the morning fix was incomplete.** Requiring the result to OPEN with the
+exit code stopped the original prose case but not this one:
+
+```
+verified:      I thought about it -> exit 0 someday, i never ran it
+exit: 0
+```
+
+It opens with `exit 0` and then admits it never ran. What may follow the code
+is a short factual tail; a hedging clause now fails the line.
+
+**F5, title case slipped the banned-word scan.** The scan matched all-caps runs
+only, so `claim-states: a: WRITTEN, feature is Done and Deployed` passed while
+`DONE` failed. Title-case completion words are now rejected by name, pointing
+at the four-state grammar.
+
+**F6, indented content rode along after the report.** Clause 3 exempted
+indented lines as continuations, so a three-space-indented narrative paragraph
+after `lessons: none` was absorbed silently. Anything after the lessons value
+is trailing content now, indented or not.
+
+Eleven fixtures hold. Both REAL pilot lane reports still exit 0, so the three
+tightenings do not reject legitimate lane output.

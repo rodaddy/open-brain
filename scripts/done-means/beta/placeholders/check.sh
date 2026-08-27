@@ -9,6 +9,7 @@
 set -u
 
 ALLOW_LIST=""
+STRICT=0
 FILES=""
 SEP=""
 
@@ -23,8 +24,12 @@ while [ $# -gt 0 ]; do
 "
       shift 2
       ;;
+    --strict)
+      STRICT=1
+      shift
+      ;;
     -h|--help)
-      echo "usage: check.sh [--allow <literal>]... <file>..."
+      echo "usage: check.sh [--allow <literal>]... [--strict] <file>..."
       exit 0
       ;;
     --)
@@ -68,7 +73,7 @@ IFS='
 '
 set -f
 # shellcheck disable=SC2086
-OUTPUT=`PH_ALLOW="$ALLOW_LIST" awk '
+OUTPUT=`PH_ALLOW="$ALLOW_LIST" PH_STRICT="$STRICT" awk '
   BEGIN {
     n = 0
     lit[++n] = "REPLACE_"
@@ -82,6 +87,16 @@ OUTPUT=`PH_ALLOW="$ALLOW_LIST" awk '
     lit[++n] = "TODO-FILL"
     lit[++n] = "FILL ME"
     lit[++n] = "FILLME"
+    # --strict adds the two tokens the default list drops. They are ordinary
+    # notation in a standing contract (Done-means: <path>, _archive/<lane>/),
+    # which is why they are not default -- but an INSTANTIATED run artifact
+    # that still carries them is exactly the unresolved scaffold this check
+    # exists to catch, and without them it passed clean (adversarial review
+    # fixture p1-removed-tokens.md, 2026-08-27).
+    if (ENVIRON["PH_STRICT"] == "1") {
+      lit[++n] = "<path>"
+      lit[++n] = "<lane>"
+    }
     nlit = n
     na = split(ENVIRON["PH_ALLOW"], atmp, "\n")
     for (i = 1; i <= na; i++) if (atmp[i] != "") allowed[atmp[i]] = 1

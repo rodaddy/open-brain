@@ -62,8 +62,30 @@ const section: string = process.argv[5] || "";
 
 const lines: string[] = text.split("\n");
 
+// Lines inside a fenced code block, by line index. A ledger file that
+// DOCUMENTS the nine-column format in a fenced example would otherwise have
+// that example judged as its ledger — the doctor read a specimen and reported
+// on it as if it were the real thing (adversarial review fixture
+// fence-only.md, 2026-08-27). Fences are tracked once, here, because all four
+// table-selection paths go through tableHeaderAt.
+const fenced: boolean[] = (function (): boolean[] {
+  const out: boolean[] = [];
+  let inFence: boolean = false;
+  for (let i = 0; i < lines.length; i++) {
+    const t: string = lines[i].trim();
+    if (t.slice(0, 3) === "```" || t.slice(0, 3) === "~~~") {
+      inFence = !inFence;
+      out.push(true);
+      continue;
+    }
+    out.push(inFence);
+  }
+  return out;
+})();
+
 // A table header is a line with a pipe that is neither blank nor a separator row.
 function tableHeaderAt(i: number): string[] | null {
+  if (fenced[i]) return null;
   if (lines[i].indexOf("|") === -1) return null;
   const cells: string[] = splitRow(lines[i]);
   if (cells.length < 2 || isSeparator(cells)) return null;
@@ -86,12 +108,18 @@ let selectedVia: string = "";
 if (section !== "") {
   const want: string = section.trim();
   let hIdx: number = -1;
+  // The heading search skips fenced lines for the same reason tableHeaderAt
+  // does. Guarding only the table lookup left a hole: a `## Ledger` inside a
+  // code fence won the heading match, and the real ledger below it became
+  // unreachable (adversarial review F2, 2026-08-27).
   for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
     if (lines[i].trim() === want) { hIdx = i; break; }
   }
   if (hIdx === -1) harness("no heading " + section);
   const level: number = headingLevel(lines[hIdx]);
   for (let i = hIdx + 1; i < lines.length; i++) {
+    if (fenced[i]) continue;
     const lv: number = headingLevel(lines[i]);
     if (lv > 0 && level > 0 && lv <= level) break;
     if (tableHeaderAt(i)) { headerIdx = i; break; }
@@ -137,6 +165,9 @@ if (!schemaOk) {
 const rows: Row[] = [];
 for (let i = headerIdx + 1; i < lines.length; i++) {
   const raw: string = lines[i];
+  // A fence opening after the header ends the table; rows inside a fenced
+  // example are not this ledger's rows.
+  if (fenced[i]) break;
   if (raw.indexOf("|") === -1) {
     if (raw.trim() === "") continue;
     break;
@@ -153,12 +184,22 @@ if (rows.length === 0) harness("table found but it has no data rows: " + path);
 
 function id(r: Row): string { return isNaN(r.num) ? "@line" + r.line : String(r.num); }
 
+// A row may not supersede ITSELF. Self-reference was a false-green: clause 2
+// asks whether a live RATIFIED row "is referenced by another row's Supersedes",
+// so two contradictory rows that each cited their own number both looked
+// superseded and the conflict went unreported (adversarial review fixture
+// self-supersedes.md, 2026-08-27). Self-references are excluded here and
+// failed by clause 5 below.
 const superseded: string[] = [];
 for (const r of rows) {
   const s: string = r.cells[7];
   if (s !== "") {
     const refs: string[] = s.split(/[,\s]+/).filter(function (x) { return x !== ""; });
-    for (const ref of refs) superseded.push(ref.replace(/^#/, ""));
+    for (const ref of refs) {
+      const n: string = ref.replace(/^#/, "");
+      if (n === String(r.num)) continue;
+      superseded.push(n);
+    }
   }
 }
 
@@ -186,6 +227,10 @@ for (const r of rows) {
     const refs: string[] = sup.split(/[,\s]+/).filter(function (x) { return x !== ""; });
     for (const ref of refs) {
       const n: string = ref.replace(/^#/, "");
+      if (n === String(r.num)) {
+        failures.push("FAIL supersedes row " + id(r) + ": supersedes itself; a row cannot be its own superseder");
+        continue;
+      }
       let found: boolean = false;
       for (const o of rows) { if (String(o.num) === n) { found = true; break; } }
       if (!found) {
@@ -196,15 +241,22 @@ for (const r of rows) {
   // Clause 6.
   if (retires !== "") {
     if (!gitOk) harness("clause 6 needs git evidence and none was available");
+    // The evidence must name THIS retire, not merely prove that some
+    // done-means file was touched. Accepting any path under
+    // scripts/done-means/ let one unrelated touch launder every Retires row in
+    // the ledger at once (adversarial review F1, 2026-08-27) -- precisely the
+    // false green this clause exists to prevent. A changed path now counts
+    // only when it IS the named path, or ends with the named path's basename.
+    const retiredBase: string = retires.slice(retires.lastIndexOf("/") + 1);
     let evidence: boolean = false;
     for (const p of gitPaths) {
-      if (p.indexOf("scripts/done-means/") === 0 || p.indexOf("/scripts/done-means/") !== -1) { evidence = true; break; }
       if (p === retires) { evidence = true; break; }
+      if (retiredBase !== "" && p.slice(p.lastIndexOf("/") + 1) === retiredBase) { evidence = true; break; }
     }
     if (!evidence) {
       failures.push(
         "FAIL retire-without-check row " + id(r) + ": Retires=\"" + retires +
-        "\" but no changed path is under scripts/done-means/ nor equal to that path (" +
+        "\" but no changed path is that path or ends with \"" + retiredBase + "\" (" +
         gitPaths.length + " changed paths examined)"
       );
     }

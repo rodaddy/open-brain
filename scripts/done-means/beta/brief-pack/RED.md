@@ -332,3 +332,105 @@ exit criteria ask for. Outputs kept beside the earlier ones:
 
 Originals re-run after the change: `lane-contract.fixture.md` EXIT=0,
 `derived-dir/lane-contract.md` EXIT=0.
+
+### 17. RED — a Tightenings section in an unrecognised shape packed as (none)
+
+The mirror of case 15: there, heading entries were invisible; here, entries in
+NEITHER supported shape are invisible and the packer shipped a brief anyway.
+The fixture's section holds three real rules as plain bullets, one of them
+literally "A check that exits 0 having examined nothing is not a pass":
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/harness-unrecognised-shape.fixture.md \
+    --done-means fixtures/done-means.fixture.sh
+## Tightenings (ranked)
+
+(none)
+EXIT=0
+```
+
+A brief that omits every standing rule while reporting success is worse than a
+refusal, because the lane reads it as the complete contract. brief-pack now
+carries the same vacuous-green guard as ratchet-bound:
+
+```
+HARNESS ERROR: 0 Tightenings entries recognized in a non-empty section (3
+content lines); entries must open with "- **YYYY-MM-DD" or "### YYYY-MM-DD"
+EXIT=3
+```
+
+A genuinely empty or whitespace-only section still packs at exit 0 — the guard
+counts content lines, ignoring blanks and HTML comments.
+
+Regression: over-budget 1, missing --done-means 3, no-Tightenings 3, default 0,
+derived-dir 0, heading-shaped 0. Both REAL pilot contracts unchanged: the first
+still refuses OVER BUDGET (exit 1), the second still packs at 2740/8000
+(exit 0).
+
+## Case 18 — an unknown flag and a zero cap both shipped a hollow brief at exit 0
+
+Two ways to get a brief that examined almost nothing while reporting success,
+found by adversarial review 2026-08-27. Both are argument-level, so neither
+touched the vacuous-green guard added in case 17.
+
+A misspelled flag was stored in the options map under its own wrong name and
+then never read, so the run silently used every default. A misspelled budget is
+the worst case: the operator believes they capped the brief at 800 tokens and
+gets 8000.
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/lane-contract.fixture.md \
+    --done-means fixtures/done-means.fixture.sh \
+    --budget-token 800
+EXIT=0        # full 8000-token default brief, no warning
+```
+
+A cap of zero packed the literal string "(none)" under every ranked section and
+still exited 0 — the same hollow brief the guard exists to refuse, reached
+through a flag instead of an empty section. A negative cap was quieter and
+worse: `slice(0, -1)` is not an error in JavaScript, it drops exactly the last
+element, so `--max-tightenings -1` shipped 11 of 12 entries and looked like an
+ordinary pass.
+
+```
+$ bash pack.sh ... --max-tightenings 0
+## Tightenings (ranked)
+
+(none)
+EXIT=0
+
+$ bash pack.sh ... --max-tightenings -1
+EXIT=0        # 11 of 12 entries, silently
+```
+
+After the fix, the argument parser rejects an unrecognised flag by name and
+bounds the three numeric options:
+
+```
+$ bash pack.sh ... --budget-token 800
+HARNESS ERROR: unknown flag --budget-token; known flags are --task
+--lane-contract --done-means --controller-contract --decisions --loop-policy
+--budget-tokens --max-tightenings --max-decisions --report-heading --out
+EXIT=3
+
+$ bash pack.sh ... --max-tightenings 0
+HARNESS ERROR: --max-tightenings must be at least 1, got 0
+EXIT=3
+
+$ bash pack.sh ... --max-tightenings -1
+HARNESS ERROR: --max-tightenings must be at least 1, got -1
+EXIT=3
+```
+
+`--max-decisions 0` stays legal and exits 0: a brief with no Decisions section
+is a real shape, unlike a brief with no Tightenings.
+
+Regression, 14 cases: unknown flag 3, max-t 0 3, max-t -1 3, max-d -1 3,
+max-d 0 legal 0, max-t 1 legal 0, plain 0, no-tightenings 3, budget-10 1,
+ctrl-no-report 3, decisions 0, loop-policy 0, heading variant 0, unrecognised
+shape 3. All three REAL lane contracts re-run: Development packs at exit 0,
+software-factory packs at exit 0, open-brain still refuses OVER BUDGET at
+exit 1 (8229 > 8000) because it carries 45 live Tightenings against its own
+bound of 15 — a harvest backlog, not a brief-pack defect.

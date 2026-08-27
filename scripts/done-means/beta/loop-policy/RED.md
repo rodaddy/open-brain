@@ -117,3 +117,58 @@ $ /opt/homebrew/opt/node@24/bin/node --test test/snippet.test.js
 ℹ pass 7
 ℹ fail 0
 ```
+
+## 2026-08-27 adversarial review — CRLF hid the section
+
+The passing fixture converted to CRLF failed, because the anchored
+`^##[ \t]+Loop policy[ \t]*$` match cannot see past a trailing `\r`:
+
+```
+$ ./check.sh fixtures/pass-crlf.md
+FAIL section: no "## Loop policy" heading
+exit: 1
+```
+
+A dispatch plan that HAS a complete loop policy was reported as having none.
+Same one-line fix as ratchet-bound, `sub(/\r$/, "", line)` at the awk entry:
+
+```
+$ ./check.sh fixtures/pass-crlf.md
+exit: 0
+```
+
+Seven pre-existing fixtures unchanged (3/1/1/1/1/1/0). Kept as
+`fixtures/pass-crlf.md`.
+
+## 2026-08-27 adversarial review — the on_exhaust rule was defeated three ways
+
+All three exit 0 while describing exactly the behaviour the rule forbids.
+
+**F1, duplicated key.** The awk store is last-write-wins, so a block carrying
+`on_exhaust` twice never rule-checked the first value. The first said "retry
+the whole thing from scratch":
+
+```
+$ ./check.sh fixtures/fail-duplicate-key.md
+exit: 0
+```
+
+A repeated top-level key is now a failure in its own right.
+
+**F2, punctuation evasion.** The test was a bare `/retry/` substring, so a
+hyphen defeated it: `on_exhaust: park, then re-try tomorrow` passed. Separators
+are now stripped before matching.
+
+**F3, paraphrase.** `on_exhaust: park then loop again from the top` contains no
+form of the token at all and passed. A list of paraphrases (try again, loop
+again, start over, from scratch, restart, another pass, ...) is matched too.
+
+After:
+
+```
+FAIL on_exhaust: key appears more than once; ...              exit: 1
+FAIL on_exhaust: must not say retry (punctuation does not evade it) exit: 1
+FAIL on_exhaust: describes looping again ("park then loop again from the top") exit: 1
+```
+
+Eight pre-existing fixtures hold (3/1/1/1/1/1/0/0).

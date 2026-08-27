@@ -103,6 +103,16 @@ recorded before the README was written. To reproduce:
 
 ## Known limits
 
+- Fenced lines never contribute to an entry body, so a fenced example
+  containing `graduated:` or `provenance:` cannot change an entry's
+  classification. It previously bought a free slot under the bound (RED.md,
+  2026-08-27). Fence markers still count as section content for the
+  vacuous-green guard.
+- HTML comment state is tracked across lines, so a multi-line comment does not
+  count as content. A section of only blank lines and comments passes.
+- CRLF input is handled: the awk strips a trailing `\r` before every match.
+  Before that fix a CRLF contract reported its `## Tightenings` section
+  ABSENT (RED.md, 2026-08-27).
 - Markdown-shape, not semantics. It cannot tell a real provenance reference
   from the literal string `provenance:` in prose, nor verify that a
   `graduated:` entry's named done-means check exists.

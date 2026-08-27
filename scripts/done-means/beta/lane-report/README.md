@@ -79,11 +79,22 @@ Token estimates anywhere in this lane use `ceil(chars / 4)`.
   to hold `<artifact>: <STATE>` pairs, so this is a deliberate false
   positive rather than a miss — but it is the clause most likely to need
   loosening against real reports.
-- Continuation lines are detected by leading whitespace only. A wrapped
-  value flush against column 0 is read as a new key if it happens to start
-  with a known key name and a colon, and as trailing content after
-  `lessons:` otherwise.
+- Continuation lines are detected by leading whitespace only, EXCEPT after
+  `lessons:` — anything non-blank there is trailing content, indented or not,
+  because the exemption let an indented narrative paragraph ride along after
+  the report (RED.md, 2026-08-27). A multi-line lesson goes on the lessons
+  line itself.
+- The `claim-states` scan also rejects title-case completion words (Done,
+  Deployed, Fixed, Complete, Verified, ...) by name. The all-caps scan alone
+  missed them, so "feature is Done and Deployed" asserted a state above the
+  grammar and passed. Still a word list, not semantics.
 - Key detection is exact-match on the five names, so a typo
   (`deliverables:`) surfaces as a missing field rather than a misspelled
   one.
-- The `verified` clause checks shape, not that the command was ever run.
+- The `verified` clause checks shape, not that the command was ever run. The
+  result must OPEN with `exit <digits>` and must not hedge: opening with the
+  code was still not enough, because "exit 0 someday, i never ran it" passed
+  (RED.md, 2026-08-27). A short factual tail after the code is fine.
+- A value must contain at least one alphanumeric character. Punctuation alone
+  (a bare `:`) used to count as a filled field.
+- CRLF input is handled; `fixtures/pass-crlf.txt` pins it.

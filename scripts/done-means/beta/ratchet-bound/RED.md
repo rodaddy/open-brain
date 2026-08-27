@@ -210,3 +210,77 @@ Reported as observed, not corrected. Three facts for the pilot to rule on:
 3. **`source=default`.** The section states its own bound in prose ("Bounded at
    15 live entries" is absent; the section opens with "Newest first"), so the
    check fell back to the built-in 15 rather than reading a declared valve.
+
+## 2026-08-27 adversarial review — CRLF blinded the check entirely
+
+A review lane's fixture `a1-crlf-16-live.md` is a valid lane contract with a
+`## Tightenings` section and 16 live entries, saved with CRLF line endings.
+Every anchored awk match failed against the trailing `\r`, so the section was
+never entered and the check reported the section MISSING:
+
+```
+$ ./check.sh fixtures/fail-crlf-16-live.md
+ABSENT: ## Tightenings in fixtures/fail-crlf-16-live.md
+exit: 1
+```
+
+That is worse than an undercount. It is exit 1 for the wrong reason, and the
+same input on a repo whose contract had no bound problem would have read as a
+missing-section failure nobody could explain. `sub(/\r$/, "", line)` at the
+awk entry point fixes it; every clause reads `line`, so one strip covers all.
+
+```
+$ ./check.sh fixtures/fail-crlf-16-live.md
+FAIL bound: 16 live > 15
+live=16 graduated=0 bound=15 source=default shape=bullet
+exit: 1
+```
+
+Now failing on the real reason. All ten pre-existing fixtures hold their exit
+codes (1/1/1/1/3/0/0/0/0/0). Kept as `fixtures/fail-crlf-16-live.md`.
+
+## 2026-08-27 adversarial review — a fenced example bought bound headroom
+
+The worst class: exit 0 on a contract that is over its bound.
+
+An entry body accumulated every line, fenced ones included, and `flush_entry`
+then searched that whole text for `graduated:`. So an entry that DOCUMENTS how
+to graduate, inside a code fence, reclassified itself as graduated and freed a
+slot under the bound:
+
+```
+$ ./check.sh fixtures/fail-16-live.md   # with one entry carrying a fenced example
+live=15 graduated=1 bound=15 source=default shape=bullet
+exit: 0
+```
+
+Sixteen real live entries, reported as fifteen, passing a bound of fifteen.
+Fenced lines are now excluded from entry text entirely (they still count as
+content for the vacuous-green guard, which is about the section, not the
+classification):
+
+```
+live=16 graduated=0 bound=15 source=default shape=bullet
+FAIL bound: 16 live > 15
+exit: 1
+```
+
+## 2026-08-27 adversarial review — a multi-line comment tripped the guard
+
+README rule 7 says a section of only blank lines and comments passes. Only the
+opening `<!--` and closing `-->` lines were excluded from the content count, so
+the BODY of a multi-line comment counted and the vacuous-green guard fired on a
+section that was legitimately empty:
+
+```
+$ ./check.sh fixtures/pass-empty.md   # variant carrying a 3-line comment
+HARNESS: 0 entries recognized in a non-empty ## Tightenings section (1 content lines)
+exit: 3
+```
+
+Comment state is now tracked across lines. Both forms pass at exit 0, and the
+guard still fires on real content in an unrecognised shape (exit 3).
+
+Regression after both fixes: eleven fixtures hold (1/1/1/1/1/3/0/0/0/0/0). Both
+REAL pilot contracts report unchanged counts — 45 live heading-shaped, and 10
+live bullet-shaped.

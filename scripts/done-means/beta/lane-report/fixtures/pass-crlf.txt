@@ -1,0 +1,5 @@
+deliverable:   a thing
+claim-states:  thing: WRITTEN
+verified:      cmd -> exit 0
+deviations:    none
+lessons:       none
