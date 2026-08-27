@@ -316,6 +316,21 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "deriveGraphFromMetadata stale-edge prune (live Postgres)",
     minTests: 1,
   },
+  // The agent_context_pack guidance + repo_facts proofs (#878), registered as
+  // that file stopped skipping itself. The sibling fake-pool suite supplies its
+  // own rows, so only these live cases evaluate the ::float8
+  // candidate_confidence cast, the candidate_scope.key JSON path, and the exact
+  // repo + namespace binds. Split by subject in #878 -- the two section loaders,
+  // then the pack's citation/non-fallback output contract -- so both halves are
+  // named here; registering one would let the other vanish unnoticed.
+  {
+    name: "agent_context_pack guidance + repo_facts (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "agent_context_pack citations + non-fallback (live Postgres)",
+    minTests: 2,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -351,9 +366,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // namespace isolation negative matrix suite's 2 as that suite stopped skipping
 // itself, then 240 -> 241 when #878 registered the maintenance sweep
 // idempotency suite's 1, then 241 -> 245 when #878 registered the three
-// graph-derivation suites' 1 + 2 + 1), so the global floor cannot silently
-// fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 245;
+// graph-derivation suites' 1 + 2 + 1, then 245 -> 249 when #878 registered the
+// two subject-split agent_context_pack guidance/repo_facts suites' 2 + 2 as
+// that file stopped skipping itself), so the global floor cannot silently fall
+// behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 249;
 
 export interface SuiteStats {
   tests: number;
