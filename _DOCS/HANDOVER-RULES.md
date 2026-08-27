@@ -316,3 +316,14 @@ only when a session actually needed it.
     `git grep -l 'describe.skip\|skipIf' origin/main -- '*.test.ts'` and
     read each hit; a comment mentioning the old guard is fine, a live
     `dbDescribe` is a lane.
+47. **The authoring session drains.** Sessions 3-8 each wrote cleanup into
+    the handover for the next session and none ran it: on
+    2026-08-27 origin carried 31 merged branches and eleven lane clones sat
+    on stale branches with stashes. Before writing State 2, run
+    `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/handover-author/scripts/check-drained.sh .`
+    until it exits 0: merged branches deleted on origin and in every clone
+    under `_worktrees/`, stashes dropped after their patch is archived under
+    `_archive/`, unmerged work landed or parked as a doc, no registered
+    worktree. `scripts/done-means/handover-validates.sh` runs the same check,
+    so a handover PR cannot merge while anything is left behind. A handover
+    never names cleanup for the next session.

@@ -2,16 +2,17 @@
 
 ## State 0 — BASE
 Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
-(181 lines). It is the standing contract for this session.
+(183 lines). It is the standing contract for this session.
 - Any question this document does not directly override → the rules layers
   answer it, nearest layer first.
 - Anything neither the base nor this document covers → ask Rico before acting.
 - Output discipline: minimum verbosity, only the context needed, output tokens
   low. If Rico wants more, he will ask.
-- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (318 lines on
-  this branch). It overrides the base; this document overrides it. Rules 28-46
+- Layer 0.1: read open-brain/_DOCS/HANDOVER-RULES.md in full (329 lines on
+  this branch). It overrides the base; this document overrides it. Rules 28-47
   bind: head never works, own clones, FIVE lanes, no `rm`, no `--no-verify`,
-  manifest in the same commit, one rebase lane per PR, census by command.
+  manifest in the same commit, one rebase lane per PR, census by command, the
+  authoring session drains.
 
 ## State 1 — ORIENT
 - `origin/main` is `692900a2` (#919); session 8 merged #893-#919 — MERGED (`git log --oneline origin/main -1`)
@@ -27,10 +28,9 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 - #889 lease race CLOSED (#899); #912 drop time and #915 runner PG 17 OPEN,
   runner-side; #916 wall-clock test OPEN — RUNNING (`gh issue list --state open`)
 - #888 Forge migration is a planning item, not a build order — RUNNING (`gh issue view 888`)
-- Lane-7 `stash@{0}` (superseded by #873) and lane-8 `stash@{0}` (superseded by
-  #906-#908) await Rico's drop — RUNNING (`git -C <clone> stash list`)
-- Mac checkout `/Volumes/ThunderBolt/Development/open-brain` is DIRTY on
-  `sprint/standards-fmt` (Rico's); lanes never work there — RUNNING
+- Drained 2026-08-27: origin holds only `main` and the two open-PR heads, the
+  Mac checkout is clean on `main`, the eleven lane clones are detached at
+  `origin/main` with no stash — RUNNING (`check-drained.sh .` exits 0)
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session7/{lane,recon,git}.workflow.js`, `collect.sh` — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`)
 Re-probe before dispatching anything (live state beats this doc):
@@ -42,10 +42,6 @@ Re-probe before dispatching anything (live state beats this doc):
 Branch: `docs/pg-tests-session9` from `origin/main` — cut it once THIS
 document's PR merges; if the checkout is `main` or `docs/pg-tests-session8` is
 merged, switch first, never work there.
-Retire: `docs/pg-tests-session8` (this document's PR); lane clones 1-6, 9, 10
-sit on merged `chore/878-*` / `feat/904-*` branches (`git switch --detach
-origin/main` then `git branch -d`); lane-6 is detached already. Worktrees:
-`none`.
 Commit this handover: branch `docs/pg-tests-session8`, path
 `_DOCS/_handover/2026-08-27-pg-tests-session9.md` with `_DOCS/HANDOVER-RULES.md`,
 explicit-path staging, `git commit -F` message file. Done by the authoring session.
@@ -107,7 +103,7 @@ Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 - Q1, since session 3: `.claude/agents/tracking-scribe.md` writes ONLY to the root checkout (Rico's dirty branch); sessions 3-8 scribed via comments — Rico's call.
 - Q2: `server/main.ts` reads `process.env` under the door override; moving them into `server/config.ts` is Rico's decision.
 - Q5: `node/no-process-env` is scoped to `server/**`; 19 `src/` files still read env and retire at L6 — Rico confirms the scope.
-- Q7: lane-7 and lane-8 `stash@{0}` are superseded; dropping them is Rico's, not a lane's.
 - Q8: #888 Forge migration — Rico decides when planning starts and whether it displaces #878 work.
 - #915: the self-hosted `check` runner's PostgreSQL 17 versus the stack's 18 is a runner change (Rico's); `scripts/local-clone.test.ts` asserts `>= 17` until then.
 - Parked: dev#98 hook-env crossing checkpoint, `_DOCS/_parked/dev98-hook-env-crossing.md` (patch embedded, test fails at :326 on main); resume or drop is Rico's call.
+- `.qmd/index.yml`: every `aqmd up` rewrites its three `models:` lines from the committed hf paths to `https://llama-swap.rodaddy.live/v1#...`, so the checkout reads dirty after each wrap; committing the fleet endpoints or ignoring the file is Rico's call.
