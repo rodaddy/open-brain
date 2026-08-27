@@ -701,6 +701,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   Rows of uncertain provenance, user data, and anything outside a
   provably-test prefix stay report-only.
 
+
+graduated: bullet 1 -> docs/sme/entries/2026-08-08-a-prefix-scoped-sql-delete-of-provable-test-residue-is-the-lanes-to-run.md (domain-backend order 83), and the FILESYSTEM half stands unchanged as standing contract clause 7 (no rm, ever, anywhere).
+provenance: operator ruling 2026-08-08, ledger item 31 (docs/issue-graph.md); no PR.
 ### 2026-08-08 (round 25) — harvest of the #653 final-sync lane (clause-e residue edit)
 
 - **When a gate has no clause-level seam, EXTRACT the clause from the
@@ -734,6 +737,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   joined the enumeration) — the briefed "8" is stale; brief the observed
   number or brief "the enumerated set," not a count.
 
+
+graduated: bullets 1, 2, 3 and 4 -> docs/sme/entries/2026-08-08-extract-the-clause-from-the-real-file-by-markers-and-prove-the-prover.md (correctness order 84); bullet 5 -> docs/sme/entries/2026-08-08-pipestatus-outside-the-pipelines-shell-prints-empty-and-reads-as-exit-0.md (write message files in a separate call before a guarded command); bullet 7 -> docs/sme/entries/2026-08-08-pipestatus-outside-the-pipelines-shell-prints-empty-and-reads-as-exit-0.md (brief the enumerated set, never a count); bullet 6 -> history-only, bootstrap continuation mode's first real run, shipped by scripts/done-means/667-lane-bootstrap-continuation.sh; bullet 8 -> history-only, one design-lookup payback already covered by round 17's payback rule.
+provenance: PR #653 final-sync lane.
 ### 2026-08-08 (round 24) — harvest of the #671 verdict-channel lane (PR #673)
 
 - **A driver that implements a changing interface can silently repair the
@@ -769,6 +775,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   fabricating. "NOT OBSERVED — structurally cannot observe" is a
   complete, correct answer.
 
+
+graduated: bullets 1, 2 and 4 -> docs/sme/entries/2026-08-08-a-driver-that-implements-a-changing-interface-can-repair-the-defect-it-exposes.md (correctness order 85); bullet 3 -> the same entry's residue-reader corollary, enforced by scripts/done-means/671-teardown-verdict-residue.sh; bullets 5 and 6 -> docs/sme/entries/2026-08-08-pipestatus-outside-the-pipelines-shell-prints-empty-and-reads-as-exit-0.md (quality order 88); bullet 7 -> the round-24 entry's structurally-cannot-observe corollary, and standing contract clause 8 (report shape).
+provenance: PR #673.
 ### 2026-08-08 (round 23) — harvest of the #667 bootstrap-continuation lane
 
 - **A negative-match clause on a crashing subject can go green off the
@@ -793,6 +802,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   announced, not refused** — lane judgment call, flagged in PR #669's
   assumptions field; stands unless the operator overrules.
 
+
+graduated: bullets 1, 3 and 4 -> docs/sme/entries/2026-08-08-a-negative-match-clause-can-go-green-off-the-subjects-own-error-text.md (adversarial order 86); bullet 2 -> the same entry's summary-line corollary; bullet 5 -> history-only, a lane judgment call flagged in PR #669's assumptions field and never overruled.
+provenance: PRs #668, #669.
 ### 2026-08-08 (round 22) — harvest of the #666 transport-delegation lane
 
 - **When the defect is "what does X pass to the boundary," stub the
@@ -816,6 +828,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   after a 120s+ hang is did-not-run.** The two are distinguishable and
   must be treated differently (rounds 11/17/20 refined).
 
+
+graduated: bullets 1 and 2 -> docs/sme/entries/2026-08-08-stub-the-boundary-do-not-extract-a-helper-for-observability.md (correctness order 87), enforced by scripts/done-means/666-transport-delegates-namespace.sh; bullets 3 and 4 -> the same entry's empty-result corollary, and docs/sme/entries/2026-08-08-includes-on-a-raw-log-line-is-a-substring-match-and-every-superset-satisfies-it.md (empty after a timeout is did-not-run).
+provenance: PR #666 lane; issue #666.
 ### 2026-08-08 (round 21) — harvest of the #653 branch-sync lane
 
 - **`lane-bootstrap` refuses a continuation lane on an EXISTING BRANCH,
@@ -840,6 +855,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   credentials fully exercises the refusal branch with zero harvest risk;
   the credentialed leg stays with the controller-dispatched verifier.
 
+
+graduated: bullets 1 and 4 -> docs/sme/entries/2026-08-08-pipestatus-outside-the-pipelines-shell-prints-empty-and-reads-as-exit-0.md (quality order 88), with the continuation-mode half now shipped by scripts/done-means/667-lane-bootstrap-continuation.sh; bullet 2 -> the same entry's record-the-negative-results corollary; bullet 3 -> the same entry's opening pattern.
+provenance: PR #653 branch-sync lane.
 ### 2026-08-08 (round 20) — harvest of the #661 five-keys lane (PR #663) and the hold-at-RED escalation
 
 - **An issue generated from a tool's own output inherits that tool's
@@ -869,6 +887,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   `qmd search` direct (~1s) as the standing fallback; empty output after
   a timeout is did-not-run.
 
+
+graduated: bullets 1, 2, 3 and 5 -> docs/sme/entries/2026-08-08-an-issue-generated-from-a-tools-output-inherits-that-tools-classification-errors.md (adversarial order 89), enforced by scripts/done-means/661-launcher-honors-six-keys.sh; bullet 4 -> docs/sme/entries/2026-08-08-includes-on-a-raw-log-line-is-a-substring-match-and-every-superset-satisfies-it.md (the two-runs-same-SHA corollary), with the collision itself filed as #665; bullet 6 -> the same entry's empty-after-a-timeout corollary.
+provenance: PR #663; operator ruling 29.2a.
 ### 2026-08-08 (round 19) — harvest of the #662 validator lane (PR #664) and the #653 credentialed verify
 
 - **A guard written as "key present AND value wrong" leaves the absent
@@ -906,6 +927,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   red gate as a broken gate; the verifier proved the fixed defects fixed
   (re-ran their checks live) before attributing the new failure.
 
+
+graduated: bullets 1, 2 and 3 -> docs/sme/entries/2026-08-08-a-guard-written-as-present-and-wrong-leaves-the-absent-branch-unguarded.md (security order 90), enforced by scripts/done-means/662-absent-namespace-scope-proof.sh; bullet 4 -> the same entry's rg -r corollary, and docs/sme/entries/2026-08-08-lane-tooling-gotchas-the-shell-the-validator-and-the-worktree.md; bullet 5 -> docs/sme/entries/2026-08-08-pipestatus-outside-the-pipelines-shell-prints-empty-and-reads-as-exit-0.md; bullets 6 and 7 -> the round-19 entry's gate-that-keeps-failing corollary.
+provenance: PR #664; the #653 credentialed verify.
 ### 2026-08-08 (round 18) — harvest of the #659 launcher-env lane (PR #660) and the controller-side discovery
 
 - **A revision proof is not a feature-live proof.** The clone redeploy
@@ -952,6 +976,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   otherwise-correct compound commands — which is exactly why the ban is
   unconditional and why `2>/dev/null` on cleanup steps deserves suspicion.
 
+
+graduated: bullets 1, 2, 3, 4, 5, 6 and 7 -> docs/sme/entries/2026-08-08-a-revision-proof-is-not-a-feature-live-proof.md (domain-backend order 91), enforced by scripts/done-means/659-launcher-env-passthrough.sh; bullet 8 -> the same entry's self-reported-violation section, and standing contract clause 7 (no rm, ever, anywhere) plus clause 8 (self-reported violations are harvested, never punished).
+provenance: PR #660.
 ### 2026-08-08 (round 17) — harvest of the #656 observer-wiring lane
 
 - **`includes("<event_name>")` on a raw log line is a substring match, and
@@ -981,6 +1008,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   so every PR gets this two-runs-same-SHA comparison for free; use it
   before concluding branch defect.
 
+
+graduated: bullets 1 and 2 -> docs/sme/entries/2026-08-08-includes-on-a-raw-log-line-is-a-substring-match-and-every-superset-satisfies-it.md (correctness order 92), enforced by scripts/done-means/656-capture-observer-wired.sh; bullets 3, 4 and 5 -> the same entry's payback, timeout, and two-runs-same-SHA corollaries.
+provenance: #656 observer-wiring lane.
 ### 2026-08-08 (round 16) — harvest of the #655 eval-teardown lane
 
 - **A teardown that reports success is not evidence of removal.** The RED
@@ -1004,6 +1034,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   and make a correct denial look spurious. Gate working as designed; know
   the shape before reporting it as a misfire.
 
+
+graduated: bullets 1, 3 and 4 -> docs/sme/entries/2026-08-08-red-by-breaking-the-import-is-a-false-red-use-a-skip-flag.md (correctness order 93), enforced by scripts/done-means/655-eval-teardown.sh; bullet 2 -> docs/sme/entries/2026-08-08-a-prefix-scoped-sql-delete-of-provable-test-residue-is-the-lanes-to-run.md (a namespace is an emergent property of its rows); bullet 5 -> the round-16 entry's session-scoped-window corollary.
+provenance: #655 eval-teardown lane.
 ### 2026-08-08 (round 15) — harvest of the #654 namespace-scope lane (PR #657) and its verify run
 
 - **A live-service check reads the SERVING process's credentials, never the
@@ -1036,6 +1069,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   (`recheck-head`). Any check whose RED lives on main and GREEN on the
   branch inherits this binding requirement.
 
+
+graduated: bullets 1, 2, 3, 4 and 5 -> docs/sme/entries/2026-08-08-a-live-service-check-reads-the-serving-processs-credentials.md (security order 94), enforced by scripts/done-means/654-namespace-scope-proof.sh; bullet 3 also -> ledger item 28 (identity-selecting config is required config, loud on absence).
+provenance: PR #657.
 ### 2026-08-08 (round 14) — harvest of the #652 capture-health composition lane
 
 - **A "compose it" lane must ask what the composer can actually SEE.** The
@@ -1064,6 +1100,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   same PR** — tsc found #648's `TransportCaptureHealth` declared but never
   barrel-exported; invisible until the first composer tried to import it.
 
+
+graduated: bullets 1, 2, 3 and 5 -> docs/sme/entries/2026-08-08-a-compose-it-lane-must-ask-what-the-composer-can-actually-see.md (domain-backend order 95), enforced by scripts/done-means/652-capture-health-composed.sh; bullet 4 -> the same entry's declare-your-own-gap corollary, and standing contract clause 5 (nothing silent).
+provenance: #652 capture-health composition lane.
 ### 2026-08-08 (round 13) — harvest of the #647 capture-liveness lane (PR #648)
 
 - **The design may already exist and simply never have been executed.** #647
@@ -1096,6 +1135,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   composition change ships. WRITTEN-not-RUNNING, stated in the PR rather
   than implied away.
 
+
+graduated: bullets 1, 3 and 4 -> docs/sme/entries/2026-08-08-ask-whether-the-design-already-exists-and-was-simply-never-run.md (quality order 96); bullet 2 -> docs/sme/entries/2026-08-08-a-top-level-await-driver-exits-0-when-it-throws-banking-a-false-green.md, already carried at order 67; bullets 5 and 6 -> the round-13 entry's gate-precision datapoints and its name-the-capability-state corollary.
+provenance: PR #648.
 ### 2026-08-08 (round 12) — harvest of the #646 provider-scope lane (PR #650)
 
 - **Verify which tree the process actually runs before reading source as
@@ -1127,6 +1169,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   on their next capture; no bulk repair was run, and the report says so —
   bulk-heal remains an operator option.
 
+
+graduated: bullets 1, 2, 3, 4 and 5 -> docs/sme/entries/2026-08-08-verify-which-tree-the-process-runs-before-reading-source-as-truth.md (domain-backend order 97), enforced by scripts/done-means/646-provider-scope.sh; bullets 6 and 7 -> the same entry's near-miss-discipline and lazy-heal corollaries, and standing contract clause 5 (nothing silent).
+provenance: PR #650.
 ### 2026-08-08 (round 11) — harvest of the #645 conflict lane, the ledger-25 retirement lane (PR #649), and the worker-48 pin failure
 
 - **A recorded ruling is not an implemented one, and the gap is invisible to
@@ -1171,6 +1216,9 @@ Newest first. Every entry: what changed, and the observation that forced it.
   variable in controller/verifier environments or teach the scripts the
   Development default.
 
+
+graduated: bullets 1, 3, 4, 5, 6 and 7 -> docs/sme/entries/2026-08-08-a-recorded-ruling-is-not-an-implemented-one-and-the-gap-is-invisible.md (gotcha-agent order 98), with the retirement half enforced by scripts/done-means/648-capture-gate-retired.sh; bullet 2 -> the same entry's model-pin corollary and _DOCS/MODEL_ROUTING.md (a worker launch pins its own model); bullet 8 -> the same entry's gate-defects section.
+provenance: PR #649; the #645 conflict lane; the worker-48 pin failure.
 ### 2026-08-08 (round 10) — harvest of the #636 neutrality-scrub lanes (PR #645, Sol + Claude continuation)
 
 - **A placeholder only neutralizes a value nothing compares to reality.** A

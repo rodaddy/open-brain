@@ -1129,3 +1129,63 @@ Any observability record that carries a session/user identity must derive it AFT
 ### Pattern
 
 A maintenance/dream/distill job that sweeps with `namespace IS NULL` touches every tenant; joining its trace to a job-supplied `session_key` renders all tenants' row identities and content inside one session's timeline — a namespace-isolation breach in the observability lane even though the data path is unchanged. Honour a job's session key only when the job is namespace-scoped; a global sweep emits no sessionId, and each observation stamps its own resolved namespace so cross-namespace evidence is visibly attributed. "No current enqueuer sets it" is not a defense — the job-row field is durable and the sweep is global by design.
+
+## [2026-08-08] A guard written as "present AND wrong" leaves the absent branch unguarded
+
+**Severity:** HIGH
+**Source:** PR #664 (#662 validator lane), the #653 credentialed verify, Tightenings round 19
+**Scope:** `src/` validators and scope guards; `scripts/done-means/662-absent-namespace-scope-proof.sh`
+**Status:** active
+
+### Pattern
+
+A guard spelled "key present AND value wrong" never runs for the ABSENT case — and the absent branch inherits the exact dead end the guard was added to remove. #654 and #662 are ONE defect on two sides of one `if`.
+
+### What to do
+
+- When a fix special-cases a key, ENUMERATE the key's states — present-correct, present-wrong, absent — and say in the check header which branch handles each. A state you cannot name is a state nothing guards.
+- **"The server always sends it" is not a reason to leave a validator's hostile-input branch dead-ended.** The lane object is the untrusted thing being validated. The dispatch's server-side hypothesis was reasonable and wrong; one live `tools/call` plus reading the column lists settled it in minutes. A lane rejects a briefed hypothesis ON EVIDENCE and writes the reasoning into the check header — never decides silently.
+- **Absence and mismatch need DIFFERENT messages, because only one has a remedy.** Reusing the delegation advice for the absent case would pass a naive "mentions namespace" assertion while remaining a dead end with more words. Clauses assert what the message SAYS, not that a message exists.
+
+### Corollary: `rg -r` is the REPLACE flag, not recursive
+
+It silently emits mangled replacement text that reads as a single real hit. It joins the `rg -E` family: the failure mode is a plausible-looking WRONG ANSWER, not an error, which is why neither is caught by checking the exit code.
+
+### Corollary: a gate that keeps failing on real defects is doing its job
+
+The #578 gate's first credentialed run found the THIRD live defect in the very path it composes (#654's absent-case sibling). Resist reading a red gate as a broken gate: the verifier re-ran the fixed defects' own checks live, proved them fixed, and only then attributed the new failure.
+
+Also observed: a per-run tally can UNDER-report entity creation — `attempted=1` while two namespaces appeared. Count the entities, not the attempts.
+
+## [2026-08-08] A live-service check reads the serving process's credentials, never the checkout's
+
+**Severity:** HIGH
+**Source:** PR #657 (#654 namespace-scope lane) and its verify run, Tightenings round 15
+**Scope:** `scripts/done-means/654-namespace-scope-proof.sh`, live-service clauses, `python/openbrain-memory` delegation
+**Status:** active
+
+### Pattern
+
+The repo `.env` has carried an empty `AUTH_TOKEN_ADMIN` since the #645 scrub, so a check built on it 401s BY DESIGN — and the transcript reads as a service fault.
+
+Round 12's which-tree-runs rule, extended to IDENTITY: name where the credential comes from in the check header, and refuse LOUDLY when it is absent instead of falling through to a misleading auth failure.
+
+### Corollary: a security control is unproven until something REQUESTS the dangerous thing
+
+The server role-gates `X-Namespace`, but the Python client had `delegate_namespace=False` hardcoded since #294 — the header was never sent, so the 403 path had NEVER executed in any run. A refusal branch that has never refused is decoration.
+
+The done-means now sends the forbidden request and asserts both the refusal (clause c) and that the refusal NAMES the actionable cause (clause d).
+
+### Corollary: silent-default identity is tenant mis-scope, not cosmetics
+
+With delegation hardcoded off, every delegated-intent session landed in namespace `admin` — a real cross-tenant landing, STRONGER than the issue as filed.
+
+Any config key that selects identity is REQUIRED config: loud on absence, never silently defaulted (ledger item 28).
+
+### Corollary: errors must name what the caller can change
+
+#646 (scope errors naming response vocabulary the validator rejects) and #654 (a silent wrong-namespace landing with no signal at all) are the same dead-end-error defect at different volumes. A refusal that does not name the acting cause, and a mis-scope that says nothing, both strand the caller. Checks assert the error TEXT, not just the status.
+
+### Corollary: a red anchor that inverts at the fix must be bound to the PR head
+
+Clause (a)'s PASS proves the fix ONLY because verify-lane pinned the worktree to the head SHA and re-read it after the run (`recheck-head`). Any check whose RED lives on main and whose GREEN lives on the branch inherits this binding requirement — without it, the inversion could come from either tree.

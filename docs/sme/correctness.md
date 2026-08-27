@@ -2179,3 +2179,138 @@ The second half compounded it. The wrong claim was made once from a bad search a
 - Verify "pre-existing" by stashing and re-running, not by asserting. The #609 full-suite differential applies cheaply at any scale.
 - An outage path is testable without an outage: a closed port in 7100-7199 yields a real connection refusal with no waiting and no wall-clock assertion. Reusable for any gate distinguishing unreachable from empty.
 - Wall-clock assertions (`toBeLessThan(1000)` ms) are CI flake generators — three runs produced three different unrelated timing failures, all proven main-owned via the #609 differential and filed (#632, #634) instead of absorbed.
+
+## [2026-08-08] Extract the clause from the real file by markers, and prove the prover
+
+**Severity:** HIGH
+**Source:** PR #653 final-sync lane (clause-e residue edit), Tightenings round 25
+**Scope:** `scripts/done-means/*.sh` and their `.driver.ts`; any check that exercises a fragment of a larger gate
+**Status:** active
+
+### Pattern
+
+When a gate has no clause-level seam, the tempting move is to retype the clause into the driver. A retyped copy proves the COPY. The gate can drift one character and the check keeps reporting on text nobody ships.
+
+Extract the clause from the real file by markers instead — and then the extractor becomes the new place a vacuous green hides.
+
+### What to do
+
+- **Extract, never retype.** Pull the clause out of the shipped file by START/END markers so the check reads the same bytes the gate runs.
+- **Fail hard on empty or unrecognisable extraction.** "0 lines extracted, all cases as expected" is a vacuous green: the extractor found nothing and the comparison loop ran zero times.
+- **Gate the END pattern on the state variable** (`on &&`). An END regex that also matches EARLIER than START turns the block off before it turns on, and silently yields nothing — the same vacuous green by a different route.
+- **Prove the prover.** "All cases behaved as expected" is a claim about the AUTHOR'S expectations until one deliberate driver mutation (`elif false`) makes the harness report MISMATCH. Until that run exists, an expectation table that agrees with itself is indistinguishable from one that compares nothing.
+
+### Corollary: zero has two meanings and a receipt has three worlds
+
+`rows=0` means both "clean" and "never looked." A companion `checked` field, read SEPARATELY, is mandatory.
+
+And a receipt MISSING the field entirely is a THIRD world that must ERROR, never default. Defaulting it means a stale pre-fix receipt — written before the field existed — silently satisfies the very clause added to read it.
+
+## [2026-08-08] A driver that implements a changing interface can repair the defect it exposes
+
+**Severity:** HIGH
+**Source:** PR #673 (#671 verdict-channel lane), Tightenings round 24
+**Scope:** `scripts/done-means/*.driver.ts` where the driver implements an interface the fix changes; residue and leak readers
+**Status:** active
+
+### Pattern
+
+The #671 driver returned only the POST-fix shape. Handed to the pre-fix gate, that object had no `failed` field, and `undefined > 0` is false — so the broken gate reported PASS and the RED was false.
+
+This is a new spelling of the false-RED family (round 18's broken import, round 22's env mutant): a CONTRACT-SHAPE mismatch that reads as legitimate green rather than as an error.
+
+### What to do
+
+- When a fix changes a driver-implemented signature, return BOTH shapes, and assert the RED went red for the defect's OWN reason — not merely that it went red.
+- **When a fix changes WHICH SIGNAL produces a failure, the control clause must assert the SIGNAL, not the outcome.** "Gate failed" was satisfied pre-fix by the old tally verdict, certifying a mechanism that did not exist yet. Round 9/17's negative-match family, extended.
+- **"Not observed" must fail closed.** A verdict moved onto a query inherits that query's failure modes; unchecked and partially-read readings both fail, or the false-red fix becomes a false-green one.
+
+### Corollary: a residue reader shares the remover's resource list
+
+A residue or leak reader must read the REMOVER'S list of tables, never a parallel copy. Two lists drift, and the drift fails GREEN: the table the purge stops clearing also stops being counted, so the leak becomes invisible at exactly the moment it starts.
+
+Enforce with a unit test asserting the reader names exactly the remover's tables.
+
+### Corollary: a lane that cannot see the live path says so
+
+The #671 lane was constrained away from the live path and could only observe its own stub label. It reported instrumentation shipped, not findings observed, and filed #672 for the real one. "NOT OBSERVED — structurally cannot observe" is a complete, correct answer; a fabricated observation is not.
+
+## [2026-08-08] Stub the boundary; do not extract a helper for observability
+
+**Severity:** HIGH
+**Source:** #666 transport-delegation lane, Tightenings round 22
+**Scope:** `scripts/done-means/*.sh` where the defect is "what does X pass across a boundary"; `src/transport.ts`, provider spawn paths
+**Status:** active
+
+### Pattern
+
+When the defect is "what does X pass to the boundary," extracting a helper (`buildProviderEnv()`) to make the value observable invents a SEAM, and the check then proves the seam instead of the real call site. That is the same gap class that let #655's stubbed green miss #666 entirely.
+
+Monkeypatch the BOUNDARY instead. The existing repo convention is `Bun.spawn` monkeypatching (`src/tools/__tests__/search-all.test.ts:85`): the SHIPPED method runs unmodified while the check reads what the real spawn actually received.
+
+### What to do
+
+- Stub at the boundary the code already crosses; do not create a new one for the check's convenience.
+- **A single-key presence assertion most needs a mutant, and an ENV-level mutant beats a source-level one.** Stripping the key from the OBSERVED env keeps RED regenerable forever with the fix in place — round 16's SKIP-flag idea in its env spelling.
+- Report what the mutant proves honestly: the clause reads that key and fails on its absence. Not more.
+
+### Corollary: an empty search result is neither permission nor a defect
+
+The design-lookup gate's window EXPIRES mid-lane by plain time decay — distinct from round 20's sibling-contention shape. Long lanes get gated twice on unrelated writes.
+
+When a legitimate lookup returns nothing, declare UNVERIFIED and source the convention elsewhere (`git log` is the standing fallback). And distinguish the two empties: fast-and-explicit "No results found" is a genuine miss, while empty output after a 120s+ hang is DID-NOT-RUN. Treating the second as the first is how a lane records a lookup it never performed.
+
+## [2026-08-08] `includes()` on a raw log line is a substring match, and every superset satisfies it
+
+**Severity:** HIGH
+**Source:** #656 observer-wiring lane, Tightenings round 17
+**Scope:** `scripts/done-means/656-capture-observer-wired.sh` and any clause reading structured logs as text
+**Status:** active
+
+### Pattern
+
+`includes("<event_name>")` against a raw log line matches every SUPERSET of that name. A renamed event (`x_MUTED`) kept two clauses green — the clause passed both when the notice existed AND when it had been renamed away.
+
+Round-9 negative-match family, new spelling.
+
+### What to do
+
+- Parse the line and compare the `msg` field for EQUALITY (`findEvent()`), then mutation-test the rename to prove the clause discriminates.
+- **A "loud on absence" claim asserts BOTH halves in ONE clause** — loud in the log AND quiet in the health verdict. Split into two clauses and each half passes for the wrong reason: silence-on-absence is the status quo, and a verdict-on-absence violates absence-is-not-staleness. Two audiences, one clause.
+
+### Corollary: record gate paybacks as deliberately as gate taxes
+
+The design-lookup gate fired on the exact edit where the lane was about to hand-roll shutdown teardown in a catch block. The surfaced doc showed `backgroundRuntimes` already owns ordered shutdown, and the delta collapsed to one runtime registration instead of a whole new mechanism.
+
+If only the TAXES get recorded, the ledger only ever argues for retirement.
+
+### Corollary: two CI runs of one identical SHA
+
+The `push` and `pull_request` workflows both run `check` on the same commit, so every PR gets a two-runs-same-SHA comparison for free. Use it before concluding a branch defect — #643's shape recurred and was settled this way.
+
+### Corollary: empty after a timeout is DID-NOT-RUN
+
+`aqmd search` returning EMPTY after a 120s+ timeout is worse than slow: it reads as "no results." Wrap it in `timeout` AND treat empty output as did-not-run; `qmd search` direct is the roughly one-second fallback.
+
+## [2026-08-08] RED by breaking the import is a false RED — use a SKIP flag
+
+**Severity:** HIGH
+**Source:** #655 eval-teardown lane, Tightenings round 16
+**Scope:** `scripts/done-means/655-eval-teardown.sh` and every check whose RED must stay regenerable after the fix ships
+**Status:** active
+
+### Pattern
+
+Moving a module aside to produce RED killed the driver AT IMPORT. Clause (a) measured nothing, and the transcript was indistinguishable from a real RED.
+
+A `SKIP_*` env flag reproduces the pre-fix world with everything else intact, and keeps RED regenerable FOREVER without deleting the fix.
+
+### What to do
+
+- Reproduce the pre-fix world by an env flag the shipped code reads, not by damaging the module graph.
+- **A guard needs a CANARY, not just an exception.** "Throws on a bad name" and "refuses BEFORE mutating" are different claims. Only planting a row under each refused name and checking it SURVIVES distinguishes them — an exception thrown after the mutation looks identical from the outside.
+- **Assert a row COUNT from OUTSIDE the run.** A teardown that reports success is not evidence of removal: the RED run showed `failed=0` while two rows leaked, because the tally is the thing under test and can never be its own proof.
+
+### Corollary: the design-lookup window is session-scoped, not lane-scoped
+
+A sibling CONCURRENT lane's lookup can occupy the recent-lookup window and make a correct denial look spurious. The gate is working as designed. Know the shape before reporting it as a misfire — a false gate-defect report costs the operator loop more than the denial cost the lane.
