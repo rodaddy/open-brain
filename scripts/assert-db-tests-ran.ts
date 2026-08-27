@@ -365,6 +365,18 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "get_entry compact render (live Postgres)",
     minTests: 1,
   },
+  // The ingest_conversation_facts tool test proves the write path and the
+  // isolation/concurrency behavior against real SQL. Split by subject in #878
+  // as that file stopped skipping itself, so both halves are named here;
+  // registering one would let the other vanish unnoticed.
+  {
+    name: "ingest_conversation_facts write path (live Postgres)",
+    minTests: 3,
+  },
+  {
+    name: "ingest_conversation_facts isolation and concurrency (live Postgres)",
+    minTests: 3,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -407,9 +419,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // itself, then 255 -> 265 when #878 registered the four ingest_raw_turn
 // suites' 4 + 1 + 2 + 3 as that file stopped skipping itself, then 265 -> 266
 // when #878 registered the get_entry compact render suite's 1 as that file
-// stopped skipping itself), so the global floor cannot silently fall behind
-// the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 266;
+// stopped skipping itself, then 266 -> 272 when #878 registered the two
+// subject-split ingest_conversation_facts write-path and isolation suites'
+// 3 + 3 as that file stopped skipping itself), so the global floor cannot
+// silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 272;
 
 export interface SuiteStats {
   tests: number;
