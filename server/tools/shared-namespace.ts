@@ -29,6 +29,7 @@
  */
 
 import type { SharedNamespaceGroup } from "../config/env-groups.ts";
+import type { AuthInfo } from "../types.ts";
 
 /**
  * The shared-namespace name set.
@@ -92,6 +93,54 @@ export function isSharedNamespace(
     namespace === config.canonicalSharedNamespace ||
     namespace === config.physicalSharedNamespace
   );
+}
+
+/**
+ * Whether the name is the configured legacy shared namespace.
+ *
+ * True only when a non-empty legacy namespace is configured AND matches. With
+ * the default (empty) legacy name, no input is ever legacy — that non-empty
+ * test is what stops an unconfigured deployment treating unnamespaced input as
+ * legacy.
+ *
+ * @param namespace Caller-supplied or stored namespace name.
+ * @param names Validated set from the composition root.
+ * @returns Whether the name is the configured legacy shared namespace.
+ */
+export function isLegacySharedNamespace(
+  namespace: string,
+  names?: SharedNamespaceGroup,
+): boolean {
+  const legacy = requireNames(
+    names,
+    "isLegacySharedNamespace",
+  ).legacySharedNamespace;
+  return legacy !== "" && namespace === legacy;
+}
+
+/**
+ * Whether a write into the legacy shared namespace must be refused.
+ *
+ * The legacy namespace is frozen (#167): only an admin role may still write
+ * into it, and only while an operator has both configured a legacy name and
+ * left the escape hatch off. Every earlier test is a "not applicable" case, so
+ * the role check is reached only for a genuine legacy-target write.
+ *
+ * @param auth The caller's authenticated identity.
+ * @param targetNamespace The namespace the write is aimed at.
+ * @param names Validated set from the composition root.
+ * @returns Whether the write must be refused.
+ */
+export function shouldRejectLegacySharedWrite(
+  auth: AuthInfo,
+  targetNamespace: string,
+  names?: SharedNamespaceGroup,
+): boolean {
+  const config = requireNames(names, "shouldRejectLegacySharedWrite");
+  if (config.allowLegacySharedWrites) return false;
+  if (config.legacySharedNamespace === "") return false;
+  if (targetNamespace !== config.legacySharedNamespace) return false;
+  return auth.role !== "admin" && auth.role !== "ob-admin";
 }
 
 /**

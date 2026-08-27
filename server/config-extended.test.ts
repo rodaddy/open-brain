@@ -186,6 +186,29 @@ describe("extended env — sharedNamespaceNames", () => {
       ).toBe(5);
     }
   });
+
+  it("leaves legacy shared writes refused when no escape hatch is set", () => {
+    expect(extendedConfig().sharedNamespaceNames.allowLegacySharedWrites).toBe(
+      false,
+    );
+  });
+
+  it("opens legacy shared writes when the escape hatch is set", () => {
+    expect(
+      extendedConfig({ OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES: "true" })
+        .sharedNamespaceNames.allowLegacySharedWrites,
+    ).toBe(true);
+  });
+
+  it("resolves sharedNamespace from the physical override", () => {
+    expect(extendedConfig().sharedNamespaceNames.sharedNamespace).toBe(
+      extendedConfig().sharedNamespaceNames.canonicalSharedNamespace,
+    );
+    expect(
+      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v9" })
+        .sharedNamespaceNames.sharedNamespace,
+    ).toBe("shared-kb-v9");
+  });
 });
 
 describe("extended env — tracing", () => {

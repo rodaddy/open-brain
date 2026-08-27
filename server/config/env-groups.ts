@@ -199,6 +199,7 @@ export const extendedEnvironmentFields = {
   OPENBRAIN_LEGACY_SHARED_NAMESPACE: blankAsAbsent,
   OPENBRAIN_LEGACY_SHARED_FALLBACK: permissiveBoolean,
   OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS: fallbackInteger(1, 5),
+  OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES: permissiveBoolean,
   // tracing — `server/observability/langfuse-tracing.ts:599-604`.
   OPENBRAIN_TRACING_ENDPOINT: blankAsAbsent,
   OPENBRAIN_TRACING_PUBLIC_KEY: blankAsAbsent,
@@ -266,6 +267,10 @@ export interface SharedNamespaceGroup {
   readonly legacyFallbackEnabled: boolean;
   /** Shared-hit count at or above which the legacy fallback is skipped. */
   readonly fallbackMinResults: number;
+  /** Physical shared namespace used by existing read/write call sites. */
+  readonly sharedNamespace: string;
+  /** Whether a non-admin may write into the configured legacy namespace. */
+  readonly allowLegacySharedWrites: boolean;
 }
 
 export interface TracingConfigGroup {
@@ -366,6 +371,8 @@ export function sharedNamespaceGroup(
       DEFAULT_LEGACY_SHARED_NAMESPACE,
     legacyFallbackEnabled: parsed.OPENBRAIN_LEGACY_SHARED_FALLBACK,
     fallbackMinResults: parsed.OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS,
+    sharedNamespace: parsed.SHARED_NAMESPACE_PHYSICAL ?? resolvedCanonical,
+    allowLegacySharedWrites: parsed.OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES,
   };
 }
 
