@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 import { runMigrations } from "../migrate.ts";
 
 // Live-Postgres coverage for migration 032 (Issue #380, INGEST-1). Proves the
@@ -10,105 +11,109 @@ import { runMigrations } from "../migrate.ts";
 // tool_result blocks and carry the densest decision content in the corpus, so
 // excluding them would rebuild the exact blindness full-send exists to fix).
 //
-// Skipped unless OPENBRAIN_TEST_DATABASE_URL is set (matches 025/027).
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
+// REQUIRES OPENBRAIN_TEST_DATABASE_URL and fails hard without it (operator
+// ruling 2026-08-27, issue #878). It must point at an isolated test database,
+// never the dogfood one. `bun run test:isolated` sets it.
 
-dbDescribe("032 raw turns (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  const nsAlice = "test-raw-alice";
-  const nsBob = "test-raw-bob";
-  const namespaces = [nsAlice, nsBob];
+const nsAlice = "test-raw-alice";
+const nsBob = "test-raw-bob";
+const namespaces = [nsAlice, nsBob];
 
-  async function cleanup(): Promise<void> {
-    await pool.query("DELETE FROM ob_raw_turns WHERE namespace = ANY($1)", [
-      namespaces,
-    ]);
-  }
+async function cleanup(): Promise<void> {
+  await pool.query("DELETE FROM ob_raw_turns WHERE namespace = ANY($1)", [
+    namespaces,
+  ]);
+}
 
-  interface TurnOverrides {
-    turn_uuid?: string;
-    parent_turn_uuid?: string | null;
-    logical_parent_turn_uuid?: string | null;
-    session_ref?: string | null;
-    prompt_id?: string | null;
-    role?: string;
-    content?: string;
-    content_hash?: string;
-    turn_index?: number;
-    is_human_prompt?: boolean;
-    occurred_at?: string | null;
-    valid_at?: string | null;
-    invalid_at?: string | null;
-    expired_at?: string | null;
-    metadata?: unknown;
-  }
+interface TurnOverrides {
+  turn_uuid?: string;
+  parent_turn_uuid?: string | null;
+  logical_parent_turn_uuid?: string | null;
+  session_ref?: string | null;
+  prompt_id?: string | null;
+  role?: string;
+  content?: string;
+  content_hash?: string;
+  turn_index?: number;
+  is_human_prompt?: boolean;
+  occurred_at?: string | null;
+  valid_at?: string | null;
+  invalid_at?: string | null;
+  expired_at?: string | null;
+  metadata?: unknown;
+}
 
-  async function insert(
-    namespace: string,
-    overrides: TurnOverrides = {},
-  ): Promise<number> {
-    const row = {
-      turn_uuid: "uuid-a",
-      parent_turn_uuid: null,
-      logical_parent_turn_uuid: null,
-      session_ref: null,
-      prompt_id: null,
-      role: "user",
-      content: "hello",
-      content_hash: "hash-a",
-      turn_index: 0,
-      is_human_prompt: false,
-      occurred_at: null,
-      valid_at: null,
-      invalid_at: null,
-      expired_at: null,
-      metadata: undefined,
-      ...overrides,
-    };
-    const result = await pool.query(
-      `INSERT INTO ob_raw_turns
-         (namespace, turn_uuid, parent_turn_uuid, logical_parent_turn_uuid,
-          session_ref, prompt_id, role, content,
-          content_hash, turn_index, is_human_prompt, occurred_at,
-          valid_at, invalid_at, expired_at, created_by, metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'test',
-               COALESCE($16::jsonb, '{}'::jsonb))
-       ON CONFLICT DO NOTHING`,
-      [
-        namespace,
-        row.turn_uuid,
-        row.parent_turn_uuid,
-        row.logical_parent_turn_uuid,
-        row.session_ref,
-        row.prompt_id,
-        row.role,
-        row.content,
-        row.content_hash,
-        row.turn_index,
-        row.is_human_prompt,
-        row.occurred_at,
-        row.valid_at,
-        row.invalid_at,
-        row.expired_at,
-        row.metadata === undefined ? null : JSON.stringify(row.metadata),
-      ],
-    );
-    return result.rowCount ?? 0;
-  }
+async function insert(
+  namespace: string,
+  overrides: TurnOverrides = {},
+): Promise<number> {
+  const row = {
+    turn_uuid: "uuid-a",
+    parent_turn_uuid: null,
+    logical_parent_turn_uuid: null,
+    session_ref: null,
+    prompt_id: null,
+    role: "user",
+    content: "hello",
+    content_hash: "hash-a",
+    turn_index: 0,
+    is_human_prompt: false,
+    occurred_at: null,
+    valid_at: null,
+    invalid_at: null,
+    expired_at: null,
+    metadata: undefined,
+    ...overrides,
+  };
+  const result = await pool.query(
+    `INSERT INTO ob_raw_turns
+       (namespace, turn_uuid, parent_turn_uuid, logical_parent_turn_uuid,
+        session_ref, prompt_id, role, content,
+        content_hash, turn_index, is_human_prompt, occurred_at,
+        valid_at, invalid_at, expired_at, created_by, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'test',
+             COALESCE($16::jsonb, '{}'::jsonb))
+     ON CONFLICT DO NOTHING`,
+    [
+      namespace,
+      row.turn_uuid,
+      row.parent_turn_uuid,
+      row.logical_parent_turn_uuid,
+      row.session_ref,
+      row.prompt_id,
+      row.role,
+      row.content,
+      row.content_hash,
+      row.turn_index,
+      row.is_human_prompt,
+      row.occurred_at,
+      row.valid_at,
+      row.invalid_at,
+      row.expired_at,
+      row.metadata === undefined ? null : JSON.stringify(row.metadata),
+    ],
+  );
+  return result.rowCount ?? 0;
+}
 
-  beforeAll(async () => {
-    await runMigrations(pool);
-    await cleanup();
-  });
+beforeAll(async () => {
+  await runMigrations(pool);
+  await cleanup();
+});
 
-  afterEach(cleanup);
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+afterEach(cleanup);
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
 
+// The describes below split by SUBJECT over one shared module-scope fixture:
+// the role contract, turn identity, the conversation thread, and the
+// retention/provenance columns. They seed the same table through the same
+// `insert` helper, so the fixture is module-scope rather than duplicated.
+describe("032 raw turns role contract (live Postgres)", () => {
   it("accepts user, assistant, and tool roles", async () => {
     for (const role of ["user", "assistant", "tool"]) {
       expect(await insert(nsAlice, { turn_uuid: `uuid-${role}`, role })).toBe(
@@ -122,7 +127,9 @@ dbDescribe("032 raw turns (live Postgres)", () => {
       insert(nsAlice, { turn_uuid: "uuid-sys", role: "system" }),
     ).rejects.toThrow();
   });
+});
 
+describe("032 raw turns identity (live Postgres)", () => {
   it("never stores an exact duplicate turn twice", async () => {
     // Resuming or forking a session makes the runtime copy prior history into
     // a new transcript. That re-send must conflict and be ignored.
@@ -174,7 +181,9 @@ dbDescribe("032 raw turns (live Postgres)", () => {
       }),
     ).toBe(1);
   });
+});
 
+describe("032 raw turns conversation thread (live Postgres)", () => {
   it("reconstructs the reply chain from parent links", async () => {
     await insert(nsAlice, { turn_uuid: "root", prompt_id: "p1" });
     await insert(nsAlice, {
@@ -277,7 +286,9 @@ dbDescribe("032 raw turns (live Postgres)", () => {
       new Set(["session-1", "session-2"]),
     );
   });
+});
 
+describe("032 raw turns retention and provenance (live Postgres)", () => {
   it("measures the believed-a-dead-fact window from invalid_at vs expired_at", async () => {
     // Bi-temporal, borrowed from Graphiti: world-time vs knowledge-time. The
     // fact stopped being true at 12:52; we found out at 12:53. The gap is the
