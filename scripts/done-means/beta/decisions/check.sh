@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Decisions-ledger doctor (graph-mode v1.3-beta).
-# Usage: check.sh <decisions.md> [--repo <path>] [--diff-base <ref>]
+# Usage: check.sh <decisions.md> [--repo <path>] [--diff-base <ref>] [--section <heading>]
 # Exit: 0 pass, 1 a clause failed, 3 harness error.
 set -u
 
 LEDGER=""
 REPO=""
 DIFF_BASE="origin/main"
+SECTION=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) shift; [ $# -gt 0 ] || { echo "HARNESS ERROR: --repo needs a value"; exit 3; }; REPO="$1" ;;
+    --section) shift; [ $# -gt 0 ] || { echo "HARNESS ERROR: --section needs a value"; exit 3; }; SECTION="$1" ;;
     --diff-base) shift; [ $# -gt 0 ] || { echo "HARNESS ERROR: --diff-base needs a value"; exit 3; }; DIFF_BASE="$1" ;;
-    -h|--help) echo "usage: check.sh <decisions.md> [--repo <path>] [--diff-base <ref>]"; exit 0 ;;
+    -h|--help) echo "usage: check.sh <decisions.md> [--repo <path>] [--diff-base <ref>] [--section <heading>]"; exit 0 ;;
     *) if [ -z "$LEDGER" ]; then LEDGER="$1"; else echo "HARNESS ERROR: unexpected argument $1"; exit 3; fi ;;
   esac
   shift
@@ -82,5 +84,5 @@ if [ "$NEEDS_GIT" = "1" ]; then
   GIT_OK=1
 fi
 
-"$NODE_RESOLVED" "$DOCTOR" "$LEDGER" "$GIT_JSON" "$GIT_OK"
+"$NODE_RESOLVED" "$DOCTOR" "$LEDGER" "$GIT_JSON" "$GIT_OK" "$SECTION"
 exit $?

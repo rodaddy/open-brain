@@ -7,5 +7,5 @@ Owner: TODO-FILL.
 Run it:
 
 ```bash
-./check.sh <path>
+./check.sh <repo>
 ```

@@ -94,3 +94,23 @@ fixtures/wordcheck.tmp.md:3: XXX
 FAIL: 2 unresolved placeholder hit(s)
 exit: 1
 ```
+
+## 2026-08-27 pilot fix
+
+`<path>` and `<lane>` dropped from the default list after the pilot in the
+first repo: all five hits on its 1396-line lane contract were notation in
+prose (`Done-means: <path>`, `_archive/<lane>/`). Fixture line 10 now uses
+`<repo>` so the count stays at four.
+
+```
+$ ./check.sh fixtures/fail-scaffold-README.md
+fixtures/fail-scaffold-README.md:1: <slug>
+fixtures/fail-scaffold-README.md:3: <YYYY-MM-DD>
+fixtures/fail-scaffold-README.md:5: TODO-FILL
+fixtures/fail-scaffold-README.md:10: <repo>
+FAIL: 4 unresolved placeholder hit(s)
+exit: 1
+$ ./check.sh <pilot clone>/docs/lane-contract.md
+PASS: no unresolved placeholders
+exit: 0
+```

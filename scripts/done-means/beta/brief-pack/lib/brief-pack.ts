@@ -1,6 +1,7 @@
 // brief-pack: bounded lane-brief assembler. See ../README.md.
 // Exit 0 under budget, 1 OVER BUDGET (nothing written), 3 harness error.
 import { readFileSync, writeFileSync, readSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 type Entry = { date: string; text: string };
 type Decision = { n: number; date: string; item: string; resolution: string };
@@ -111,6 +112,17 @@ function sectionOf(src: string, heading: string): string | null {
   return body.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
 }
 
+// First level-2 heading whose text matches /report/i, e.g.
+// "## Lane report schema" or "## Required lane report format".
+function findReportHeading(src: string): string | null {
+  for (const line of src.split("\n")) {
+    const t = line.trim();
+    if (t.slice(0, 3) !== "## ") continue;
+    if (/report/i.test(t.slice(3))) return t;
+  }
+  return null;
+}
+
 const tighteningsSection = sectionOf(contract, "## Tightenings");
 if (tighteningsSection === null) {
   process.stderr.write("ABSENT: no \"## Tightenings\" section in " + opts["lane-contract"] + "\n");
@@ -128,12 +140,14 @@ function parseEntries(body: string): Entry[] {
   const flush = () => {
     if (cur.length === 0) return;
     const text = cur.join("\n").replace(/\s+$/, "");
-    const m = text.match(/^- \*\*(\d{4}-\d{2}-\d{2})/);
+    const m = text.match(/^(?:- \*\*|### +)(\d{4}-\d{2}-\d{2})/);
     out.push({ date: m ? m[1] : "0000-00-00", text });
     cur = [];
   };
   for (const line of lines) {
-    if (/^- \*\*\d{4}-\d{2}-\d{2}/.test(line)) {
+    // Two entry shapes, same unit as ratchet-bound: a "- **YYYY-MM-DD" bullet,
+    // or a "### YYYY-MM-DD" heading whose block (bullets included) is one entry.
+    if (/^(?:- \*\*|### +)\d{4}-\d{2}-\d{2}/.test(line)) {
       flush();
       cur = [line];
     } else if (cur.length > 0) {
@@ -168,10 +182,51 @@ const loopPolicy = opts["loop-policy"]
   ? mustRead(opts["loop-policy"], "--loop-policy")
   : null;
 
-const ctrlPath = opts["controller-contract"]
-  ?? new URL("../../../../../../_DOCS/controller-contract.md", import.meta.url).pathname;
-const schema = sectionOf(mustRead(ctrlPath, "--controller-contract"), "## Lane report schema")
-  ?? die("controller contract has no \"## Lane report schema\" section");
+// Default the controller contract to the lane contract's own directory, so a
+// repo that does not use the Development _DOCS/ layout still resolves.
+// Candidates in order: the lane contract's own directory first (repo-shaped,
+// works outside the Development _DOCS/ layout), then the historical
+// _DOCS/controller-contract.md relative to this tool.
+function readable(path: string): boolean {
+  try {
+    readFileSync(path, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+const ctrlCandidates = [
+  resolve(dirname(resolve(opts["lane-contract"])), "controller-contract.md"),
+  new URL("../../../../../../_DOCS/controller-contract.md", import.meta.url).pathname,
+];
+let ctrlResolved = "";
+if (opts["controller-contract"]) {
+  ctrlResolved = opts["controller-contract"];
+} else {
+  for (const c of ctrlCandidates) {
+    if (readable(c)) {
+      ctrlResolved = c;
+      break;
+    }
+  }
+  if (ctrlResolved === "") {
+    die("no --controller-contract given and none at " + ctrlCandidates.join(" or "));
+  }
+}
+const ctrlPath = ctrlResolved;
+const ctrlSrc = mustRead(ctrlPath, "--controller-contract");
+const reportHeading = opts["report-heading"]
+  ? (opts["report-heading"].slice(0, 3) === "## "
+    ? opts["report-heading"]
+    : "## " + opts["report-heading"])
+  : findReportHeading(ctrlSrc);
+if (reportHeading === null) {
+  process.stderr.write("ABSENT: no level-2 heading matching /report/i in " + ctrlPath + "\n");
+  process.exit(3);
+}
+const headingUsed: string = reportHeading ?? "";
+const schema = sectionOf(ctrlSrc, headingUsed)
+  ?? die("controller contract has no \"" + headingUsed + "\" section");
 
 function commentHeader(src: string): string {
   const lines = src.split("\n");
@@ -243,7 +298,8 @@ sections.push({
 const bodyText = sections.map((s) => s.body).join("\n\n");
 // header token count includes itself; compute with a placeholder of stable width.
 const headerFor = (used: number) =>
-  "# Lane brief\n\nbudget: " + used + "/" + budget + " tokens (ceil chars/4)";
+  "# Lane brief\n\nbudget: " + used + "/" + budget + " tokens (ceil chars/4)"
+  + " | report-format: " + headingUsed;
 let used = estTokens(headerFor(0) + "\n\n" + bodyText);
 used = estTokens(headerFor(used) + "\n\n" + bodyText);
 const out = headerFor(used) + "\n\n" + bodyText + "\n";

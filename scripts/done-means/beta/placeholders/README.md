@@ -28,7 +28,7 @@ so a file that legitimately *documents* the token list can be checked without
 tripping on its own contents:
 
 ```bash
-./check.sh --allow '<slug>' --allow '<path>' docs/template-guide.md
+./check.sh --allow '<slug>' --allow '<repo>' docs/template-guide.md
 ```
 
 For mustache, `--allow '{{...}}'` exempts every `{{...}}` match; `--allow
@@ -52,18 +52,21 @@ silently shrink the examined set. A missing `awk` is also exit `3`.
 Kept in `check.sh`. Case-sensitive substring match unless noted:
 
 `REPLACE_` (prefix) · `<scope>` · `<slug>` · `<repo>` · `<owner>` ·
-`<lane-name>` · `<lane>` · `<YYYY-MM-DD>` · `<date>` · `<path>` ·
+`<lane-name>` · `<YYYY-MM-DD>` · `<date>` ·
 `TODO-FILL` · `FILL ME` · `FILLME` · any `{{...}}` mustache
 
 `TBD` and `XXX` are matched **whole-word** and case-sensitively, so
 `SUBTBDWORD` and `MAXXXIMUM` do not hit. Every other token is a plain
-case-sensitive substring: `<lane>` therefore also matches inside `<lane-name>`,
-which is harmless — both are placeholders and both must go.
+case-sensitive substring. `<path>` and `<lane>` were dropped on 2026-08-27:
+the open-brain pilot showed both are ordinary notation in standing contracts
+(`Done-means: <path>`, `_archive/<lane>/`), so they flagged prose that is
+instantiated. Pass them with `--allow` inverted, i.e. add them back per run
+with a local wrapper, if a repo scaffolds with them.
 
 ## Fenced code blocks are NOT exempt
 
 A placeholder inside a ``` fence is still unresolved. A command a reader is
-meant to paste that reads `./check.sh <path>` has not been instantiated; the
+meant to paste that reads `./check.sh <repo>` has not been instantiated; the
 reader cannot run it. The check makes no attempt to track fence state.
 
 ## Inputs

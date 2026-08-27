@@ -167,3 +167,168 @@ tokens (ceil chars/4)`, line 3 of `fixtures/real.out.md`). Excluded section is
 This run also exercised the default `--controller-contract` path resolution,
 which pulled the `## Lane report schema` block out of the real
 `_DOCS/controller-contract.md`.
+
+## 2026-08-27 pilot fix
+
+The open-brain pilot hit two defects. Both transcripts below are the RED state
+captured BEFORE the fix, then the same commands after. Same clone, same branch.
+
+### 7. RED — real open-brain controller contract, exit 3 (defect a)
+
+open-brain spells the section `## Required lane report format`; the tool
+required the literal `## Lane report schema`, so pack never packed.
+
+```
+$ bash pack.sh --task fixtures/openbrain-task.txt \
+    --lane-contract /Volumes/ThunderBolt/Development/open-brain/docs/lane-contract.md \
+    --done-means /Volumes/ThunderBolt/Development/open-brain/scripts/done-means/563-bounded-recall.sh \
+    --controller-contract /Volumes/ThunderBolt/Development/open-brain/docs/controller-contract.md
+HARNESS ERROR: controller contract has no "## Lane report schema" section
+EXIT=3
+```
+
+### 8. RED — default --controller-contract was Development-shaped (defect b)
+
+With no flag, the default was `_DOCS/controller-contract.md` resolved relative
+to the tool, not to the lane contract. open-brain keeps both contracts in
+`docs/`, so the default could never find it.
+
+### 9. GREEN — heading discovered by /report/i
+
+```
+$ bash pack.sh --task fixtures/openbrain-task.txt \
+    --lane-contract /Volumes/ThunderBolt/Development/open-brain/docs/lane-contract.md \
+    --done-means /Volumes/ThunderBolt/Development/open-brain/scripts/done-means/563-bounded-recall.sh \
+    --controller-contract /Volumes/ThunderBolt/Development/open-brain/docs/controller-contract.md
+budget: 1255/8000 tokens (ceil chars/4) | report-format: ## Required lane report format
+EXIT=0
+```
+
+Under the default 8000 budget, so no OVER BUDGET table — 1255 tokens against
+the real files. stderr was empty.
+
+### 10. GREEN — default derived from the lane contract's directory
+
+Same command with `--controller-contract` REMOVED entirely. The default now
+resolves `docs/controller-contract.md` beside the lane contract:
+
+```
+$ bash pack.sh --task fixtures/openbrain-task.txt \
+    --lane-contract /Volumes/ThunderBolt/Development/open-brain/docs/lane-contract.md \
+    --done-means /Volumes/ThunderBolt/Development/open-brain/scripts/done-means/563-bounded-recall.sh
+budget: 1255/8000 tokens (ceil chars/4) | report-format: ## Required lane report format
+EXIT=0
+```
+
+Identical output to the explicit-flag run, which is the point.
+
+### 11. GREEN — new fixture, "## Required lane report format" (exit 0)
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/lane-contract.fixture.md \
+    --done-means fixtures/done-means.fixture.sh \
+    --controller-contract fixtures/ctrl-required-format.fixture.md
+budget: 764/8000 tokens (ceil chars/4) | report-format: ## Required lane report format
+EXIT=0
+```
+
+### 12. RED — new fixture, no /report/i heading (exit 3 ABSENT)
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/lane-contract.fixture.md \
+    --done-means fixtures/done-means.fixture.sh \
+    --controller-contract fixtures/ctrl-no-report.fixture.md
+ABSENT: no level-2 heading matching /report/i in fixtures/ctrl-no-report.fixture.md
+EXIT=3
+```
+
+### 13. GREEN — new fixture, no flag, contract beside the lane contract (exit 0)
+
+`fixtures/derived-dir/` holds `lane-contract.md` and `controller-contract.md`.
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/derived-dir/lane-contract.md \
+    --done-means fixtures/done-means.fixture.sh
+budget: 765/8000 tokens (ceil chars/4) | report-format: ## Required lane report format
+EXIT=0
+```
+
+### 14. Regression — the five original fixtures, exit codes unchanged
+
+Run after the fix; compare to cases 1-5 above.
+
+```
+1 over budget (--budget-tokens 300)     -> EXIT=1   (fixtures/should-not-exist.md still absent)
+2 missing --done-means                  -> EXIT=3   HARNESS ERROR: missing required --done-means
+3 no ## Tightenings                     -> EXIT=3   ABSENT: no "## Tightenings" section in ...
+4 empty task via stdin                  -> EXIT=3   HARNESS ERROR: --task is empty
+5 pass, default budget                  -> EXIT=0   report-format: ## Lane report schema
+```
+
+Case 5 still selects `## Lane report schema`: `/report/i` matches the original
+spelling, so the fixture contract is unaffected. Its token count moved 972 ->
+982 because the header line now carries the heading — the brief's content is
+byte-identical otherwise.
+
+### Note — an interim patch broke cases 1 and 5
+
+First cut made the lane-contract-relative path the ONLY default, which sent
+cases 1 and 5 (lane contract in `fixtures/`, no `controller-contract.md` there)
+to `EXIT=3 HARNESS ERROR: no --controller-contract given and none at ...`. The
+default is now an ordered candidate list — lane-contract directory first, then
+the historical `_DOCS/controller-contract.md` — so a repo-shaped layout wins
+without dropping the Development-shaped one. Caught by re-running the old
+fixtures, which is why they are in the suite.
+
+### 15. RED — heading-shaped Tightenings ranked as (none) (defect c, controller)
+
+Same class as ratchet-bound R1: `parseEntries` only opened an entry on a
+`- **YYYY-MM-DD` bullet. The first pilot's contract uses `### YYYY-MM-DD
+(round N)` headings with the rules as bullets underneath, so every entry was
+invisible and the brief shipped `## Tightenings (ranked)` / `(none)` with
+exit 0 (case 9 above, 1255 tokens). Green having examined nothing.
+
+Fix: an entry opens on either shape, and a heading block (its bullets
+included) is ONE entry, the same unit ratchet-bound counts.
+
+```
+$ bash pack.sh --task fixtures/task.txt \
+    --lane-contract fixtures/lane-contract-heading.fixture.md \
+    --done-means fixtures/done-means.fixture.sh | rg -n 'budget:|^### '
+3:budget: 483/8000 tokens (ceil chars/4) | report-format: ## Lane report schema
+34:### 2026-08-17 (round 31) — harvest of the clone-path wave
+41:### 2026-08-18 (round 32) — harvest of the live-observer lane
+49:### 2026-08-16 (round 30) — harvest of the index lane
+EXIT=0
+```
+
+### 16. The real first-pilot contract now refuses OVER BUDGET (exit 1)
+
+With the 39 heading entries visible, the default top-8 ranking overflows:
+
+```
+$ bash pack.sh --task fixtures/openbrain-task.txt \
+    --lane-contract <first pilot>/docs/lane-contract.md \
+    --done-means <first pilot>/scripts/done-means/563-bounded-recall.sh
+OVER BUDGET: 8881 > 8000
+section                          tokens
+Task                             36
+Done-means                       891
+Standing rules                   33
+Tightenings (ranked)             6907
+Report format                    250
+Excluded (available on request)  738
+header                           26
+EXIT=1
+```
+
+Same run with `--max-tightenings 3` -> `budget: 5524/8000`, EXIT=0. This is
+the first OVER BUDGET refusal on a real contract, which the amendment's pilot
+exit criteria ask for. Outputs kept beside the earlier ones:
+`fixtures/openbrain-heading.out.md`, `fixtures/openbrain-heading.err`.
+
+Originals re-run after the change: `lane-contract.fixture.md` EXIT=0,
+`derived-dir/lane-contract.md` EXIT=0.

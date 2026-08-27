@@ -1,6 +1,7 @@
 // Decisions-ledger doctor (v1.3-beta). Node 24 native type stripping, no deps.
 // stdin/args: argv[2] = ledger path, argv[3] = JSON string of git paths (may be "[]"),
 // argv[4] = "1" when git evidence is available, "0" when the wrapper could not look.
+// argv[5] = optional --section heading text (exact, e.g. "## Ledger"); "" when absent.
 // Exit: 0 pass, 1 clause failure, 3 harness error.
 
 import { readFileSync } from "node:fs";
@@ -57,16 +58,60 @@ if (gitOk) {
   }
 }
 
+const section: string = process.argv[5] || "";
+
 const lines: string[] = text.split("\n");
-let headerIdx: number = -1;
-for (let i = 0; i < lines.length; i++) {
-  if (lines[i].indexOf("|") === -1) continue;
+
+// A table header is a line with a pipe that is neither blank nor a separator row.
+function tableHeaderAt(i: number): string[] | null {
+  if (lines[i].indexOf("|") === -1) return null;
   const cells: string[] = splitRow(lines[i]);
-  if (cells.length < 2 || isSeparator(cells)) continue;
-  headerIdx = i;
-  break;
+  if (cells.length < 2 || isSeparator(cells)) return null;
+  return cells;
 }
-if (headerIdx === -1) harness("no markdown table found in " + path);
+
+function headingLevel(raw: string): number {
+  const m = /^(#{1,6})\s/.exec(raw.trim());
+  return m ? m[1].length : 0;
+}
+
+// Table selection, in order:
+//   (a) --section <heading>: the first table under that exact heading, up to the
+//       next heading of the same or higher level;
+//   (b) else the first table anywhere whose header row first cell is "#";
+//   (c) else the first table in the file.
+let headerIdx: number = -1;
+let selectedVia: string = "";
+
+if (section !== "") {
+  const want: string = section.trim();
+  let hIdx: number = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === want) { hIdx = i; break; }
+  }
+  if (hIdx === -1) harness("no heading " + section);
+  const level: number = headingLevel(lines[hIdx]);
+  for (let i = hIdx + 1; i < lines.length; i++) {
+    const lv: number = headingLevel(lines[i]);
+    if (lv > 0 && level > 0 && lv <= level) break;
+    if (tableHeaderAt(i)) { headerIdx = i; break; }
+  }
+  if (headerIdx === -1) harness("no markdown table under heading " + section + " in " + path);
+  selectedVia = "section";
+} else {
+  for (let i = 0; i < lines.length; i++) {
+    const cells: string[] | null = tableHeaderAt(i);
+    if (cells && cells[0].trim() === "#") { headerIdx = i; selectedVia = "hash-column"; break; }
+  }
+  if (headerIdx === -1) {
+    for (let i = 0; i < lines.length; i++) {
+      if (tableHeaderAt(i)) { headerIdx = i; selectedVia = "first"; break; }
+    }
+  }
+  if (headerIdx === -1) harness("no markdown table found in " + path);
+}
+
+process.stdout.write("table: line " + (headerIdx + 1) + " via " + selectedVia + "\n");
 
 const header: string[] = splitRow(lines[headerIdx]);
 const failures: string[] = [];
@@ -80,7 +125,8 @@ if (schemaOk) {
 }
 if (!schemaOk) {
   process.stdout.write(
-    "FAIL schema row " + (headerIdx + 1) + ": header is [" + header.join(" | ") +
+    "FAIL schema row " + (headerIdx + 1) + ": judged the table at line " + (headerIdx + 1) +
+    " (selected via " + selectedVia + ") with header [" + header.join(" | ") +
     "] but v1.3-beta requires the nine columns [" + COLUMNS.join(" | ") +
     "]; this ledger needs MIGRATION to the v1.3-beta 9-column format before the doctor can judge it\n"
   );

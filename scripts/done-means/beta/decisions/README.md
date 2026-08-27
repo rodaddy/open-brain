@@ -22,15 +22,42 @@ accompanied by an actual change to the checks.
 
 ## Usage
 
-    ./check.sh <decisions.md> [--repo <path>] [--diff-base <ref>]
+    ./check.sh <decisions.md> [--repo <path>] [--diff-base <ref>] [--section <heading>]
 
-`--repo` defaults to the git root containing the ledger (`git rev-parse
+`--section` names the exact heading line whose table is the ledger (see Table
+selection below). `--repo` defaults to the git root containing the ledger (`git rev-parse
 --show-toplevel`). `--diff-base` defaults to `origin/main`. Git is only
 consulted when at least one row has a non-empty `Retires`; a ledger with no
 `Retires` values needs no repo and no ref.
 
 Node is resolved in this order, exit 3 if none: `$NODE_BIN` if set and
 executable, then `/opt/homebrew/opt/node@24/bin/node`, then `node` on `PATH`.
+
+## Table selection
+
+A decisions ledger frequently is not the first table in its file — the real
+`open-brain/docs/issue-graph.md` opens with a prose table at line 52 and keeps
+its ledger at line 279 under `## Ledger`. The doctor picks a table in this
+order:
+
+1. `--section "<heading text>"` — the first table under that exact heading line,
+   searching to the next heading of the same or higher level. If the file has no
+   such heading, exit 3 `HARNESS ERROR: no heading <text>`; if the heading exists
+   but holds no table, exit 3 as well. Never a silent fall-through to another
+   table: an explicit target that misses is a harness error, not a pass.
+2. Otherwise, the first table anywhere whose header row's first cell is `#`.
+   Every v1.3-beta ledger has one, and prose tables essentially never do.
+3. Otherwise, the first table in the file.
+
+The first line of output is always which table was judged and how it was found:
+
+    table: line <n> via <section|hash-column|first>
+
+That line exists because the pilot failure was invisible: the doctor reported a
+schema failure that was correct about the object it looked at and wrong about
+the object that mattered, and nothing in the output said which one it had read.
+The clause-1 message now also names the table's line and header for the same
+reason.
 
 ## Exit grammar
 
@@ -40,6 +67,9 @@ executable, then `/opt/homebrew/opt/node@24/bin/node`, then `node` on `PATH`.
 | 1 | a clause failed — one `FAIL <clause> row <#>: <detail>` line per failure |
 | 3 | harness error — could not look. Never a pass. |
 
+`--section` naming a heading the file does not contain is exit 3, not exit 1:
+the doctor was told where to look, could not, and has judged nothing.
+
 Exit 0 having examined nothing is not a pass: a file with no markdown table, or
 a table with a valid header and zero data rows, exits 3.
 
@@ -47,8 +77,10 @@ a table with a valid header and zero data rows, exits 3.
 
 1. `schema` — the header must be exactly `# | Date | Item | State | Resolution |
    Rejected | Falsifier | Supersedes | Retires`. A mismatch fails alone, exit 1,
-   with a message naming the migration need (an old 5-column ledger does not
-   crash the doctor — see RED.md, `mcp-cutover/decisions.md`).
+   with a message naming the migration need, INCLUDING the line number and
+   header of the table it judged, so a wrong-table pick is visible in the
+   failure itself (an old 5-column ledger does not crash the doctor — see
+   RED.md, `mcp-cutover/decisions.md`).
 2. `conflict` — two or more RATIFIED rows with the same Item (trimmed,
    case-insensitive) where none is referenced by another row's `Supersedes`.
 3. `falsifier` — RATIFIED with an empty Falsifier.
@@ -79,6 +111,18 @@ From this directory, against the checked-in fixtures:
     ./check.sh fixtures/pass-clause6-retire.md        # exit 0
     ./check.sh fixtures/harness-empty.md              # exit 3
     ./check.sh                                        # exit 3
+
+Table selection (2026-08-27 pilot fix):
+
+    ./check.sh fixtures/pass-section-second-table.md                      # exit 0
+    ./check.sh fixtures/pass-section-second-table.md --section '## Ledger' # exit 0
+    ./check.sh fixtures/fail-section-old-shape.md                         # exit 1
+    ./check.sh fixtures/fail-section-old-shape.md --section '## Ledger'    # exit 1
+    ./check.sh fixtures/harness-missing-section.md --section '## Decisions' # exit 3
+
+`pass-section-second-table.md` and `fail-section-old-shape.md` both put a prose
+table ABOVE the ledger, reproducing the real `issue-graph.md` shape. The failing
+one must name the LEDGER table's line (14), never the prose table's (9).
 
 ## Clause 6 fixtures, and how the passing case is produced
 
@@ -112,8 +156,12 @@ Anywhere this skill estimates token counts, the estimate is
 
 ## Known limits
 
-- The doctor reads the FIRST markdown table in the file. A ledger with a second
-  table below it is not examined.
+- The doctor judges ONE table per run — the one named by the selection order
+  above. A file with two `#`-first-cell tables has its second one unexamined;
+  `--section` is the way to aim at it.
+- `--section` matches the heading line EXACTLY after trimming, so `## Ledger`
+  does not match `## Ledger (v2)`. This is deliberate: a fuzzy match that picks
+  a neighbouring heading reintroduces the wrong-table failure it exists to fix.
 - Row numbers are taken from column 1 as written. A duplicated row number makes
   `Supersedes` resolution ambiguous; the doctor accepts the first match and
   does not flag the duplicate.

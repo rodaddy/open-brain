@@ -152,7 +152,7 @@ export function validate(text: string): Failure[] {
     const vlines = verified.split("\n");
     let ok = 0;
     for (let i = 0; i < vlines.length; i++) {
-      const l = vlines[i];
+      const l = vlines[i] ?? "";
       if (l.indexOf("->") === -1) continue;
       const result = l.slice(l.indexOf("->") + 2);
       if (/\bexit [0-9]+/.test(result) && l.slice(0, l.indexOf("->")).trim() !== "") {
