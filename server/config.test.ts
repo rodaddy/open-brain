@@ -835,7 +835,10 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
       complete,
       incomplete,
     ]) {
-      const reader = readMcpTracingConfig(shape);
+      const reader = readMcpTracingConfig(shape, {
+        info: () => {},
+        warn: () => {},
+      });
       const schema = extendedConfig(shape).tracing;
       expect(schema.enabled).toBe(reader.enabled);
       expect(schema.maskingEnabled).toBe(reader.maskingEnabled);

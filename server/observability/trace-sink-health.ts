@@ -14,7 +14,7 @@
  * machine with its own external consumer (`src/rotating-file.ts`) and no
  * dependency on the SDK, the MCP server, or the trace body.
  */
-import { logger } from "../../src/logger.ts";
+import type { TracingLogger } from "./trace-types.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 
 /**
@@ -188,17 +188,21 @@ export class SinkHealthTracker {
  * not a trace, so it carries an error LABEL (code/name) and nothing else.
  */
 export function reportSinkFailure(
+  logger: TracingLogger,
   tracker: SinkHealthTracker,
   err: unknown,
   countsAsTrace = true,
 ): void {
   if (!tracker.recordFailure(countsAsTrace)) return;
-  logger.warn("mcp_tool_tracing_suspended", { error: tracingErrorLabel(err) });
+  logger.warn({ error: tracingErrorLabel(err) }, "mcp_tool_tracing_suspended");
 }
 
 /** Emit the recovery line with the window's drop count, and only on the edge. */
-export function reportSinkSuccess(tracker: SinkHealthTracker): void {
+export function reportSinkSuccess(
+  logger: TracingLogger,
+  tracker: SinkHealthTracker,
+): void {
   const dropped = tracker.recordSuccess();
   if (dropped === undefined) return;
-  logger.info("mcp_tool_tracing_resumed", { droppedTraces: dropped });
+  logger.info({ droppedTraces: dropped }, "mcp_tool_tracing_resumed");
 }

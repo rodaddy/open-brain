@@ -264,7 +264,7 @@ fi
 #       `?? resolveQmdPath()` fallback at the consumer, because either one reads
 #       as injected and behaves as a direct read.
 #
-#   (d) server/main.ts  `createTracingRuntime({ config: config.tracing })`
+#   (d) server/main.ts  `createTracingRuntime({ config: config.tracing, logger })`
 #       SATISFIED by L2b-2 (#825). The `= process.env` default is gone from
 #       `readMcpTracingConfig` (server/observability/trace-config.ts:32), and
 #       the composition root now hands the validated group down at
@@ -289,7 +289,7 @@ fi
 ARRIVALS="server/main.ts|searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs
 server/main.ts|sharedNamespaceNames: config.sharedNamespaceNames
 server/main.ts|qmdPath: config.qmd.path
-server/main.ts|createTracingRuntime({ config: config.tracing })"
+server/main.ts|createTracingRuntime({ config: config.tracing, logger })"
 
 ARRIVAL_BAD=""
 ARRIVAL_OK=0

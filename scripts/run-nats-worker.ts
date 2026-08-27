@@ -17,6 +17,7 @@ import {
 import type { AuthInfo } from "../src/types.ts";
 import { createTracingRuntime } from "../server/observability/langfuse-tracing.ts";
 import { readMcpTracingConfig } from "../server/observability/trace-config.ts";
+import { tracingLoggerFrom } from "../server/observability/trace-logger-adapter.ts";
 
 type LoggerLike = Pick<typeof logger, "error" | "info">;
 type HealthServer = { stop(force?: boolean): void };
@@ -327,7 +328,14 @@ export async function startNatsWorkerProcess(
     // This worker root has no `ServerConfig`, so it reads its own tracing
     // configuration from the env record it was handed and passes it down;
     // the tracing module itself reads no environment (#825, L2b-2).
-    tracing = createTracing({ config: readMcpTracingConfig(env) });
+    // The injectable `log` is an error-only surface (`LoggerLike`), so this
+    // lane takes the process logger this root already imports — the same one
+    // `log` itself defaults to.
+    const tracingLogger = tracingLoggerFrom(logger);
+    tracing = createTracing({
+      config: readMcpTracingConfig(env, tracingLogger),
+      logger: tracingLogger,
+    });
     // NOTHING IS ADJUSTED SILENTLY: read the threshold before composing the
     // observer, so the bound the observer takes its verdict against is the
     // same one announced in the startup summary below.

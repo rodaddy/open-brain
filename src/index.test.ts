@@ -1,4 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
+import { silentTracingLogger } from "../server/observability/trace-logger-fixture.ts";
 import {
   createTracingRuntime,
   type McpTracingConfig,
@@ -66,11 +67,19 @@ function maintenancePool() {
 describe("server background tracing composition", () => {
   it("routes a maintenance handler trace into the process-owned sink", async () => {
     const sink = recordingSink();
-    const tracing = createTracingRuntime({ config: ENABLED_CONFIG, sink });
+    const tracing = createTracingRuntime({
+      config: ENABLED_CONFIG,
+      sink,
+      logger: silentTracingLogger(),
+    });
     const runtime = startServerMaintenanceQueue(
       {
         pool: maintenancePool(),
-        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+        },
         autoStart: false,
       },
       tracing,

@@ -48,6 +48,7 @@ import {
   installMcpTracing,
 } from "../server/observability/langfuse-tracing.ts";
 import { readMcpTracingConfig } from "../server/observability/trace-config.ts";
+import { tracingLoggerFrom } from "../server/observability/trace-logger-adapter.ts";
 
 const EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL;
 
@@ -255,12 +256,14 @@ export function createApp(
 
   // MCP server factory -- creates a fresh server per session to avoid
   // "Already connected to a transport" errors with concurrent clients
+  const tracingLogger = tracingLoggerFrom(logger);
   const serverFactory = () => {
     const s = createBrainServer();
     if (tracing?.sink) {
       installMcpTracing(s, {
         config: tracing.config,
         sink: tracing.sink,
+        logger: tracingLogger,
       });
     }
     registerAllTools(s, toolDeps);
@@ -319,8 +322,10 @@ if (import.meta.main) {
   // This legacy root has no `ServerConfig`, so it is the env door for its own
   // tracing configuration: it reads the environment here and hands the result
   // down, the same values `server/main.ts` hands down from its validated parse.
+  const tracingLogger = tracingLoggerFrom(logger);
   const tracing = createTracingRuntime({
-    config: readMcpTracingConfig(process.env),
+    config: readMcpTracingConfig(process.env, tracingLogger),
+    logger: tracingLogger,
   });
 
   if (process.env.OPEN_BRAIN_RUN_MIGRATIONS !== "0") {

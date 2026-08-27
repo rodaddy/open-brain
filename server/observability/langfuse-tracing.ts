@@ -87,7 +87,6 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { logger } from "../../src/logger.ts";
 import { maskTraceValue } from "./trace-masking.ts";
 import { buildToolTraceBody, errorOutput } from "./trace-body.ts";
 export { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
@@ -112,9 +111,10 @@ import type {
   McpTracingHandle,
   TraceBody,
   TraceSpanBody,
+  TracingLogger,
   TracingSink,
 } from "./trace-types.ts";
-export type { McpTraceStatus } from "./trace-types.ts";
+export type { McpTraceStatus, TracingLogger } from "./trace-types.ts";
 export {
   buildToolTraceBody,
   errorOutput,
@@ -172,6 +172,16 @@ interface ActiveMcpTrace {
   readonly metadata: Record<string, unknown>;
   spanBytes: number;
   payloadDegraded: boolean;
+  /**
+   * The logger `installMcpTracing` received, carried on the call's own context.
+   *
+   * `traceRetrievalSpan` and its sync twin are called from deep inside tool
+   * handlers that hold no tracing deps, so there is no parameter to thread one
+   * through. They already read this store to decide whether a trace is active
+   * at all, which makes it the seam that reaches them: the root's logger is
+   * placed here once per traced call, by the install that owns the deps.
+   */
+  readonly logger: TracingLogger;
 }
 
 const activeMcpTrace = new AsyncLocalStorage<ActiveMcpTrace>();
@@ -276,10 +286,10 @@ function recordTraceSpanUnsafe(
     active.spanBytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
     active.payloadDegraded = true;
   } catch (err: unknown) {
-    logger.warn("mcp_tool_trace_span_payload_degraded", {
-      error: tracingErrorLabel(err),
-      reason: "serialization_error",
-    });
+    active.logger.warn(
+      { error: tracingErrorLabel(err), reason: "serialization_error" },
+      "mcp_tool_trace_span_payload_degraded",
+    );
     appendDegradedSpan(active, span, "serialization_error");
     active.payloadDegraded = true;
   }
@@ -294,9 +304,15 @@ function recordTraceSpan(
   try {
     recordTraceSpanUnsafe(name, input, output, metadata);
   } catch (err: unknown) {
-    logger.warn("mcp_tool_trace_span_collection_failed", {
-      error: tracingErrorLabel(err),
-    });
+    // Re-read rather than take a parameter: the callers of this function are
+    // tool handlers with no tracing deps in scope, and the store is what
+    // already tells them a trace is active.
+    activeMcpTrace
+      .getStore()
+      ?.logger.warn(
+        { error: tracingErrorLabel(err) },
+        "mcp_tool_trace_span_collection_failed",
+      );
   }
 }
 
@@ -408,6 +424,26 @@ function resolveTracingConfig(deps: McpTracingDeps): McpTracingConfig {
 }
 
 /**
+ * The ONE place this lane's logger is resolved, and it is never defaulted.
+ *
+ * A fallback here would be a second logger for the process — its own transport,
+ * its own destination, its own view of the correlation context — which is the
+ * exact state #860 removes. #612 is the receipt for how quietly that fails: the
+ * service logged into a void for as long as the server path existed, with no
+ * error and no dropped-line counter. So a missing logger is a wiring mistake
+ * and says so at the call site, rather than resolving to somewhere nobody
+ * reads.
+ */
+function resolveTracingLogger(deps: McpTracingDeps): TracingLogger {
+  if (!deps.logger) {
+    throw new Error(
+      "createTracingRuntime requires a logger from the composition root: pass { logger } (server/main.ts passes the logger it created; a root without one passes its own)",
+    );
+  }
+  return deps.logger;
+}
+
+/**
  * Install content-ful tracing on every tool registered after this call.
  *
  * ORDER MATTERS, exactly as it does for `installMcpAudit`: this works by
@@ -429,8 +465,9 @@ export function installMcpTracing(
   if (!config.enabled) return INACTIVE_HANDLE;
   if (tracingInstalledServers.has(server)) return INACTIVE_HANDLE;
 
+  const logger = resolveTracingLogger(deps);
   const shared = deps.sink !== undefined;
-  const sink = deps.sink ?? createSinkSafely(config, deps.createSink);
+  const sink = deps.sink ?? createSinkSafely(config, logger, deps.createSink);
   if (!sink) return INACTIVE_HANDLE;
   tracingInstalledServers.add(server);
 
@@ -462,11 +499,12 @@ export function installMcpTracing(
         metadata: {},
         spanBytes: 0,
         payloadDegraded: false,
+        logger,
       };
       return activeMcpTrace.run(active, async () => {
         try {
           const result = await callback(args, extra);
-          emitTrace(sink, tracker, {
+          emitTrace(sink, tracker, logger, {
             toolName: name,
             status: isToolError(result) ? "error" : "success",
             durationMs: Date.now() - started,
@@ -479,7 +517,7 @@ export function installMcpTracing(
           });
           return result;
         } catch (err: unknown) {
-          emitTrace(sink, tracker, {
+          emitTrace(sink, tracker, logger, {
             toolName: name,
             status: "exception",
             durationMs: Date.now() - started,
@@ -505,7 +543,9 @@ export function installMcpTracing(
   return {
     active: true,
     shutdown: () =>
-      shared ? Promise.resolve() : shutdownSink(sink, deps.shutdownTimeoutMs),
+      shared
+        ? Promise.resolve()
+        : shutdownSink(sink, logger, deps.shutdownTimeoutMs),
   };
 }
 
@@ -531,7 +571,8 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
 } {
   const config = resolveTracingConfig(deps);
   if (!config.enabled) return { config, shutdown: () => Promise.resolve() };
-  const built = deps.sink ?? createSinkSafely(config, deps.createSink);
+  const logger = resolveTracingLogger(deps);
+  const built = deps.sink ?? createSinkSafely(config, logger, deps.createSink);
   if (!built) return { config, shutdown: () => Promise.resolve() };
   // THE RUNTIME OWNS THE SHARED SINK, SO IT OWNS THAT SINK'S HEALTH. The real
   // factory attaches its own tracker; an injected sink (a test fake, or one
@@ -558,15 +599,17 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
     background: createBackgroundTraceEmitter(
       sink,
       sink.health,
+      logger,
       config.maskingEnabled,
     ),
-    shutdown: () => shutdownSink(sink, deps.shutdownTimeoutMs),
+    shutdown: () => shutdownSink(sink, logger, deps.shutdownTimeoutMs),
   };
 }
 
 function createBackgroundTraceEmitter(
   sink: TracingSink,
   tracker: SinkHealthTracker | undefined,
+  logger: TracingLogger,
   maskingEnabled: boolean,
 ): BackgroundTraceEmitter {
   return {
@@ -587,7 +630,7 @@ function createBackgroundTraceEmitter(
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
         ...(body.userId === undefined ? {} : { userId: body.userId }),
       };
-      emitBuiltTrace(sink, tracker, traceBody);
+      emitBuiltTrace(sink, tracker, logger, traceBody);
     },
   };
 }
@@ -633,14 +676,16 @@ function authAndSession(
 function emitTrace(
   sink: TracingSink,
   tracker: SinkHealthTracker | undefined,
+  logger: TracingLogger,
   input: Parameters<typeof buildToolTraceBody>[0],
 ): void {
-  emitBuiltTrace(sink, tracker, buildToolTraceBody(input));
+  emitBuiltTrace(sink, tracker, logger, buildToolTraceBody(input));
 }
 
 function emitBuiltTrace(
   sink: TracingSink,
   tracker: SinkHealthTracker | undefined,
+  logger: TracingLogger,
   body: TraceBody,
 ): void {
   try {
@@ -649,9 +694,9 @@ function emitBuiltTrace(
     // throws while down). Against the REAL SDK an enqueue always succeeds even
     // with the endpoint dead, so nothing here fires during a real outage and
     // recovery is driven by the health probe in `defaultSinkFactory` instead.
-    if (tracker) reportSinkSuccess(tracker);
+    if (tracker) reportSinkSuccess(logger, tracker);
   } catch (err: unknown) {
-    if (tracker) reportSinkFailure(tracker, err);
+    if (tracker) reportSinkFailure(logger, tracker, err);
   }
 }
 
@@ -664,14 +709,16 @@ function emitBuiltTrace(
  */
 function createSinkSafely(
   config: McpTracingConfig,
+  logger: TracingLogger,
   factory: McpTracingDeps["createSink"],
 ): TracingSink | undefined {
   try {
-    return (factory ?? defaultSinkFactory)(config);
+    return factory ? factory(config) : defaultSinkFactory(config, logger);
   } catch (err: unknown) {
-    logger.warn("mcp_tool_tracing_sink_init_failed", {
-      error: tracingErrorLabel(err),
-    });
+    logger.warn(
+      { error: tracingErrorLabel(err) },
+      "mcp_tool_tracing_sink_init_failed",
+    );
     return undefined;
   }
 }
