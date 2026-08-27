@@ -1,0 +1,8 @@
+// ACCEPTED. Identical logic as guard clauses: each precondition is stated and
+// dismissed on one line, and the real work sits at depth 0.
+export function flat(a: boolean, b: boolean, c: boolean, d: boolean): number {
+  if (!a) return 0;
+  if (!b) return 0;
+  if (!c) return 0;
+  return d ? 1 : 0;
+}

@@ -1,0 +1,7 @@
+// REJECTED by no-empty with allowEmptyCatch off. The single most damaging
+// shape in the set: the parse failed, and nothing above ever learns of it.
+export function swallow(raw: string): void {
+  try {
+    JSON.parse(raw);
+  } catch {}
+}
