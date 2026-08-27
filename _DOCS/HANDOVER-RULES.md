@@ -236,3 +236,57 @@ only when a session actually needed it.
     `:901` — is blocked at commit. Sequence #868 (split the file, drop the
     `process.env` helper) before such a lane; a lint exemption for test files
     is a rung reopening and needs Rico.
+    Resolved 2026-08-26 by #872: the file is split into `server/config.test.ts`,
+    `server/config-extended.test.ts`, `server/config-equivalence.test.ts`, and
+    `parseServerConfig(environment)` at `server/config.ts:380` takes the env
+    object, so no test reads `process.env`. The rule stays as the pattern: a
+    lane blocked by pre-existing lint in a shared test file sequences the
+    split first, never `--no-verify` and never an exemption.
+36. **Every Postgres test runs against a real test database; skipping is a
+    HARD FAILURE.** Rico, 2026-08-26 (#878): "bad shit happens when we pretend
+    that we're using a database and we're not." The pattern is
+    `const pool = new Pool({ connectionString: requireTestDatabaseUrl() })`
+    from `scripts/test-support/require-test-database.ts` with a plain
+    `describe`; `describe.skip` on a missing `OPENBRAIN_TEST_DATABASE_URL` is
+    a defect, and so is a lint exemption for test files. Test files are held
+    to the server-code standard (rules 25/26). `_githooks/pre-push` runs
+    `bun run test:isolated` (#881), so the database is always there at push.
+37. **A pg suite rename or split updates `scripts/assert-db-tests-ran.ts` in
+    the SAME commit.** CI's anti-skip guard is a manifest of suite names and
+    minimum counts; #884's first CI run failed on the manifest alone, with
+    zero test failures. The lane brief names it; the collector reads the
+    guard's `MISSING` / `ran N expected M` lines before blaming a test.
+38. **`--no-verify` is never the answer, and the head checks for it.** The
+    #879 lane pushed with `--no-verify` when the old pre-push hook could not
+    find a database (self-reported). The fix was the hook (#880/#881), not
+    the flag. Every brief carries "never `--no-verify`" verbatim, and a lane
+    that used it reports the sha; the head records the deviation on the
+    scribe issue and re-runs the skipped gate itself before merge.
+39. **Every lane clone carries `core.hooksPath=_githooks` before dispatch.**
+    A fresh clone inherits the global `/Users/rico/.config/git/hooks`, so
+    the repo's pre-commit/pre-push gates do not run there, and
+    `bun scripts/verify-lane.ts` inherits the same setting and fails on the
+    `750-l2b2-lint-refuses-process-env.sh` clause (#872). The head sets it
+    with `git -C <clone> config core.hooksPath _githooks` on every clone at
+    State 2 and re-checks it in the re-probe list.
+40. **A done-means script diffs against the merge-base, scans the call line,
+    and is proven with a deliberate miss.** `750-l5-shared-namespace-importers.sh`
+    shipped three defects in one session (#875 origin/main instead of
+    merge-base; #876 import line only, alias rejected, zero-call importer
+    failed; #877 multiline regex merged adjacent calls). Each was found by a
+    dependent lane, not the author. A check lane's Done-check includes the
+    exit-1 run on a hand-broken input, and the check is on `origin/main`
+    before a dependent lane opens a PR (`pr-body-gate` refuses a Done-means
+    path that is not on the branch).
+41. **A read-only lane that needs `gh` or the network is native Opus 5 low,
+    not the Codex companion.** Codex companion lanes have no forge access and
+    no DNS; they also trip the graph-mode gate (EPERM on chmod) and finish
+    with that noise in their report. CI triage, run-log reads, and issue
+    searches route native with the reason stated (rule 28 covers write
+    lanes; this covers reads).
+42. **A CI failure on a file the PR does not touch is compared with `main`
+    before it blocks the merge, and it gets an issue.** #884's second run
+    failed on `server/maintenance/maintenance.pg.test.ts:353`, a timing race
+    the PR never touched (#889). The collector reruns the failed job once,
+    files the race with file:line and the run id, and merges on green; the
+    python-capture flake (#764) hit five PRs this way before its fix lane ran.
