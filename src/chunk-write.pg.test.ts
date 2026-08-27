@@ -6,9 +6,9 @@
  * must land as a parent row holding the COMPLETE text with its own vector,
  * plus chunk rows that each carry their own vector and point back at it.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo convention); skips when unset.
- * NOTE: a skipped run proves nothing -- set the variable when the result of
- * this file is being used as evidence.
+ * REQUIRES the test database, and fails hard without it (operator ruling
+ * 2026-08-27, issue #878): a suite that skips itself reports a false green.
+ * `bun run test:isolated` supplies it.
  *
  * The embedding PROVIDER is stubbed with a deterministic vector so the test
  * does not depend on a live MLX endpoint; the splitting, the inserts, the
@@ -20,9 +20,8 @@ import { runMigrations } from "./db/migrate.ts";
 import { EMBEDDING_DIMENSIONS, contentHash } from "./embedding.ts";
 import { writeEntryChunks } from "./chunk-write.ts";
 import { toSql } from "pgvector/pg";
+import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 // Per-process namespace so concurrent CI runs cannot collide. The `check` job
 // runs against a SHARED, persistent Postgres on the runner (unlike the
@@ -38,33 +37,32 @@ const CREATED_BY = "chunk-write-test";
 const stubEmbed = async (): Promise<number[]> =>
   Array(EMBEDDING_DIMENSIONS).fill(0.01);
 
-dbDescribe("parent + chunk entry storage (live Postgres)", () => {
-  let pool: Pool;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  beforeAll(async () => {
-    pool = new Pool({ connectionString: DB_URL });
-    await runMigrations(pool);
-  });
+beforeAll(async () => {
+  await runMigrations(pool);
+});
 
-  afterAll(async () => {
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.end();
+});
 
-  afterEach(async () => {
-    await pool.query(`DELETE FROM thoughts WHERE namespace = $1`, [NS]);
-  });
+afterEach(async () => {
+  await pool.query(`DELETE FROM thoughts WHERE namespace = $1`, [NS]);
+});
 
-  async function insertParent(content: string): Promise<string> {
-    const { rows } = await pool.query(
-      `INSERT INTO thoughts
-         (content, tags, source, created_by, namespace, embedding, content_hash)
-       VALUES ($1, '{}', 'test', $2, $3, $4, $5)
-       RETURNING id`,
-      [content, CREATED_BY, NS, toSql(await stubEmbed()), contentHash(content)],
-    );
-    return rows[0].id as string;
-  }
+async function insertParent(content: string): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO thoughts
+       (content, tags, source, created_by, namespace, embedding, content_hash)
+     VALUES ($1, '{}', 'test', $2, $3, $4, $5)
+     RETURNING id`,
+    [content, CREATED_BY, NS, toSql(await stubEmbed()), contentHash(content)],
+  );
+  return rows[0].id as string;
+}
 
+describe("parent + chunk entry storage (live Postgres)", () => {
   it("stores the parent's COMPLETE text, however long", async () => {
     // 51,283 is the longest turn actually captured in the live dogfood clone
     // (open_brain_local_20260724, ob_raw_turns, measured 2026-07-30).
@@ -127,9 +125,10 @@ dbDescribe("parent + chunk entry storage (live Postgres)", () => {
     // not disturb.
     const indexes = rows.map((row) => row.chunk_index as number);
     expect(indexes[0]).toBe(0);
-    for (let i = 1; i < indexes.length; i++) {
-      expect(indexes[i]!).toBeGreaterThan(indexes[i - 1]!);
-    }
+    const strictlyIncreasing = indexes.every(
+      (value, i, all) => i === 0 || value > (all[i - 1] ?? Number.NEGATIVE_INFINITY),
+    );
+    expect(strictlyIncreasing).toBe(true);
   });
 
   it("keeps text that only appears in the middle of a long entry", async () => {
@@ -158,6 +157,9 @@ dbDescribe("parent + chunk entry storage (live Postgres)", () => {
     expect(rows[0].hits).toBeGreaterThan(0);
   });
 
+});
+
+describe("chunk write duplicate and fallback handling (live Postgres)", () => {
   it("reports repeated chunks as duplicates rather than as written rows", async () => {
     // Long entries with repeated text (log dumps, retried tool output) produce
     // byte-identical chunks. The row is refused by the content_hash unique

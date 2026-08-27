@@ -22,7 +22,9 @@
  *     including a same-value write, which must report success rather than
  *     "not found" -- UPDATE matches the row even when the value is unchanged.
  *
- * Gated on OPENBRAIN_TEST_DATABASE_URL (repo dbDescribe convention).
+ * REQUIRES the test database, and fails hard without it (operator ruling
+ * 2026-08-27, issue #878): a suite that skips itself reports a false green.
+ * `bun run test:isolated` supplies it.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
@@ -33,9 +35,8 @@ import { runMigrations } from "../../db/migrate.ts";
 import { registerSetTier } from "../set-tier.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo } from "../../types.ts";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 
 const CREATED_BY = "dream-set-tier-pg-test";
 const OWNER_NS = "dream-set-tier-owner-ns";
@@ -49,90 +50,89 @@ const ownerAuth: AuthInfo = {
   namespaceSource: "token",
 };
 
-dbDescribe("set_tier (live Postgres)", () => {
-  let pool: Pool;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  beforeAll(async () => {
-    pool = new Pool({ connectionString: DB_URL });
-    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await runMigrations(pool);
-    await cleanup();
-  });
+beforeAll(async () => {
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await runMigrations(pool);
+  await cleanup();
+});
 
-  afterEach(cleanup);
+afterEach(cleanup);
 
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
 
-  async function cleanup(): Promise<void> {
-    for (const table of ["thoughts", "decisions"]) {
-      await pool.query(`DELETE FROM ${table} WHERE created_by = $1`, [
-        CREATED_BY,
-      ]);
-    }
+async function cleanup(): Promise<void> {
+  for (const table of ["thoughts", "decisions"]) {
+    await pool.query(`DELETE FROM ${table} WHERE created_by = $1`, [
+      CREATED_BY,
+    ]);
   }
+}
 
-  async function seedThought(opts: {
-    namespace: string;
-    tier: string;
-    content: string;
-    archivedAt?: Date | null;
-  }): Promise<string> {
-    const { rows } = await pool.query(
-      `INSERT INTO thoughts (content, created_by, namespace, tier, archived_at)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [
-        opts.content,
-        CREATED_BY,
-        opts.namespace,
-        opts.tier,
-        opts.archivedAt ?? null,
-      ],
-    );
-    return rows[0].id as string;
+async function seedThought(opts: {
+  namespace: string;
+  tier: string;
+  content: string;
+  archivedAt?: Date | null;
+}): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO thoughts (content, created_by, namespace, tier, archived_at)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [
+      opts.content,
+      CREATED_BY,
+      opts.namespace,
+      opts.tier,
+      opts.archivedAt ?? null,
+    ],
+  );
+  return rows[0].id as string;
+}
+
+async function readRow(id: string): Promise<Record<string, unknown>> {
+  const { rows } = await pool.query(
+    `SELECT id, tier, namespace, archived_at, content, updated_at
+       FROM thoughts WHERE id = $1`,
+    [id],
+  );
+  return rows[0];
+}
+
+async function readTier(id: string): Promise<string> {
+  return (await readRow(id)).tier as string;
+}
+
+async function callSetTier(
+  auth: AuthInfo,
+  args: { table: string; id: string; tier: string },
+) {
+  const server = new McpServer({ name: "test", version: "1.0.0" });
+  const deps: ToolDeps = { pool, embedFn: async () => null };
+  registerSetTier(server, deps);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const originalSend = clientTransport.send.bind(clientTransport);
+  clientTransport.send = (message, options) =>
+    originalSend(message, { ...options, authInfo: auth } as never);
+
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    return await client.callTool({ name: "set_tier", arguments: args });
+  } finally {
+    await client.close();
+    await server.close();
   }
+}
 
-  async function readRow(id: string): Promise<Record<string, unknown>> {
-    const { rows } = await pool.query(
-      `SELECT id, tier, namespace, archived_at, content, updated_at
-         FROM thoughts WHERE id = $1`,
-      [id],
-    );
-    return rows[0];
-  }
-
-  async function readTier(id: string): Promise<string> {
-    return (await readRow(id)).tier as string;
-  }
-
-  async function callSetTier(
-    auth: AuthInfo,
-    args: { table: string; id: string; tier: string },
-  ) {
-    const server = new McpServer({ name: "test", version: "1.0.0" });
-    const deps: ToolDeps = { pool: pool as any, embedFn: async () => null };
-    registerSetTier(server, deps);
-
-    const [clientTransport, serverTransport] =
-      InMemoryTransport.createLinkedPair();
-    const originalSend = clientTransport.send.bind(clientTransport);
-    clientTransport.send = (message: any, options?: any) =>
-      originalSend(message, { ...options, authInfo: auth });
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
-
-    try {
-      return await client.callTool({ name: "set_tier", arguments: args });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  }
-
+describe("set_tier (live Postgres)", () => {
   it("persists the new tier for a row in the caller's namespace", async () => {
     const id = await seedThought({
       namespace: OWNER_NS,
@@ -147,7 +147,7 @@ dbDescribe("set_tier (live Postgres)", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(JSON.parse((result.content as any)[0].text)).toEqual({
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]?.text ?? "")).toEqual({
       id,
       table: "thoughts",
       tier: "hot",
@@ -176,7 +176,7 @@ dbDescribe("set_tier (live Postgres)", () => {
     // would confirm the existence of a row in a namespace the caller cannot
     // read. Pinned here so the ambiguity is understood as intended.
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toBe("Entry not found or archived");
+    expect((result.content as Array<{ text: string }>)[0]?.text ?? "").toBe("Entry not found or archived");
 
     // The whole row, not just the tier: this is the assertion the mock cannot
     // make, and the one that fails if the predicate is ever dropped.
@@ -193,7 +193,7 @@ dbDescribe("set_tier (live Postgres)", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toBe("Entry not found or archived");
+    expect((result.content as Array<{ text: string }>)[0]?.text ?? "").toBe("Entry not found or archived");
   });
 
   it("refuses an archived row in the caller's own namespace", async () => {
@@ -252,7 +252,7 @@ dbDescribe("set_tier (live Postgres)", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(JSON.parse((result.content as any)[0].text).tier).toBe("hot");
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]?.text ?? "").tier).toBe("hot");
     expect(await readTier(id)).toBe("hot");
   });
 });
