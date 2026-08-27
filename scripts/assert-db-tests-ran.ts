@@ -183,6 +183,17 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "031 ob_source_sync_runs running-only uniqueness compat (live Postgres)",
     minTests: 6,
   },
+  // Migration 032's raw-turn structural guarantees, split by subject over one
+  // shared fixture. Registered by #878 when the suite stopped skipping itself
+  // without a database, so a vanished raw-turn constraint fails the run rather
+  // than reporting a silent zero.
+  { name: "032 raw turns role contract (live Postgres)", minTests: 2 },
+  { name: "032 raw turns identity (live Postgres)", minTests: 4 },
+  { name: "032 raw turns conversation thread (live Postgres)", minTests: 4 },
+  {
+    name: "032 raw turns retention and provenance (live Postgres)",
+    minTests: 7,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -202,9 +213,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // suite stopped skipping itself, then 83 -> 85 when #878 also registered the
 // backgroundExtract tag-merge suite that shares migration 027's file and had
 // never been named here, then 85 -> 91 when #878 registered the migration 031
-// upgrade-path suite and its 6), so the global floor cannot silently fall
-// behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 91;
+// upgrade-path suite and its 6, then 91 -> 108 when #878 registered the four
+// migration 032 raw-turns suites' 2 + 4 + 4 + 7), so the global floor cannot
+// silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 108;
 
 export interface SuiteStats {
   tests: number;
