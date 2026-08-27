@@ -4,7 +4,7 @@ Status: PROPOSED. Copy this file per engagement; do not edit it in place.
 
 Graph Mode v1.3-beta, opted in 2026-08-27 (pilot). Every dispatch plan in this
 repo carries the `## Loop policy` block below, validated with
-`scripts/done-means/beta/loop-policy/check.sh <plan.md>` before dispatch.
+`/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/loop-policy/check.sh <plan.md>` before dispatch.
 
 ## Objective
 
@@ -22,8 +22,8 @@ one-way and loud.
 
 ## Loop policy
 
-<!-- Schema and field meanings: scripts/done-means/beta/loop-policy/templates/loop-policy.md
-     Validate with: scripts/done-means/beta/loop-policy/check.sh <this-file>
+<!-- Schema and field meanings: /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/loop-policy/templates/loop-policy.md
+     Validate with: /opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/loop-policy/check.sh <this-file>
      on_exhaust is mandatory, non-empty, and may never say "retry". -->
 
 ```yaml

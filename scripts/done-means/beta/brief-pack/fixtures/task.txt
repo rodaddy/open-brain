@@ -1,3 +1,0 @@
-Add a done-means check that proves every bash entrypoint in scripts/ is
-bash-3.2 clean, and wire the node 24 runtime resolution into the wrapper so a
-launchd job does not fall back to a stale PATH node binary.

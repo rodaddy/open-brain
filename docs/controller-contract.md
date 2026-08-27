@@ -115,37 +115,39 @@ one.
 ## Graph Mode v1.3-beta (opted in 2026-08-27, pilot)
 
 Pilot per Rico, 2026-08-27. Amendment:
-`_DOCS/GRAPH_MODE_SOP-v1.3-beta.md` in Development. Executables are copied
-byte-faithful into `scripts/done-means/beta/` with `PROVENANCE.md`;
-improvements flow back to the Development canon, never as a local fork.
+`_DOCS/GRAPH_MODE_SOP-v1.3-beta.md` in Development. Executables run from the
+Development canon path and are never copied (Rico ruling 2026-08-27);
+improvements go straight into that canon, never a local fork.
 **Nothing here is hook-wired, merge-gated, or in CI.** The controller runs
 these by hand at the landing points this contract already names.
 
 1. **Briefs are assembled, not pasted.** A lane brief comes from
-   `scripts/done-means/beta/brief-pack/pack.sh`, which ranks Tightenings and
-   decisions against the task, emits an `## Excluded (available on request)`
-   list, and REFUSES over budget rather than truncating. A refusal is the
-   signal to cut a smaller lane, not to raise the budget.
+   `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/brief-pack/pack.sh`,
+   which ranks Tightenings and decisions against the task, emits an
+   `## Excluded (available on request)` list, and REFUSES over budget
+   rather than truncating. A refusal is the signal to cut a smaller lane,
+   not to raise the budget.
 2. **A lane report is accepted only after it validates.** This repo's schema is
    the eleven-field one under `## Required lane report format` above, so the
    beta's five-field `lane-report/check.sh` does NOT judge it; the repo's own
    format section remains the authority until the schemas are reconciled in a
    decisions pass. Where a lane returns the beta five-field shape instead,
-   `scripts/done-means/beta/lane-report/check.sh <report>` must exit 0 before
-   the report is read.
+   `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/lane-report/check.sh`
+   `<report>` must exit 0 before the report is read.
 3. **Every merge pass records exits.** At each merge pass the controller runs,
    and appends the exact command, exit, and last line to
    `scripts/done-means/beta-receipts.md`:
-   - `scripts/done-means/beta/ratchet-bound/check.sh docs/lane-contract.md`
-   - `scripts/done-means/beta/placeholders/check.sh <files changed in the pass>`
-   - `scripts/done-means/beta/decisions/check.sh docs/decisions.md`
+   - `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/ratchet-bound/check.sh docs/lane-contract.md`
+   - `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/placeholders/check.sh <files changed in the pass>`
+   - `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/decisions/check.sh docs/decisions.md`
    Red receipts are recorded as red. A beta failure is reported in the lane
    report's `deviations:` field and never absorbed.
 4. **Every dispatch plan carries a loop policy.** Copy
    `docs/dispatch-plan.template.md`, fill the `## Loop policy` block so `goal`
    names a real `scripts/done-means/` check path, and require
-   `scripts/done-means/beta/loop-policy/check.sh <plan.md>` to exit 0 before
-   dispatch. `on_exhaust` is mandatory and may never say retry.
+   `/opt/homebrew/bin/bash /Volumes/ThunderBolt/Development/_ob/skills/graph-mode/beta/loop-policy/check.sh`
+   `<plan.md>` to exit 0 before dispatch. `on_exhaust` is mandatory and may
+   never say retry.
 5. **Known pilot gaps, both recorded in `beta-receipts.md`.**
    `ratchet-bound` reports `live=0` against this repo's Tightenings because it
    counts `- **YYYY-MM-DD` entries and this contract groups them under

@@ -1,8 +1,0 @@
-deliverable:   lane-report validator: check.sh plus lib/lane-report.ts
-claim-states:  check.sh: WRITTEN
-               lib/lane-report.ts: WRITTEN
-               fixtures/: WRITTEN
-verified:      ./check.sh fixtures/pass.txt -> exit 0, lane report valid
-               ./check.sh fixtures/fail-clause1-missing-field.txt -> exit 1, 1 failure(s)
-deviations:    none
-lessons:       none

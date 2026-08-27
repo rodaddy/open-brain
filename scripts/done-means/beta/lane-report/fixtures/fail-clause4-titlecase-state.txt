@@ -1,5 +1,0 @@
-deliverable:   x
-claim-states:  a: WRITTEN, feature is Done and Deployed
-verified:      cmd -> exit 0
-deviations:    none
-lessons:       none

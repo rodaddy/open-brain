@@ -1,2 +1,0 @@
-Prove bounded recall returns a stable top-k under a fixed seed corpus.
-Add a done-means fixture covering the empty-corpus exit 3 path.
