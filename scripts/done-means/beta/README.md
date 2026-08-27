@@ -38,3 +38,32 @@ for d in lane-report ratchet-bound placeholders decisions loop-policy; do \
 Nothing here is wired to a hook, merge gate, or CI. The controller runs
 these by hand at the landing points the SOP names; promotion up the
 enforcement ladder is a per-repo ruling after the pilot.
+
+## Vendoring this into another repo
+
+Development has no repo-root TypeScript project and no line-ending policy, so
+two classes of defect are invisible here and only appear in the repo that
+receives a copy. Both were found by the open-brain and software-factory pilots
+on 2026-08-27, and both would have shipped a green.
+
+**Typecheck.** The three `lib/*.ts` files are written to satisfy `strict` plus
+`noUncheckedIndexedAccess`, because open-brain's `tsconfig.json` includes
+`scripts/**/*` and enables both. Before that pass, vendoring produced 49
+errors that nothing in Development could have surfaced. Keep the `?? ""`
+defaults and the `lineAt`/`cellOf` accessors when editing: each index is
+already proven in range, so the default is a type obligation, not a runtime
+one, and removing it re-breaks the pilots without failing anything here.
+
+**Line endings.** Three fixtures carry CRLF on purpose. A repo whose
+`.gitattributes` normalizes to LF strips them at staging, and all three keep
+exiting exactly as documented while testing nothing. Pin them in the
+receiving repo and verify on the STAGED BLOB, not the working copy:
+
+```
+git show :<path> | file -      # must say "with CRLF line terminators"
+```
+
+**Fixture portability.** A fixture that reaches outside its own bytes for
+evidence tests the repo it landed in. `decisions/fixtures/pass-clause6-retire.md`
+retired a Development path and passed only here. Run the whole fixture set in
+every target repo; a matching sha256 manifest does not prove equivalence.

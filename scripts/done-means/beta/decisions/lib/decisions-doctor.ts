@@ -61,6 +61,13 @@ if (gitOk) {
 const section: string = process.argv[5] || "";
 
 const lines: string[] = text.split("\n");
+// Indexed reads go through lineAt so the file satisfies
+// noUncheckedIndexedAccess, which the open-brain pilot's tsconfig enables and
+// Development has no TS project to catch (2026-08-27). Every call site is
+// already in range; the default is a type obligation, not a runtime one.
+function lineAt(i: number): string {
+  return lines[i] ?? "";
+}
 
 // Lines inside a fenced code block, by line index. A ledger file that
 // DOCUMENTS the nine-column format in a fenced example would otherwise have
@@ -72,7 +79,7 @@ const fenced: boolean[] = (function (): boolean[] {
   const out: boolean[] = [];
   let inFence: boolean = false;
   for (let i = 0; i < lines.length; i++) {
-    const t: string = lines[i].trim();
+    const t: string = lineAt(i).trim();
     if (t.slice(0, 3) === "```" || t.slice(0, 3) === "~~~") {
       inFence = !inFence;
       out.push(true);
@@ -86,15 +93,15 @@ const fenced: boolean[] = (function (): boolean[] {
 // A table header is a line with a pipe that is neither blank nor a separator row.
 function tableHeaderAt(i: number): string[] | null {
   if (fenced[i]) return null;
-  if (lines[i].indexOf("|") === -1) return null;
-  const cells: string[] = splitRow(lines[i]);
+  if (lineAt(i).indexOf("|") === -1) return null;
+  const cells: string[] = splitRow(lineAt(i));
   if (cells.length < 2 || isSeparator(cells)) return null;
   return cells;
 }
 
 function headingLevel(raw: string): number {
   const m = /^(#{1,6})\s/.exec(raw.trim());
-  return m ? m[1].length : 0;
+  return m?.[1]?.length ?? 0;
 }
 
 // Table selection, in order:
@@ -114,13 +121,13 @@ if (section !== "") {
   // unreachable (adversarial review F2, 2026-08-27).
   for (let i = 0; i < lines.length; i++) {
     if (fenced[i]) continue;
-    if (lines[i].trim() === want) { hIdx = i; break; }
+    if (lineAt(i).trim() === want) { hIdx = i; break; }
   }
   if (hIdx === -1) harness("no heading " + section);
-  const level: number = headingLevel(lines[hIdx]);
+  const level: number = headingLevel(lineAt(hIdx));
   for (let i = hIdx + 1; i < lines.length; i++) {
     if (fenced[i]) continue;
-    const lv: number = headingLevel(lines[i]);
+    const lv: number = headingLevel(lineAt(i));
     if (lv > 0 && level > 0 && lv <= level) break;
     if (tableHeaderAt(i)) { headerIdx = i; break; }
   }
@@ -129,7 +136,7 @@ if (section !== "") {
 } else {
   for (let i = 0; i < lines.length; i++) {
     const cells: string[] | null = tableHeaderAt(i);
-    if (cells && cells[0].trim() === "#") { headerIdx = i; selectedVia = "hash-column"; break; }
+    if (cells && (cells[0] ?? "").trim() === "#") { headerIdx = i; selectedVia = "hash-column"; break; }
   }
   if (headerIdx === -1) {
     for (let i = 0; i < lines.length; i++) {
@@ -141,14 +148,14 @@ if (section !== "") {
 
 process.stdout.write("table: line " + (headerIdx + 1) + " via " + selectedVia + "\n");
 
-const header: string[] = splitRow(lines[headerIdx]);
+const header: string[] = splitRow(lineAt(headerIdx));
 const failures: string[] = [];
 
 // Clause 1: schema.
 let schemaOk: boolean = header.length === COLUMNS.length;
 if (schemaOk) {
   for (let i = 0; i < COLUMNS.length; i++) {
-    if (header[i].toLowerCase() !== COLUMNS[i].toLowerCase()) { schemaOk = false; break; }
+    if ((header[i] ?? "").toLowerCase() !== (COLUMNS[i] ?? "").toLowerCase()) { schemaOk = false; break; }
   }
 }
 if (!schemaOk) {
@@ -164,7 +171,7 @@ if (!schemaOk) {
 // Collect data rows.
 const rows: Row[] = [];
 for (let i = headerIdx + 1; i < lines.length; i++) {
-  const raw: string = lines[i];
+  const raw: string = lineAt(i);
   // A fence opening after the header ends the table; rows inside a fenced
   // example are not this ledger's rows.
   if (fenced[i]) break;
@@ -178,9 +185,15 @@ for (let i = headerIdx + 1; i < lines.length; i++) {
     failures.push("FAIL schema row " + (i + 1) + ": " + cells.length + " cells, expected " + COLUMNS.length);
     continue;
   }
-  rows.push({ num: parseInt(cells[0], 10), line: i + 1, cells: cells });
+  rows.push({ num: parseInt(cells[0] ?? "", 10), line: i + 1, cells: cells });
 }
 if (rows.length === 0) harness("table found but it has no data rows: " + path);
+// Column reads go through cellOf for noUncheckedIndexedAccess. The schema
+// check above already proved the row has every column.
+function cellOf(r: { cells: string[] }, i: number): string {
+  return r.cells[i] ?? "";
+}
+
 
 function id(r: Row): string { return isNaN(r.num) ? "@line" + r.line : String(r.num); }
 
@@ -192,7 +205,7 @@ function id(r: Row): string { return isNaN(r.num) ? "@line" + r.line : String(r.
 // failed by clause 5 below.
 const superseded: string[] = [];
 for (const r of rows) {
-  const s: string = r.cells[7];
+  const s: string = cellOf(r, 7);
   if (s !== "") {
     const refs: string[] = s.split(/[,\s]+/).filter(function (x) { return x !== ""; });
     for (const ref of refs) {
@@ -204,12 +217,12 @@ for (const r of rows) {
 }
 
 for (const r of rows) {
-  const state: string = r.cells[3];
-  const item: string = r.cells[2];
-  const rejected: string = r.cells[5];
-  const falsifier: string = r.cells[6];
-  const sup: string = r.cells[7];
-  const retires: string = r.cells[8];
+  const state: string = cellOf(r, 3);
+  const item: string = cellOf(r, 2);
+  const rejected: string = cellOf(r, 5);
+  const falsifier: string = cellOf(r, 6);
+  const sup: string = cellOf(r, 7);
+  const retires: string = cellOf(r, 8);
 
   // Clause 7: state enum.
   if (STATES.indexOf(state) === -1) {
@@ -267,7 +280,7 @@ for (const r of rows) {
 const groups: Array<{ key: string; rows: Row[] }> = [];
 for (const r of rows) {
   if (r.cells[3] !== "RATIFIED") continue;
-  const key: string = r.cells[2].trim().toLowerCase();
+  const key: string = cellOf(r, 2).trim().toLowerCase();
   let g: { key: string; rows: Row[] } | undefined;
   for (const x of groups) { if (x.key === key) { g = x; break; } }
   if (!g) { g = { key: key, rows: [] }; groups.push(g); }
@@ -282,7 +295,7 @@ for (const g of groups) {
     const ids: string[] = live.map(id);
     failures.push(
       "FAIL conflict row " + ids.join(",") + ": " + live.length +
-      " live RATIFIED rows share Item \"" + live[0].cells[2] + "\" and none is superseded"
+      " live RATIFIED rows share Item \"" + (live[0] ? cellOf(live[0], 2) : "") + "\" and none is superseded"
     );
   }
 }

@@ -88,7 +88,11 @@ const KNOWN_FLAGS: string[] = [
   "out",
 ];
 for (let i = 0; i < argv.length; i += 1) {
-  const a = argv[i];
+  // `?? ""` here and below is for noUncheckedIndexedAccess, which the
+  // open-brain pilot's tsconfig enables and Development has no TS project to
+  // catch (2026-08-27). Each index is already in range; the default is a type
+  // obligation, not a runtime one.
+  const a = argv[i] ?? "";
   if (a.slice(0, 2) !== "--") die("unexpected argument: " + a);
   const key = a.slice(2);
   if (KNOWN_FLAGS.indexOf(key) === -1) {
@@ -115,17 +119,18 @@ if (!Number.isFinite(budget) || !Number.isFinite(maxTightenings) || !Number.isFi
 if (maxTightenings < 1) die("--max-tightenings must be at least 1, got " + opts["max-tightenings"]);
 if (maxDecisions < 0) die("--max-decisions must be 0 or more, got " + opts["max-decisions"]);
 
-const taskText = opts.task === "-" ? readStdin() : mustRead(opts.task, "--task");
+const taskPath: string = opts.task ?? "";
+const taskText = taskPath === "-" ? readStdin() : mustRead(taskPath, "--task");
 if (taskText.trim() === "") die("--task is empty");
-const contract = mustRead(opts["lane-contract"], "--lane-contract");
-const doneMeans = mustRead(opts["done-means"], "--done-means");
+const contract = mustRead(opts["lane-contract"] ?? "", "--lane-contract");
+const doneMeans = mustRead(opts["done-means"] ?? "", "--done-means");
 
 // --- parse ------------------------------------------------------------
 function sectionOf(src: string, heading: string): string | null {
   const lines = src.split("\n");
   let start = -1;
   for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i].trim() === heading) {
+    if ((lines[i] ?? "").trim() === heading) {
       start = i + 1;
       break;
     }
@@ -133,8 +138,9 @@ function sectionOf(src: string, heading: string): string | null {
   if (start < 0) return null;
   const body: string[] = [];
   for (let i = start; i < lines.length; i += 1) {
-    if (lines[i].slice(0, 3) === "## ") break;
-    body.push(lines[i]);
+    const l = lines[i] ?? "";
+    if (l.slice(0, 3) === "## ") break;
+    body.push(l);
   }
   return body.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
 }
@@ -168,7 +174,7 @@ function parseEntries(body: string): Entry[] {
     if (cur.length === 0) return;
     const text = cur.join("\n").replace(/\s+$/, "");
     const m = text.match(/^(?:- \*\*|### +)(\d{4}-\d{2}-\d{2})/);
-    out.push({ date: m ? m[1] : "0000-00-00", text });
+    out.push({ date: m?.[1] ?? "0000-00-00", text });
     cur = [];
   };
   for (const line of lines) {
@@ -213,11 +219,17 @@ function parseDecisions(src: string): Decision[] {
     if (line.trim().slice(0, 1) !== "|") continue;
     const cells = line.split("|").slice(1, -1).map((c) => c.trim());
     if (cells.length < 9) continue;
-    if (/^-+$/.test(cells[0].replace(/:/g, ""))) continue;
-    const n = Number(cells[0].replace("#", ""));
+    const c0 = cells[0] ?? "";
+    if (/^-+$/.test(c0.replace(/:/g, ""))) continue;
+    const n = Number(c0.replace("#", ""));
     if (!Number.isFinite(n)) continue;
-    if (cells[3].toUpperCase() !== "RATIFIED") continue;
-    out.push({ n, date: cells[1], item: cells[2], resolution: cells[4] });
+    if ((cells[3] ?? "").toUpperCase() !== "RATIFIED") continue;
+    out.push({
+      n,
+      date: cells[1] ?? "",
+      item: cells[2] ?? "",
+      resolution: cells[4] ?? "",
+    });
   }
   return out;
 }
@@ -243,7 +255,7 @@ function readable(path: string): boolean {
   }
 }
 const ctrlCandidates = [
-  resolve(dirname(resolve(opts["lane-contract"])), "controller-contract.md"),
+  resolve(dirname(resolve(opts["lane-contract"] ?? "")), "controller-contract.md"),
   new URL("../../../../../../_DOCS/controller-contract.md", import.meta.url).pathname,
 ];
 let ctrlResolved = "";
@@ -281,8 +293,9 @@ function commentHeader(src: string): string {
   if (lines[0] && lines[0].slice(0, 2) === "#!") i = 1;
   const out: string[] = [];
   for (; i < lines.length; i += 1) {
-    if (lines[i].slice(0, 1) !== "#") break;
-    out.push(lines[i]);
+    const l = lines[i] ?? "";
+    if (l.slice(0, 1) !== "#") break;
+    out.push(l);
   }
   return out.join("\n");
 }

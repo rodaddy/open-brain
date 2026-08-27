@@ -43,7 +43,11 @@ export function parse(text: string): { fields: Field[]; tail: string[] } {
   const tail: string[] = [];
   let current: Field | null = null;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // `?? ""` throughout this file is for noUncheckedIndexedAccess, which the
+    // open-brain pilot's tsconfig enables and Development has no TS project to
+    // catch (2026-08-27). The index is always in range here; the default is a
+    // type obligation, not a runtime one.
+    const line = lines[i] ?? "";
     const key = keyAt(line);
     if (key !== null) {
       current = {
@@ -110,10 +114,12 @@ export function validate(text: string): Failure[] {
 
   // Clause 2: every value non-empty.
   for (let i = 0; i < fields.length; i++) {
-    if (!nonEmpty(fields[i].value)) {
+    const f = fields[i];
+    if (f === undefined) continue;
+    if (!nonEmpty(f.value)) {
       failures.push({
         clause: "empty-value",
-        detail: fields[i].key + ": empty value at line " + fields[i].line,
+        detail: f.key + ": empty value at line " + f.line,
       });
     }
   }

@@ -4,7 +4,7 @@ Copied byte-faithful. This directory is a COPY; canon lives in Development.
 
 - Source repo: `/Volumes/ThunderBolt/Development` (`_ob/skills/graph-mode/beta/`)
 - Source branch: `feat/graph-mode-v1.3-beta`
-- Source commit: `7130d53a`
+- Source commit: `fa5495fb`
 - Source PR: https://git.rodaddy.live/rtech/development/pulls/3 — **UNMERGED at copy time**
 - Copy date: 2026-08-27 (resync from `6bfc3e3f`, 8 adversarial-review fix commits)
 - Copied by: open-brain beta opt-in lane (claude-code, claude-fable-5)
@@ -44,7 +44,7 @@ eb3a37201ac9b3e291012096824ab94374a9786f08eb47bf3494d49b127b8268  brief-pack/fix
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  brief-pack/fixtures/real.err
 16aa1267646f528ed0fc0bb4f49cc1c640fe166879c2eaff7cd062df9bcb51a1  brief-pack/fixtures/real.out.md
 04d9d12873a9e5c839eb60b1d3c6c8a6cff7b14edda0db5ade68c4df850c056a  brief-pack/fixtures/task.txt
-2a5675f65d043169ef8b94d39cc3030aa6f7395f5bafb2d23c1f33c049022df2  brief-pack/lib/brief-pack.ts
+a24d367c1bcdcafee220b808996c5f5e97833310f4e611f008525488df7e0765  brief-pack/lib/brief-pack.ts
 8010f7f8564412b5b85d3dfbca3f3faa52bd605addd7c7d944ef914cf4cee42d  brief-pack/pack.sh
 efff7a7ef558ee7d95507f2716de1596dd093319601a89cc145cad7c5505c4dd  brief-pack/README.md
 b8aba7c3bc19316f9e32d2bfb9b5a762b233b6c3436305c78f37e5c31a2494f2  brief-pack/RED.md
@@ -64,7 +64,7 @@ f80d46e17bfad109729423899a15b3258504f3ea473b6cceac423c7d37a712b0  decisions/fixt
 65f75ac8f66f4866ccd7458d85b63eb7d3528ebf6e0ddc1d43748bb1875e0fe4  decisions/fixtures/pass-clause6-retire.md
 3cd11dccf36469df283f745e7638e5c052fbe3e15279450d467589c806bcaccb  decisions/fixtures/pass-fenced-section-heading.md
 e4511112556b12e0d7d89e9fec0be95a70121b02356f29660f54923bdc954d71  decisions/fixtures/pass-section-second-table.md
-d3c01a39967a151bc82306116c709c6cddc70d12e18d5a18d506c8c295b2f6f1  decisions/lib/decisions-doctor.ts
+5f6b301d746ae3e6f7c697f816a9faddd2f4ce51430b0980eb386fd9633045d4  decisions/lib/decisions-doctor.ts
 1a9e8eee2ffb4b8296a7f530dc0f7927f8f2e4e30292b37b518adade5880da2e  decisions/README.md
 96410a0bc395a4ac4d7a12f8cc165a772526634ecc9430a307302501f7bab749  decisions/RED.md
 dc8fffdfdd44667aff79c37532b64d82e0a8bd20335388d7f3968b50d42871e0  decisions/templates/decisions.md
@@ -83,7 +83,7 @@ d8f7b676693a134afce9a3ab2b7588953f56eab1dc7d1b648e21c878b2c19ecc  lane-report/fi
 28f9f311cfe6888a3a8adb801149d6837c2b901d9ebe2ecd80bb2ddedbccc498  lane-report/fixtures/fail-clause6-blank-deviations.txt
 3f9fec46c7f64c17ea2a3cb193f9524bce3b7f589b38bde1ffcd32e389af786b  lane-report/fixtures/pass-crlf.txt
 70fad71c249da7f3dadea4c8444c24928c37382683b90b2077ca8ddaa4fff8aa  lane-report/fixtures/pass.txt
-eabdc62c2086321ac821cf8c9f2be297117aa136f5865d69e2595da81de4f06b  lane-report/lib/lane-report.ts
+d3040008f9ed45167644a74ce87925d92e4f814a7b654ccdeec0ad59892d0509  lane-report/lib/lane-report.ts
 931e86e1c7de47e7258155d31f51303e6f72fb62d05354bb3b0680c29245799c  lane-report/README.md
 5c3a8bd6278f06bd8ee48126379b9b150c882efc60b848ca63a1ce72285640a3  lane-report/RED.md
 46169e55e3c39aa36e10017c35566c0ac939432c4135a501277c73b6794a5f85  loop-policy/check.sh
@@ -127,5 +127,5 @@ b6c35f50651e71318a9f230b8b1b30d4a40302e0da7720140899278803de71cb  ratchet-bound/
 f654adb6f9a282ca245c2bab59f3e66024a0092b2717aecf076f9e985c77368c  ratchet-bound/fixtures/pass-multiline-comment.md
 daf73a1a0b52a310ce12eec74d19f8664b1c6dd7da5d488605f876b833053825  ratchet-bound/README.md
 a35fb14666680c9fbc84983dd80ac36b5ffc0fc242e88eb74b3ec8af8be728d9  ratchet-bound/RED.md
-76e0b0b189770d803407dae8c1dd19239c6efad3ef3c6c96527dfa0fd678a371  README.md
+56dc21b403de5a80b4c9b1eb9f766e4a4c4250c597cad8e1d8af7a96cb80dc9b  README.md
 ```
