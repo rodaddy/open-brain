@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-25T12:06:49Z
-Updated: 2026-08-25T12:06:49Z
+Updated: 2026-08-27T00:49:25Z
 
 ---
 
@@ -97,3 +97,22 @@ fallback itself is right is a separate question per site.
 
 Scan reproducible from the repo root; #747 carries the full context and the
 one fix already applied.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-27T00:49:25Z
+
+Current census (read-only recon, Luna, origin/main 3e01ebb), non-test `server/`:
+
+catch_sites=69 rethrows=13 logs=34 swallows=5 returns_default=17
+
+Sites that lose the error (swallow or return a default with no log):
+- server/transport/server-identity.ts:155, :208, :266 (interface/IP/identity lookups return empty or UNKNOWN_SERVER_IP)
+- server/observability/langfuse-tracing.ts:310, :627; trace-sink.ts:281, :339; trace-release.ts:55
+- server/config/nats.ts:91 (invalid URL becomes a sentinel); server/main.ts:464 (close failure suppressed)
+- server/realtime/recovery-wal-records.ts:128; recovery-wal.ts:475
+- server/tools/brain-answer.ts:267; context-pack-durable-lane.ts:487; context-pack-durable-memory.ts:276; context-pack-guidance.ts:378; context-pack-repo-facts.ts:391; entry-text.ts:23; find-duplicates.ts:360; promote-entry.ts:203; search-brain.ts:236; tier-lane.ts:299
+
+verified: `rg -n -U 'catch\s*(\([^)]*\))?\s*\{' server --glob '!*.test.ts' | rg -c 'catch\s*'` -> 69. The 62 in the title was the earlier measurement; 22 sites are the L3 hard-failure work.

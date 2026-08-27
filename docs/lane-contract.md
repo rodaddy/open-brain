@@ -91,6 +91,18 @@ Every lane, no exceptions:
 
 Newest first. Every entry: what changed, and the observation that forced it.
 
+### 2026-08-27 (round 39) — harvest of the session-9 #878 split-and-convert lanes (PRs #929-#935) and the #916 growth-shape lane (PR #934)
+
+- **Lint the origin/main copy of every file in a split before cutting the lane.** The pre-commit gate lints staged files whole, so a conversion lane inherits every pre-existing finding in a file it touches; three of five batch-1 lanes overran the 15-minute timebox on that inherited work, and one stopped red because 19 `no-non-null-assertion` findings sat inside test bodies its brief forbade touching. One `oxlint --deny-warnings` run on the origin/main copy is part of sizing the lane, and the brief names the allowed fix patterns (`expectDefined` guard in the helper module, hoisted bodies, `as unknown as T`). (PRs #929, #930, #931, #933)
+- **`max-lines-per-function` measures the describe callback; neither splitting the file nor nesting sub-describes clears it.** Hoist each `it` body to a named module-scope `async function` called as `it("<same name>", fn)`; assertion text moves verbatim. The finding only becomes visible after the split lands. (PRs #930, #932, #933)
+- **A helper lifted into a shared test module takes `pool` as a parameter and creates none.** The helper-owns-the-pool version gives each half of a split an `afterAll` that ends a connection the other half still uses. A shared row accessor also collides with same-named locals in moved bodies; rename before hoisting. (PRs #932, #933)
+- **A hoisted module-scope const evaluates at import.** One that calls a function defined lower in the file typechecks clean and throws `ReferenceError` at module load; a green `tsc` over a hoist of this shape is not evidence. Move its dependencies with it and run the suite. (PR #935)
+- **Every new describe name gets its manifest entry in the same commit, re-measured per half**, or CI's anti-skip guard fails on a suite it cannot find. Prettier runs inside the pre-commit gate and reformats staged files, so lint and test receipts are taken on the committed tree, not the staged one. (PR #933)
+- **gitleaks judges the diff, not the file.** Relocating an unchanged secret-shaped fixture reads as a removed-and-added secret even though the literal is byte-identical to origin/main. Keep the block in its original range and run `git diff --cached | gitleaks detect` before committing instead of adding an allowlist entry. (PR #934)
+- **The controller re-run uses the handover's done-check invocation verbatim, never the bare script.** `878-pg-tests-require-database.sh` discovers only `*.pg.test.ts` from the merge-base diff; a split into `*.test.ts` files yields `SUBJECT: none`, exit 1, no receipt, and the collector reported "not verified" on a PR that passes under `CHANGED_FILES`. The collector now derives `CHANGED_FILES` from the PR's `*.test.ts` paths. (PRs #933, #935; session-9 head)
+
+provenance: PR #929; PR #930; PR #931; PR #932; PR #933; PR #934; PR #935; the session-9 lane reports.
+
 ### 2026-08-26 (round 38) — harvest of the #780 wave 2 file lanes (PRs #797-#814)
 
 - **A reuse candidate is only reuse when its defaults AND its failure shape

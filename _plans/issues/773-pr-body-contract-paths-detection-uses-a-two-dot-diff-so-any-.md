@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-26T07:38:39Z
-Updated: 2026-08-26T07:38:39Z
+Updated: 2026-08-26T20:11:41Z
 
 ---
 
@@ -32,3 +32,11 @@ Diff from the merge base: `git diff --quiet "${BASE_SHA}...${HEAD_SHA}" -- ...` 
 ## Claim state
 
 WRITTEN (this report). Workaround applied on #771: branch updated to main so the two-dot diff is clean.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-26T20:11:40Z
+
+Same two-dot class, second site: `scripts/done-means/handoff-validates.sh:39` runs `git diff --name-only origin/main -- '_DOCS/_handoff/*.md'` (working tree vs main). Observed 2026-08-26 on PR #785 at head 1a790c3: after #824 added `_DOCS/_handoff/2026-08-26-lint-sweep-l2-session3.md` to main, the check listed that file for a branch that never touched it and failed with "HARNESS: cannot read". Line 38 already has the three-dot form; line 39 should go, or restrict to files present in HEAD. Workaround used: merge origin/main into the branch.

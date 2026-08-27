@@ -3,11 +3,12 @@
 
 # #764 — python-capture: TestAgainstARealTranscript reads whatever is largest in the runner's ~/.claude, fails when that is an API-error transcript
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-26T02:28:24Z
-Updated: 2026-08-26T02:28:24Z
+Updated: 2026-08-27T04:38:33Z
+Closed: 2026-08-27T04:38:33Z
 
 ---
 
@@ -26,3 +27,110 @@ PR #763 (docs-only) run 32922625834, job `python-capture` on `open-brain-ct106`:
 Pin the input: ship a fixture transcript (redacted) under `tests/fixtures/` and run the real-transcript variant only when an env var opts in (same pattern as the live canaries). Related flake family: #702.
 
 Claim state: RUNNING for the log and the test source; PROPOSED for the fix.
+
+---
+
+## Resolution
+
+Closed by **PR #890** — fix(python-capture): the real-transcript test picks a transcript with operator turns instead of the largest file (#764)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `23239ba68b4973560c51018430030e7e1cffb9aa`
+- Merged at: 2026-08-27T04:38:32Z
+- PR state: MERGED
+- Issue closed: 2026-08-27T04:38:33Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #890 body
+
+> ## Summary
+>
+> - Fixes #764. `python/openbrain/tests/test_capture_transcript.py::TestAgainstARealTranscript` read whatever `*.jsonl` file was LARGEST under the runner's `~/.claude`, which made the outcome a property of the host rather than of the code. On 2026-08-27 the biggest session on several runners was one where every `user` record was an API error, so no operator turns were found and `assert 1 < 1` failed on five unrelated PRs (#873 #875 #883 #885 #886).
+> - The class now reads a committed fixture, `python/openbrain/tests/fixtures/transcripts/session-with-operator-turns.jsonl`, carrying the three record classes the original live measurement found: three operator turns, two tool results replayed under the `user` role, and one API-error record. Content is synthesized; nothing real and nothing sensitive is in it.
+> - Assertion semantics are preserved in meaning — operator turns are found, and neither the tool results nor the API-error record counts as one. Because the file is now known, the test additionally names the exact three turns it expects rather than only comparing counts.
+> - Chose the fixture over "select the newest transcript containing a usable operator turn": the latter still leaves the assertion's strength dependent on whatever the host happens to hold, and it fails or skips on a clean machine for reasons unrelated to the change under test.
+> - Side effect worth stating: the class no longer skips when `~/.claude` is absent, so these six tests now genuinely run in CI and on a fresh checkout. Previously they skipped silently there, which is a pass that tested nothing.
+> - Closes #764.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/764-real-transcript-test-selects-operator-turns.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> Evidence, run in this branch's clone:
+>
+> - `bash scripts/done-means/764-real-transcript-test-selects-operator-turns.sh` -> exit 0 on the committed tree (`DONE-MEANS 764: PASS`). At `origin/main` C1 fails (`still selects a transcript from the host`) and C3 reports `6 skipped` instead of running.
+> - `cd python/openbrain && uv run pytest -q` -> `622 passed, 1 skipped, 19 deselected`.
+> - `cd python/openbrain && uv run mypy src/openbrain` -> `Success: no issues found in 50 source files`.
+> - `cd python/openbrain && uv run ruff check src tests` -> `All checks passed!`.
+> - `bunx tsc --noEmit` -> exit 0. No TypeScript or JavaScript file is touched by this change, so oxlint has no target here and the TypeScript suite is unaffected.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the six tests in this class no longer exercise a live transcript at all, so a Claude Code format change that a developer's real `~/.claude` would have caught now goes unnoticed until the fixture is refreshed. That is the deliberate trade — the tests were only opportunistically running against a live file anyway, and on CI they were skipping outright.
+> - Assumptions that could be wrong: that the fixture's record shapes still match what Claude Code writes today. They were copied from the shapes the existing `operator_line`/`tool_result_line`/`assistant_reply_line` helpers in this same test module already encode, which were themselves measured against a live 26.5 MB transcript on 2026-07-31 and again on 2026-08-03 (#447), so the fixture is not a fresh guess.
+> - Missing/weak tests: nothing asserts that the API-error record specifically is the reason a `user` record was excluded — `records.py` has no API-error branch, it simply requires `promptSource`, so an error record is excluded by the same rule as a tool result. Writing a test that distinguishes them would assert a distinction the parser does not make.
+> - Security/permission risk: none. No auth, namespace, or SQL path is touched. The fixture is synthesized, contains no real conversation content and no credentials; gitleaks scanned the staged change and found none.
+> - Migration/deploy risk: none. Test-only change plus a new done-means script; no schema, no runtime code path, no config.
+> - Downstream client/runtime risk: none. `docs/downstream-rollout.md` applies to MCP tool/schema/protocol/client-facing changes; this alters no contract, no tool surface, and no Python client behavior.
+> - Rollback/cleanup concern: reverting the commit restores the previous selection helper exactly; the fixture file is orphaned by the revert and nothing else references it.
+> - Fixes made before PR: the original `len(result.turns) < user_records` comparison counted assistant turns too, so against a small known file it compared six turns to six user records and failed. Corrected to count operator turns specifically, which is what the assertion's own failure message always claimed to be about.
+> - Known residual risk: the fixture ages. If Claude Code changes its record format, this suite stays green while production capture silently degrades — which is the exact failure the class's docstring says it exists to prevent. The mitigation is refreshing the fixture whenever `records.py` rules are re-measured, and the docstring now says the file is committed so a reader knows to.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: the pattern (a test whose input is discovered from the host machine rather than committed) is a single-instance fix here, and `docs/sme/` lanes are for review findings that a future swarm should scan code for, not for a one-file determinism fix already enforced by an executable done-means check.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: no server, transport, or database path is touched; this is a test-input change in the Python capture package.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: the new fixture is a Claude Code transcript sample used only as test input by the Python capture reader. It is not a contract fixture and has no TypeScript counterpart.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board: no MCP tool, schema, transport, or client-facing surface changes. The diff is one test module, one test fixture, and one done-means script.
+>
+
+---
+
+## Discussion (5)
+
+### rodaddy — 2026-08-27T02:40:48Z
+
+Hit again 2026-08-27 on PR #873 run 33033898375 (TS-only diff): test_operator_turns_are_found_and_tool_results_are_not, 'assert 1 < 1', the largest transcript was an API Error transcript.
+
+---
+
+### rodaddy — 2026-08-27T02:52:28Z
+
+Hit again on PR #875 run 33034489960, same assertion (test_capture_transcript.py:725), same API-error transcript uuid 6e56dc8e.
+
+---
+
+### rodaddy — 2026-08-27T04:08:08Z
+
+Hit again on PR #883 run 33038376440 (test-only diff), same assertion.
+
+---
+
+### rodaddy — 2026-08-27T04:11:55Z
+
+Hit again on PR #885 run 33038453875 (test-only diff), same assertion.
+
+---
+
+### rodaddy — 2026-08-27T04:16:37Z
+
+Hit again on PR #886 run 33038608484 (test-only diff), same assertion. Four hits this session (#873 #875 #883 #885 #886).
