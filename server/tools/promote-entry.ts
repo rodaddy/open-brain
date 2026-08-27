@@ -34,7 +34,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
 import { promoteEntry } from "../../src/promotion-service.ts";
 import {
