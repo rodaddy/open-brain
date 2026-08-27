@@ -210,3 +210,12 @@ only when a session actually needed it.
     it and lands first, then the dependents rebase onto it. This supersedes the
     one-file-at-a-time sequencing from the 2026-08-26 morning ruling on #780;
     that ruling's "fully to standard, one file per lane" part still stands.
+33. **Removing a fallback runs the WHOLE suite before push.** #857 deleted the
+    `process.env` fallback in `server/tools/shared-namespace.ts`, its lane
+    proved green on `server/tools` only, and main went RED at `49a8ae6`:
+    `contracts/server-tool-parity.test.ts` composes tool dependencies itself
+    and had no `sharedNamespaceNames` (fix #859). A lane that deletes a
+    default, fallback, or lenient guard runs `bun run test:isolated` with no
+    path before pushing, and its brief names `contracts/` as a composition
+    site next to `server/main.ts`. A collector that sees a real failure
+    compares it with the main run for the PR's base sha before blaming the PR.
