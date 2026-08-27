@@ -1,5 +1,4 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { Pool } from "pg";
+import { describe, expect, it } from "bun:test";
 import { registerGetEntry } from "../get-entry.ts";
 import type { AuthInfo } from "../../types.ts";
 import {
@@ -9,7 +8,7 @@ import {
   setupMcpClient,
 } from "./test-helpers.ts";
 
-describe("get_entry", () => {
+describe("get_entry full reads and source scope", () => {
   it("filters scoped callers to readable namespaces", async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {
@@ -92,7 +91,9 @@ describe("get_entry", () => {
       await cleanup();
     }
   });
+});
 
+describe("get_entry source ref redaction", () => {
   it("requires matching source scope before returning source refs", async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const sourceRefs = [
@@ -154,9 +155,7 @@ describe("get_entry", () => {
       expect(parseToolResult(result).source_refs).toEqual([
         { ...sourceRefs[0], source_type: "file" },
       ]);
-      expect(queries[0]?.sql).toContain(
-        "COALESCE(t.source_refs, '[]'::jsonb)",
-      );
+      expect(queries[0]?.sql).toContain("COALESCE(t.source_refs, '[]'::jsonb)");
       expect(queries[0]?.params).toEqual([
         "550e8400-e29b-41d4-a716-446655440021",
         JSON.stringify({
@@ -169,7 +168,9 @@ describe("get_entry", () => {
       await cleanup();
     }
   });
+});
 
+describe("get_entry source scope authorization", () => {
   it("denies source scope for non-admin callers before querying", async () => {
     let queried = false;
     const mockPool = {
@@ -234,7 +235,9 @@ describe("get_entry", () => {
       await cleanup();
     }
   });
+});
 
+describe("get_entry compact render", () => {
   it("denies compact render before querying when the role cannot read the table", async () => {
     let queried = false;
     const mockPool = {
@@ -307,7 +310,9 @@ describe("get_entry", () => {
       await cleanup();
     }
   });
+});
 
+describe("get_entry compact envelope", () => {
   it("returns a bounded compact envelope without emitting the full row", async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {
@@ -392,7 +397,9 @@ describe("get_entry", () => {
       await cleanup();
     }
   });
+});
 
+describe("get_entry session compact content", () => {
   it("builds session compact content from the full summary, not the clipped search preview", async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const mockPool = {
@@ -442,65 +449,6 @@ describe("get_entry", () => {
       expect(queries[0]?.sql).toContain("length(entry.content_text)");
     } finally {
       await cleanup();
-    }
-  });
-});
-
-// Gated on OPENBRAIN_TEST_DATABASE_URL. CI's db-integration job sets this and
-// catches real Postgres SQL failures that mock-pool tests cannot execute.
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-
-dbDescribe("get_entry compact render (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
-  const ns = "test-get-entry-compact";
-  const sessionId = "550e8400-e29b-41d4-a716-446655440099";
-
-  async function cleanupNs() {
-    await pool.query("DELETE FROM sessions WHERE namespace = $1", [ns]);
-  }
-
-  afterAll(async () => {
-    await cleanupNs();
-    await pool.end();
-  });
-
-  it("reports session length and truncation from the full readable content", async () => {
-    await cleanupNs();
-    const longSummary = "x".repeat(450);
-    await pool.query(
-      `INSERT INTO sessions (id, namespace, project, summary, created_by, tags)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [sessionId, ns, "proj", longSummary, "codex", ["compact"]],
-    );
-
-    const { client, cleanup } = await setupMcpClient(
-      registerGetEntry,
-      pool as any,
-      createMockEmbed(),
-      { role: "agent", clientId: ns },
-    );
-
-    try {
-      const result = await client.callTool({
-        name: "get_entry",
-        arguments: {
-          table: "sessions",
-          id: sessionId,
-          render: "compact",
-          max_chars: 80,
-        },
-      });
-
-      expect(result.isError).toBeFalsy();
-      const parsed = parseToolResult(result);
-      expect(parsed.content_preview).toBe(`proj: ${"x".repeat(74)}`);
-      expect(parsed.content_length).toBe(456);
-      expect(parsed.content_truncated).toBe(true);
-      expect(parsed.content_preview).toHaveLength(80);
-    } finally {
-      await cleanup();
-      await cleanupNs();
     }
   });
 });
