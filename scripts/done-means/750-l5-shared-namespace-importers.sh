@@ -27,7 +27,17 @@
 # GENERIC BY DESIGN — NO ARGUMENTS
 # ---------------------------------------------------------------------------
 # This check takes no argv. It discovers its own subject: the non-test files
-# under server/tools changed against origin/main. That is what makes it usable
+# under server/tools changed against the MERGE BASE of origin/main and HEAD.
+# Diffing against the moving tip of origin/main instead would drag in files
+# that other branches changed after this one was cut, and judge them as if
+# this lane had touched them. The merge base is the branch's own diff.
+#
+# Two files are always excluded from the subject, however they arrive:
+# `server/tools/shared-namespace.ts`, which DEFINES the six helpers rather
+# than calling them, and anything matching `*-fixture.ts`. Neither is a
+# migration subject, and both fail clause 2 by construction.
+#
+# Self-discovery is what makes this check usable
 # by the sibling lanes on this rung without editing it — each lane changes a
 # different pair of modules, and each gets its own subject list for free.
 #
@@ -84,10 +94,17 @@ if [ -n "${CHANGED_FILES:-}" ]; then
   SUBJECT="$(printf '%s\n' $CHANGED_FILES)"
   SUBJECT_SOURCE="CHANGED_FILES override"
 else
-  SUBJECT="$(cd "$REPO_ROOT" && git diff --name-only origin/main -- server/tools 2>/dev/null | rg -v '\.test\.ts$')"
-  SUBJECT_SOURCE="git diff --name-only origin/main -- server/tools (non-test)"
+  MERGE_BASE="$(cd "$REPO_ROOT" && git merge-base origin/main HEAD 2>/dev/null)"
+  [ -n "$MERGE_BASE" ] || fail_hard "git merge-base origin/main HEAD produced nothing"
+  SUBJECT="$(cd "$REPO_ROOT" && git diff --name-only "$MERGE_BASE" -- server/tools 2>/dev/null | rg -v '\.test\.ts$')"
+  SUBJECT_SOURCE="git diff --name-only \$(git merge-base origin/main HEAD) -- server/tools (non-test)"
 fi
 SUBJECT="$(printf '%s\n' "$SUBJECT" | rg -v '^$' || true)"
+# The twin DEFINES the helpers; a fixture is test scaffolding. Neither is ever
+# a subject, whether discovery or CHANGED_FILES put it there.
+SUBJECT="$(printf '%s\n' "$SUBJECT" \
+  | rg -v '^server/tools/shared-namespace\.ts$' \
+  | rg -v -- '-fixture\.ts$' || true)"
 
 if [ -z "$SUBJECT" ]; then
   printf 'SUBJECT: none — %s produced no files.\n' "$SUBJECT_SOURCE" >&2
