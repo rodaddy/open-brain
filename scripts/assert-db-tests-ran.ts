@@ -335,6 +335,28 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "agent_context_pack citations + non-fallback (live Postgres)",
     minTests: 2,
   },
+  // The ingest_raw_turn tool test carries pure isHarnessNoise cases that run
+  // everywhere plus these live suites, covering the write/replay path, stored
+  // provenance, the per-namespace session_seq recompute, and the namespace and
+  // auth boundary. Split by subject in #878 as that file stopped skipping
+  // itself, so all four are named here; registering one would let the others
+  // vanish unnoticed.
+  {
+    name: "ingest_raw_turn write path (live Postgres)",
+    minTests: 4,
+  },
+  {
+    name: "ingest_raw_turn provenance (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "ingest_raw_turn session_seq recompute (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "ingest_raw_turn namespace and auth boundary (live Postgres)",
+    minTests: 3,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -374,8 +396,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // two subject-split agent_context_pack guidance/repo_facts suites' 2 + 2 as
 // that file stopped skipping itself, then 249 -> 255 when #904 registered the
 // retire-collab scratch-migration suite's 6 as that file stopped skipping
-// itself), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 255;
+// itself, then 255 -> 265 when #878 registered the four ingest_raw_turn
+// suites' 4 + 1 + 2 + 3 as that file stopped skipping itself), so the global
+// floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 265;
 
 export interface SuiteStats {
   tests: number;
