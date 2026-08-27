@@ -301,6 +301,21 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // UNIQUE(job_kind, idempotency_key) conflict path, which exists only in
   // Postgres and reported a silent zero before.
   { name: "maintenance sweep idempotency (live Postgres)", minTests: 1 },
+  // The #346 graph-derivation regressions, proven against the real partial-unique
+  // indexes rather than the in-memory FakeGraph. Registered by #878 when the file
+  // stopped skipping itself without a database.
+  {
+    name: "deriveGraphFromMetadata anchor rename (live Postgres)",
+    minTests: 1,
+  },
+  {
+    name: "deriveGraphFromMetadata duplicate source titles (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "deriveGraphFromMetadata stale-edge prune (live Postgres)",
+    minTests: 1,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -335,9 +350,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // stopped skipping itself, then 238 -> 240 when #878 registered the #297
 // namespace isolation negative matrix suite's 2 as that suite stopped skipping
 // itself, then 240 -> 241 when #878 registered the maintenance sweep
-// idempotency suite's 1), so the global floor cannot silently fall behind
-// the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 241;
+// idempotency suite's 1, then 241 -> 245 when #878 registered the three
+// graph-derivation suites' 1 + 2 + 1), so the global floor cannot silently
+// fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 245;
 
 export interface SuiteStats {
   tests: number;

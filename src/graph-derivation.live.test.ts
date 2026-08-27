@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
 import type { AuthInfo } from "./types.ts";
 
@@ -16,40 +17,43 @@ import type { AuthInfo } from "./types.ts";
  * A rename of the same anchor (stable canonical id, new display name) must be a
  * safe in-place UPDATE and must not raise a 23505 on the canonical index.
  *
- * Env-gated exactly like search-brain-relational-retrieval.test.ts: skipped
- * unless OPENBRAIN_TEST_DATABASE_URL points at a migrated database.
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878) rather than skipping itself into a false green.
+ * `bun run test:isolated` sets it.
  */
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
+const auth: AuthInfo = {
+  role: "admin",
+  clientId: "test-graph-derivation",
+  namespaceSource: "token",
+};
+
+/** The derivation store handle
+, which is the shared pool in every suite. */
+const store = { query: pool.query.bind(pool) };
+
+/** Clears both graph tables for one namespace. */
+async function clearNamespace(ns: string): Promise<void> {
+  await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
+  await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
+}
+
+afterAll(async () => {
+  await pool.end();
+});
+
+describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
   const ns = "test-graph-derivation-rename";
   const anchorType = "thought";
   const anchorId = "aa000000-0000-4000-8000-000000000346";
   const anchorCanonical = `${anchorType}:${anchorId}`;
-  const auth: AuthInfo = {
-    role: "admin",
-    clientId: "test-graph-derivation",
-    namespaceSource: "token",
-  };
-
-  async function cleanup(): Promise<void> {
-    await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
-    await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
-  }
-
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
-
   it("renames the anchor in place without violating the canonical unique index", async () => {
-    await cleanup();
+    await clearNamespace(ns);
 
     // First derivation: create the anchor under its original display name.
     const first = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
@@ -77,7 +81,7 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     // The derivation remains structurally `unchanged`, but the anchor's readable
     // storage name and exact display_name must still refresh in place.
     const renamed = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
@@ -105,7 +109,7 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
 
     // Re-running the exact same (renamed) input is idempotent and content-free.
     const again = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
@@ -131,37 +135,20 @@ dbDescribe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
  * so lower(name) is unique exactly where canonical_id is, and preserves the
  * shared label in metadata.display_name.
  */
-dbDescribe(
+describe(
   "deriveGraphFromMetadata duplicate source titles (live Postgres)",
   () => {
-    const pool = new Pool({ connectionString: DB_URL });
     const ns = "test-graph-derivation-dup-title";
     const anchorType = "source";
     const idA = "cc000000-0000-4000-8000-0000000003a1";
     const idB = "cc000000-0000-4000-8000-0000000003b2";
-    const auth: AuthInfo = {
-      role: "admin",
-      clientId: "test-graph-derivation",
-      namespaceSource: "token",
-    };
-
-    async function cleanup(): Promise<void> {
-      await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
-      await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
-    }
-
-    afterAll(async () => {
-      await cleanup();
-      await pool.end();
-    });
-
     it("stores two same-titled anchors without a lower(name) unique violation", async () => {
-      await cleanup();
+      await clearNamespace(ns);
       const sharedTitle = "Q3 Release Plan";
 
       // First anchor: title T under canonical source:idA.
       const a = await deriveGraphFromMetadata(
-        { query: pool.query.bind(pool) },
+        store,
         auth,
         {
           anchorType,
@@ -177,7 +164,7 @@ dbDescribe(
       // Pre-fix this raised "duplicate key value violates unique constraint
       // idx_ob_entities_lookup_unique".
       const b = await deriveGraphFromMetadata(
-        { query: pool.query.bind(pool) },
+        store,
         auth,
         {
           anchorType,
@@ -207,16 +194,16 @@ dbDescribe(
     });
 
     it("renames an anchor onto a sibling's title without a lower(name) collision", async () => {
-      await cleanup();
+      await clearNamespace(ns);
 
-      await deriveGraphFromMetadata({ query: pool.query.bind(pool) }, auth, {
+      await deriveGraphFromMetadata(store, auth, {
         anchorType,
         anchorId: idA,
         anchorName: "Existing Title",
         namespace: ns,
         metadata: { topics: ["Migrations"], people: [] },
       });
-      await deriveGraphFromMetadata({ query: pool.query.bind(pool) }, auth, {
+      await deriveGraphFromMetadata(store, auth, {
         anchorType,
         anchorId: idB,
         anchorName: "Different Title",
@@ -228,7 +215,7 @@ dbDescribe(
       // path. Pre-fix the rename would set name = "Existing Title" and collide
       // with A's row on lower(name).
       const renamed = await deriveGraphFromMetadata(
-        { query: pool.query.bind(pool) },
+        store,
         auth,
         {
           anchorType,
@@ -266,54 +253,46 @@ dbDescribe(
  * SHARED term entity node is left intact. A rerun of the shrunk set is a no-op.
  * Proven against the real partial-unique index and the real UPDATE semantics.
  */
-dbDescribe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
+/** The active anchor row's entity id, by canonical id. */
+async function anchorEntityId(
+  ns: string,
+  anchorType: string,
+  anchorCanonical: string,
+): Promise<string> {
+  const res = await pool.query(
+    `SELECT id FROM ob_entities
+        WHERE namespace = $1 AND entity_type = $2 AND canonical_id = $3
+          AND archived_at IS NULL`,
+    [ns, anchorType, anchorCanonical],
+  );
+  return res.rows[0].id as string;
+}
+
+/** The active topic node's id, or undefined when no live row carries the name. */
+async function topicId(
+  ns: string,
+  name: string,
+): Promise<string | undefined> {
+  const res = await pool.query(
+    `SELECT id FROM ob_entities
+        WHERE namespace = $1 AND entity_type = 'topic' AND lower(name) = lower($2)
+          AND archived_at IS NULL`,
+    [ns, name],
+  );
+  return res.rows[0]?.id as string | undefined;
+}
+
+describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
   const ns = "test-graph-derivation-prune";
   const anchorType = "thought";
   const anchorId = "bb000000-0000-4000-8000-000000000346";
   const anchorCanonical = `${anchorType}:${anchorId}`;
-  const auth: AuthInfo = {
-    role: "admin",
-    clientId: "test-graph-derivation",
-    namespaceSource: "token",
-  };
-
-  async function cleanup(): Promise<void> {
-    await pool.query("DELETE FROM ob_links WHERE namespace = $1", [ns]);
-    await pool.query("DELETE FROM ob_entities WHERE namespace = $1", [ns]);
-  }
-
-  async function anchorEntityId(): Promise<string> {
-    const res = await pool.query(
-      `SELECT id FROM ob_entities
-        WHERE namespace = $1 AND entity_type = $2 AND canonical_id = $3
-          AND archived_at IS NULL`,
-      [ns, anchorType, anchorCanonical],
-    );
-    return res.rows[0].id as string;
-  }
-
-  async function topicId(name: string): Promise<string | undefined> {
-    const res = await pool.query(
-      `SELECT id FROM ob_entities
-        WHERE namespace = $1 AND entity_type = 'topic' AND lower(name) = lower($2)
-          AND archived_at IS NULL`,
-      [ns, name],
-    );
-    return res.rows[0]?.id as string | undefined;
-  }
-
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
-
   it("archives the dropped term's edge, keeps the shared node, and no-ops on rerun", async () => {
-    await cleanup();
+    await clearNamespace(ns);
 
     // Initial: topics [migrations, indexing] -> two live anchor->term edges.
     const first = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
@@ -327,8 +306,8 @@ dbDescribe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(first.links_new).toBe(2);
     expect(first.links_archived).toBe(0);
 
-    const anchor = await anchorEntityId();
-    const indexingId = await topicId("indexing");
+    const anchor = await anchorEntityId(ns, anchorType, anchorCanonical);
+    const indexingId = await topicId(ns, "indexing");
     expect(indexingId).toBeDefined();
 
     const liveBefore = await pool.query(
@@ -341,7 +320,7 @@ dbDescribe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
 
     // Changed: topics [migrations] -> the indexing edge is now stale.
     const changed = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
@@ -374,12 +353,12 @@ dbDescribe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(liveAfter.rows[0].n).toBe(1);
 
     // The SHARED "indexing" entity node is untouched — only the link was pruned.
-    const indexingStillLive = await topicId("indexing");
+    const indexingStillLive = await topicId(ns, "indexing");
     expect(indexingStillLive).toBe(indexingId);
 
     // Rerun the SAME shrunk set: unchanged content, nothing new to prune.
     const again = await deriveGraphFromMetadata(
-      { query: pool.query.bind(pool) },
+      store,
       auth,
       {
         anchorType,
