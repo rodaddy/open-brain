@@ -25,6 +25,7 @@ import pino from "pino";
 import type { Pool, PoolClient } from "pg";
 import type { Role } from "../config.ts";
 import { registerMemoryTools } from "./index.ts";
+import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
 
 interface CapturedQuery {
   readonly sql: string;
@@ -70,8 +71,10 @@ async function clientCapturingQueries(
     pool,
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
+    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     send(message, {
@@ -139,7 +142,10 @@ describe("set_tier scopes its write to the caller's own namespace", () => {
   });
 
   test("a role without write permission never reaches the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("readonly", "rico");
+    const { client, queries } = await clientCapturingQueries(
+      "readonly",
+      "rico",
+    );
 
     const result = await client.callTool({
       name: "set_tier",
@@ -186,7 +192,9 @@ describe("bulk_set_tier and bulk_archive scope every statement", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toBe("Permission denied: cannot delete from thoughts");
+    expect(textOf(result)).toBe(
+      "Permission denied: cannot delete from thoughts",
+    );
     expect(queries).toHaveLength(0);
   });
 
@@ -212,12 +220,22 @@ describe("bulk_set_tier and bulk_archive scope every statement", () => {
 
 describe("demote_entry does not archive on merely-readable scope", () => {
   test("the UPDATE binds the write scope even though the SELECT read wider", async () => {
-    const { client, queries } = await clientCapturingQueries("admin", "operator", [
-      {
-        match: "SELECT id, namespace, promoted_from",
-        rows: [{ id: UUID_A, namespace: "shared-kb", promoted_from: { source_id: UUID_B } }],
-      },
-    ]);
+    const { client, queries } = await clientCapturingQueries(
+      "admin",
+      "operator",
+      [
+        {
+          match: "SELECT id, namespace, promoted_from",
+          rows: [
+            {
+              id: UUID_A,
+              namespace: "shared-kb",
+              promoted_from: { source_id: UUID_B },
+            },
+          ],
+        },
+      ],
+    );
 
     await client.callTool({
       name: "demote_entry",
@@ -233,7 +251,10 @@ describe("demote_entry does not archive on merely-readable scope", () => {
   });
 
   test("a non-global role is refused before any statement runs", async () => {
-    const { client, queries } = await clientCapturingQueries("promoter", "promo");
+    const { client, queries } = await clientCapturingQueries(
+      "promoter",
+      "promo",
+    );
 
     const result = await client.callTool({
       name: "demote_entry",
@@ -241,7 +262,9 @@ describe("demote_entry does not archive on merely-readable scope", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toBe("Permission denied: admin or ob-admin role required");
+    expect(textOf(result)).toBe(
+      "Permission denied: admin or ob-admin role required",
+    );
     expect(queries).toHaveLength(0);
   });
 });
@@ -251,7 +274,10 @@ describe("find_duplicates never emits an unscoped self-join (#485)", () => {
     // This is the #485 regression. Current-src gives admin an empty predicate on
     // both sides, so the join runs over every pair in the table -- measured at a
     // 60s statement_timeout cancellation against 256.7ms for the scoped form.
-    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "ob-admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "find_duplicates",
@@ -275,7 +301,9 @@ describe("find_duplicates never emits an unscoped self-join (#485)", () => {
     const timeoutIndex = queries.findIndex((query) =>
       query.sql.includes("statement_timeout"),
     );
-    const joinIndex = queries.findIndex((query) => query.sql.includes("JOIN thoughts b"));
+    const joinIndex = queries.findIndex((query) =>
+      query.sql.includes("JOIN thoughts b"),
+    );
     expect(queries[0]?.sql).toBe("BEGIN READ ONLY");
     expect(timeoutIndex).toBeGreaterThanOrEqual(0);
     // Arming the bound after the join is the same as not arming it: the
@@ -334,7 +362,10 @@ describe("citation_recall scopes on the lane's namespace", () => {
 
 describe("scan_namespace binds the scanned namespace as a parameter", () => {
   test("every table scan is bound to the requested namespace", async () => {
-    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
+    const { client, queries } = await clientCapturingQueries(
+      "ob-admin",
+      "operator",
+    );
 
     await client.callTool({
       name: "scan_namespace",
@@ -393,9 +424,9 @@ describe("tier_lane defaults to dry-run and writes nothing", () => {
     // Reading the default as `?? false` would make every exploratory call write
     // durable memory. This assertion is what fails if it is ever inverted.
     expect(JSON.parse(textOf(result)).dry_run).toBe(true);
-    expect(queries.some((query) => query.sql.includes("INSERT INTO thoughts"))).toBe(
-      false,
-    );
+    expect(
+      queries.some((query) => query.sql.includes("INSERT INTO thoughts")),
+    ).toBe(false);
   });
 
   test("the lane read binds the caller's own namespace", async () => {
@@ -429,9 +460,16 @@ describe("tier_lane defaults to dry-run and writes nothing", () => {
 
 describe("promote_entry defaults to dry-run", () => {
   test("an unqualified call reports dry_run true and inserts nothing", async () => {
-    const { client, queries } = await clientCapturingQueries("promoter", "promo", [
-      { match: "FROM thoughts", rows: [{ id: UUID_A, content: "shareable", tags: null }] },
-    ]);
+    const { client, queries } = await clientCapturingQueries(
+      "promoter",
+      "promo",
+      [
+        {
+          match: "FROM thoughts",
+          rows: [{ id: UUID_A, content: "shareable", tags: null }],
+        },
+      ],
+    );
 
     const result = await client.callTool({
       name: "promote_entry",
@@ -444,13 +482,16 @@ describe("promote_entry defaults to dry-run", () => {
     if (!result.isError) {
       expect(JSON.parse(textOf(result)).dry_run).toBe(true);
     }
-    expect(queries.some((query) => query.sql.startsWith("INSERT INTO thoughts"))).toBe(
-      false,
-    );
+    expect(
+      queries.some((query) => query.sql.startsWith("INSERT INTO thoughts")),
+    ).toBe(false);
   });
 
   test("the legacy shared name is refused as a target before any statement", async () => {
-    const { client, queries } = await clientCapturingQueries("promoter", "promo");
+    const { client, queries } = await clientCapturingQueries(
+      "promoter",
+      "promo",
+    );
 
     const result = await client.callTool({
       name: "promote_entry",
@@ -488,7 +529,9 @@ describe("ingest_conversation_facts refuses before it writes", () => {
     session_key: "lane-1",
   };
   const sourceRef = { source_kind: "conversation", external_id: "conv-1" };
-  const facts = [{ event_type: "fact", content: "a distilled durable statement" }];
+  const facts = [
+    { event_type: "fact", content: "a distilled durable statement" },
+  ];
 
   test("a role without sessions write permission never reaches the pool", async () => {
     const { client, queries } = await clientCapturingQueries("discord", "bot");
@@ -563,7 +606,9 @@ describe("ingest_conversation_facts refuses before it writes", () => {
       arguments: { scope, source_ref: sourceRef, facts },
     });
 
-    const lane = queries.find((query) => query.sql.includes("FROM ob_session_lanes"));
+    const lane = queries.find((query) =>
+      query.sql.includes("FROM ob_session_lanes"),
+    );
     if (lane) {
       // The namespace is the first coordinate and is a bound parameter, never
       // interpolated: it is the isolation boundary for the whole call.
@@ -574,7 +619,9 @@ describe("ingest_conversation_facts refuses before it writes", () => {
     // Whatever the source registry answered, no durable row may be written when
     // the lane does not resolve.
     expect(
-      queries.some((query) => query.sql.includes("INSERT INTO ob_session_events")),
+      queries.some((query) =>
+        query.sql.includes("INSERT INTO ob_session_events"),
+      ),
     ).toBe(false);
   });
 });
