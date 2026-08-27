@@ -6,9 +6,9 @@
  * that the default path leaves the database alone -- so these tests seed a real
  * oversized row, plan against it, and count `thoughts` before and after.
  *
- * Skips loudly (via `describe.skip`) when `OPENBRAIN_TEST_DATABASE_URL` is
- * unset. It must point at an isolated test/playground database, never the
- * dogfood database.
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
+ * database, never the dogfood database. `bun run test:isolated` sets it.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,11 +16,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerDecomposeEntryTool } from "./decompose-entry.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-const pool = DB_URL ? new Pool({ connectionString: DB_URL }) : null;
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `decompose-pg-${process.pid}`;
 const OTHER_NAMESPACE = `${NAMESPACE}-other`;
@@ -37,7 +36,6 @@ async function callDecompose(
   args: Record<string, unknown>,
   role = "agent",
 ): Promise<CallOutcome> {
-  if (!pool) throw new Error("OPENBRAIN_TEST_DATABASE_URL is required");
   const server = new McpServer({ name: "decompose-test", version: "1.0.0" });
   registerDecomposeEntryTool(server, {
     pool,
@@ -45,7 +43,8 @@ async function callDecompose(
     logger: pino({ level: "silent" }),
     embeddingModel: "decompose-test",
   });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -56,7 +55,10 @@ async function callDecompose(
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const result = await client.callTool({ name: "decompose_entry", arguments: args });
+    const result = await client.callTool({
+      name: "decompose_entry",
+      arguments: args,
+    });
     const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
     let body: Record<string, unknown> = {};
     try {
@@ -72,38 +74,38 @@ async function callDecompose(
 }
 
 async function countThoughts(namespace: string): Promise<number> {
-  const { rows } = await pool!.query(
+  const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS cnt FROM thoughts WHERE namespace = $1`,
     [namespace],
   );
   return rows[0].cnt;
 }
 
-dbDescribe("decompose_entry (live Postgres)", () => {
-  let sourceId = "";
-  let foreignId = "";
+/** Ids of the seeded rows, filled by the module-scope `beforeAll`. */
+let sourceId = "";
+let foreignId = "";
 
-  beforeAll(async () => {
-    const source = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
-      [OVERSIZED, NAMESPACE],
-    );
-    sourceId = source.rows[0].id;
-    const foreign = await pool!.query(
-      `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
-      [OVERSIZED, OTHER_NAMESPACE],
-    );
-    foreignId = foreign.rows[0].id;
-  });
+beforeAll(async () => {
+  const source = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
+    [OVERSIZED, NAMESPACE],
+  );
+  sourceId = source.rows[0].id;
+  const foreign = await pool.query(
+    `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
+    [OVERSIZED, OTHER_NAMESPACE],
+  );
+  foreignId = foreign.rows[0].id;
+});
 
-  afterAll(async () => {
-    if (!pool) return;
-    await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
-      [NAMESPACE, OTHER_NAMESPACE],
-    ]);
-    await pool.end();
-  });
+afterAll(async () => {
+  await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
+  await pool.end();
+});
 
+describe("decompose_entry planning (live Postgres)", () => {
   test("the default call plans and writes NOTHING", async () => {
     const before = await countThoughts(NAMESPACE);
     const { isError, body } = await callDecompose(NAMESPACE, {
@@ -127,7 +129,9 @@ dbDescribe("decompose_entry (live Postgres)", () => {
       dry_run: false,
     });
     expect(isError).toBe(true);
-    expect(body.text).toBe("dry_run=false requires apply_mode=write_replacements");
+    expect(body.text).toBe(
+      "dry_run=false requires apply_mode=write_replacements",
+    );
     expect(await countThoughts(NAMESPACE)).toBe(before);
   });
 
@@ -149,7 +153,9 @@ dbDescribe("decompose_entry (live Postgres)", () => {
     // Same text as a genuine miss, so existence is not disclosed.
     expect(body.text).toBe("Entry not found or archived");
   });
+});
 
+describe("decompose_entry applying (live Postgres)", () => {
   test("an explicit apply writes replacements linked to the source", async () => {
     const before = await countThoughts(NAMESPACE);
     const { isError, body } = await callDecompose(NAMESPACE, {
@@ -165,7 +171,7 @@ dbDescribe("decompose_entry (live Postgres)", () => {
     expect(await countThoughts(NAMESPACE)).toBe(before + writtenIds.length);
 
     // parent_id is the joinable lineage; provenance JSON alone is not.
-    const { rows } = await pool!.query(
+    const { rows } = await pool.query(
       `SELECT parent_id, chunk_index, source FROM thoughts WHERE id = ANY($1::uuid[]) ORDER BY chunk_index`,
       [writtenIds],
     );
