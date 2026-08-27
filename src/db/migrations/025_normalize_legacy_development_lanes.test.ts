@@ -1,72 +1,86 @@
+/**
+ * Live-Postgres behavior tests for migration 025, which normalizes the legacy
+ * Development lane shape in place.
+ *
+ * A migration that rewrites existing rows can only be proven against a real
+ * database: the accepted shapes must converge on the canonical values while
+ * keeping their identity and their event history, and every unrecognized or
+ * conflicting shape must come back byte-for-byte unchanged. Re-running the
+ * migration must change nothing the second time.
+ *
+ * REQUIRES `OPENBRAIN_TEST_DATABASE_URL`, and fails hard without it (operator
+ * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
+ * database, never the dogfood database. `bun run test:isolated` sets it.
+ */
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
+import { requireTestDatabaseUrl } from "../../../scripts/test-support/require-test-database.ts";
 
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
 const migrationUrl = new URL("025_normalize_legacy_development_lanes.sql", import.meta.url);
 
-dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
-  const pool = new Pool({ connectionString: DB_URL });
-  const namespaces = [
-    "test-migration-025-local",
-    "test-migration-025-foreign",
-  ];
+const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  async function cleanup(): Promise<void> {
-    await pool.query(
-      `DELETE FROM ob_session_events WHERE lane_id IN
-         (SELECT id FROM ob_session_lanes WHERE namespace = ANY($1::text[]))`,
-      [namespaces],
-    );
-    await pool.query(
-      "DELETE FROM ob_session_lanes WHERE namespace = ANY($1::text[])",
-      [namespaces],
-    );
-  }
+const LOCAL_NAMESPACE = "test-migration-025-local";
+const FOREIGN_NAMESPACE = "test-migration-025-foreign";
+const namespaces = [LOCAL_NAMESPACE, FOREIGN_NAMESPACE];
 
-  async function seedLane(
-    slug: string,
-    overrides: Record<string, unknown> = {},
-    namespace = namespaces[0]!,
-  ): Promise<string> {
-    const lane = {
-      agent: "shared-session-finalizer",
-      source: "local-runtime",
-      project: slug,
-      channel_id: null,
-      thread_id: null,
-      metadata: {},
-      ...overrides,
-    };
-    const { rows } = await pool.query(
-      `INSERT INTO ob_session_lanes
-         (session_key, namespace, status, agent, source, project, channel_id,
-          thread_id, metadata, created_by)
-       VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $2)
-       RETURNING id`,
-      [
-        `dev:${slug}`,
-        namespace,
-        lane.agent,
-        lane.source,
-        lane.project,
-        lane.channel_id,
-        lane.thread_id,
-        JSON.stringify(lane.metadata),
-      ],
-    );
-    return rows[0].id as string;
-  }
+async function cleanup(): Promise<void> {
+  await pool.query(
+    `DELETE FROM ob_session_events WHERE lane_id IN
+       (SELECT id FROM ob_session_lanes WHERE namespace = ANY($1::text[]))`,
+    [namespaces],
+  );
+  await pool.query(
+    "DELETE FROM ob_session_lanes WHERE namespace = ANY($1::text[])",
+    [namespaces],
+  );
+}
 
-  async function runMigration(): Promise<void> {
-    await pool.query(await Bun.file(migrationUrl).text());
-  }
+async function seedLane(
+  slug: string,
+  overrides: Record<string, unknown> = {},
+  namespace = LOCAL_NAMESPACE,
+): Promise<string> {
+  const lane = {
+    agent: "shared-session-finalizer",
+    source: "local-runtime",
+    project: slug,
+    channel_id: null,
+    thread_id: null,
+    metadata: {},
+    ...overrides,
+  };
+  const { rows } = await pool.query(
+    `INSERT INTO ob_session_lanes
+       (session_key, namespace, status, agent, source, project, channel_id,
+        thread_id, metadata, created_by)
+     VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $2)
+     RETURNING id`,
+    [
+      `dev:${slug}`,
+      namespace,
+      lane.agent,
+      lane.source,
+      lane.project,
+      lane.channel_id,
+      lane.thread_id,
+      JSON.stringify(lane.metadata),
+    ],
+  );
+  return rows[0].id as string;
+}
 
-  beforeEach(cleanup);
-  afterAll(async () => {
-    await cleanup();
-    await pool.end();
-  });
+async function runMigration(): Promise<void> {
+  await pool.query(await Bun.file(migrationUrl).text());
+}
+
+beforeEach(cleanup);
+afterAll(async () => {
+  await cleanup();
+  await pool.end();
+});
+
+describe("025 normalize legacy Development lanes (live Postgres)", () => {
 
   it("normalizes only recognized legacy and partial shapes while preserving identity and history", async () => {
     const accepted = [
@@ -85,29 +99,29 @@ dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
       {
         slug: "foreign",
         overrides: { source: null },
-        namespace: namespaces[1]!,
+        namespace: FOREIGN_NAMESPACE,
       },
     ];
     const acceptedIds = new Map<string, string>();
     for (const item of accepted) {
       acceptedIds.set(
-        `${item.namespace ?? namespaces[0]}:${item.slug}`,
+        `${item.namespace ?? LOCAL_NAMESPACE}:${item.slug}`,
         await seedLane(item.slug, item.overrides, item.namespace),
       );
     }
-    const historyLaneId = acceptedIds.get(`${namespaces[0]}:legacy`)!;
+    const historyLaneId = acceptedIds.get(`${LOCAL_NAMESPACE}:legacy`) ?? "";
     await pool.query(
       `INSERT INTO ob_session_events
          (lane_id, event_type, content, created_by)
        VALUES ($1, 'decision', 'preserved history', $2)`,
-      [historyLaneId, namespaces[0]],
+      [historyLaneId, LOCAL_NAMESPACE],
     );
 
     await runMigration();
     await runMigration();
 
     for (const item of accepted) {
-      const namespace = item.namespace ?? namespaces[0]!;
+      const namespace = item.namespace ?? LOCAL_NAMESPACE;
       const { rows } = await pool.query(
         `SELECT id, agent, source, project, channel_id, thread_id, metadata
            FROM ob_session_lanes
@@ -129,7 +143,7 @@ dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
     const { rows: partialRows } = await pool.query(
       `SELECT metadata FROM ob_session_lanes
         WHERE namespace = $1 AND session_key = 'dev:partial'`,
-      [namespaces[0]],
+      [LOCAL_NAMESPACE],
     );
     expect(partialRows[0].metadata).toEqual({
       retained: true,
@@ -142,6 +156,9 @@ dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
     expect(eventRows).toHaveLength(1);
   });
 
+});
+
+describe("025 leaves unrecognized lane shapes unchanged (live Postgres)", () => {
   it("leaves unknown or conflicting lane shapes byte-for-byte unchanged", async () => {
     const rejected = [
       { slug: "bad-agent", overrides: { agent: "unknown-finalizer" } },
@@ -159,7 +176,7 @@ dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
         `SELECT id, agent, source, project, channel_id, thread_id, metadata
            FROM ob_session_lanes
           WHERE namespace = $1 AND session_key = $2`,
-        [namespaces[0], `dev:${item.slug}`],
+        [LOCAL_NAMESPACE, `dev:${item.slug}`],
       );
       before.set(item.slug, rows[0]);
     }
@@ -171,7 +188,7 @@ dbDescribe("025 normalize legacy Development lanes (live Postgres)", () => {
         `SELECT id, agent, source, project, channel_id, thread_id, metadata
            FROM ob_session_lanes
           WHERE namespace = $1 AND session_key = $2`,
-        [namespaces[0], `dev:${item.slug}`],
+        [LOCAL_NAMESPACE, `dev:${item.slug}`],
       );
       expect(rows).toEqual([before.get(item.slug)]);
     }
