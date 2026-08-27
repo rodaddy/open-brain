@@ -174,6 +174,15 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "028 maintenance_jobs lease_expired compat (live Postgres)",
     minTests: 3,
   },
+  // Migration 031 converts a database that applied an earlier revision of 030
+  // from a permanent all-status UNIQUE constraint to a running-only partial
+  // index. Registered because the upgrade path it repairs exists only in
+  // Postgres: the suite rewinds a real schema to the legacy shape and proves
+  // the converged one, which no text assertion over the SQL can do.
+  {
+    name: "031 ob_source_sync_runs running-only uniqueness compat (live Postgres)",
+    minTests: 6,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -192,9 +201,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // #878 registered the migration 029 terminal-category compat suite's 3 as that
 // suite stopped skipping itself, then 83 -> 85 when #878 also registered the
 // backgroundExtract tag-merge suite that shares migration 027's file and had
-// never been named here), so the global floor cannot silently fall behind the
-// per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 85;
+// never been named here, then 85 -> 91 when #878 registered the migration 031
+// upgrade-path suite and its 6), so the global floor cannot silently fall
+// behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 91;
 
 export interface SuiteStats {
   tests: number;
