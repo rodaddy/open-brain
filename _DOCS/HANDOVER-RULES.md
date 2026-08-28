@@ -365,3 +365,25 @@ only when a session actually needed it.
     `aqmd in open-brain "<question>"`, which queries the root index by name
     (`_ob/bin/aqmd:453`) and writes nothing in the clone. `aqmd up` runs
     once, at wrap, from the root checkout.
+52. **A CI failure in a file the PR does not touch is read before it is
+    acted on.** `gh run view <run> --job <job> --log` into the session
+    scratch, then `rg -n '\(fail\)'`: one line names the test. Session 10's
+    #944 failed on `scripts/ob-backfill.test.ts:310`, a CPU growth-shape scan
+    that took 6.3 s against bun's 5 s per-test default on the runner, in a
+    file the PR never touched, and the same job had passed on main at
+    `89c8da62`. That shape gets ONE `gh run rerun <run> --failed`, recorded on
+    the PR or #878 with the test name; a second failure becomes an issue. A
+    hand merge or `--no-verify` is never the answer to a red check.
+53. **The docs branch is pushed from a clean clone, never from the root
+    checkout.** The root checkout's pre-push suite fails on the six
+    order-dependent tracing tests of #924, so every session-9 and session-10
+    push of `docs/pg-tests-*` ran as a lane in a detached clone:
+    `git fetch /Volumes/ThunderBolt/Development/open-brain <branch>`, then
+    `git push origin FETCH_HEAD:refs/heads/<branch>` (the hook runs the
+    suite on the clone's tree, where it passes). The lane touches nothing in
+    the root checkout and never checks the branch out.
+54. **`_reports/` is gitignored** (`.gitignore:73`; no `_reports/` path has
+    ever been tracked). The session record is WRITTEN there for `aqmd up` to
+    index and is never staged; a scribe that cannot stage it has not
+    failed. Whether the records should be tracked is Rico's call, not a
+    lane's `git add -f`.
