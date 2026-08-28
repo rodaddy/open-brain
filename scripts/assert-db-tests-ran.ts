@@ -46,6 +46,14 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     minTests: 8,
   },
   {
+    name: "resumable file-source sync plan, checkpoint, and concurrency (live Postgres)",
+    minTests: 4,
+  },
+  {
+    name: "resumable file-source sync idempotence and isolation (live Postgres)",
+    minTests: 6,
+  },
+  {
     name: "search_brain relational retrieval eval fixture (live Postgres)",
     minTests: 2,
   },
@@ -454,9 +462,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // clustering and cursor loops suite's 8 as that file stopped skipping
 // itself, then 285 -> 292 when #878 registered the two subject-split graph
 // derivation handler selection/convergence and isolation/atomicity suites'
-// 4 + 3 as that file stopped skipping itself), so the global floor cannot
-// silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 292;
+// 4 + 3 as that file stopped skipping itself, then 292 -> 302 when #878
+// registered the two subject-split source-sync plan/checkpoint/concurrency
+// and idempotence/isolation suites' 4 + 6 as that file stopped skipping
+// itself), so the global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 302;
 
 export interface SuiteStats {
   tests: number;
