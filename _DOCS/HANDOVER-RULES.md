@@ -407,4 +407,9 @@ only when a session actually needed it.
     body merely said session 12 "closes #951". Write "session 12 finishes
     #951" or "wayfinder: #951"; a closing keyword appears only in the PR
     that lands the fix, and the head confirms `gh issue view N --json state`
-    after every merge that mentions an issue.
+    after every merge that mentions an issue. The keyword list is every
+    tense: close, closes, closed, fix, fixes, fixed, resolve, resolves,
+    resolved, each followed by `#N`. The PR that added this rule (#953)
+    re-closed #951 with the past-tense form in its own body, so the safe
+    shape in commit and PR text is the bare number ("issue 951", "#951 was
+    auto-closed" is NOT safe) or the verb without the number.
