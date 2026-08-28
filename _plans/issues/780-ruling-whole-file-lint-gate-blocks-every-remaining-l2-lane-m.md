@@ -3,11 +3,12 @@
 
 # #780 — ruling: whole-file lint gate blocks every remaining L2 lane (main.ts, search-*.ts, langfuse-tracing.ts debt)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: none
 Created: 2026-08-26T11:11:13Z
-Updated: 2026-08-26T16:41:46Z
+Updated: 2026-08-26T21:19:56Z
+Closed: 2026-08-26T20:54:22Z
 
 ---
 
@@ -86,7 +87,73 @@ Ruling recorded in `_plans/server-rewrite-decisions.md` once made.
 
 ---
 
-## Discussion (7)
+## Resolution
+
+Closed by **PR #836** — docs(handoff): author session 4 of the #780 lint sweep
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `c196950d234fb5fc150a2a054e5d7c1d3dd3de50`
+- Merged at: 2026-08-26T20:54:21Z
+- PR state: MERGED
+- Issue closed: 2026-08-26T20:54:23Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #836 body
+
+> ## Summary
+>
+> - Adds `_DOCS/_handoff/2026-08-26-lint-sweep-l2-session4.md`, the session-4 brief for the #780 lint sweep.
+> - Slice: the seven checklist files still carrying one complexity finding each at `923126d` — five parallel one-file lanes, then a collector pass plus `server/auth/middleware.ts` and `server/application/index.ts`, then the re-tick and the closing `oxlint --deny-warnings` run over non-test `server/` that closes #780.
+> - Wave 2 of `_plans/server-hardening-ladder.md` (L2b-2, L2c, L3-L6) stays on the map, not in this slice.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/handoff-validates.sh
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — not applicable, docs-only; `_ob/skills/handoff-author/scripts/validate-handoff.sh` exits 0 (120 lines) and the fixture battery is `pass.md` exit 0 with 18/18 fail fixtures exit 1
+> - [x] Python package checks passed or are not applicable — not applicable, no Python touched
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable, no runtime surface touched
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: a stale map fact sending the next session at an already-fixed file. Every State 1 line was re-probed against `origin/main` `923126d` this session and carries its probe command.
+> - Assumptions that could be wrong: that the seven findings hold at merge time. State 1 names the two re-probe commands the incoming session runs before dispatching.
+> - Missing/weak tests: none — the handoff's own check is the validator, and it was seen passing plus the whole fixture battery.
+> - Security/permission risk: `server/auth/middleware.ts` sits on the namespace-isolation boundary, so its lane is written extraction-only with the regression tests explicitly off scope.
+> - Migration/deploy risk: none, docs-only.
+> - Downstream client/runtime risk: none, docs-only.
+> - Rollback/cleanup concern: State 2 names `docs/780-sweep-session3` as the branch to retire once this merges.
+> - Fixes made before PR: trimmed the document from 124 to 120 lines to satisfy the validator's length rule.
+> - Known residual risk: the reusable lane scripts live under the temp workspace, which has no persistence guarantee; the handoff says so and describes them well enough to rebuild.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: no code defect or review pattern surfaced — this is the next session's brief.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: docs-only change with no runtime surface
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract, schema, or fixture is touched
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - `validate-handoff.sh _DOCS/_handoff/2026-08-26-lint-sweep-l2-session4.md` → `PASS ... (120 lines) [validator 2026-08-22.4]`, exit 0
+> - Fixture battery: `pass.md` exit 0; 18 of 18 `fail-*.md` exit 1
+> - Map re-probed at `origin/main` `923126d`; `sanitize.ts` complexity 11 and `working-set.ts append` 15 confirmed live via `./node_modules/.bin/oxlint --deny-warnings`
+>
+
+---
+
+## Discussion (38)
 
 ### rodaddy — 2026-08-26T15:42:40Z
 
@@ -101,61 +168,61 @@ Ruling (Rico, 2026-08-26): O1. Pay the debt one file at a time, each file brough
 One lane per file, in this order. Tick when merged.
 
 **Blocking L2 first**
-- [ ] server/main.ts (3)
-- [ ] server/tools/search-brain.ts (2)
-- [ ] server/tools/search-all.ts (5)
-- [ ] server/tools/search-engine.ts (9, includes max-lines: L4 split pulled forward)
-- [ ] server/observability/langfuse-tracing.ts (8, includes max-lines: L4 split pulled forward)
+- [x] server/main.ts (3)
+- [x] server/tools/search-brain.ts (2)
+- [x] server/tools/search-all.ts (5)
+- [x] server/tools/search-engine.ts (9, includes max-lines: L4 split pulled forward)
+- [x] server/observability/langfuse-tracing.ts (8, includes max-lines: L4 split pulled forward)
 
 **Then by count**
-- [ ] server/realtime/recovery-wal.ts (8)
-- [ ] server/tools/ingest-conversation-facts.ts (5)
-- [ ] server/tools/curation.ts (5)
-- [ ] server/tools/context-pack-durable-memory.ts (5)
-- [ ] server/tools/context-pack-durable-lane.ts (5)
-- [ ] server/tools/session-events.ts (4)
-- [ ] server/tools/entities.ts (4)
-- [ ] server/tools/context-pack-guidance.ts (4)
-- [ ] server/tools/brain-answer.ts (4)
-- [ ] server/transport/session-manager.ts (3)
-- [ ] server/tools/update-entry.ts (3)
-- [ ] server/tools/tiering.ts (3)
-- [ ] server/tools/skill-usage.ts (3)
-- [ ] server/tools/scan-namespace.ts (3)
-- [ ] server/tools/decompose-entry.ts (3)
-- [ ] server/tools/context-pack-repo-facts.ts (3)
-- [ ] server/tools/citation-recall.ts (3)
-- [ ] server/tools/agent-context-pack.ts (3)
-- [ ] server/transport/server-identity.ts (2)
-- [ ] server/tools/tier-lane.ts (2)
-- [ ] server/tools/session-lifecycle.ts (2)
-- [ ] server/tools/resolve-entry.ts (2)
-- [ ] server/tools/reporting.ts (2)
-- [ ] server/tools/promotion.ts (2)
-- [ ] server/tools/promote-entry.ts (2)
-- [ ] server/tools/people.ts (2)
-- [ ] server/tools/list-recent.ts (2)
-- [ ] server/tools/lanes.ts (2)
-- [ ] server/tools/get-entry.ts (2)
-- [ ] server/tools/find-duplicates.ts (2)
-- [ ] server/tools/conversation-facts-contract.ts (2)
-- [ ] server/tools/adjacent-context.ts (2)
-- [ ] server/transport/worker-proxy.ts (1)
-- [ ] server/transport/health.ts (1)
-- [ ] server/tools/tier-mutations.ts (1)
-- [ ] server/tools/source-registry.ts (1)
-- [ ] server/tools/session-save-load.ts (1)
-- [ ] server/tools/repo-facts.ts (1)
-- [ ] server/tools/realtime-append.ts (1)
-- [ ] server/tools/memory-helpers.ts (1)
-- [ ] server/tools/ingest-raw-turn.ts (1)
-- [ ] server/tools/context-pack-budget.ts (1)
-- [ ] server/realtime/working-set.ts (1)
-- [ ] server/maintenance/index.ts (1)
-- [ ] server/logging/sanitize.ts (1)
-- [ ] server/capture/liveness-observer.ts (1)
-- [ ] server/auth/middleware.ts (1)
-- [ ] server/application/index.ts (1)
+- [x] server/realtime/recovery-wal.ts (8)
+- [x] server/tools/ingest-conversation-facts.ts (5)
+- [x] server/tools/curation.ts (5)
+- [x] server/tools/context-pack-durable-memory.ts (5)
+- [x] server/tools/context-pack-durable-lane.ts (5)
+- [x] server/tools/session-events.ts (4)
+- [x] server/tools/entities.ts (4)
+- [x] server/tools/context-pack-guidance.ts (4)
+- [x] server/tools/brain-answer.ts (4)
+- [x] server/transport/session-manager.ts (3)
+- [x] server/tools/update-entry.ts (3)
+- [x] server/tools/tiering.ts (3)
+- [x] server/tools/skill-usage.ts (3)
+- [x] server/tools/scan-namespace.ts (3)
+- [x] server/tools/decompose-entry.ts (3)
+- [x] server/tools/context-pack-repo-facts.ts (3)
+- [x] server/tools/citation-recall.ts (3)
+- [x] server/tools/agent-context-pack.ts (3)
+- [x] server/transport/server-identity.ts (2)
+- [x] server/tools/tier-lane.ts (2)
+- [x] server/tools/session-lifecycle.ts (2)
+- [x] server/tools/resolve-entry.ts (2)
+- [x] server/tools/reporting.ts (2)
+- [x] server/tools/promotion.ts (2)
+- [x] server/tools/promote-entry.ts (2)
+- [x] server/tools/people.ts (2)
+- [x] server/tools/list-recent.ts (2)
+- [x] server/tools/lanes.ts (2)
+- [x] server/tools/get-entry.ts (2)
+- [x] server/tools/find-duplicates.ts (2)
+- [x] server/tools/conversation-facts-contract.ts (2)
+- [x] server/tools/adjacent-context.ts (2)
+- [x] server/transport/worker-proxy.ts (1)
+- [x] server/transport/health.ts (1)
+- [x] server/tools/tier-mutations.ts (1)
+- [x] server/tools/source-registry.ts (1)
+- [x] server/tools/session-save-load.ts (1)
+- [x] server/tools/repo-facts.ts (1)
+- [x] server/tools/realtime-append.ts (1)
+- [x] server/tools/memory-helpers.ts (1)
+- [x] server/tools/ingest-raw-turn.ts (1)
+- [x] server/tools/context-pack-budget.ts (1)
+- [x] server/realtime/working-set.ts (1)
+- [x] server/maintenance/index.ts (1)
+- [x] server/logging/sanitize.ts (1)
+- [x] server/capture/liveness-observer.ts (1)
+- [x] server/auth/middleware.ts (1)
+- [x] server/application/index.ts (1)
 - [ ] 266 (1)
 
 ---
@@ -187,3 +254,247 @@ State 3: #781 (ladder status, decisions entry with Rico's verbatim ruling, basel
 ### rodaddy — 2026-08-26T16:41:46Z
 
 Checklist tick: server/main.ts (3) — #782 MERGED at c1ec709. State 3 done-check at origin/main c1ec709: `oxlint --deny-warnings server/main.ts` exit 0; `scripts/done-means/750-server-baseline-holds.sh` PASS exit 0. (Agents cannot edit the checklist comment in place — raw API writes are hook-refused — so ticks land as comments; Rico can mirror them into the checklist.)
+
+---
+
+### rodaddy — 2026-08-26T16:44:44Z
+
+Lane 2 recon (read-only Luna lane, 12m) for server/tools/search-brain.ts, before the extraction: existing helpers already in use — auth parse types.ts:55-68, result envelope types.ts:70-87, fts-config.ts:36-54/126-142, read-scope.ts:90-139, shared-namespace.ts:102-108, search-engine.ts:1023-1094. No shared helper exists for: the inline tool schema (search-all.ts:271-329 and src/tools/search-brain.ts:1797-1878 also inline theirs), request-arg normalization, FTS privilege degradation, or the catch/log/error-response block — which brain-answer.ts:268-283 duplicates inline (a finding for that file's own lane). Twin duplication: server registerSearchBrainTool :77-235 vs src registerSearchBrain :1797-2093; resolveTables :62-75 vs readableSearchTables :109-127. Tests that must stay green: server/tools/search-read-scope.test.ts (11 cases), server/tools/namespace-denial.test.ts.
+
+---
+
+### rodaddy — 2026-08-26T16:58:37Z
+
+Lane 2 (server/tools/search-brain.ts) is PR #786 at e8e3b51: schema/annotations hoisted, three helpers extracted, `respondToSearchFailure` exported from new `server/tools/tool-failure.ts` (brain-answer.ts:268-283 is its second caller, left for that file's lane). RED 2 findings at c1ec709 → GREEN done-means exit 0, tsc 0, 22/22 tests, tests byte-unmodified. Lane ran 5 min (Opus 5 low, native).
+
+---
+
+### rodaddy — 2026-08-26T17:06:56Z
+
+Checklist tick: server/tools/search-brain.ts (2) — #786 MERGED at 4b4fe42 (receipt 780-touched-files-lint-clean.sh exit 0 at e8e3b51; CI green on run 32992027930 after one lease-boundary flake, #787). New shared module server/tools/tool-failure.ts; brain-answer.ts adopts it in its own lane.
+
+---
+
+### rodaddy — 2026-08-26T17:20:53Z
+
+Scribe, State 5a (#779 fixer) -- WRITTEN, unpushed: clone branch feat/l2b1-inject-config-into-tool-readers rebased onto 4b4fe42, new commit 7b257c0 applies the composition-root half (main.ts passes ftsCorpusConfig / recoveryWalPath / natsRuntimeBoundary from config and the NATS phase; search-brain.ts passes dependencies.ftsCorpusConfig; dead searchEmbeddingTimeoutMs field dropped). Done-means 750-l2b1-tool-readers-take-config.sh gained CLAUSE 4 (arrival at the composition root, exact-once matches); head re-ran it: 4/4 PASS.
+
+State 5b dispatched (native Opus 5 low, rule 28): server/tools/dependency-arrival.test.ts proving the three values arrive (german FTS SQL, WAL file written, doctor transport payload) plus CLAUSE 5 running that test. Seam map from the Codex recon lane: search-read-scope.test.ts:49-75 harness, realtime-append.ts:206-215, src/operator-doctor.test.ts:58-101 fixture.
+
+Tooling fact for #784-class notes: the Codex runtime rejects --effort max (accepts none..xhigh); the companion ran the recon lanes at xhigh.
+
+---
+
+### rodaddy — 2026-08-26T17:42:19Z
+
+Scribe, State 5 landed: #779 squash-merged as fca45fb (six commits: reader half, composition-root half 7b257c0, arrival test fd6e294, path-keyed fallback WAL store d0bbbd3). Receipt on d0bbbd3: 750-l2b1-tool-readers-take-config.sh 5/5 PASS. CI green on pull_request run 32995357664; the push run python-capture failure is #764.
+
+Checklist note: server/tools/realtime-stores.ts, server/tools/operator-doctor.ts, server/tools/fts-config.ts are N/A for the sweep (oxlint --deny-warnings clean at 49ecfbe; #779 touched them for the rewiring only). Remaining process.env readers for rung L2: search-all.ts (lane 3, dispatched now on chore/780-lint-search-all) and search-engine.ts (next handoff, L4 split; must re-add searchEmbeddingTimeoutMs and wire config.search.embeddingTimeoutMs).
+
+Lane 3 brief carries the Codex reuse map: normalizeSearchArgs moves to a shared module (defaults identical at search-all:334-339 / search-brain:165-169); search-all keeps its own catch shape ([] plus warn) so respondToSearchFailure is not reused; no FTS gate added (search-all passes {} today, English).
+
+---
+
+### rodaddy — 2026-08-26T17:53:16Z
+
+Scribe, lane 3 (server/tools/search-all.ts): PR #788 opened from chore/780-lint-search-all at dc5b82c. RED 5 oxlint findings at fca45fb; GREEN oxlint 0 on search-all.ts, search-brain.ts, and the new shared server/tools/search-request.ts (normalizeSearchArgs moved out of search-brain.ts, both tools import it). Behavior unchanged; tests unmodified. Head re-ran the done-means and the three suites in the clone before push. Residual process.env read at search-all.ts:124 (qmdPath fallback) is the L2b-2 lane's, not this lint lane's.
+
+---
+
+### rodaddy — 2026-08-26T17:54:52Z
+
+Ruling (Rico, 2026-08-26, supersedes the one-file-at-a-time sequencing above): files that do not touch each other run in PARALLEL, 5-10 lanes at once, each in its own local clone with its own PR. Sequencing remains only where two files would share a new helper: the shared module gets one owner lane and lands first. The head consolidates returns and never codes or runs plumbing itself (HANDOFF-RULES rule 31, landing on #785).
+
+---
+
+### rodaddy — 2026-08-26T18:05:22Z
+
+Scribe: #788 (server/tools/search-all.ts) squash-merged as 011bf24; receipt on dc5b82c, CI green (runs 32996611139/32996611721). Tick search-all.ts.
+
+Wave 1 dispatched under the parallel ruling: eight lanes, one file each, own clone (_worktrees/lane-1..8 at fca45fb), own PR on chore/780-lint-<slug>: search-engine.ts (9), langfuse-tracing.ts (8), recovery-wal.ts (8), ingest-conversation-facts.ts (5), curation.ts (5), session-events.ts (4), entities.ts (4), brain-answer.ts (4). Wave 2 holds context-pack-durable-memory.ts, context-pack-durable-lane.ts, context-pack-guidance.ts (likely shared helper; one owner first). Audit at fca45fb: 156 findings across 50 of 102 non-test server/ files; 9 real process.env reads remain (L2b-2 lane), the rest are doc comments.
+
+---
+
+### rodaddy — 2026-08-26T18:18:04Z
+
+Scribe, wave 1 PRs open (each lane reports oxlint 0 on its file, done-means exit 0, tsc clean, pinning suites green via test:isolated; PROPOSED until the collectors post receipts): #795 search-engine.ts (9 -> 0; new search-engine-types/-sql/-rows/-fallback.ts; read-scope helper judged not a duplicate, reason in search-engine-sql.ts:60-66), #796 langfuse-tracing.ts (8 -> 0; eight trace-*.ts siblings; tracingErrorLabel moved to trace-error-label.ts), #794 recovery-wal.ts (8 -> 0; five recovery-wal-*.ts siblings; also split realtime-append.ts, mark's sole caller, so that file leaves wave 2), #791 ingest-conversation-facts.ts (5 -> 0), #792 curation.ts (5 -> 0, dry-run contract untouched), #790 session-events.ts (4 -> 0; shared session-event-provenance.ts), #793 entities.ts (4 -> 0; entity-shared/-links/-hydrate.ts), #789 brain-answer.ts (4 -> 0; reused tool-failure.ts respondToSearchFailure; answer-evidence/-retrieval.ts). Collectors dispatched for receipts and CI. Wave 2a dispatching: promote-entry, lanes, promotion, adjacent-context, scan-namespace, resolve-entry, tier-mutations, decompose-entry.
+
+---
+
+### rodaddy — 2026-08-26T18:20:07Z
+
+Scribe, wave 1 MERGED (receipts on each head, CI green or #764 flake-only): #789 brain-answer.ts a5e8543, #790 session-events.ts c3e4482, #791 ingest-conversation-facts.ts af336cc, #792 curation.ts bb3a90d, #793 entities.ts 108fa88, #794 recovery-wal.ts + realtime-append.ts 9964f49, #795 search-engine.ts ca349ad, #796 langfuse-tracing.ts 5666c67. origin/main = 5666c67. Tick: search-engine.ts, langfuse-tracing.ts, recovery-wal.ts, realtime-append.ts, ingest-conversation-facts.ts, curation.ts, session-events.ts, entities.ts, brain-answer.ts. Wave 2a in flight (8 lanes). Re-audit of main dispatched to cut wave 2b from live counts.
+
+---
+
+### rodaddy — 2026-08-26T18:46:46Z
+
+Wave 2a merged (squash, branches deleted), origin/main = a3f48d8:
+
+- #797 promote-entry.ts -> 3580c10
+- #798 decompose-entry.ts -> 75804eb
+- #799 scan-namespace.ts -> cb0feab
+- #800 adjacent-context.ts -> b7b6314
+- #801 lanes.ts -> 860ee1f
+- #802 promotion.ts -> 5a72ab5
+- #803 tier-mutations.ts -> 4b8205e
+- #804 resolve-entry.ts -> a3f48d8
+
+Each merged on a verify-lane receipt on its head SHA plus a harvest comment; four CI runs were red only on the #764 python-capture flake.
+
+Wave 2c dispatched: session-manager, skill-usage, citation-recall, tiering, update-entry, server-identity, conversation-facts-contract, find-duplicates, and agent-context-pack.ts on the #806 branch (its one residual finding is that file's debt). #805 collector running.
+
+---
+
+### rodaddy — 2026-08-26T19:10:21Z
+
+Wave 2b/2c merged (squash, branches deleted), origin/main = 53923c1:
+
+- #805 context-pack-guidance.ts -> 088a4ee
+- #807 session-manager.ts (+ new session-store.ts) -> c4c2655
+- #808 skill-usage.ts -> b081202
+- #809 citation-recall.ts -> f93a901
+- #810 conversation-facts-contract.ts -> ff60122
+- #812 find-duplicates.ts -> db7ef8b
+- #813 tiering.ts -> b68420b
+- #806 context-pack-durable-memory.ts + context-pack-durable-lane.ts + agent-context-pack.ts (split into 8 context-pack-* siblings) -> 53923c1
+
+Waiting on CI re-runs: #811 update-entry.ts (runner-environment failures: exit 127 on core01-deploy-local tests, a deleted bun binary, an ob-backfill timing threshold; none in the touched file) and #814 server-identity.ts (one beforeEach hook timeout in session-lifecycle.pg.test.ts, untouched).
+
+Lane lessons harvested into docs/lane-contract.md round 38 (880eb06 on docs/780-sweep-paperwork-2, PR #785).
+
+Checklist: 30 of 53 files lint-clean at 53923c1 (ticked above from live oxlint).
+
+Wave 2d dispatched: context-pack-repo-facts, tier-lane, session-lifecycle, reporting, people, list-recent, get-entry.
+
+---
+
+### rodaddy — 2026-08-26T19:12:34Z
+
+Merged after green CI re-runs (the earlier failures were runner-environment: exit 127, a deleted bun binary, a timing threshold, one hook timeout; none in the touched files):
+
+- #811 update-entry.ts -> b31bf32
+- #814 server-identity.ts -> 40628c9
+
+Checklist: 32 of 53 files lint-clean at 40628c9.
+
+---
+
+### rodaddy — 2026-08-26T19:36:40Z
+
+Scribe, session 3 handoff authored: PR #824, commit `902bcd1`, branch `docs/780-handoff-session3`, file `_DOCS/_handoff/2026-08-26-lint-sweep-l2-session3.md`.
+
+Done-means `scripts/done-means/handoff-validates.sh` -> exit 0 (`PASS: 1 handoff document(s) conform`, validator 2026-08-22.4, 120 lines).
+
+The slice it cuts: collect #815-#819, then #820-#823 with #822 last (it owns the shared promotion helpers), land #785 so rules 28-32 reach main, re-tick this checklist from live oxlint, then a fresh wave of five one-finding file lanes (health.ts, source-registry.ts, session-save-load.ts, repo-facts.ts, memory-helpers.ts) with the next five queued. Re-probed live at authoring: origin/main `40628c9`, nine PRs open, 32 of 54 ticked, CI firing again (run 33004537250). WRITTEN, not executed.
+
+---
+
+### rodaddy — 2026-08-26T20:04:18Z
+
+Scribe, session 3: started 2026-08-26 from handoff `_DOCS/_handoff/2026-08-26-lint-sweep-l2-session3.md` (PR #824). Graph mode T1 declared. Live state matches State 1: `origin/main` 40628c9, nine lane PRs #815-#823 open, #785 draft, 32/54 ticked. Wave 1 collectors dispatched: #824 #815 #816 #817 #818.
+
+---
+
+### rodaddy — 2026-08-26T20:12:33Z
+
+Scribe, session 3, wave 1+2 collected (receipt on head SHA, squash, branch deleted):
+- #824 handoff -> fa00f61 (head 0bd7f8c)
+- #815 list-recent -> 384c76a (head 508cc99)
+- #816 get-entry -> 66c341c (head 9f005b1)
+- #817 context-pack-repo-facts -> e46fa1c (head bbd151b)
+- #818 worker-proxy -> dc057e3 (head 3f59c8b)
+- #820 reporting -> 48f3dac (head 83a4229)
+- #821 people -> b65dafe (head 05ce0d4)
+- #823 session-lifecycle -> d10c340 (head bb0e87e)
+In flight: #819, #822, #785 (its done-means hit the two-dot diff at handoff-validates.sh:39, noted on #773; branch is being synced with main, no force-push). CI: python-capture #764 flake only. Checklist re-tick follows once all merge.
+
+---
+
+### rodaddy — 2026-08-26T20:15:12Z
+
+Scribe, session 3, State 5: #819 -> 6c86b4c, #822 -> 83e7d01 merged (receipts on head). All nine lane PRs #815-#823 collected. Checklist comment 5427622744 re-ticked from live oxlint at 83e7d01: 40 ticked, 13 open (health.ts, source-registry.ts, session-save-load.ts, repo-facts.ts, memory-helpers.ts, ingest-raw-turn.ts, context-pack-b*.ts, working-set.ts, maintenance/index.ts, logging/sanitize.ts, liveness-observer.ts, auth/middleware.ts, application/index.ts). State 6 lanes running: health, source-registry, session-save-load, repo-facts. #785: branch synced with main (77925df); its done-means handoff-validates.sh has no file to judge for a rules-layer change, fix in progress on the same branch (drops the two-dot diff, #773).
+
+---
+
+### rodaddy — 2026-08-26T20:20:24Z
+
+Scribe, session 3, State 6: PRs opened — #828 health.ts (c16a2d3), #830 source-registry.ts (da6bc98), #829 session-save-load.ts (a337d59); repo-facts.ts lane running. memory-helpers.ts STOPPED with receipts: `authorize` has 16 call sites in 9 files; two callers are dirty at main (session-save-load.ts :7, fixed by #829; ingest-raw-turn.ts :121 complexity 12), and the whole-file pre-commit gate would make the lane pay their findings. Sequence: merge #829, land ingest-raw-turn.ts (lane dispatched now, pulled forward from wave 2), then re-run memory-helpers. Gap filed: #831 (session_save has no server-side pg test).
+
+---
+
+### rodaddy — 2026-08-26T20:22:36Z
+
+Scribe, session 3, State 4 closed: #785 merged -> f467bbb (receipt on a13ca5f). HANDOFF-RULES.md on main is now 212 lines: rules 28-32 (delegate by default, graph mode declared, standing scribe, head consolidates, parallel clones) are on main, plus the handoff-validates.sh fix (rules-layer change judged by the newest handoff; two-dot diff dropped, #773). #828 health.ts merged -> 73dd820.
+
+---
+
+### rodaddy — 2026-08-26T20:26:42Z
+
+Scribe, session 3, State 6 merges: #829 session-save-load.ts -> 0f2069f (head a337d59), #832 repo-facts.ts -> 7e61026 (head c13df0c). #833 ingest-raw-turn.ts opened (d3b9ccb, pulled forward as an authorize caller), CI running. #830 source-registry.ts: `check` failed twice, first on the lease-boundary flake (#787); second run under triage.
+
+---
+
+### rodaddy — 2026-08-26T20:31:02Z
+
+Scribe, session 3: #830 source-registry.ts -> b0b0369 (head da6bc98; both CI failures were known classes, #787 then #760, triage on the PR). #833 ingest-raw-turn.ts: `check` failed on a wall-clock assertion in scripts/ob-backfill.test.ts (untouched by the PR), filed as #834; re-running once before collecting. memory-helpers.ts re-runs after #833 merges.
+
+---
+
+### rodaddy — 2026-08-26T20:34:41Z
+
+Scribe, session 3: #833 ingest-raw-turn.ts -> 173b6d3 (head d3b9ccb; re-run green after the #834 timing flake). memory-helpers.ts lane re-dispatched against 173b6d3 with all nine authorize callers clean.
+
+---
+
+### rodaddy — 2026-08-26T20:44:35Z
+
+Scribe, session 3, States 3-6 closed: #835 memory-helpers.ts -> 923126d (head d8e1e2f; 16 authorize call sites converted across 9 caller files, all clean at main first). Checklist re-ticked at 923126d: 46 ticked, 7 open, each ONE complexity finding: context-pack-b*.ts fitDurableLaneSection 14, realtime/working-set.ts append 15, maintenance/index.ts createMaintenanceRuntime 11, logging/sanitize.ts sanitizeValue 11, capture/liveness-observer.ts readCaptureLiveness 12, auth/middleware.ts anonymous 14, application/index.ts createShadowApplication 13. Session total: 15 PRs merged (#815-#824, #785, #828-#830, #832, #833, #835), issues filed #831 #834, #773 second site noted. Handoff for session 4 being authored on docs/780-sweep-session3.
+
+---
+
+### rodaddy — 2026-08-26T20:54:52Z
+
+Scribe, session 4: started. #836 (session-4 handoff) merged at c196950 with verify-lane receipt. Seven files remain at one complexity finding each (live oxlint at c196950): context-pack-budget 14, working-set 15, maintenance/index 11, logging/sanitize 11, liveness-observer 12, auth/middleware 14, application/index 13. Wave one: five parallel one-file lanes.
+
+---
+
+### rodaddy — 2026-08-26T21:05:05Z
+
+Scribe, session 4: #837 (server/tools/context-pack-b*.ts, fitDurableLaneSection 14 -> clean) MERGED at 99242f8, verify-lane receipt on b52d35c, CI all green. harvested: #837.
+
+---
+
+### rodaddy — 2026-08-26T21:09:08Z
+
+Scribe, session 4: #838 (server/realtime/working-set.ts, append 15 -> clean) MERGED at f3ea21e, verify-lane receipt on 9d1b00a, CI flake-only (#834 ob-backfill wall-clock, #764 python-capture). No new lessons. #834 hit count +1.
+
+---
+
+### rodaddy — 2026-08-26T21:09:34Z
+
+Scribe, session 4: #839 (server/logging/sanitize.ts, sanitizeValue 11 -> clean) MERGED at db88dbb, receipt on 5253ce1, CI pass. #840 (server/capture/liveness-observer.ts, readCaptureLiveness 12 -> clean) MERGED at 05b603d, receipt on f9dd6c5, CI pass. No new lessons on either.
+
+---
+
+### rodaddy — 2026-08-26T21:10:01Z
+
+Scribe, session 4: #842 (server/maintenance/index.ts, createMaintenanceRuntime 11 -> clean) MERGED at f189782, receipt on 3aa434c, CI pass. No new lessons. Wave one complete: 5 of 5 merged. Wave two (auth/middleware.ts, application/index.ts) in flight.
+
+---
+
+### rodaddy — 2026-08-26T21:10:44Z
+
+Scribe, session 4: #843 opened (server/auth/middleware.ts, handler complexity 14 -> clean), extraction only. Auth behavior identical: all five status/error pairs and DELEGATED_ID_RE byte-identical on read-back, refusal precedence 403 -> namespace 400 -> agent 400 preserved, regression tests under server/auth/ and server/transport/ unmodified and green (85 tests, 0 fail, test:isolated). Collector running.
+
+---
+
+### rodaddy — 2026-08-26T21:14:22Z
+
+Scribe, session 4: #843 (server/auth/middleware.ts) MERGED at 2ccfa5a, receipt on 08e1dae, CI pass. harvested: #843. One file left: server/application/index.ts (lane running).
+
+---
+
+### rodaddy — 2026-08-26T21:15:54Z
+
+Scribe, session 4: #844 opened (server/application/index.ts, createShadowApplication 13 -> clean), composition root, one file, 35 tests green. Collector running. This is the last file.

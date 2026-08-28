@@ -252,3 +252,35 @@ Exit codes captured with `rc=$?` on its own line.
   Their pull requests were already verified by verify-lane, so re-running the
   lanes would have proved nothing the merge pass had not already proved. The
   failures are rows 7 through 9 rather than a silent pass.
+
+## Run receipts, 2026-08-27 (session-9 merge pass, PRs #929-#935)
+
+| # | command | exit | last line |
+|---|---------|------|-----------|
+| 1 | `ratchet-bound/check.sh docs/lane-contract.md` (head, before round 39) | 0 | `live=13 graduated=32 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (scribe, after round 39) | 0 | `live=14 graduated=32 bound=15 source=default shape=heading` |
+| 3 | `placeholders/check.sh docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
+| 4 | `placeholders/check.sh scripts/done-means/916-sanitize-scan-growth-shape.sh` | 0 | `PASS: no unresolved placeholders` |
+| 5 | `placeholders/check.sh docs/decisions.md` | 0 | `PASS: no unresolved placeholders` |
+| 6 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 4 rows, 0 failures` |
+| 7 | `brief-pack/pack.sh --task task-get-entry.txt ... ` (default rounds) | 1 | `OVER BUDGET: 12418 > 8000` |
+| 8 | `brief-pack/pack.sh ... --max-tightenings 2` | 0 | wrote `brief-receipt-probe.md` (excluded-rounds listing) |
+| 9 | `lane-report/check.sh reports/lane-2-878-026-phase2.txt` | 1 | `FAIL claim-states: disallowed state word(s): CI` |
+| 10 | `lane-report/check.sh reports/lane-rebase-935.txt` | 1 | `FAIL trailing-content: line 1: RESULTS` (also `FAIL field-set`) |
+
+Row 7 was observed by the session-9 head at `OVER BUDGET: 10855 > 8000` before
+round 39 existed. The scribe re-ran it after inserting round 39 and observed
+`12418 > 8000` — the same refusal, larger because the contract grew by this
+harvest. Both numbers are recorded rather than one overwriting the other.
+
+## Pilot findings, session 9
+
+- **The `lane-report` checker's word list treats `CI` as a state word.** The
+  026 phase-2 report (#933) carried `CI` inside a `verified:` line describing a
+  real check run and failed `claim-states` on it. The report was accepted with
+  the false positive recorded here rather than sent back. Decisions row 4.
+- **Rebase lanes report in a `RESULTS` block that the five-field checker
+  refuses.** `lane-rebase-935.txt` fails both `field-set` and
+  `trailing-content` because the git lane script emits `RESULTS` by design, not
+  the five-field format. Whether rebase lanes adopt the five-field shape is
+  open. Decisions row 4.

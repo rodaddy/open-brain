@@ -36,7 +36,9 @@ those when stricter or more specific.
   first move, and refuses writes to the shared `/Volumes/collab` volume. A
   denial means adjust, not retry with a different spelling.
 - **Search this repo before asking.** Use `aqmd search "<word>"`, then
-  `aqmd "<question>"`. Development-wide `_DOCS`/`_ob` are not yet in any index
+  `aqmd "<question>"`, from THIS root checkout only: never from a lane clone
+  (there it is `aqmd in open-brain "<question>"`; HANDOVER-RULES rule 51).
+  Development-wide `_DOCS`/`_ob` are not yet in any index
   (#440), so procedures living there are currently unreachable by search.
 - **Skills are thin adapters.** Canonical content lives in
   `_ob/skills/<slug>/`; `~/.claude/skills/<slug>/` may only carry trigger text,

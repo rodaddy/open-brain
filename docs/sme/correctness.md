@@ -2314,3 +2314,42 @@ A `SKIP_*` env flag reproduces the pre-fix world with everything else intact, an
 ### Corollary: the design-lookup window is session-scoped, not lane-scoped
 
 A sibling CONCURRENT lane's lookup can occupy the recent-lookup window and make a correct denial look spurious. The gate is working as designed. Know the shape before reporting it as a misfire — a false gate-defect report costs the operator loop more than the denial cost the lane.
+
+## [2026-08-27] A shared test helper that owns the pool ends a connection its sibling suite still uses
+
+**Severity:** MEDIUM
+**Source:** PR #933 (also PR #932); session-9 #878 split-and-convert lanes
+**Scope:** `src/**/*-test-helpers.ts`, `scripts/test-support/*.ts`
+**Status:** active
+
+### Pattern
+
+When a long describe block is split across two files, the shared helper module extracted alongside it is the natural place to put the database pool — and that is the defect. A helper that constructs its own `new Pool` and registers its own `afterAll` is imported by both halves, so each half's teardown ends a connection the other half may still be mid-query on. The failure is timing-dependent: it looks like a flaky suite, not a lifecycle bug, and it does not reproduce when either file is run alone.
+
+The same extraction also produces a quieter collision: a shared row accessor lifted into the helper module takes a name that already exists as a local inside one of the moved `it` bodies, and the moved body silently binds to the local instead of the helper.
+
+### Check
+
+- A test helper module takes `pool: Pool` as its first parameter and constructs none. If a helper's source contains `new Pool`, that is the finding.
+- Exactly one module-scope `const pool = new Pool({ connectionString: requireTestDatabaseUrl() })` per test file, with that file's own `afterAll` ending it.
+- Before hoisting a shared accessor, `rg` its name across the bodies being moved and rename it if it collides.
+
+## [2026-08-27] A hoisted module-scope const that calls a lower-defined function throws at import
+
+**Severity:** MEDIUM
+**Source:** PR #935; session-9 #878 split-and-convert lanes
+**Scope:** any test file whose `it` bodies were hoisted to module scope to satisfy `max-lines-per-function`
+
+**Status:** active
+
+### Pattern
+
+Hoisting an `it` body out of a describe callback to a named module-scope function moves every line it declared with it, including consts. A `const` whose initializer calls a function declared further down the file is fine inside the callback — the callback runs after the whole module has evaluated — and throws `ReferenceError` the moment it becomes module-scope, because module-scope initializers evaluate top to bottom at import.
+
+The trap is that this typechecks clean. `tsc` resolves the function by declaration, not by evaluation order, so a green typecheck over a hoist of this shape says nothing about whether the module can be loaded at all. The failure surfaces as an import-time crash of the entire file, which reads as a broken suite rather than a bad hoist.
+
+### Check
+
+- After a hoist, run the suite. A green `tsc` is not the receipt for this class of change.
+- Hoist a const's callees alongside it, or convert the callee to a `function` declaration so it hoists on its own.
+- `rg` the hoisted const's initializer for identifiers defined later in the file before accepting the move.

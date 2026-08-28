@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-26T16:02:29Z
-Updated: 2026-08-26T16:37:44Z
+Updated: 2026-08-26T19:29:27Z
 
 ---
 
@@ -15,8 +15,20 @@ Observed 2026-08-26 ~16:00Z by the head session. `gh run list --limit 6` shows o
 
 ---
 
-## Discussion (1)
+## Discussion (3)
 
 ### rodaddy — 2026-08-26T16:37:44Z
 
 Update 2026-08-26 ~16:50Z: `pull_request` runs did fire for #781 and #782 at 16:15Z and for #783 after a `gh pr close`/`gh pr reopen` at 16:25Z (CI success at 8fb2878). All four self-hosted runners report online/idle. Remaining oddity: `gh run rerun --failed 32987435737` (#782, python-capture red on #764) left the run in `queued` with no attempt 2 for 20+ minutes and no job rows. `main` has no required status checks, so merges are not blocked by it. Leaving open for the rerun behavior; the trigger gap itself is not reproducing.
+
+---
+
+### rodaddy — 2026-08-26T16:48:07Z
+
+Pattern, now seen three times today: a PR's `opened` and `synchronize` events produce NO workflow run (#783 opened 15:59Z, #785 opened 16:44Z + synchronize 16:50Z), while `reopened` fires CI immediately (#783 at 16:25Z; #781/#782 at 16:15Z look like the same reopen trick). Both silent PRs were created with `gh pr create` from the temp clone; both branches are `docs/**`, which is outside `on.push.branches` in ci.yml but should not matter for `pull_request`. Next check: compare a PR created from a `feat/**` branch, and look at the repo's Actions event log for dropped `pull_request` deliveries.
+
+---
+
+### rodaddy — 2026-08-26T19:29:27Z
+
+Live re-probe 2026-08-26 (handoff-author, session 3): CI IS firing on lane PRs now. `gh pr checks 823` returns full jobs from run 33004537250 — contract-parity pass, db-integration pass, python-package pass, python-provider pass, validate pass, python-capture fail (the known #764 flake), check pending. The starvation window this issue describes is over; the remaining question is only what unblocked it, so this can likely close as resolved-by-observation unless someone wants the root cause. RUNNING.
