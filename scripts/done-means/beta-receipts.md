@@ -284,3 +284,46 @@ harvest. Both numbers are recorded rather than one overwriting the other.
   `trailing-content` because the git lane script emits `RESULTS` by design, not
   the five-field format. Whether rebase lanes adopt the five-field shape is
   open. Decisions row 4.
+
+## Run receipts, 2026-08-27 (session-10 merge pass, PRs #939-#944)
+
+| # | command | exit | last line |
+|---|---------|------|-----------|
+| 1a | `ratchet-bound/check.sh docs/lane-contract.md` (BEFORE round 40) | 0 | `live=14 graduated=32 bound=15 source=default shape=heading` |
+| 1b | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 40) | 0 | `live=15 graduated=32 bound=15 source=default shape=heading` |
+| 2 | `placeholders/check.sh docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
+| 3 | `placeholders/check.sh docs/decisions.md` | 0 | `PASS: no unresolved placeholders` |
+| 4 | `placeholders/check.sh scripts/done-means/827-tier-lane-denied-warn-pinned.sh` | 3 | `HARNESS ERROR: file does not exist: scripts/done-means/827-tier-lane-denied-warn-pinned.sh` |
+| 5 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 5 rows, 0 failures` |
+| 6 | `brief-pack/pack.sh ... --done-means 878-pg-tests-require-database.sh` (default rounds) | 1 | `header                           26` |
+| 7 | same, `--max-tightenings 2` | 0 | `- 2026-08-08 ### 2026-08-08 (later) — harvest of the #614 lane (PR #623) and its ruling  - **` |
+| 8 | `lane-report/check.sh reports/lane-3-embedding-repair-attempt1.txt` | 1 | `lane report invalid: 1 failure(s)` |
+| 9 | `lane-report/check.sh reports/lane-4-backup-restore-phase3.txt` | 1 | `lane report invalid: 2 failure(s)` |
+| 10 | `lane-report/check.sh reports/rebase-944.txt` | 1 | `lane report invalid: 2 failure(s)` |
+
+## Pilot findings, session 10
+
+- **`lane-report/check.sh` validates shape, not truth — row 9 confirms it in the
+  sharpest form available.** The phase-3 report's `claim-states` labels
+  pull request #944 MERGED while the pull request is OPEN on the forge
+  (`gh pr view 944 --json state` → `OPEN`, head `e75b6428`). The checker did not
+  notice. Its two failures are `trailing-content` (line 1 of the teardown prose)
+  and `claim-states: disallowed state word(s): CI` — the same false positive
+  recorded in session 9 as decisions row 4. A report can therefore carry a
+  factually wrong state label and fail for two unrelated reasons, or pass
+  outright. Nothing in the beta reads the forge.
+- **Default brief-pack rounds still refuse a conversion brief.** Row 6 exits 1 on
+  the #878 conversion brief at the default eight Tightenings rounds; row 7 with
+  `--max-tightenings 2` exits 0. Round 40 landing makes the default one round
+  larger, not smaller, so the refusal recorded as decisions row 3 is unchanged
+  and the knob remains the only path. Decisions row 3 stays OPEN.
+- **The trailing-content refusal on a rebase-lane report reproduced (row 10).**
+  `rebase-944.txt` fails `field-set` (found `<none>`) and `trailing-content`
+  because the git lane script emits a `RESULTS` block by design, as the head
+  expected from session 9. Decisions row 4.
+- **Row 4 is a harness error, not a check failure.**
+  `scripts/done-means/827-tier-lane-denied-warn-pinned.sh` does not exist on
+  `docs/pg-tests-session10`: PR #943 merged to `origin/main`, and this branch is
+  stacked on `docs/pg-tests-session9`, which was cut before it. Exit 3 is the
+  placeholders harness reporting a missing subject. Announced rather than
+  substituted with another path.

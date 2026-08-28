@@ -3,11 +3,12 @@
 
 # #827 — tier-lane: no test asserts the tier_lane_denied warn line
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-26T19:42:47Z
-Updated: 2026-08-26T19:42:47Z
+Updated: 2026-08-28T02:24:40Z
+Closed: 2026-08-28T02:24:40Z
 
 ---
 
@@ -45,3 +46,28 @@ Whether the sibling denial-logging tools listed above have the same hole. If the
 - The pre-commit gate lints staged files whole (rule 25), so touching a test file with pre-existing findings means clearing them in the same lane.
 
 Parent: #780, #750. Origin: PR #819.
+
+---
+
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-28T02:24:41Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-28T02:24:40Z.
+
+---
+
+## Discussion (2)
+
+### rodaddy — 2026-08-28T02:20:59Z
+
+Session 10 lane (pull request #943, WRITTEN): server/tools/tier-lane-denied.test.ts pins the tier_lane_denied warn (message plus { tool, role, namespace }) on a foreign-namespace call with zero pool statements, and a same-namespace call emits none. RED shown two ways: the done-means scripts/done-means/827-tier-lane-denied-warn-pinned.sh exits 1 at origin/main with no test file, and swapping authorizeTierLane for the shared authorize fails the test (1 pass 1 fail); the script's clause 3 repeats that mutation and restores the source. Sibling denial logs checked, report only (not widened): promote_shared_denied, adjacent_context_denied, citation_recall_denied, promote_entry_denied are all unpinned by any test under server/ or src/. src/tools/tier-lane.ts:75 is the legacy twin; untouched. No map checkbox for #827 exists in _plans or docs (checked by rg); nothing to tick.
+
+---
+
+### rodaddy — 2026-08-28T02:24:40Z
+
+Closed by pull request #943, MERGED at 8e644513: server/tools/tier-lane-denied.test.ts pins the tier_lane_denied warn (message and { tool, role, namespace }) on a foreign-namespace call; scripts/done-means/827-tier-lane-denied-warn-pinned.sh exits 0 on main and its clause 3 proves the pin by deleting the warn and watching the test fail. The four sibling denial logs remain unpinned (see the comment above); sizing them is a separate call.
