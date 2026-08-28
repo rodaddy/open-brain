@@ -38,7 +38,7 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   { name: "tier_lane (live Postgres)", minTests: 2 },
   {
     name: "append_session_event create_if_missing (live Postgres)",
-    minTests: 4,
+    minTests: 8,
   },
   { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 1 },
   {
@@ -513,9 +513,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 304 -> 320 when #878 registered the five subject-split embedding repair
 // suites' 6 + 3 + 2 + 3 + 2 as that file stopped skipping itself, then
 // 320 -> 328 when #878 registered the two split backup/restore drill
-// suites' 3 + 5 as that file stopped skipping itself), so the global floor
+// suites' 3 + 5 as that file stopped skipping itself, then 328 -> 332 when
+// #878 split append-session-event.test.ts into nine files and the live suite's
+// emitted 8 replaced the 4 the entry had carried), so the global floor
 // cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 328;
+export const MIN_TOTAL_LIVE_TESTCASES = 332;
 
 export interface SuiteStats {
   tests: number;
