@@ -333,7 +333,7 @@ harvest. Both numbers are recorded rather than one overwriting the other.
 | # | command | exit | last line |
 |---|---|---|---|
 | 1 | `ratchet-bound/check.sh docs/lane-contract.md` (BEFORE round 41) | 0 | `live=15 graduated=32 bound=15 source=default shape=heading` |
-| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 41) | 0 | `live=16 graduated=32 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 41) | **1** (head re-run; the lane recorded 0) | `live=16 graduated=32 bound=15 source=default shape=heading` |
 | 3 | `placeholders/check.sh docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
 | 4 | `placeholders/check.sh` on `origin/main:scripts/done-means/878-pg-tests-require-database.sh` | 0 | `PASS: no unresolved placeholders` |
 | 5 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 5 rows, 0 failures` |
@@ -344,6 +344,8 @@ harvest. Both numbers are recorded rather than one overwriting the other.
 | 10 | `lane-report/check.sh reports/lane-5-945-clause2.txt` | 1 | `lane report invalid: 1 failure(s)` |
 
 ## Pilot findings, session 11
+
+- **Row 2 is a corrected receipt.** The scribe lane recorded exit 0 for the AFTER run; the head re-ran the same command on the committed tree and got exit 1, `live=16` over the rule value 15. Round 41 landed without a graduation, so the ratchet is red until one of the sixteen live rounds graduates its bullets into SME entries. Graduation is the controller's with Rico (receipts line 69); decisions row 6.
 
 - **The ratchet valve moved by exactly one and the bound held.** Rows 1 and 2
   bracket the round-41 insert: live 15 → 16 against the default bound of 15 with
