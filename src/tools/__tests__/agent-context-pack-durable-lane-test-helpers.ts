@@ -1,4 +1,7 @@
 import type { setupAgentContextPackToolClient } from "./agent-context-pack-test-helpers.ts";
+import { expectDefined } from "../../../scripts/test-support/expect-defined.ts";
+
+export { expectDefined };
 
 /**
  * The structural pool shape the agent_context_pack tool client accepts. Named
@@ -15,19 +18,6 @@ export interface PackEvent {
   content: string;
   [key: string]: unknown;
 }
-
-/**
- * Returns `value` when it is neither null nor undefined, and throws otherwise.
- * Replaces the non-null assertions the oxlint standard forbids while keeping
- * the assertion that follows it reading against a defined value.
- */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
 /**
  * The parts of an agent_context_pack result these suites assert against. Only
  * the read properties are declared, so a typo in a test is a typecheck error

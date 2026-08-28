@@ -10,15 +10,9 @@ import type { Pool } from "pg";
 import { registerSource } from "./source-registry.ts";
 import type { SourceObservation } from "./source-sync.ts";
 import type { AuthInfo } from "./types.ts";
+import { expectDefined } from "../scripts/test-support/expect-defined.ts";
 
-/** Narrows an optional value, throwing a labelled error when it is absent. */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
+export { expectDefined };
 export const H = (n: number): string => n.toString(16).padStart(64, "0");
 
 export function obs(files: Array<[string, string]>): SourceObservation {

@@ -12,6 +12,9 @@ import { registerLaneUpsert } from "../lane-upsert.ts";
 import { createMockEmbed, type MockPool } from "./test-helpers.ts";
 import type { ToolDeps } from "../index.ts";
 import type { AuthInfo as ObAuthInfo } from "../../types.ts";
+import { expectDefined } from "../../../scripts/test-support/expect-defined.ts";
+
+export { expectDefined };
 
 export type { ObAuthInfo };
 
@@ -20,15 +23,6 @@ type SendMessage = Parameters<TransportSend>[0];
 type SendOptions = Parameters<TransportSend>[1];
 
 export type ToolResult = Awaited<ReturnType<Client["callTool"]>>;
-
-/** Narrowing guard replacing the non-null assertions in the moved bodies. */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
 /** Typed read of the first text block of a tool result. */
 export function firstText(result: ToolResult): string {
   const content = expectDefined(
