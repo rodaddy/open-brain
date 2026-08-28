@@ -63,16 +63,35 @@
 #   The exemption is line-shaped (`//`, `/*`, `*`), which is what prettier
 #   leaves behind; a literal buried mid-expression on a code line still fails.
 #
-# CLAUSE 2 -- THE HELPER IS ACTUALLY IMPORTED.
+# CLAUSE 2 -- THE HELPER DEMAND ACTUALLY REACHES THE FILE.
 #   Clause 1 alone is satisfiable by deleting the environment read and leaving
 #   the suite connecting to nothing, which is worse than the defect. So clause 2
-#   demands one of `requireTestDatabaseUrl`, `requireLocalCloneTestDatabaseUrl`,
-#   or `requireScratchAdminUrl` on an import line whose
-#   module path ends in the basename `require-test-database`. Matching the
-#   IDENTIFIER and the BASENAME rather than a fixed relative path is what lets
-#   files at different depths under server/ and src/ satisfy the same clause --
-#   `../../scripts/test-support/...` and `../scripts/test-support/...` are the
-#   same import.
+#   demands that one of `requireTestDatabaseUrl`,
+#   `requireLocalCloneTestDatabaseUrl`, or `requireScratchAdminUrl` is CALLED,
+#   and that the identifier arrives from a module whose specifier basename is
+#   `require-test-database`. Matching the IDENTIFIER and the BASENAME rather
+#   than a fixed relative path is what lets files at different depths under
+#   server/ and src/ satisfy the same clause -- `../../scripts/test-support/...`
+#   and `../scripts/test-support/...` are the same import.
+#
+#   Issue #945: the clause used to judge the LINE SHAPE of the import, and two
+#   honest conversions failed it while clauses 1, 3, and 4 passed. Prettier
+#   wraps a two-specifier import across physical lines, putting the identifier
+#   and the module specifier on different lines so no single line carries both;
+#   and one half of a split suite can reach the helper only through the shared
+#   sibling module the split created. So the clause is now STATEMENT-AWARE and
+#   allows ONE RELAY HOP:
+#     - an import statement is joined from its `import` keyword to the
+#       terminating `;` before matching, so wrapping is invisible to it;
+#     - failing a direct import, each RELATIVE sibling module the file imports
+#       (resolved from the subject's own directory, `.ts` appended when the
+#       specifier carries none) is read once, and the clause passes when that
+#       sibling imports the identifier from a `require-test-database` module.
+#       The relay owns the call in that shape, so the call is looked for there.
+#   The hop is deliberately ONE deep: a chain longer than that is no longer a
+#   split's shared helper, and following it would turn a source check into a
+#   module resolver. A file that CALLS a helper it never imports at all still
+#   fails -- that is the case clause 2 exists to catch.
 #
 # CLAUSE 3 -- THE HARD FAIL IS OBSERVED, not merely arranged, per file.
 #   Clauses 1 and 2 read source. Clause 3 runs the thing: with the variable THAT
@@ -131,6 +150,66 @@ demanded_variable_of() {
   elif rg -qF 'requireTestDatabaseUrl' "$1" 2>/dev/null; then
     printf 'OPENBRAIN_TEST_DATABASE_URL\n'
   fi
+}
+
+# Prints one line per import STATEMENT in the file, each statement joined from
+# its `import` keyword to the terminating `;`. Prettier wraps a multi-specifier
+# import across physical lines, so a per-line match sees the identifiers and
+# the module specifier on different lines and finds neither together.
+import_statements_of() {
+  awk '
+    /^[[:space:]]*import[[:space:]]/ && !collecting { collecting = 1; buf = "" }
+    collecting {
+      line = $0
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      buf = (buf == "" ? line : buf " " line)
+      if (index($0, ";") > 0) { print buf; collecting = 0 }
+    }
+  ' "$1" 2>/dev/null
+}
+
+# The import statements of a file that both name a helper identifier and load a
+# module whose specifier basename is `require-test-database`.
+direct_helper_imports_of() {
+  import_statements_of "$1" | rg "$HELPER_IDENT" | rg -F "$HELPER_BASENAME" || true
+}
+
+# Collapses `.` and `..` segments in a repo-relative path textually. `realpath
+# --relative-to` is GNU-only and this check runs on macOS as well.
+normalize_repo_path() {
+  printf '%s\n' "$1" | awk -F/ '
+    {
+      n = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i == "" || $i == ".") continue
+        if ($i == ".." && n > 0 && out[n] != "..") { n--; continue }
+        out[++n] = $i
+      }
+      s = ""
+      for (i = 1; i <= n; i++) s = (s == "" ? out[i] : s "/" out[i])
+      print s
+    }
+  '
+}
+
+# The relative sibling modules a file imports. Each printed as a repo-relative
+# path resolved from the importing file's own directory, with `.ts` appended
+# when the specifier carries no extension.
+relative_imports_of() {
+  local file="$1"
+  local dir
+  dir="$(dirname "$file")"
+  import_statements_of "$REPO_ROOT/$file" \
+    | rg -o 'from[[:space:]]+"\.[^"]*"' \
+    | sed 's/^from[[:space:]]*"//; s/"$//' \
+    | while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+        case "$spec" in
+          *.ts | *.tsx | *.js) : ;;
+          *) spec="$spec.ts" ;;
+        esac
+        normalize_repo_path "$dir/$spec"
+      done
 }
 
 # ---------------------------------------------------------------------------
@@ -213,12 +292,34 @@ while IFS= read -r FILE; do
   # -------------------------------------------------------------------------
   # CLAUSE 2 -- the helper arrives, matched on identifier plus module basename.
   # -------------------------------------------------------------------------
-  IMPORT_HITS="$(cd "$REPO_ROOT" && rg -n "$HELPER_IDENT" "$FILE" 2>/dev/null \
-    | rg -F "$HELPER_BASENAME" || true)"
+  # The demand is a CALL of a helper identifier in this file. Where the
+  # identifier comes from is the second half, answered directly or one hop away.
+  CALL_HITS="$(cd "$REPO_ROOT" && rg -n "($HELPER_IDENT)\(" "$FILE" 2>/dev/null || true)"
+  IMPORT_HITS="$(direct_helper_imports_of "$REPO_ROOT/$FILE")"
+  CLAUSE2_VIA=""
+  [ -n "$IMPORT_HITS" ] && CLAUSE2_VIA="its own import"
+  if [ -z "$CLAUSE2_VIA" ]; then
+    while IFS= read -r SIBLING; do
+      [ -n "$SIBLING" ] || continue
+      [ -f "$REPO_ROOT/$SIBLING" ] || continue
+      if [ -n "$(direct_helper_imports_of "$REPO_ROOT/$SIBLING")" ]; then
+        CLAUSE2_VIA="the relay module $SIBLING"
+        # The relay owns the call; the subject reaches the demand through it.
+        CALL_HITS="$(cd "$REPO_ROOT" && rg -n "($HELPER_IDENT)\(" "$SIBLING" 2>/dev/null || true)"
+        break
+      fi
+    done <<EOSIB
+$(relative_imports_of "$FILE")
+EOSIB
+  fi
   DEMANDED="$(cd "$REPO_ROOT" && demanded_variable_of "$FILE")"
-  if [ -n "$IMPORT_HITS" ]; then
-    printf 'CLAUSE 2 [%s]: PASS -- imports %s from a %s module\n' \
-      "$FILE" "$HELPER_IDENT" "$HELPER_BASENAME"
+  if [ -n "$CALL_HITS" ] && [ -n "$CLAUSE2_VIA" ]; then
+    printf 'CLAUSE 2 [%s]: PASS -- calls %s, reaching it through %s\n' \
+      "$FILE" "$HELPER_IDENT" "$CLAUSE2_VIA"
+  elif [ -n "$CLAUSE2_VIA" ]; then
+    printf 'CLAUSE 2 [%s]: FAIL -- %s arrives through %s but is never called\n' \
+      "$FILE" "$HELPER_IDENT" "$CLAUSE2_VIA"
+    CLAUSE2=FAIL
   else
     printf 'CLAUSE 2 [%s]: FAIL -- no import of %s from a %s module\n' \
       "$FILE" "$HELPER_IDENT" "$HELPER_BASENAME"
@@ -272,7 +373,7 @@ else
 fi
 
 printf '\nCLAUSE 1 (no self-skipping machinery on code lines): %s\n' "$CLAUSE1"
-printf 'CLAUSE 2 (imports requireTestDatabaseUrl):           %s\n' "$CLAUSE2"
+printf 'CLAUSE 2 (the helper demand reaches the file):      %s\n' "$CLAUSE2"
 printf 'CLAUSE 3 (hard fail observed without the variable):  %s\n' "$CLAUSE3"
 printf 'CLAUSE 4 (test:isolated over the subject exits 0):   %s\n' "$CLAUSE4"
 
