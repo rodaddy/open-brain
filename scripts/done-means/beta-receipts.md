@@ -400,3 +400,55 @@ into one gotcha-agent SME entry, and appended the row-3 ratification to
 - **Round 27 graduation takes live from 16 back to 15.** Row 3 reports
   `live=15 graduated=33` against the default rule value of 15, which is the
   state decisions row 6 was ratified to produce.
+
+## Run receipts, 2026-08-28 (session-12 merge pass, PRs #956 and #957)
+
+Every command below was run by the tracking-scribe lane in the root checkout on
+`docs/pg-tests-session12`, with the exit read directly from the command rather
+than through a pipeline.
+
+| # | command | exit | last line |
+|---|---------|------|-----------|
+| 1 | `ratchet-bound/check.sh docs/lane-contract.md` (BEFORE round 42) | 0 | `live=15 graduated=33 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 42) | 1 | `live=16 graduated=33 bound=15 source=default shape=heading` |
+| 3 | `placeholders/check.sh docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
+| 4 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 6 rows, 0 failures` |
+| 5 | `lane-report/check.sh .../reports/951-attempt1.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 6 | `lane-report/check.sh .../reports/951-attempt2.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 7 | `lane-report/check.sh .../reports/step1.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 8 | `lane-report/check.sh .../reports/step2.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 9 | `lane-report/check.sh .../reports/step3.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 10 | `lane-report/check.sh .../reports/step4.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 11 | `lane-report/check.sh .../reports/step5.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 12 | `lane-report/check.sh .../reports/step6.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 13 | `lane-report/check.sh .../reports/step7.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 14 | `lane-report/check.sh .../reports/step8.md` | 0 | `lane report valid: 5 fields, all clauses passed` |
+| 15 | `bun run scripts/build-sme-indexes.ts` | 0 | `wrote docs/sme/gotcha-agent.md (58 entries)` |
+| 16 | `bun run scripts/sync-issues.ts` | 0 | `406 issues (108 open, 298 closed), 604 comments, 298 with a Resolution -> _plans/issues/` |
+| 17 | `bun run scripts/stale-blockers.ts` | 0 | `35 open issue(s) reference only closed work — verify each against live state before closing.` |
+
+## Pilot findings, session 12
+
+- **Row 2 is the expected state, recorded rather than repaired.** Round 42 takes
+  the Tightenings rounds from 15 to 16 against the default rule value of 15, so
+  `ratchet-bound` exits 1 the moment a harvest lands. Graduating a round to
+  restore the count is Rico's call (decisions row 6), not a scribe adjustment,
+  so the failing exit stands in the record. Rows 1 and 2 exist as a pair for
+  exactly this reason: the before run proves the failure is the harvest's doing
+  and not inherited.
+- **A piped `| tail` hides the exit of the command that produced it.** The first
+  attempt at rows 1-4 read `rc=$?` after `check.sh ... | tail -3` and reported
+  the ratchet AFTER run as exit 0 when the check had exited 1 — `$?` belonged to
+  `tail`. Every row above was re-taken with the output captured into a variable
+  and the exit read from the check itself. This is round 27's PIPESTATUS lesson
+  surfacing in a new spelling.
+- **The ten lane-report checks all passed, against the brief's expectation.**
+  The brief predicted field-set refusals because these files are head-condensed
+  excerpts rather than raw lane returns; the condensation preserved all five
+  required fields, so every file validated. Recorded as written rather than
+  reshaped to match the prediction.
+- **`decisions/check.sh` reports 6 rows, 0 failures with no new row this
+  session**, which is the state the brief called for.
+- **`sync-issues.ts` rendered 298 Resolutions across 406 issues**, and the
+  stale-blocker pass surfaced 35 candidates. Both are reported to the
+  controller; nothing was closed.
