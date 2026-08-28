@@ -763,7 +763,7 @@
         "command": "git reset --hard origin/main"
       }
     },
-    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex git guard: `git reset --hard` needs explicit user approval.\"}\n",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"git guard: `git reset --hard` needs explicit user approval.\"}\n",
     "stderr": "",
     "status": 0
   },
@@ -790,7 +790,7 @@
         "command": "git checkout main"
       }
     },
-    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex git guard: do not switch to main/master for work; use a focused work branch.\"}\n",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"git guard: do not switch to main/master for work; use a focused work branch.\"}\n",
     "stderr": "",
     "status": 0
   },
@@ -817,7 +817,7 @@
         "command": "gh pr merge --admin 12"
       }
     },
-    "stdout": "{\"decision\":\"block\",\"reason\":\"Codex merge guard: do not use `gh pr merge --admin/--auto`. Inspect checks and merge deliberately.\"}\n",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"merge guard: do not use `gh pr merge --admin/--auto`. Inspect checks and merge deliberately.\"}\n",
     "stderr": "",
     "status": 0
   },
