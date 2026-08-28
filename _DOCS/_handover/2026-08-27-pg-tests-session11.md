@@ -30,7 +30,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 - #827 #938 CLOSED; #945 #924 #915 #912 #937 OPEN — RUNNING (`gh issue list --state open`)
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session10/{lane,git,diag,drain,scribe}.workflow.js`, `collect.sh <pr> [CHANGED_FILES]`, `common-rules.txt` R1-R9, `rebase-brief.template.txt`, `task-scribe.txt`, `task-drain.txt` — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`, `827-*.sh`)
-- Drain: origin holds `main`, `docs/pg-tests-session9` (#936), and two non-program heads; eleven clones detached at `4e1f0f2c`, no stash, no extra worktree, every `test/878-*` and `test/827-*` branch deleted; nine clones read ` M .qmd/index.yml` — UNVERIFIED as drained (`check-drained.sh .` exits 1 on that file only; HANDED-OVER UNKNOWNS)
+- Drain: origin holds `main`, `docs/pg-tests-session9` (#936), and two non-program heads; eleven clones detached at `4e1f0f2c`, no stash, no extra worktree, every `test/878-*` and `test/827-*` branch deleted; `check-drained.sh` ignores the tracked `.qmd/index.yml` since Development `a4190023` and passes every clone — RUNNING (`check-drained.sh .` fails on the root checkout's untracked draft only)
 - Root checkout carries one untracked agent draft, `scripts/done-means/qmd-root-only-gate-fires.sh` — WRITTEN (`git status --short`; keep or drop is Rico's)
 - Round 40, two SME entries, decisions row 5, session-10 beta receipts: `690b67de` on `docs/pg-tests-session10`, stacked on `docs/pg-tests-session9` — WRITTEN (this document's PR)
 Re-probe before dispatching anything (live state beats this doc):
@@ -95,8 +95,7 @@ still exit 0; tick the map checkbox in the same motion.
 Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
-- `.qmd/index.yml`: qmd rewrites its fleet `models:` lines in any clone that ran `aqmd`, so `check-drained.sh` exits 1 on nine clones and on nothing else; whether the check exempts that file is Rico's ruling (HANDOVER-RULES rule 51; #936).
-- `docs/pg-tests-session10` is stacked on `docs/pg-tests-session9` because #936 is still open (its done-means fails on the same `.qmd/index.yml` half); one PR carries both sessions' docs or #936 merges first — Rico's call.
+- `docs/pg-tests-session10` (#946) is stacked on `docs/pg-tests-session9` (#936); both done-means now fail only on the root checkout's untracked `scripts/done-means/qmd-root-only-gate-fires.sh` — keep or drop it, and merge #936 first or #946 alone, are Rico's calls.
 - decisions rows 3-5 (`docs/decisions.md`) need Rico: brief-pack's `--max-tightenings 2` knob; lane-report/check.sh's `CI` false positive and RESULTS-block rebase reports; the backup drill running on every isolated run.
 - `_reports/` is gitignored (rule 54); whether the session records get tracked is Rico's call.
 - Q1, since session 3: the tracking scribe runs as a Workflow lane on the root checkout's docs branch — Rico confirms that as the standing shape.
