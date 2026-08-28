@@ -411,6 +411,12 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "graph derivation handler isolation and atomicity (live Postgres)",
     minTests: 3,
   },
+  // #878 split the agent_context_pack durable lane file by subject; the live
+  // half is the only one that reaches Postgres, and it stopped skipping itself.
+  {
+    name: "agent_context_pack durable lane reads (live Postgres)",
+    minTests: 2,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -465,8 +471,10 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // 4 + 3 as that file stopped skipping itself, then 292 -> 302 when #878
 // registered the two subject-split source-sync plan/checkpoint/concurrency
 // and idempotence/isolation suites' 4 + 6 as that file stopped skipping
-// itself), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 302;
+// itself, then 302 -> 304 when #878 registered the agent_context_pack durable
+// lane live-reads suite's 2 as that file stopped skipping itself), so the
+// global floor cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 304;
 
 export interface SuiteStats {
   tests: number;

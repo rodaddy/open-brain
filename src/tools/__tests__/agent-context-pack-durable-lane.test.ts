@@ -1,725 +1,357 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { Pool } from "pg";
+import { describe, expect, it } from "bun:test";
 import type { AuthInfo } from "../../types.ts";
 import {
   AGENT_CONTEXT_PACK_SCOPE as SCOPE,
   setupAgentContextPackToolClient as setupToolClient,
 } from "./agent-context-pack-test-helpers.ts";
+import {
+  expectDefined,
+  parsePackPayload,
+  type PackEvent,
+  type RecordedQuery,
+} from "./agent-context-pack-durable-lane-test-helpers.ts";
 
-describe("agent_context_pack durable lane context", () => {
-  it("does not query or return durable lane context unless explicitly requested", async () => {
-    let queryCount = 0;
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async () => {
-        queryCount += 1;
-        return { rows: [] };
+async function doesNotQueryOrReturnDurableLaneContextUnless() {
+  let queryCount = 0;
+  const auth: AuthInfo = { role: "admin", clientId: "rico" };
+  const { client, cleanup } = await setupToolClient(auth, {
+    query: async () => {
+      queryCount += 1;
+      return { rows: [] };
+    },
+  });
+
+  try {
+    const pack = await client.callTool({
+      name: "agent_context_pack",
+      arguments: {
+        ...SCOPE,
+        requested_sections: ["working_set"],
       },
     });
 
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["working_set"],
-        },
-      });
+    const payload = parsePackPayload(pack.content);
+    expect(pack.isError).toBeFalsy();
+    expect(payload.sections.durable_lane_context).toBeUndefined();
+    expect(queryCount).toBe(0);
+  } finally {
+    await cleanup();
+  }
+}
 
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(pack.isError).toBeFalsy();
-      expect(payload.sections.durable_lane_context).toBeUndefined();
-      expect(queryCount).toBe(0);
-    } finally {
-      await cleanup();
-    }
+// Fixture for the bounded-distillation case: one oversized checkpoint and
+// ten oversized events, so the whole-pack fitter has something to spend its
+// allocation on.
+const lane = {
+  id: "lane-durable-1",
+  session_key: SCOPE.session_key,
+  status: "active",
+  agent: SCOPE.agent,
+  source: SCOPE.platform,
+  channel_id: SCOPE.channel_id,
+  thread_id: null,
+  project: "open-brain",
+  topic: "First-class local memory",
+  current_context_md: "C".repeat(9000),
+  updated_at: "2026-07-17T18:00:00Z",
+  metadata: { private_raw: "must not escape" },
+};
+const events = Array.from({ length: 10 }, (_, index) => ({
+  id: `event-${index}`,
+  event_type: index % 2 === 0 ? "decision" : "fact",
+  content: `event-${index}:` + "E".repeat(2000),
+  source: "shared",
+  importance: "warm",
+  artifact_path: null,
+  transcript_ref: `collab/open-brain/conversations/${index}`,
+  transcript: "RAW TRANSCRIPT MUST NOT ESCAPE",
+  metadata: { tool_output: "RAW TOOL OUTPUT MUST NOT ESCAPE" },
+  occurred_at: null,
+  created_at: `2026-07-17T17:00:0${index}Z`,
+}));
+
+async function returnsBoundedDistilledDurableContextForTheE() {
+  const queries: RecordedQuery[] = [];
+  const auth: AuthInfo = { role: "admin", clientId: "rico" };
+  const { client, cleanup } = await setupToolClient(auth, {
+    query: async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params });
+      if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
+        return { rows: [lane] };
+      }
+      if (sql.includes("FROM ob_session_events")) {
+        // Real SQL selects newest-first (created_at DESC); mirror it so the
+        // loader's chronological reverse() lands the newest event at the tail.
+        return { rows: [...events].reverse().slice(0, 8) };
+      }
+      return { rows: [] };
+    },
   });
 
-  it("returns bounded distilled durable context for the exact authorized lane", async () => {
-    const queries: Array<{ sql: string; params?: any[] }> = [];
-    const lane = {
-      id: "lane-durable-1",
-      session_key: SCOPE.session_key,
-      status: "active",
-      agent: SCOPE.agent,
-      source: SCOPE.platform,
-      channel_id: SCOPE.channel_id,
-      thread_id: null,
-      project: "open-brain",
-      topic: "First-class local memory",
-      current_context_md: "C".repeat(9000),
-      updated_at: "2026-07-17T18:00:00Z",
-      metadata: { private_raw: "must not escape" },
-    };
-    const events = Array.from({ length: 10 }, (_, index) => ({
-      id: `event-${index}`,
-      event_type: index % 2 === 0 ? "decision" : "fact",
-      content: `event-${index}:` + "E".repeat(2000),
-      source: "shared",
-      importance: "warm",
-      artifact_path: null,
-      transcript_ref: `collab/open-brain/conversations/${index}`,
-      transcript: "RAW TRANSCRIPT MUST NOT ESCAPE",
-      metadata: { tool_output: "RAW TOOL OUTPUT MUST NOT ESCAPE" },
-      occurred_at: null,
-      created_at: `2026-07-17T17:00:0${index}Z`,
-    }));
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async (sql: string, params?: any[]) => {
-        queries.push({ sql, params });
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
-          return { rows: [lane] };
-        }
-        if (sql.includes("FROM ob_session_events")) {
-          // Real SQL selects newest-first (created_at DESC); mirror it so the
-          // loader's chronological reverse() lands the newest event at the tail.
-          return { rows: [...events].reverse().slice(0, 8) };
-        }
-        return { rows: [] };
+  try {
+    const pack = await client.callTool({
+      name: "agent_context_pack",
+      arguments: {
+        ...SCOPE,
+        requested_sections: ["durable_lane_context"],
+        budget: { max_tokens: 3000 },
       },
     });
 
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["durable_lane_context"],
-          budget: { max_tokens: 3000 },
-        },
-      });
-
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      const durable = payload.sections.durable_lane_context;
-      // THIS caller asked for a bound (budget.max_tokens: 3000), so it gets one
-      // -- that path is unchanged. What changed on 2026-07-30 is what the bound
-      // spends its room on. Previously a fixed 6,000-char checkpoint ceiling and
-      // a 1,000-char-per-event ceiling meant three events arrived, each severed
-      // mid-content. Now the checkpoint takes at most half the allocation and
-      // the events that fit arrive WHOLE: fewer events, none of them mutilated.
-      // An event the caller can read beats three it cannot.
-      expect(durable).toMatchObject({
-        label: "durable_lane_context",
-        exact_scope_required: true,
-        event_count: 2,
-        truncated: true,
-      });
-      expect(durable.events.map((e: any) => e.id)).toEqual([
-        "event-8",
-        "event-9",
-      ]);
-      // Checkpoint bounded to half the allocation, not to a hardcoded 6000.
-      // Slightly under half after the whole-pack fitter charges serialization
-      // framing; the assertion is the share, not an exact byte count.
-      const halfAllocation = Math.floor((3000 * 4 - 1200) / 2);
-      expect(durable.lane.current_context_md.length).toBeLessThanOrEqual(
-        halfAllocation,
-      );
-      expect(durable.lane.current_context_md.length).toBeGreaterThan(
-        halfAllocation - 100,
-      );
-      // No per-event ceiling is applied any more. The old 1,000-char cut is
-      // gone, so retained bodies run past it -- the last one is bounded only by
-      // whatever allocation remains, not by a fixed number.
-      expect(
-        durable.events.every((event: any) => event.content.length > 1000),
-      ).toBe(true);
-      // The whole serialized section stays within the whole-pack budget.
-      expect(JSON.stringify(durable).length).toBeLessThanOrEqual(
-        3000 * 4 - 1200,
-      );
-      expect(JSON.stringify(durable)).not.toContain("RAW TRANSCRIPT");
-      expect(JSON.stringify(durable)).not.toContain("RAW TOOL OUTPUT");
-      expect(JSON.stringify(durable)).not.toContain("must not escape");
-      expect(payload.warnings.truncation).not.toEqual([]);
-      // Reconciled to what was actually retained -- the halved checkpoint plus
-      // the whole events that fit -- and reported as unbounded, because no
-      // per-section ceiling exists any more.
-      const laneBudget = payload.budget.durable_lane_context;
-      expect(laneBudget.max_events).toBe(Number.MAX_SAFE_INTEGER);
-      expect(laneBudget.max_event_chars).toBe(Number.MAX_SAFE_INTEGER);
-      expect(laneBudget.content_chars_used).toBeGreaterThan(
-        halfAllocation + 3000,
-      );
-      expect(laneBudget.content_chars_used).toBeLessThanOrEqual(
-        laneBudget.content_char_limit,
-      );
-      // One lane citation plus one per retained event.
-      expect(payload.citations).toHaveLength(3);
-
-      expect(queries[0]!.sql).toContain("WHERE namespace = $1");
-      expect(queries[0]!.sql).toContain("AND session_key = $2");
-      expect(queries[0]!.sql).toContain("AND agent = $3");
-      expect(queries[0]!.sql).toContain("AND source = $4");
-      expect(queries[0]!.sql).toContain("metadata->>'server_id' = $5");
-      expect(queries[0]!.sql).toContain("AND channel_id = $6");
-      expect(queries[0]!.sql).toContain(
-        "thread_id IS NOT DISTINCT FROM $7::text",
-      );
-      expect(queries[0]!.params).toEqual([
-        "rico",
-        SCOPE.session_key,
-        SCOPE.agent,
-        SCOPE.platform,
-        SCOPE.server_id,
-        SCOPE.channel_id,
-        null,
-      ]);
-      expect(queries[1]!.sql).toContain("e.lane_id = $1");
-      expect(queries[1]!.sql).toContain("l.namespace = $2");
-      expect(queries[1]!.params?.slice(0, 3)).toEqual([
-        "lane-durable-1",
-        "rico",
-        SCOPE.session_key,
-      ]);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("declares omitted short events and returns the selected recent subset chronologically", async () => {
-    const lane = {
-      id: "lane-nine-events",
-      session_key: SCOPE.session_key,
-      status: "active",
-      agent: SCOPE.agent,
-      source: SCOPE.platform,
-      channel_id: SCOPE.channel_id,
-      thread_id: null,
-      project: "open-brain",
-      topic: "bounded recent events",
-      current_context_md: "short checkpoint",
-      updated_at: "2026-07-17T18:00:00Z",
-    };
-    const events = Array.from({ length: 9 }, (_, index) => ({
-      id: `event-${index}`,
-      event_type: "fact",
-      content: `short event ${index}`,
-      source: "shared",
-      importance: "warm",
-      artifact_path: null,
-      transcript_ref: null,
-      occurred_at: null,
-      created_at: `2026-07-17T17:00:0${index}Z`,
-    })).reverse();
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async (sql: string) => {
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
-          return { rows: [lane] };
-        }
-        if (sql.includes("FROM ob_session_events")) {
-          return { rows: events };
-        }
-        return { rows: [] };
-      },
+    expect(pack.isError).toBeFalsy();
+    const payload = parsePackPayload(pack.content);
+    const durable = expectDefined(
+      payload.sections.durable_lane_context,
+      "the durable lane section",
+    );
+    // THIS caller asked for a bound (budget.max_tokens: 3000), so it gets one
+    // -- that path is unchanged. What changed on 2026-07-30 is what the bound
+    // spends its room on. Previously a fixed 6,000-char checkpoint ceiling and
+    // a 1,000-char-per-event ceiling meant three events arrived, each severed
+    // mid-content. Now the checkpoint takes at most half the allocation and
+    // the events that fit arrive WHOLE: fewer events, none of them mutilated.
+    // An event the caller can read beats three it cannot.
+    expect(durable).toMatchObject({
+      label: "durable_lane_context",
+      exact_scope_required: true,
+      event_count: 2,
+      truncated: true,
     });
+    expect(durable.events.map((e: PackEvent) => e.id)).toEqual(["event-8", "event-9"]);
+    // Checkpoint bounded to half the allocation, not to a hardcoded 6000.
+    // Slightly under half after the whole-pack fitter charges serialization
+    // framing; the assertion is the share, not an exact byte count.
+    const halfAllocation = Math.floor((3000 * 4 - 1200) / 2);
+    expect(durable.lane.current_context_md.length).toBeLessThanOrEqual(halfAllocation);
+    expect(durable.lane.current_context_md.length).toBeGreaterThan(
+      halfAllocation - 100,
+    );
+    // No per-event ceiling is applied any more. The old 1,000-char cut is
+    // gone, so retained bodies run past it -- the last one is bounded only by
+    // whatever allocation remains, not by a fixed number.
+    expect(
+      durable.events.every((event: PackEvent) => event.content.length > 1000),
+    ).toBe(true);
+    // The whole serialized section stays within the whole-pack budget.
+    expect(JSON.stringify(durable).length).toBeLessThanOrEqual(3000 * 4 - 1200);
+    expect(JSON.stringify(durable)).not.toContain("RAW TRANSCRIPT");
+    expect(JSON.stringify(durable)).not.toContain("RAW TOOL OUTPUT");
+    expect(JSON.stringify(durable)).not.toContain("must not escape");
+    expect(payload.warnings.truncation).not.toEqual([]);
+    // Reconciled to what was actually retained -- the halved checkpoint plus
+    // the whole events that fit -- and reported as unbounded, because no
+    // per-section ceiling exists any more.
+    const laneBudget = payload.budget.durable_lane_context;
+    expect(laneBudget.max_events).toBe(Number.MAX_SAFE_INTEGER);
+    expect(laneBudget.max_event_chars).toBe(Number.MAX_SAFE_INTEGER);
+    expect(laneBudget.content_chars_used).toBeGreaterThan(halfAllocation + 3000);
+    expect(laneBudget.content_chars_used).toBeLessThanOrEqual(
+      laneBudget.content_char_limit,
+    );
+    // One lane citation plus one per retained event.
+    expect(payload.citations).toHaveLength(3);
 
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["durable_lane_context"],
-        },
-      });
+    const laneQuery = expectDefined(queries[0], "the lane query");
 
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      const durable = payload.sections.durable_lane_context;
-      // No budget was requested, so every event in the lane comes back whole.
-      // This used to expect events 1..8 and `truncated: true` -- event-0 was
-      // dropped by the 8-event ceiling and the caller was told the lane had
-      // been shortened. Both the ceiling and the marker are gone as of
-      // 2026-07-30; the oldest event is no longer the price of a full read.
-      expect(durable.events.map((event: any) => event.id)).toEqual([
-        "event-0",
-        "event-1",
-        "event-2",
-        "event-3",
-        "event-4",
-        "event-5",
-        "event-6",
-        "event-7",
-        "event-8",
-      ]);
-      expect(durable).toMatchObject({ event_count: 9, truncated: false });
-      expect(payload.warnings.truncation).toEqual([]);
-    } finally {
-      await cleanup();
-    }
-  });
+    const eventQuery = expectDefined(queries[1], "the event query");
 
-  it("preserves sub-millisecond database ordering in chronological output", async () => {
-    const lane = {
-      id: "lane-sub-millisecond-events",
-      session_key: SCOPE.session_key,
-      status: "active",
-      agent: SCOPE.agent,
-      source: SCOPE.platform,
-      channel_id: SCOPE.channel_id,
-      thread_id: null,
-      project: "open-brain",
-      topic: "precision-preserving event order",
-      current_context_md: "checkpoint",
-      updated_at: "2026-07-17T18:00:00Z",
-    };
-    const newerId = "00000000-0000-4000-8000-000000000001";
-    const olderId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
-    const events = [
-      {
-        id: newerId,
-        event_type: "fact",
-        content: "newer event",
-        source: "shared",
-        importance: "warm",
-        artifact_path: null,
-        transcript_ref: null,
-        occurred_at: null,
-        created_at: "2026-07-17T17:00:00.123900Z",
-      },
-      {
-        id: olderId,
-        event_type: "fact",
-        content: "older event",
-        source: "shared",
-        importance: "warm",
-        artifact_path: null,
-        transcript_ref: null,
-        occurred_at: null,
-        created_at: "2026-07-17T17:00:00.123100Z",
-      },
-    ];
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async (sql: string) => {
-        if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
-          return { rows: [lane] };
-        }
-        if (sql.includes("FROM ob_session_events")) {
-          return { rows: events };
-        }
-        return { rows: [] };
-      },
-    });
-
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["durable_lane_context"],
-        },
-      });
-
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(
-        payload.sections.durable_lane_context.events.map(
-          (event: any) => event.id,
-        ),
-      ).toEqual([olderId, newerId]);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("fails closed without event reads when the exact durable lane does not match", async () => {
-    const queries: string[] = [];
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async (sql: string) => {
-        queries.push(sql);
-        return { rows: [] };
-      },
-    });
-
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          channel_id: "wrong-channel",
-          requested_sections: ["durable_lane_context"],
-        },
-      });
-
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(payload.sections.durable_lane_context).toBeUndefined();
-      expect(payload.warnings.scope_denials).toContainEqual({
-        source: "durable_lane_context",
-        reasons: ["exact_scope"],
-      });
-      expect(queries).toHaveLength(1);
-      expect(queries[0]).not.toContain("ob_session_events");
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("fails closed for every mismatched durable exact-scope coordinate", async () => {
-    const cases = [
-      ["namespace", { namespace: "other" }],
-      ["agent", { agent: "other-agent" }],
-      ["platform", { platform: "other-platform" }],
-      ["server_id", { server_id: "other-server" }],
-      ["channel_id", { channel_id: "other-channel" }],
-      ["thread_id", { thread_id: "other-thread" }],
-      ["session_key", { session_key: "other-session" }],
-    ] as const;
-    const expectedParams = [
-      SCOPE.namespace,
+    expect(laneQuery.sql).toContain("WHERE namespace = $1");
+    expect(laneQuery.sql).toContain("AND session_key = $2");
+    expect(laneQuery.sql).toContain("AND agent = $3");
+    expect(laneQuery.sql).toContain("AND source = $4");
+    expect(laneQuery.sql).toContain("metadata->>'server_id' = $5");
+    expect(laneQuery.sql).toContain("AND channel_id = $6");
+    expect(laneQuery.sql).toContain("thread_id IS NOT DISTINCT FROM $7::text");
+    expect(laneQuery.params).toEqual([
+      "rico",
       SCOPE.session_key,
       SCOPE.agent,
       SCOPE.platform,
       SCOPE.server_id,
       SCOPE.channel_id,
       null,
-    ];
-
-    for (const [, override] of cases) {
-      const queries: Array<{ sql: string; params?: any[] }> = [];
-      const auth: AuthInfo = { role: "admin", clientId: "rico" };
-      const { client, cleanup } = await setupToolClient(auth, {
-        query: async (sql: string, params?: any[]) => {
-          queries.push({ sql, params });
-          const exact = expectedParams.every(
-            (value, index) => params?.[index] === value,
-          );
-          return {
-            rows: exact
-              ? [
-                  {
-                    id: "lane-durable-exact",
-                    session_key: SCOPE.session_key,
-                    status: "active",
-                    agent: SCOPE.agent,
-                    source: SCOPE.platform,
-                    channel_id: SCOPE.channel_id,
-                    thread_id: null,
-                    project: "open-brain",
-                    topic: "exact scope",
-                    current_context_md: "exact context",
-                    updated_at: "2026-07-17T00:00:00.000Z",
-                  },
-                ]
-              : [],
-          };
-        },
-      });
-
-      try {
-        const pack = await client.callTool({
-          name: "agent_context_pack",
-          arguments: {
-            ...SCOPE,
-            ...override,
-            requested_sections: ["durable_lane_context"],
-          },
-        });
-
-        expect(pack.isError).toBeFalsy();
-        const payload = JSON.parse((pack.content as any)[0].text);
-        expect(payload.sections.durable_lane_context).toBeUndefined();
-        expect(payload.warnings.scope_denials).toContainEqual({
-          source: "durable_lane_context",
-          reasons: ["exact_scope"],
-        });
-        expect(queries).toHaveLength(1);
-        expect(queries[0]!.sql).not.toContain("ob_session_events");
-      } finally {
-        await cleanup();
-      }
-    }
-  });
-
-  it("degrades durable lane lookup failures without leaking database errors", async () => {
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async () => {
-        throw new Error("postgres://secret-host/internal-detail");
-      },
-    });
-
-    try {
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["durable_lane_context"],
-        },
-      });
-
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(payload.sections.durable_lane_context).toBeUndefined();
-      expect(payload.warnings.degraded_sources).toEqual([
-        {
-          source: "durable_lane_context",
-          reason: "database_unavailable",
-        },
-      ]);
-      expect(JSON.stringify(payload)).not.toContain("secret-host");
-      expect(JSON.stringify(payload)).not.toContain("internal-detail");
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("discards the pool client after a timed-out durable read", async () => {
-    let statementTimeoutMs = 0;
-    let activeQueries = 0;
-    let releaseCount = 0;
-    let releaseArgument: unknown;
-    let rolledBack = false;
-    const lane = {
-      id: "lane-timeout",
-      session_key: SCOPE.session_key,
-      status: "active",
-      agent: SCOPE.agent,
-      source: SCOPE.platform,
-      channel_id: SCOPE.channel_id,
-      thread_id: null,
-      project: "open-brain",
-      topic: "timeout",
-      current_context_md: "context",
-      updated_at: "2026-07-17T18:00:00Z",
-    };
-    const dbClient = {
-      query: async (config: {
-        text: string;
-        values?: unknown[];
-        query_timeout?: number;
-      }) => {
-        const { text, values, query_timeout: queryTimeoutMs } = config;
-        expect(queryTimeoutMs).toBeGreaterThan(0);
-        if (text === "BEGIN READ ONLY" || text === "COMMIT") {
-          return { rows: [] };
-        }
-        if (text === "ROLLBACK") {
-          rolledBack = true;
-          return { rows: [] };
-        }
-        if (text.includes("set_config('statement_timeout'")) {
-          statementTimeoutMs = Number.parseInt(String(values?.[0]), 10);
-          return { rows: [] };
-        }
-        if (text.includes("FROM ob_session_lanes") && !text.includes("JOIN")) {
-          return { rows: [lane] };
-        }
-        if (text.includes("FROM ob_session_events")) {
-          activeQueries += 1;
-          await new Promise((resolve) =>
-            setTimeout(resolve, statementTimeoutMs + 2),
-          );
-          activeQueries -= 1;
-          throw new Error(
-            "canceling statement due to statement timeout secret-detail",
-          );
-        }
-        return { rows: [] };
-      },
-      release: (error?: unknown) => {
-        releaseCount += 1;
-        releaseArgument = error;
-      },
-    };
-    const auth: AuthInfo = { role: "admin", clientId: "rico" };
-    const { client, cleanup } = await setupToolClient(auth, {
-      query: async () => {
-        throw new Error("budgeted reads must use a checked-out client");
-      },
-      connect: async () => dbClient,
-    });
-
-    try {
-      const startedAt = performance.now();
-      const pack = await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...SCOPE,
-          requested_sections: ["durable_lane_context"],
-          budget: { max_latency_ms: 25 },
-        },
-      });
-      const elapsedMs = performance.now() - startedAt;
-
-      expect(pack.isError).toBeFalsy();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(payload.sections.durable_lane_context).toBeUndefined();
-      expect(payload.warnings.degraded_sources).toEqual([
-        {
-          source: "durable_lane_context",
-          reason: "database_unavailable",
-        },
-      ]);
-      expect(JSON.stringify(payload)).not.toContain("secret-detail");
-      expect(elapsedMs).toBeLessThan(250);
-      expect(activeQueries).toBe(0);
-      expect(rolledBack).toBe(false);
-      expect(releaseCount).toBe(1);
-      expect(releaseArgument).toBeInstanceOf(Error);
-    } finally {
-      await cleanup();
-    }
-  });
-});
-
-const DB_URL = process.env.OPENBRAIN_TEST_DATABASE_URL;
-const dbDescribe = DB_URL ? describe : describe.skip;
-
-dbDescribe("agent_context_pack durable lane reads (live Postgres)", () => {
-  const pool = new Pool({
-    connectionString: DB_URL,
-    max: 2,
-    connectionTimeoutMillis: 500,
-  });
-  const namespace = `test-context-pack-${process.pid}`;
-  const liveScope = {
-    namespace,
-    agent: "nagatha",
-    platform: "discord",
-    server_id: "live-server",
-    channel_id: "live-channel",
-    session_key: `live-context-pack-${process.pid}`,
-  };
-  const laneId = "10000000-0000-0000-0000-000000000001";
-
-  async function cleanupDatabaseRows() {
-    await pool.query(
-      `DELETE FROM ob_session_events
-        WHERE lane_id IN (SELECT id FROM ob_session_lanes WHERE namespace = $1)`,
-      [namespace],
-    );
-    await pool.query("DELETE FROM ob_session_lanes WHERE namespace = $1", [
-      namespace,
     ]);
+    expect(eventQuery.sql).toContain("e.lane_id = $1");
+    expect(eventQuery.sql).toContain("l.namespace = $2");
+    expect(eventQuery.params?.slice(0, 3)).toEqual([
+      "lane-durable-1",
+      "rico",
+      SCOPE.session_key,
+    ]);
+  } finally {
+    await cleanup();
   }
+}
 
-  async function insertLane() {
-    await pool.query(
-      `INSERT INTO ob_session_lanes
-         (id, session_key, namespace, agent, source, channel_id, thread_id,
-          project, topic, current_context_md, metadata, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, NULL, 'open-brain', 'live context',
-               'live checkpoint', jsonb_build_object('server_id', $7::text), 'test')`,
-      [
-        laneId,
-        liveScope.session_key,
-        namespace,
-        liveScope.agent,
-        liveScope.platform,
-        liveScope.channel_id,
-        liveScope.server_id,
-      ],
-    );
-  }
-
-  async function callLivePack(maxLatencyMs?: number) {
-    const { client, cleanup } = await setupToolClient(
-      { role: "admin", clientId: namespace },
-      pool as any,
-    );
-    try {
-      return await client.callTool({
-        name: "agent_context_pack",
-        arguments: {
-          ...liveScope,
-          requested_sections: ["durable_lane_context"],
-          ...(maxLatencyMs === undefined
-            ? {}
-            : { budget: { max_latency_ms: maxLatencyMs } }),
-        },
-      });
-    } finally {
-      await cleanup();
-    }
-  }
-
-  afterAll(async () => {
-    await cleanupDatabaseRows();
-    await pool.end();
-  });
-
-  it("orders equal-timestamp events by UUID and returns the whole lane chronologically", async () => {
-    await cleanupDatabaseRows();
-    try {
-      await insertLane();
-      const createdAt = "2026-07-17T17:00:00.000Z";
-      for (let index = 1; index <= 9; index += 1) {
-        const id = `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`;
-        await pool.query(
-          `INSERT INTO ob_session_events
-             (id, lane_id, event_type, content, source, importance, created_by, created_at)
-           VALUES ($1, $2, 'fact', $3, 'test', 'warm', 'test', $4)`,
-          [id, laneId, `short event ${index}`, createdAt],
-        );
+async function declaresOmittedShortEventsAndReturnsTheSelec() {
+  const lane = {
+    id: "lane-nine-events",
+    session_key: SCOPE.session_key,
+    status: "active",
+    agent: SCOPE.agent,
+    source: SCOPE.platform,
+    channel_id: SCOPE.channel_id,
+    thread_id: null,
+    project: "open-brain",
+    topic: "bounded recent events",
+    current_context_md: "short checkpoint",
+    updated_at: "2026-07-17T18:00:00Z",
+  };
+  const events = Array.from({ length: 9 }, (_, index) => ({
+    id: `event-${index}`,
+    event_type: "fact",
+    content: `short event ${index}`,
+    source: "shared",
+    importance: "warm",
+    artifact_path: null,
+    transcript_ref: null,
+    occurred_at: null,
+    created_at: `2026-07-17T17:00:0${index}Z`,
+  })).reverse();
+  const auth: AuthInfo = { role: "admin", clientId: "rico" };
+  const { client, cleanup } = await setupToolClient(auth, {
+    query: async (sql: string) => {
+      if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
+        return { rows: [lane] };
       }
-
-      const pack = await callLivePack();
-      const payload = JSON.parse((pack.content as any)[0].text);
-      expect(pack.isError).toBeFalsy();
-      expect(payload.sections.durable_lane_context).toBeDefined();
-      // No budget was requested, so the whole lane comes back whole. All nine
-      // events share one timestamp, so the `created_at DESC, id DESC` tie-break
-      // is what makes the order deterministic; after the chronological reverse
-      // that surfaces as UUID ascending. This used to expect only the eight
-      // "recent" events and `truncated: true`, dropping ...0001 to the 8-event
-      // ceiling. That ceiling and its truncation marker are gone as of
-      // 2026-07-30 (see agent-context-pack-durable-lane.ts) -- the oldest event
-      // is no longer the price of a full read.
-      expect(
-        payload.sections.durable_lane_context.events.map(
-          (event: Record<string, unknown>) => event.id,
-        ),
-      ).toEqual(
-        Array.from(
-          { length: 9 },
-          (_, index) =>
-            `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
-        ),
-      );
-      expect(payload.sections.durable_lane_context).toMatchObject({
-        event_count: 9,
-        truncated: false,
-      });
-    } finally {
-      await cleanupDatabaseRows();
-    }
+      if (sql.includes("FROM ob_session_events")) {
+        return { rows: events };
+      }
+      return { rows: [] };
+    },
   });
 
-  it("cancels a lock-delayed event read before returning and releases its pool client", async () => {
-    await cleanupDatabaseRows();
-    const blocker = await pool.connect();
-    try {
-      await insertLane();
-      await blocker.query("BEGIN");
-      await blocker.query(
-        "LOCK TABLE ob_session_events IN ACCESS EXCLUSIVE MODE",
-      );
+  try {
+    const pack = await client.callTool({
+      name: "agent_context_pack",
+      arguments: {
+        ...SCOPE,
+        requested_sections: ["durable_lane_context"],
+      },
+    });
 
-      const startedAt = performance.now();
-      const pack = await callLivePack(50);
-      const elapsedMs = performance.now() - startedAt;
-      const payload = JSON.parse((pack.content as any)[0].text);
+    expect(pack.isError).toBeFalsy();
+    const payload = parsePackPayload(pack.content);
+    const durable = expectDefined(
+      payload.sections.durable_lane_context,
+      "the durable lane section",
+    );
+    // No budget was requested, so every event in the lane comes back whole.
+    // This used to expect events 1..8 and `truncated: true` -- event-0 was
+    // dropped by the 8-event ceiling and the caller was told the lane had
+    // been shortened. Both the ceiling and the marker are gone as of
+    // 2026-07-30; the oldest event is no longer the price of a full read.
+    expect(durable.events.map((event: PackEvent) => event.id)).toEqual([
+      "event-0",
+      "event-1",
+      "event-2",
+      "event-3",
+      "event-4",
+      "event-5",
+      "event-6",
+      "event-7",
+      "event-8",
+    ]);
+    expect(durable).toMatchObject({ event_count: 9, truncated: false });
+    expect(payload.warnings.truncation).toEqual([]);
+  } finally {
+    await cleanup();
+  }
+}
 
-      expect(pack.isError).toBeFalsy();
-      expect(payload.sections.durable_lane_context).toBeUndefined();
-      expect(payload.warnings.degraded_sources).toEqual([
-        {
-          source: "durable_lane_context",
-          reason: "database_unavailable",
-        },
-      ]);
-      expect(elapsedMs).toBeLessThan(500);
-      await pool.query("SELECT 1");
-    } finally {
-      await blocker.query("ROLLBACK").catch(() => undefined);
-      blocker.release();
-      await cleanupDatabaseRows();
-    }
+async function preservesSubmillisecondDatabaseOrderingInChr() {
+  const lane = {
+    id: "lane-sub-millisecond-events",
+    session_key: SCOPE.session_key,
+    status: "active",
+    agent: SCOPE.agent,
+    source: SCOPE.platform,
+    channel_id: SCOPE.channel_id,
+    thread_id: null,
+    project: "open-brain",
+    topic: "precision-preserving event order",
+    current_context_md: "checkpoint",
+    updated_at: "2026-07-17T18:00:00Z",
+  };
+  const newerId = "00000000-0000-4000-8000-000000000001";
+  const olderId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+  const events = [
+    {
+      id: newerId,
+      event_type: "fact",
+      content: "newer event",
+      source: "shared",
+      importance: "warm",
+      artifact_path: null,
+      transcript_ref: null,
+      occurred_at: null,
+      created_at: "2026-07-17T17:00:00.123900Z",
+    },
+    {
+      id: olderId,
+      event_type: "fact",
+      content: "older event",
+      source: "shared",
+      importance: "warm",
+      artifact_path: null,
+      transcript_ref: null,
+      occurred_at: null,
+      created_at: "2026-07-17T17:00:00.123100Z",
+    },
+  ];
+  const auth: AuthInfo = { role: "admin", clientId: "rico" };
+  const { client, cleanup } = await setupToolClient(auth, {
+    query: async (sql: string) => {
+      if (sql.includes("FROM ob_session_lanes") && !sql.includes("JOIN")) {
+        return { rows: [lane] };
+      }
+      if (sql.includes("FROM ob_session_events")) {
+        return { rows: events };
+      }
+      return { rows: [] };
+    },
   });
+
+  try {
+    const pack = await client.callTool({
+      name: "agent_context_pack",
+      arguments: {
+        ...SCOPE,
+        requested_sections: ["durable_lane_context"],
+      },
+    });
+
+    expect(pack.isError).toBeFalsy();
+    const payload = parsePackPayload(pack.content);
+    expect(
+      expectDefined(
+        payload.sections.durable_lane_context,
+        "the durable lane section",
+      ).events.map((event: PackEvent) => event.id),
+    ).toEqual([olderId, newerId]);
+  } finally {
+    await cleanup();
+  }
+}
+
+describe("agent_context_pack durable lane context", () => {
+  it(
+    "does not query or return durable lane context unless explicitly requested",
+    doesNotQueryOrReturnDurableLaneContextUnless,
+  );
+
+  it(
+    "returns bounded distilled durable context for the exact authorized lane",
+    returnsBoundedDistilledDurableContextForTheE,
+  );
+
+  it(
+    "declares omitted short events and returns the selected recent subset chronologically",
+    declaresOmittedShortEventsAndReturnsTheSelec,
+  );
+
+  it(
+    "preserves sub-millisecond database ordering in chronological output",
+    preservesSubmillisecondDatabaseOrderingInChr,
+  );
 });
