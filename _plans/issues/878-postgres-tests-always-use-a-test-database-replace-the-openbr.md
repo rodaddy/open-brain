@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-08-27T03:25:31Z
-Updated: 2026-08-28T04:18:28Z
+Updated: 2026-08-28T18:15:23Z
 
 ---
 
@@ -24,7 +24,7 @@ Closes the question in #874 (no lint exemption).
 
 ---
 
-## Discussion (78)
+## Discussion (88)
 
 ### rodaddy — 2026-08-27T03:48:03Z
 
@@ -499,3 +499,78 @@ Scribe, session 11: #950 MERGED at 35245948 (State 4, search-brain-relational-re
 ### rodaddy — 2026-08-28T04:18:28Z
 
 Scribe, session 11: #949 MERGED at fd70d4ec (State 5, sdk-protocol: helpers to server/application/sdk-protocol-test-helpers.ts, env isolation to scripts/test-support/shared-namespace-env.ts, 12 live tests; manifest unchanged at 12; verify-lane receipt on the PR). Lane-3 lesson harvested: MIN_TOTAL_LIVE_TESTCASES is the sum of the manifest's minTests, so a suite that already has an entry raises it by zero. States 3-7 of the session-11 handover are MERGED; remaining self-skipping file on origin/main: append-session-event.test.ts (plan WRITTEN, session 12).
+
+---
+
+### rodaddy — 2026-08-28T04:32:51Z
+
+Scribe, session 11: docs PR #952 open (docs/pg-tests-session11 at 3919c09b, pushed from a clone per rule 53): session-12 handover (validator PASS, 93 lines), HANDOVER-RULES 55-56, _plans/878-append-session-event-split.md, round 41, two SME entries, beta receipts with the corrected ratchet row, decisions row 6. #951 filed (expectDefined x7). Collector running on #952.
+
+---
+
+### rodaddy — 2026-08-28T04:35:17Z
+
+Scribe, session 11: #952 MERGED at 1ce3f8e3. Session 11 closed: States 3-7 MERGED (#947 #948 #949 #950), State 6 plan and the session-12 handover on main. Next session: read _DOCS/_handover/2026-08-28-pg-tests-session12.md and execute it from State 0.
+
+---
+
+### rodaddy — 2026-08-28T04:49:39Z
+
+Scribe, session 11 (post-wrap): #951 was auto-closed by the #952 squash (its message contained a closing keyword for #951 while describing session-12 work) and is reopened; HANDOVER-RULES rule 57 lands in a follow-up PR so no commit or PR text names a closing keyword for work not in that change.
+
+---
+
+### rodaddy — 2026-08-28T04:55:01Z
+
+Scribe, session 11 (post-wrap): issue 951 auto-closed a second time by the #953 squash (its body wrote the past-tense closing word next to the issue number); reopened. Rule 57 gains the full keyword list (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved) in a follow-up.
+
+---
+
+### rodaddy — 2026-08-28T16:49:30Z
+
+## 2026-08-28 rulings landed (session 11 follow-through)
+
+Rico, 2026-08-28: "yes to all" on the open rulings. State after this pass:
+
+- D3 `--max-tightenings 2` ratified (decisions row 3) and recorded in docs/controller-contract.md item 1.
+- D4 lane-report checker word list fixed in Development canon: `_ob/skills/graph-mode/beta/lane-report/lib/lane-report.ts` at 752cfac3 on wip/2026-08-27 (Development repo), acronym fixture rc=0, completion fixture rc=1.
+- D5 backup drill stays always-on (decisions row 4).
+- D6 round 27 graduated into SME entry order 101; ratchet live=15 graduated=33 exit 0.
+- New Done-means for ledger PRs: scripts/done-means/decisions-ledger-checks.sh (RED at fee8e11b, GREEN on the branch).
+- MERGED: #955 a9abb7f5 (rows 3-6 RATIFIED with Falsifiers, round 27 graduation, ledger check).
+- #739 rebased to 1025920b (only .agents/skills/.gitkeep remains; the .claude/skills symlink was never tracked, .gitignore:53). Collect in progress.
+- #745 rebased as a single cherry-pick 9083a532 plus 7f513b6 adding scripts/done-means/745-guard-label-not-codex.sh (RED at fee8e11b: 8 source + 3 fixture refusals; GREEN on the branch). Collect after CI.
+
+---
+
+### rodaddy — 2026-08-28T16:57:05Z
+
+## 2026-08-28 stale PRs landed
+
+- MERGED: #745 c01ded78 (guard refusals say "git guard"/"merge guard"; done-means scripts/done-means/745-guard-label-not-codex.sh).
+- MERGED: #739 494fb1a2 (.agents/skills/.gitkeep tracked; done-means scripts/done-means/739-skills-layout-tracked.sh).
+- Pattern for the record: a PR with no handover file cannot use handover-validates.sh as its Done-means (it exits 1 on "no handover files to check"); each such PR now carries a check that judges its own surface, RED on origin/main and GREEN on the branch.
+
+---
+
+### rodaddy — 2026-08-28T17:08:29Z
+
+Scribe, session 12: started 2026-08-28 from _DOCS/_handover/2026-08-28-pg-tests-session12.md. origin/main 494fb1a2, no open PRs, T1 declared. Order: issue 951 lane (expectDefined util) first, then plan Lane 1 (append-session-event live suite), then Lanes 2-8 sequenced.
+
+---
+
+### rodaddy — 2026-08-28T17:14:25Z
+
+Session 12 deviation, flagged for a ruling (not taken silently): _plans/878-append-session-event-split.md Lanes 1-7 each stage the trimmed append-session-event.test.ts, and _githooks/pre-commit lints every staged file whole (git checkout-index at :275), so every one of those commits is refused on the file's ~130 pre-existing oxlint findings until Lane 8 deletes it. Executable shape used instead: the eight lanes run sequenced in one clone on one branch (chore/878-append-session-event-split), each verified on the working tree (oxlint on the new file, tsc, test:isolated, census falling, 878 done-means), and the split lands as ONE commit and ONE pull request after Lane 8 (deleted files are not linted). Same end state on main; the per-lane pull requests the handover named are the delta. Rico: say so if you want a different shape.
+
+---
+
+### rodaddy — 2026-08-28T17:21:44Z
+
+Session 12: #956 merged (a932cf2d), issue 951 closed; head re-ran 951-expect-defined-single-util.sh on origin/main -> exit 0. Split step 1 of 8 verified on the lane-1 working tree: append-session-event.pg.test.ts (443 lines, 8 its, requireTestDatabaseUrl), original trimmed 2779 -> 2338, 878 done-means exit 0 on the pg file. Finding: scripts/assert-db-tests-ran.ts:40 carries minTests 4 for a suite that emits 8 (the handover said 8); the landing step corrects it, floor 328 -> 332. Finding: the CHANGED_FILES form of the 878 check does not apply to pure unit files (clauses 2-3 demand a database call), so the plan's Lane 2-8 done-checks are replaced by the bare invocation plus a no-skip rg over the split files.
+
+---
+
+### rodaddy — 2026-08-28T18:15:22Z
+
+Session 12: #957 merged (f93a16a0). src/tools/__tests__/append-session-event.test.ts is retired; the split is nine files (pg, helper module, auth, lane-creation, failure-paths, lane-state, provenance, share-gate, share-lifecycle, citation), 70 its (62 unit + 8 live), full suite 4010 pass on the committed tree. Manifest entry corrected minTests 4 -> 8, MIN_TOTAL_LIVE_TESTCASES 328 -> 332. Head re-ran on origin/main f93a16a0: CHANGED_FILES=<pg file> bash scripts/done-means/878-pg-tests-require-database.sh -> see receipt in the session record. Harvest and drain lanes running next.
