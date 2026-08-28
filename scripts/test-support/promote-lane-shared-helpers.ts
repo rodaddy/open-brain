@@ -10,6 +10,9 @@ import { readFileSync } from "node:fs";
 import type { Pool } from "pg";
 import { parseArgs } from "../promote-lane-shared.ts";
 import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import { expectDefined } from "./expect-defined.ts";
+
+export { expectDefined };
 
 export const DEFAULT_MIN = 24;
 // minLen <= len < minLen*1.5 → manual-review. minLen=24 → [24, 36).
@@ -18,15 +21,6 @@ export const MANUAL_REVIEW_CONTENT = "x".repeat(30); // len 30, in the ambiguity
 export const SHARE_CONTENT =
   "This is a substantive shared-worthy decision about the schema design choices.";
 export const TEST_NAMESPACE = "test-promote-lane-shared-live";
-
-/** Narrows an optional value, throwing a labelled error when it is absent. */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
 export interface PromoterHarness {
   ns: string;
   applyDbEnv: () => void;

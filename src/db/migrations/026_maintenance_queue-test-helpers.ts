@@ -13,6 +13,9 @@
  */
 import type { Pool } from "pg";
 import { MaintenanceQueue } from "../../maintenance-queue.ts";
+import { expectDefined } from "../../../scripts/test-support/expect-defined.ts";
+
+export { expectDefined };
 
 const migrationUrl = new URL("026_maintenance_queue.sql", import.meta.url);
 
@@ -50,18 +53,4 @@ export async function enqueue(
     runAfter: new Date("2000-01-01T00:00:00.000Z"),
     ...input,
   });
-}
-
-/**
- * Narrows an optional value, throwing a labelled error when it is absent.
- *
- * Same assertion meaning as a non-null assertion -- a missing value still
- * fails the test -- except the failure names which value went missing instead
- * of surfacing as a bare TypeError on the next property read.
- */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is undefined`);
-  }
-  return value;
 }

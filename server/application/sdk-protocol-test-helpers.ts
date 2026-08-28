@@ -26,21 +26,9 @@ import { WorkingSetStore } from "../realtime/working-set.ts";
 import { registerMemoryTools } from "../tools/index.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "../tools/shared-namespace-fixture.ts";
 import { silentLogger } from "../transport/testing/silent-logger.ts";
+import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
 
-/**
- * Assert a value is present and return it narrowed.
- *
- * Replaces the non-null assertion operator: `x!` tells the compiler to stop
- * checking, while this throws a labelled error at the moment the assumption is
- * actually wrong, which is what a test wants to read in its failure output.
- */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
+export { expectDefined };
 export const TEST_TOKEN = "sdk-protocol-proof-token";
 const CONNECTED: DatabaseHealth = {
   connected: true,

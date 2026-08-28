@@ -18,6 +18,9 @@ import {
 } from "./graph-derivation-handler.ts";
 import { type MaintenanceJob } from "./maintenance-queue.ts";
 import type { AuthInfo } from "./types.ts";
+import { expectDefined } from "../scripts/test-support/expect-defined.ts";
+
+export { expectDefined };
 
 export const ns = "test-graph-derivation-maint";
 export const otherNs = "test-graph-derivation-maint-other";
@@ -30,23 +33,6 @@ export const auth: AuthInfo = {
 
 export const hashA = "a".repeat(64);
 export const hashB = "b".repeat(64);
-
-/**
- * Narrows a possibly-absent value, throwing with a caller-supplied label.
- *
- * Replaces the `x!` non-null assertions the oxlint standard forbids: the
- * assertion's runtime meaning (throw when absent) is kept, and the label says
- * which expectation went missing instead of a bare TypeError.
- *
- * @throws {Error} when `value` is null or undefined.
- */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
 export async function cleanup(pool: Pool): Promise<void> {
   for (const namespace of [ns, otherNs]) {
     await pool.query("DELETE FROM ob_links WHERE namespace = $1", [namespace]);

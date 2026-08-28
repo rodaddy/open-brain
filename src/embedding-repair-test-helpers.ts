@@ -15,6 +15,9 @@ import {
 } from "./embedding-canonical.ts";
 import type { EmbedWithMetaFn } from "./embedding-repair.ts";
 import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
+import { expectDefined } from "../scripts/test-support/expect-defined.ts";
+
+export { expectDefined };
 
 // Deterministic, provider-free embedding: a fixed unit vector. Repair only needs
 // a valid halfvec(768); content correctness is the provider's concern, not ours.
@@ -184,12 +187,4 @@ export async function embeddingIsNull(
     [id],
   );
   return rows[0].is_null as boolean;
-}
-
-/** Narrow a nullable value at a test boundary without a non-null assertion. */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`${label} is undefined`);
-  }
-  return value;
 }

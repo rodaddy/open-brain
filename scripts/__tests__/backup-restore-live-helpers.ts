@@ -19,6 +19,9 @@ import {
   requireLocalCloneTestDatabaseUrl,
   requireTestDatabaseUrl,
 } from "../test-support/require-test-database.ts";
+import { expectDefined } from "../test-support/expect-defined.ts";
+
+export { expectDefined };
 
 export const REPO_ROOT = join(import.meta.dir, "..", "..");
 export const MIGRATIONS_DIR = join(REPO_ROOT, "src", "db", "migrations");
@@ -79,15 +82,6 @@ export interface CliResult {
   stdout: string;
   stderr: string;
 }
-
-/** Throws when a value is null or undefined, so callers need no `!`. */
-export function expectDefined<T>(value: T | null | undefined, label: string): T {
-  if (value === null || value === undefined) {
-    throw new Error(`expected ${label} to be defined`);
-  }
-  return value;
-}
-
 export function parseAdminUrl(url: string): Conn & { database: string } {
   const parsed = new URL(url);
   return {
