@@ -442,6 +442,18 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "embedding repair through the real maintenance queue (live Postgres)",
     minTests: 2,
   },
+  // The live backup/restore drill was split into a full-run half and a
+  // snapshot/refusals/upgrade half (#878, #938) as that file stopped skipping
+  // itself, so both halves are named here; registering one would let the other
+  // vanish unnoticed.
+  {
+    name: "backup restore drill full run (live Postgres)",
+    minTests: 3,
+  },
+  {
+    name: "backup restore drill snapshot, refusals, and upgrade (live Postgres)",
+    minTests: 5,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -499,9 +511,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // itself, then 302 -> 304 when #878 registered the agent_context_pack durable
 // lane live-reads suite's 2 as that file stopped skipping itself, then
 // 304 -> 320 when #878 registered the five subject-split embedding repair
-// suites' 6 + 3 + 2 + 3 + 2 as that file stopped skipping itself), so the
-// global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 320;
+// suites' 6 + 3 + 2 + 3 + 2 as that file stopped skipping itself, then
+// 320 -> 328 when #878 registered the two split backup/restore drill
+// suites' 3 + 5 as that file stopped skipping itself), so the global floor
+// cannot silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 328;
 
 export interface SuiteStats {
   tests: number;
