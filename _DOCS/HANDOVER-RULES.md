@@ -400,3 +400,11 @@ only when a session actually needed it.
     tree where it exits 1 (live=16 over the rule value 15). A lane's exit
     column is PROPOSED; the head runs the same command on the committed tree
     and corrects the row, announcing the correction in the pilot findings.
+57. **A closing keyword in any commit or PR text closes the issue at merge,
+    whether or not the change did the work.** GitHub reads `closes #N`,
+    `fixes #N`, `resolves #N` in the squash message (which carries the PR
+    title and body) and closed #951 from the #952 handover commit, whose
+    body merely said session 12 "closes #951". Write "session 12 finishes
+    #951" or "wayfinder: #951"; a closing keyword appears only in the PR
+    that lands the fix, and the head confirms `gh issue view N --json state`
+    after every merge that mentions an issue.
