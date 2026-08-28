@@ -377,3 +377,26 @@ harvest. Both numbers are recorded rather than one overwriting the other.
   check run instead of a missing-subject report.
 - **Decisions row count is unchanged at 5.** No new decision row was added this
   session, and row 5 exits 0 with 0 failures.
+
+## Run receipts, 2026-08-28 (decisions rows 3-6 ratified)
+
+Rico's rulings of 2026-08-28 ("yes to all") moved `docs/decisions.md` rows 3, 4,
+5 and 6 from OPEN to RATIFIED, graduated round 27 of `docs/lane-contract.md`
+into one gotcha-agent SME entry, and appended the row-3 ratification to
+`docs/controller-contract.md` item 1.
+
+| # | command | exit | last line |
+|---|---------|------|-----------|
+| 1 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 6 rows, 0 failures` |
+| 2 | `bun run scripts/build-sme-indexes.ts` | 0 | `wrote docs/sme/gotcha-agent.md (57 entries)` |
+| 3 | `ratchet-bound/check.sh docs/lane-contract.md` | 0 | `live=15 graduated=33 bound=15 source=default shape=heading` |
+| 4 | `placeholders/check.sh docs/controller-contract.md docs/decisions.md docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
+
+- **Row 1 first ran red on `retire-without-check`.** Row 5's Retires column was
+  filled with `the OPENBRAIN_BACKUP_DRILL toggle`, and the check requires a
+  Retires value to name a changed path. The brief said the Retires column stays
+  as it was — empty — so the column was returned to empty and row 1 re-ran at
+  exit 0. Announced, not silent.
+- **Round 27 graduation takes live from 16 back to 15.** Row 3 reports
+  `live=15 graduated=33` against the default rule value of 15, which is the
+  state decisions row 6 was ratified to produce.

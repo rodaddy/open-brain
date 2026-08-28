@@ -127,6 +127,8 @@ these by hand at the landing points this contract already names.
    `## Excluded (available on request)` list, and REFUSES over budget
    rather than truncating. A refusal is the signal to cut a smaller lane,
    not to raise the budget.
+   Ratified 2026-08-28 (decisions row 3): conversion briefs pack with
+   `--max-tightenings 2`.
 2. **A lane report is accepted only after it validates.** This repo's schema is
    the eleven-field one under `## Required lane report format` above, so the
    beta's five-field `lane-report/check.sh` does NOT judge it; the repo's own
