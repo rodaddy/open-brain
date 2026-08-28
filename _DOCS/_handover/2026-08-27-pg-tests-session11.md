@@ -31,7 +31,7 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session10/{lane,git,diag,drain,scribe}.workflow.js`, `collect.sh <pr> [CHANGED_FILES]`, `common-rules.txt` R1-R9, `rebase-brief.template.txt`, `task-scribe.txt`, `task-drain.txt` — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`, `827-*.sh`)
 - Drain: origin holds `main`, `docs/pg-tests-session9` (#936), and two non-program heads; eleven clones detached at `4e1f0f2c`, no stash, no extra worktree, every `test/878-*` and `test/827-*` branch deleted; `check-drained.sh` ignores the tracked `.qmd/index.yml` since Development `a4190023` and passes every clone — RUNNING (`check-drained.sh .` fails on the root checkout's untracked draft only)
-- Root checkout carries one untracked agent draft, `scripts/done-means/qmd-root-only-gate-fires.sh` — WRITTEN (`git status --short`; keep or drop is Rico's)
+- `scripts/done-means/qmd-root-only-gate-fires.sh` drives the `_ob/bin/qmd` temp-workspace guard (Development `6eb694ec`) from a lane clone: four write verbs refused with exit 3, two reads open — RUNNING (`bash scripts/done-means/qmd-root-only-gate-fires.sh` → exit 0)
 - Round 40, two SME entries, decisions row 5, session-10 beta receipts: `690b67de` on `docs/pg-tests-session10`, stacked on `docs/pg-tests-session9` — WRITTEN (this document's PR)
 Re-probe before dispatching anything (live state beats this doc):
 - `git log --oneline origin/main -1` → expect 4e1f0f2c or later with this PR merged
@@ -95,7 +95,7 @@ still exit 0; tick the map checkbox in the same motion.
 Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
-- `docs/pg-tests-session10` (#946) is stacked on `docs/pg-tests-session9` (#936); both done-means now fail only on the root checkout's untracked `scripts/done-means/qmd-root-only-gate-fires.sh` — keep or drop it, and merge #936 first or #946 alone, are Rico's calls.
+- `docs/pg-tests-session10` (#946) is stacked on `docs/pg-tests-session9` (#936); merge #936 first or #946 alone is Rico's call.
 - decisions rows 3-5 (`docs/decisions.md`) need Rico: brief-pack's `--max-tightenings 2` knob; lane-report/check.sh's `CI` false positive and RESULTS-block rebase reports; the backup drill running on every isolated run.
 - `_reports/` is gitignored (rule 54); whether the session records get tracked is Rico's call.
 - Q1, since session 3: the tracking scribe runs as a Workflow lane on the root checkout's docs branch — Rico confirms that as the standing shape.
