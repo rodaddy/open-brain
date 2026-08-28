@@ -741,6 +741,9 @@ provenance: PR #708.
   into an artifact they became top-level sections of the ISSUE, so the
   PR's structure masqueraded as the issue's. Blockquoting the embedded
   body keeps every line inside its section and byte-identical.
+
+
+graduated: bullets 1, 2, 3 and 4 -> docs/sme/entries/2026-08-28-issue-closure-reasoning-lives-in-the-closing-comment-and-the-timeline-not-the-linkage-field.md (gotcha-agent order 101)
 provenance: operator ruling 2026-08-09, ledger item 32; no PR number in the heading.
 
 ### 2026-08-08 (round 26) — operator ruling on test-data cleanup (ledger item 31)
