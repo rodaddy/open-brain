@@ -327,3 +327,51 @@ harvest. Both numbers are recorded rather than one overwriting the other.
   stacked on `docs/pg-tests-session9`, which was cut before it. Exit 3 is the
   placeholders harness reporting a missing subject. Announced rather than
   substituted with another path.
+
+## Run receipts, 2026-08-27 (session-11 merge pass, PRs #947-#950)
+
+| # | command | exit | last line |
+|---|---|---|---|
+| 1 | `ratchet-bound/check.sh docs/lane-contract.md` (BEFORE round 41) | 0 | `live=15 graduated=32 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 41) | 0 | `live=16 graduated=32 bound=15 source=default shape=heading` |
+| 3 | `placeholders/check.sh docs/lane-contract.md` | 0 | `PASS: no unresolved placeholders` |
+| 4 | `placeholders/check.sh` on `origin/main:scripts/done-means/878-pg-tests-require-database.sh` | 0 | `PASS: no unresolved placeholders` |
+| 5 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 5 rows, 0 failures` |
+| 6 | `lane-report/check.sh reports/lane-1-lane-upsert.txt` | 1 | `lane report invalid: 1 failure(s)` |
+| 7 | `lane-report/check.sh reports/lane-2-relational-retrieval.txt` | 1 | `lane report invalid: 1 failure(s)` |
+| 8 | `lane-report/check.sh reports/lane-3-sdk-protocol.txt` | 1 | `lane report invalid: 1 failure(s)` |
+| 9 | `lane-report/check.sh reports/lane-4-plan.txt` | 1 | `lane report invalid: 1 failure(s)` |
+| 10 | `lane-report/check.sh reports/lane-5-945-clause2.txt` | 1 | `lane report invalid: 1 failure(s)` |
+
+## Pilot findings, session 11
+
+- **The ratchet valve moved by exactly one and the bound held.** Rows 1 and 2
+  bracket the round-41 insert: live 15 → 16 against the default bound of 15 with
+  graduated steady at 32, exit 0 both times. The bound is a graduation valve on
+  live rounds, so a single added round is what the ratchet expects to see.
+- **The ratchet counts round HEADINGS, and it caught a duplicated insert.** A
+  first insert attempt reported an error from `sed` after having already written
+  its block, and the retry produced two identical `### 2026-08-27 (round 41)`
+  headings. The check read `live=17` and exited 1 with
+  `FAIL bound: 17 live > 15`. Announced rather than worked around: the file was
+  restored with `git checkout docs/lane-contract.md` and re-inserted once, with
+  the heading count verified at 48 (from 47) before re-running. The failing run
+  is not in the table because it was a run against a file state that no longer
+  exists; it is recorded here instead.
+- **All five lane-report rows refuse for the SAME single reason, and it is the
+  expected one.** Every one exits 1 on `field-set`: the checker expects
+  `[deliverable, claim-states, verified, deviations, lessons]` in order and the
+  files carry only `[deliverable, lessons]` (rows 6, 9) or
+  `[deliverable, deviations, lessons]` (rows 7, 8, 10). These five files are
+  head-condensed excerpts of the real lane reports, not the reports the lanes
+  emitted, so the refusal is a property of the input and not evidence about
+  lane compliance. Unlike session 9 and 10, no row failed `trailing-content` and
+  no row tripped the `claim-states` state-word false positive.
+- **The placeholders check passes on a done-means script taken from
+  `origin/main`.** Row 4 ran against the merged content of the file PR #947
+  changed, extracted with `git show origin/main:<path>`. Session 10 recorded row
+  4 as a harness error (exit 3) because the subject did not exist on the branch;
+  extracting from `origin/main` is what makes the same class of row a real
+  check run instead of a missing-subject report.
+- **Decisions row count is unchanged at 5.** No new decision row was added this
+  session, and row 5 exits 0 with 0 failures.

@@ -3,11 +3,12 @@
 
 # #945 — 878 done-means clause 2 judges the import's line shape: a prettier-wrapped require-test-database import fails a file that demands the database
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-28T02:39:16Z
-Updated: 2026-08-28T02:39:16Z
+Updated: 2026-08-28T04:09:40Z
+Closed: 2026-08-28T03:53:20Z
 
 ---
 
@@ -20,3 +21,67 @@ Second shape of the same defect: a split half that reaches the helper only throu
 Ask: make clause 2 match the identifier and the basename within the same import STATEMENT (multi-line aware), or document the one-specifier-per-line convention in the script header and in HANDOVER-RULES; prove it with a deliberate miss per rule 40 (a wrapped import that should pass, and a file with no import that should fail).
 
 Parent: #878. Related: #918 (clause design), #944.
+
+---
+
+## Resolution
+
+Closed by **PR #946** — docs(handover): session 11 of #878, HANDOVER-RULES 52-54, and the session-10 harvest
+
+- Linkage: Closed by commit `751c72682adac2d808aac786e8714967b1ce65b4`, which is the merge commit of this pull request.
+- Merge commit: `751c72682adac2d808aac786e8714967b1ce65b4`
+- Merged at: 2026-08-28T03:53:18Z
+- PR state: MERGED
+- Issue closed: 2026-08-28T03:53:21Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #946 body
+
+> ## Summary
+>
+> - Session 10 of #878 landed six pull requests (#939 graph-derivation-handler, #940 source-sync, #941 agent-context-pack-durable-lane, #942 embedding-repair, #943 the #827 tier_lane_denied pin, #944 backup-restore-live with the #938 fix); the anti-skip manifest floor moved 285 -> 328 and #827 and #938 closed. This PR is the paperwork: the session-11 handover, HANDOVER-RULES 52-54, and the tracking-scribe harvest. It is stacked on `docs/pg-tests-session9` (#936, still open); merging this PR carries both sessions' docs.
+> - `_DOCS/_handover/2026-08-27-pg-tests-session11.md` cuts the next slice: lane-upsert, search-brain-relational-retrieval, and sdk-protocol.pg as split-and-convert lanes with RED at `4e1f0f2c` and oxlint counts measured on origin/main, a T0 planning lane for the 2779-line append-session-event file, and #945 as the wayfinder. Validator: PASS, 110 lines.
+> - `_DOCS/HANDOVER-RULES.md` gains rule 52 (a CI failure in a file the PR does not touch is read from the job log; a timing test over bun's 5 s default gets one `gh run rerun --failed`, recorded; #944's first run failed on `scripts/ob-backfill.test.ts:310`), rule 53 (docs branches are pushed from a clean clone because the root checkout's pre-push fails on #924), and rule 54 (`_reports/` is gitignored; the session record is written there and never staged).
+> - The harvest commit: Tightenings round 40 in `docs/lane-contract.md` (ten entries with provenance), two `docs/sme/entries/` files with the regenerated correctness and gotcha-agent lanes, decisions row 5 in `docs/decisions.md` (OPEN for Rico: the backup drill toggle removal), the session-10 merge-pass receipts in `scripts/done-means/beta-receipts.md`, and the refreshed `_plans/issues/` mirror.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/handover-validates.sh
+>
+> `scripts/done-means/handover-validates.sh` validates every handover this branch adds and then runs the skill's `check-drained.sh`. On this branch the validator half returns `PASS: ... conforms (110 lines) [validator 2026-08-27.1]`; the drain half returns **exit 1** on one condition only: nine lane clones and the root checkout carry qmd's generated edit to `.qmd/index.yml`, which an agent may not check out (HANDOVER-RULES rule 51; the ruling is in the handover's HANDED-OVER UNKNOWNS). Every `test/878-*` and `test/827-*` branch is deleted, every clone is detached at `4e1f0f2c`, no stash, no extra worktree. Exit grammar: `0` pass, `1` the thing under test failed, `3` harness error.
+>
+> - [x] Relevant Open Brain tests/typecheck/migrations passed — the pre-push gate ran the Bun suite in the clean clone that pushed the branch; no TypeScript is staged, so the pre-commit lint/typecheck step reports itself skipped.
+> - [x] Python package checks passed or are not applicable — not applicable, no Python touched.
+> - [x] Live Open Brain smoke passed or is not applicable — not applicable, documentation, receipts, and mirrors only.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: round 40 and rules 52-54 brief every later lane. Each entry cites the lane report under `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session10/reports/` and its pull request.
+> - Assumptions that could be wrong: that lane-upsert, search-brain-relational-retrieval, and sdk-protocol.pg split cleanly under 500 lines at the describe boundaries the handover names (53/763, 536/826, 96/426); the boundaries were read with `rg -n` at `4e1f0f2c`, the lanes take real block edges with `awk NR` per round 40. That `.qmd/index.yml` is the only thing keeping `check-drained.sh` red: the head's own run lists that file and nothing else.
+> - Missing/weak tests: `ratchet-bound/check.sh` checks for a `provenance:` token, not its accuracy; `decisions/check.sh` accepts OPEN rows with empty Rejected/Falsifier by design, so row 5 carries no falsifier until Rico rules. `lane-report/check.sh` validates report shape, not truth (beta receipts, session 10 pilot findings).
+> - Security/permission risk: none. No code, credentials, namespace, or auth path touched.
+> - Migration/deploy risk: none. No schema, no runtime, no deployed artifact.
+> - Downstream client/runtime risk: none. `docs/downstream-rollout.md` classifies this as not applicable.
+> - Rollback/cleanup concern: a plain revert restores the previous state; the harvest commit and the handover commit are separable. The `_plans/issues/` mirror regenerates on the next scribe run. If #936 merges first, this PR reduces to its own two commits.
+> - Fixes made before PR: #944's first CI run failed on an untouched timing test and was rerun once, green (rule 52). The scribe's push was refused by the root pre-push on #924 and the branch was pushed from a clean clone (rule 53). The scribe left `_reports/2026-08/2026-08-27-pg-tests-session10.md` unstaged because `.gitignore:73` ignores `_reports/` (rule 54).
+> - Known residual risk: the done-means stays red until Rico rules on `.qmd/index.yml`, so this PR cannot merge on its own receipt. Decisions rows 3-5 are open rulings.
+> - SME review-memory update: [x] `docs/sme/` updated or [ ] not applicable because: one correctness entry (a non-superuser restore target needs its extensions created by an administrator first) and one gotcha-agent entry (a phase-N lane verifies the previous phase by the shape of the file being split from), lane files regenerated by `bun run scripts/build-sme-indexes.ts`.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: documentation, receipts, and mirrors only, no service behavior changes.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract, fixture, or client-facing shape is touched.
+>
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-28T04:09:40Z
+
+Closed by #947 (squash b88c4a0f on main, MERGED): clause 2 of scripts/done-means/878-pg-tests-require-database.sh joins the import statement across lines and resolves one relay hop. Receipts on the PR: RED at 751c7268 on the wrapped-import fixture (exit 1, clause 2 FAIL), GREEN after (exit 0), relay fixture exit 0, deliberate miss with no import exit 1, backup-restore invocation still exit 0. verify-lane receipt on #947.
