@@ -395,6 +395,14 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "ingest_conversation_facts isolation and concurrency (live Postgres)",
     minTests: 3,
   },
+  {
+    name: "graph derivation handler selection and convergence (live Postgres)",
+    minTests: 4,
+  },
+  {
+    name: "graph derivation handler isolation and atomicity (live Postgres)",
+    minTests: 3,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -444,8 +452,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // stopped skipping itself, then 284 -> 285 when #878 re-measured the
 // runSharedPromoter cursor-stall suite at its emitted 1 and registered the
 // clustering and cursor loops suite's 8 as that file stopped skipping
-// itself), so the global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 285;
+// itself, then 285 -> 292 when #878 registered the two subject-split graph
+// derivation handler selection/convergence and isolation/atomicity suites'
+// 4 + 3 as that file stopped skipping itself), so the global floor cannot
+// silently fall behind the per-suite one.
+export const MIN_TOTAL_LIVE_TESTCASES = 292;
 
 export interface SuiteStats {
   tests: number;
