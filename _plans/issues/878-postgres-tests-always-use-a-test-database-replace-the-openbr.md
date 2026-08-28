@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-08-27T03:25:31Z
-Updated: 2026-08-27T17:29:51Z
+Updated: 2026-08-28T02:45:23Z
 
 ---
 
@@ -24,7 +24,7 @@ Closes the question in #874 (no lint exemption).
 
 ---
 
-## Discussion (54)
+## Discussion (69)
 
 ### rodaddy — 2026-08-27T03:48:03Z
 
@@ -355,3 +355,93 @@ Scribe, session 9: #935 (promote-lane-shared) rebased onto 29a49ea6 by lane-7, h
 ### rodaddy — 2026-08-27T17:29:51Z
 
 Scribe, session 9: #935 merged at fa82bdf5 — MERGED (`git log --oneline origin/main -1`). `scripts/promote-lane-shared.test.ts` split into `promote-lane-shared.test.ts`, `promote-lane-shared-clustering.test.ts`, `scripts/test-support/promote-lane-shared-helpers.ts`; manifest floor 284 -> 285. Controller re-run with CHANGED_FILES: receipt posted on #935, exit 0 (verify-935.log:80). Harvested: #935 — a hoisted module-scope const that calls a function defined lower in the file throws ReferenceError at import; a green tsc over a hoist is not evidence. States 3-8 of the session-9 handover are landed: #929 #930 #931 #932 #933 #934 #935, floor 265 -> 285, #916 closed. Remaining on #878: the nine files over 600 lines listed in the handover's unknowns. Session wrap in progress: drain lane RUNNING, tracking-scribe harvest next.
+
+---
+
+### rodaddy — 2026-08-27T17:45:19Z
+
+Scribe, session 9 wrap: States 3-8 landed (#929 #930 #931 #932 #933 #934 #935 MERGED, floor 265 -> 285, #916 CLOSED). Paperwork PR #936 (`docs/pg-tests-session9` at eb5b0ca1) — WRITTEN and pushed: harvest commit e49910a9 (lane-contract round 39, two SME correctness entries, decisions rows 3-4 OPEN, session-9 beta receipts, issue mirror) and handover commit eb5b0ca1 (`_DOCS/_handover/2026-08-27-pg-tests-session10.md`, validator PASS 113 lines; HANDOVER-RULES 48-50). #936's done-means (`handover-validates.sh`) is RED on the drain half only: ten lane clones carry a generated `.qmd/index.yml` edit that the git guard will not let an agent restore; the loop is in the handover's HANDED-OVER UNKNOWNS, after which the check passes unchanged. Session 10 slice: graph-derivation-handler.live, source-sync.pg, embedding-repair.pg, backup-restore-live, agent-context-pack-durable-lane (RED taken at fa82bdf5, oxlint counts 8/15/23/28/35), wayfinder #827. Filed #937 (`aqmd up` skips `_DOCS/_handover/` and `docs/sme/entries/`, stale allowlist). Open Brain: three correction events saved (rules 48-50 lessons, drain-lane PASS claim vs head re-run).
+
+---
+
+### rodaddy — 2026-08-28T01:56:03Z
+
+Scribe, session 10: started 2026-08-27 from _DOCS/_handover/2026-08-27-pg-tests-session10.md. origin/main fa82bdf5, floor 285, graph mode T1 declared. Subjects: graph-derivation-handler.live, source-sync.pg, embedding-repair.pg, backup-restore-live, agent-context-pack-durable-lane (split + require the test database), then #827.
+
+---
+
+### rodaddy — 2026-08-28T02:04:27Z
+
+Scribe, session 10: lane-3 (embedding-repair.pg split) stopped at 3.5 min with receipts: RED confirmed at origin/main (clauses 1-3 FAIL), no commit, helper copy ranges corrupted. Re-cut as two sequenced lanes (helper+formula file staged, then the trim/manifest/PR). Lesson for the lane contract: briefs give anchor lines, lanes take block boundaries from awk NR before any sed copy.
+
+---
+
+### rodaddy — 2026-08-28T02:06:30Z
+
+Scribe, session 10: lane-4 (backup-restore-live) stopped at minute 12 with receipts. RED confirmed at origin/main (clauses 1-3 FAIL). Ungating exposed a pre-existing failure: restore into the non-superuser clone exits 1 (7 pass 1 fail, head re-ran it on unmodified fa82bdf5 with OPENBRAIN_BACKUP_DRILL=1). Filed as its own issue; State 6 conversion is blocked on that fix (clause 4). Second finding: the decided split does not stand as written, the refusal its at 541/612/737 consume the backup the it at 194 produces; ruling: the seed+backup phase becomes a shared helper both files call from beforeAll. Ungated file staged on lane-4, uncommitted.
+
+---
+
+### rodaddy — 2026-08-28T02:11:39Z
+
+Scribe, session 10: lane-1 opened pull request #939 (graph-derivation-handler.live split into selection/convergence + isolation/atomicity, helper module, manifest +4 +3, floor 285 -> 292). Lane receipts: RED exit 1 at origin/main, GREEN exit 0 on the committed tree, oxlint 0, tsc 0, 7 pass. State: WRITTEN; collector running (verify-lane + CI, merge on green).
+
+---
+
+### rodaddy — 2026-08-28T02:11:56Z
+
+Scribe, session 10: lane-2 opened pull request #940 (source-sync.pg split into plan/checkpoint/concurrency + idempotence/isolation, helper module, manifest +4 +6). Receipts: RED exit 1 at origin/main, GREEN exit 0 on the committed tree, oxlint 0, tsc 0, 10 pass. State: WRITTEN; rebases onto main after #939 merges (rule 43).
+
+---
+
+### rodaddy — 2026-08-28T02:12:43Z
+
+Scribe, session 10: pull request #939 MERGED at 665e00e7 (verify-lane receipt posted, CI green, lane-report/check.sh exit 0 on the lane report). origin/main floor 285 -> 292.
+
+---
+
+### rodaddy — 2026-08-28T02:13:32Z
+
+Scribe, session 10: lane-5 opened pull request #941 (agent-context-pack-durable-lane split into two unit files + one live .pg file, helper module, manifest +2). Receipts: RED exit 1 at origin/main, GREEN exit 0 on the committed tree with CHANGED_FILES naming the live file only, oxlint 0 (was 37), tsc 0, 10 pass 0 skip (was 8 pass 3 skip). State: WRITTEN; rebases after #940 merges (rule 43).
+
+---
+
+### rodaddy — 2026-08-28T02:18:38Z
+
+Scribe, session 10: lane-3 (phase 2) opened pull request #942 (embedding-repair.pg split into scope/drift + four flattened formula/queue suites, helper module, manifest +6 +3 +2 +3 +2). Receipts: RED exit 1 at origin/main, GREEN exit 0 on the committed tree, oxlint 0 (was 23), tsc 0, 16 pass. State: WRITTEN; rebase order after #940: #941, then #942 (rule 43).
+
+---
+
+### rodaddy — 2026-08-28T02:20:22Z
+
+Scribe, session 10: pull request #940 MERGED at 508d7232 (verify-lane receipt posted, CI green, lane-report/check.sh exit 0). origin/main floor 292 -> 302. Next: #941 rebase.
+
+---
+
+### rodaddy — 2026-08-28T02:24:42Z
+
+Scribe, session 10: pull request #943 MERGED at 8e644513 (#827 closed; State 8 done). Lane-4 phase 2 staged on test/878-backup-restore-live with the #938 fix proven locally (8 pass; the fix needed the admin extension bootstrap from scripts/test-support/clone-database.ts:188-194 on top of the fresh owned target); phase 3 (rewrite of the original file, lint, manifest, PR) dispatching.
+
+---
+
+### rodaddy — 2026-08-28T02:27:07Z
+
+Scribe, session 10: pull request #941 MERGED at b21b3324 (verify-lane receipt, CI green, lane-report check exit 0). origin/main floor 302 -> 304. Next: #942 rebase (delta 16 -> 320).
+
+---
+
+### rodaddy — 2026-08-28T02:33:37Z
+
+Scribe, session 10: pull request #942 MERGED at 89c8da62 (verify-lane receipt, CI green, lane-report check exit 0). origin/main floor 304 -> 320. States 3, 4, 5, 7, 8 done; State 6 (backup-restore-live, with the #938 fix) in its phase-3 lane.
+
+---
+
+### rodaddy — 2026-08-28T02:38:50Z
+
+Scribe, session 10: lane-4 (phase 3) opened pull request #944 (backup-restore-live ungated and split into full-run + snapshot/refusals/upgrade, helper module with the shared drill lifecycle, the #938 fix: restore into a fresh clone-owned target with the admin extension bootstrap; manifest +3 +5). Receipts: RED exit 1 at fa82bdf5, GREEN exit 0 on e75b642, oxlint 0 (was 28), tsc 0, 8 pass in 4.6s. State: WRITTEN; rebase onto 89c8da62 (floor 320 -> 328) dispatching.
+
+---
+
+### rodaddy — 2026-08-28T02:45:23Z
+
+Session 10 scribe: PR #944 (backup-restore-live, fixes #938) rebased onto origin/main 89c8da62 as 986c20d, floor 320 -> 328, pre-push clean. State: WRITTEN, collector (verify-lane + CI + squash) running. Harvest lane (round 40, two SME entries, decisions row 5, beta receipts, session report) running on docs/pg-tests-session10.

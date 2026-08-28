@@ -2197,3 +2197,22 @@ The A/B comparison therefore had ZERO valid 4.8 samples. Model-pinned dispatch m
 The git guard fires on the word "main" in commit-message PROSE on a correctly-named branch — say "the default branch"; the guard should read `git branch --show-current`. The design-lookup gate fires on a gitignored scratch PR-body file. The PRE-PUSH hook runs the suite against the shared dogfood database — the exact inadmissible path of the #614 ruling (1 fail then 0 fail on an identical tree, skip counts 485 apart). `aqmd search` can exceed 120s; wrap it in `timeout`.
 
 Announced by tooling and needing a home: verify-lane and lane-bootstrap print `ADJUSTED: neither OPENBRAIN_TEMP_WORKSPACE nor DEV_TMP is set` and place worktrees under `~/.cache` instead of the configured temp workspace. Set the variable in controller and verifier environments, or teach the scripts the Development default.
+
+## [2026-08-27] A phase-N lane verifies the previous phase by the shape of the file being split from
+
+**Severity:** MEDIUM
+**Source:** pull request #944 (pushed, not merged)
+**Scope:** split-and-convert lanes under #878 and any multi-phase lane working on one clone
+
+**Status:** active
+
+### Pattern
+
+Staged-path presence and lint-clean new files read as a completed phase while the edit to the pre-existing file never happened. `git status` shows every expected path staged and both new files pass lint, so every file-existence signal agrees the split landed — and the original file still holds all of its suites at its original length.
+
+The next phase then either refuses on a shape it cannot reconcile, or commits duplicated suites: the same tests now exist in the source file and in the file they were supposedly moved to.
+
+### Check
+
+- Before the first edit of a phase-N lane, run `rg -n 'describe\(|^\s+it\('` and `wc -l` on the file being split FROM, and compare both numbers with the brief's expected counts.
+- A real split makes both numbers fall. Neither the staged path list nor a lint pass on the new files can express that.
