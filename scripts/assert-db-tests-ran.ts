@@ -417,6 +417,31 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "agent_context_pack durable lane reads (live Postgres)",
     minTests: 2,
   },
+  // The #345 stale-embedding repair tests were split by subject in #878 as that
+  // file stopped skipping itself: scope-and-drift stayed in
+  // src/embedding-repair.pg.test.ts and the writer-parity suites moved to
+  // src/embedding-repair-formula.pg.test.ts. All five are named here; register
+  // only some and the rest could vanish without the guard noticing.
+  {
+    name: "embedding repair scope and drift (live Postgres)",
+    minTests: 6,
+  },
+  {
+    name: "embedding repair decisions by the live formula (live Postgres)",
+    minTests: 3,
+  },
+  {
+    name: "embedding repair decision tag merge (live Postgres)",
+    minTests: 2,
+  },
+  {
+    name: "embedding repair sessions by the live formula (live Postgres)",
+    minTests: 3,
+  },
+  {
+    name: "embedding repair through the real maintenance queue (live Postgres)",
+    minTests: 2,
+  },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
@@ -472,9 +497,11 @@ export const REQUIRED_SUITES: ReadonlyArray<{
 // registered the two subject-split source-sync plan/checkpoint/concurrency
 // and idempotence/isolation suites' 4 + 6 as that file stopped skipping
 // itself, then 302 -> 304 when #878 registered the agent_context_pack durable
-// lane live-reads suite's 2 as that file stopped skipping itself), so the
+// lane live-reads suite's 2 as that file stopped skipping itself, then
+// 304 -> 320 when #878 registered the five subject-split embedding repair
+// suites' 6 + 3 + 2 + 3 + 2 as that file stopped skipping itself), so the
 // global floor cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 304;
+export const MIN_TOTAL_LIVE_TESTCASES = 320;
 
 export interface SuiteStats {
   tests: number;
