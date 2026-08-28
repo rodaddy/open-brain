@@ -387,3 +387,16 @@ only when a session actually needed it.
     index and is never staged; a scribe that cannot stage it has not
     failed. Whether the records should be tracked is Rico's call, not a
     lane's `git add -f`.
+55. **A conversion brief says "floor +N" only when the live suite has NO
+    manifest entry.** `MIN_TOTAL_LIVE_TESTCASES` is the sum of the manifest's
+    `minTests` (its own test enforces it), so a suite whose describe name is
+    already in `REQUIRED_SUITES` raises it by zero; the #949 lane raised it
+    328 → 340 on a brief that said +N, and the guard's test refused the push.
+    The head checks `rg -n '<describe name>' scripts/assert-db-tests-ran.ts`
+    while writing the brief and states "entry exists at minTests M, floor
+    unchanged" or "no entry: add at the JUnit count, floor +count".
+56. **The head re-runs every beta receipt it cites before the docs commit.**
+    The session-11 scribe lane recorded `ratchet-bound/check.sh` exit 0 on a
+    tree where it exits 1 (live=16 over the rule value 15). A lane's exit
+    column is PROPOSED; the head runs the same command on the committed tree
+    and corrects the row, announcing the correction in the pilot findings.

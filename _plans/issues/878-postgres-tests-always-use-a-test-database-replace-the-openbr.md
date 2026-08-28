@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: enhancement
 Created: 2026-08-27T03:25:31Z
-Updated: 2026-08-28T02:45:23Z
+Updated: 2026-08-28T04:18:28Z
 
 ---
 
@@ -24,7 +24,7 @@ Closes the question in #874 (no lint exemption).
 
 ---
 
-## Discussion (69)
+## Discussion (78)
 
 ### rodaddy — 2026-08-27T03:48:03Z
 
@@ -445,3 +445,57 @@ Scribe, session 10: lane-4 (phase 3) opened pull request #944 (backup-restore-li
 ### rodaddy — 2026-08-28T02:45:23Z
 
 Session 10 scribe: PR #944 (backup-restore-live, fixes #938) rebased onto origin/main 89c8da62 as 986c20d, floor 320 -> 328, pre-push clean. State: WRITTEN, collector (verify-lane + CI + squash) running. Harvest lane (round 40, two SME entries, decisions row 5, beta receipts, session report) running on docs/pg-tests-session10.
+
+---
+
+### rodaddy — 2026-08-28T02:52:37Z
+
+Session 10 scribe: PR #944 MERGED at 4e1f0f2c (backup-restore-live split into backup-restore-live.test.ts + backup-restore-live-refusals.test.ts + helpers; fixes #938, now CLOSED). Floor 320 -> 328 (MERGED, scripts/assert-db-tests-ran.ts:518). CI note: the first db-integration run failed on scripts/ob-backfill.test.ts:310 (growth-shape scan, 6.3s vs bun's 5s per-test default, file untouched by #944); one gh run rerun --failed went green. Session 10 total: #939 #940 #941 #942 #943 #944 merged, floor 285 -> 328, #827 and #938 closed, #945 open. Remaining #878 files over 500 lines on origin/main: append-session-event 2779, search-brain-relational-retrieval 1095, sdk-protocol.pg 847 (server/application/), lane-upsert 838. Harvest commit 690b67de on docs/pg-tests-session10 (WRITTEN, push pending).
+
+---
+
+### rodaddy — 2026-08-28T02:58:18Z
+
+Session 10 scribe, wrap: paperwork PR #946 (docs/pg-tests-session10 at 1a47d1fe, stacked on #936): session-11 handover (validator PASS, 110 lines), HANDOVER-RULES 52-54, harvest commit 690b67de. Drain: eleven clones detached at 4e1f0f2c, every test/878-* and test/827-* branch deleted, no stash; check-drained.sh exits 1 only on .qmd/index.yml in nine clones (Rico's ruling, unchanged from session 9). aqmd up ran from the root. Session 11 subjects: lane-upsert, search-brain-relational-retrieval, sdk-protocol.pg, an append-session-event split plan, #945 as wayfinder.
+
+---
+
+### rodaddy — 2026-08-28T03:54:41Z
+
+Scribe, session 11: started at origin/main 751c7268 (#946 merged; #936 merged first). Branch docs/pg-tests-session11. Plan: split-and-hard-fail lane-upsert, search-brain-relational-retrieval, sdk-protocol.pg; append-session-event split plan; #945 clause-2 fix. Graph mode T1 declared.
+
+---
+
+### rodaddy — 2026-08-28T04:00:17Z
+
+Scribe, session 11: five lanes dispatched at origin/main 751c7268 — lane-1 lane-upsert split+convert, lane-2 search-brain-relational-retrieval split+convert, lane-3 sdk-protocol helpers split+convert, lane-4 append-session-event split plan (T0, plan file only), lane-5 #945 clause-2 fix. Briefs packed with brief-pack --max-tightenings 2 (6323-6664/8000). PROPOSED until each PR lands.
+
+---
+
+### rodaddy — 2026-08-28T04:02:51Z
+
+Scribe, session 11: State 6 plan WRITTEN at _plans/878-append-session-event-split.md on docs/pg-tests-session11 — 8 files (7 unit + 1 live), 69 its, 135 oxlint findings on origin/main; rg -c '^## Lane' -> 8, every lane has a Done-check line. Lands with this session's docs PR.
+
+---
+
+### rodaddy — 2026-08-28T04:09:41Z
+
+Scribe, session 11: #947 MERGED at b88c4a0f (State 7, #945 closed). Lane-5 lesson harvested on the PR.
+
+---
+
+### rodaddy — 2026-08-28T04:13:10Z
+
+Scribe, session 11: #948 MERGED at 73e01a7f (State 3, lane-upsert split by subject: lane-upsert.test.ts 12 its, lane-upsert-embedding-and-defaults.test.ts 10 its, lane-upsert.pg.test.ts 2 its, lane-upsert-test-helpers.ts; manifest entry unchanged at 2; verify-lane receipt on the PR). Lane-1 lesson harvested on the PR: an `as any` removal is finished at tsc, not at oxlint (AuthInfo name collision with the MCP SDK).
+
+---
+
+### rodaddy — 2026-08-28T04:17:32Z
+
+Scribe, session 11: #950 MERGED at 35245948 (State 4, search-brain-relational-retrieval: fixture-data and fixture modules split out, unit file 12 its, pg file 2 its; manifest unchanged at 2; verify-lane receipt on the PR). Lane-2 lesson harvested on the PR: take split line ranges from a scratch copy of the origin/main file, never from the working copy being split; git checkout <path> mid-lane reverts unrelated fixes.
+
+---
+
+### rodaddy — 2026-08-28T04:18:28Z
+
+Scribe, session 11: #949 MERGED at fd70d4ec (State 5, sdk-protocol: helpers to server/application/sdk-protocol-test-helpers.ts, env isolation to scripts/test-support/shared-namespace-env.ts, 12 live tests; manifest unchanged at 12; verify-lane receipt on the PR). Lane-3 lesson harvested: MIN_TOTAL_LIVE_TESTCASES is the sum of the manifest's minTests, so a suite that already has an entry raises it by zero. States 3-7 of the session-11 handover are MERGED; remaining self-skipping file on origin/main: append-session-event.test.ts (plan WRITTEN, session 12).

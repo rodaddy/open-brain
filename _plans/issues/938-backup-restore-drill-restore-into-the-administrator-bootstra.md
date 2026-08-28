@@ -3,11 +3,12 @@
 
 # #938 — backup restore drill: restore into the administrator-bootstrapped non-superuser clone exits 1 under bun run test:isolated
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: bug
 Created: 2026-08-28T02:06:25Z
-Updated: 2026-08-28T02:10:24Z
+Updated: 2026-08-28T02:51:29Z
+Closed: 2026-08-28T02:51:29Z
 
 ---
 
@@ -20,6 +21,83 @@ Why it was hidden: the suite only runs when OPENBRAIN_BACKUP_DRILL=1 and nothing
 Ask: root-cause with the restore stderr, fix at the owning boundary (scripts/restore.ts or the isolated runner's clone bootstrap, whichever is wrong), RED-first with the existing test as the red.
 
 Parent: #878. Related: #904, #298.
+
+---
+
+## Resolution
+
+Closed by **PR #944** — test(pg): the backup restore drill test requires the test database instead of skipping (#878, #938)
+
+- Linkage: GitHub recorded this pull request as the closer.
+- Merge commit: `4e1f0f2c33f3e0be596540cd5d93dca4b58d2cf2`
+- Merged at: 2026-08-28T02:51:28Z
+- PR state: MERGED
+- Issue closed: 2026-08-28T02:51:30Z by rodaddy (COMPLETED)
+
+### Direction taken and why — PR #944 body
+
+> ## Summary
+>
+> - The live backup/restore drill read `OPENBRAIN_TEST_DATABASE_URL` and `OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL` itself and swapped in a conditional describe when either was absent, so a run without them reported no failures and exited 0. Both are now demanded through `scripts/test-support/require-test-database.ts`, which throws `test_database_required` when a variable is unset (#878).
+> - The pg_dump/pg_restore probe is asserted by the first test instead of gating the suite, so a missing client tool fails loudly rather than silently disabling the drill.
+> - The file no longer fits the repo's per-file standard once it stops nesting, so it is split in three: the full run stays in `scripts/__tests__/backup-restore-live.test.ts` (3 tests), the snapshot, refusal, and upgrade tests move to `scripts/__tests__/backup-restore-live-refusals.test.ts` (5 tests), and the drill lifecycle both halves need moves to `scripts/__tests__/backup-restore-live-helpers.ts`, which holds no test and creates no pool at import. Each half opens its own lifecycle, so either runs standalone. Test names, order, and assertions are unchanged.
+> - Fixes #938. The runner's clone database is already migrated by `scripts/test-isolated.ts` and `scripts/restore.ts` refuses a non-empty target, so the non-superuser clone test restored into a database that could never be empty and failed for a reason unrelated to what it asserts. The drill now restores into a fresh `open_brain_ci_restore_clone_tgt` that the clone role OWNS, with the `vector` and `pg_stat_statements` extensions installed by the administrator first — the same bootstrap `scripts/test-support/clone-database.ts:194` performs, because a non-superuser cannot create extensions and pg_restore would fail on them. The non-superuser property the test is about is preserved; the false failure is not.
+> - `scripts/assert-db-tests-ran.ts` registers both new suite names at their JUnit-emitted counts (3 and 5) and raises `MIN_TOTAL_LIVE_TESTCASES` 285 -> 293, so CI's anti-skip guard fails if either half vanishes.
+>
+> ## Verification
+>
+> - Done-means: scripts/done-means/878-pg-tests-require-database.sh
+>   `CHANGED_FILES="scripts/__tests__/backup-restore-live.test.ts scripts/__tests__/backup-restore-live-refusals.test.ts" bash scripts/done-means/878-pg-tests-require-database.sh` -> exit 0, all four clauses PASS. RED at `origin/main` fa82bdf5, recorded by the phase-1 lane: same invocation with `CHANGED_FILES="scripts/__tests__/backup-restore-live.test.ts"` -> exit 1, clauses 1/2/3 FAIL and 4 PASS.
+> - [x] Relevant Open Brain tests/typecheck/migrations passed
+> - [x] Python package checks passed or are not applicable
+> - [x] Live Open Brain smoke passed or is not applicable
+>
+> Receipts, all on the committed tree at e75b642:
+>
+> - `./node_modules/.bin/oxlint --deny-warnings` over the four touched files -> exit 0, zero findings.
+> - `bunx tsc --noEmit` -> exit 0.
+> - `bun run test:isolated scripts/__tests__/backup-restore-live.test.ts scripts/__tests__/backup-restore-live-refusals.test.ts` -> exit 0, 8 pass / 0 fail in 3.97s.
+> - Suite counts read from JUnit, not tallied by eye: 3 testcases carry `backup restore drill full run (live Postgres)` and 5 carry `backup restore drill snapshot, refusals, and upgrade (live Postgres)`.
+> - Every touched file is under the 500-line standard: 317 / 376 / 301.
+>
+> Python is not applicable — no path under `python/openbrain-memory/` is touched. A live Open Brain smoke is not applicable: this changes test files and a CI manifest only, no server, tool, or transport behavior.
+>
+> ## Critical Self-Review
+>
+> - Highest-risk behavior: the drill now demands two database URLs at import instead of skipping, so any CI job that runs these files without both configured turns from silently green to red. That is the intended effect of #878, but it is the change most likely to surface as a new failure elsewhere.
+> - Assumptions that could be wrong: that the clone role can be granted ownership of a fresh database on every runner, and that installing `vector` and `pg_stat_statements` as administrator is sufficient for pg_restore under that role. Verified locally against the real clone role; a runner whose administrator connection lacks CREATEDB would fail at `openDrill` rather than at the assertion.
+> - Missing/weak tests: nothing asserts that the two halves do not collide when run concurrently. They share the same fixed `open_brain_ci_restore_*` names, so a parallel run of both files against one server would interfere. Bun runs test files sequentially in this suite, which is what makes it safe today rather than a guarantee in the code.
+> - Security/permission risk: none new. The change does not touch auth, namespace predicates, or any server path. It reduces privilege in one place, by restoring as the non-superuser clone role rather than the administrator.
+> - Migration/deploy risk: none. No migration is added or altered; `runMigrations` is called only against throwaway scratch databases that are dropped in `closeDrill`.
+> - Downstream client/runtime risk: none. `docs/downstream-rollout.md` classifies this as not applicable — no MCP tool, schema, protocol, or client-facing surface changes.
+> - Rollback/cleanup concern: the scratch databases are dropped in `closeDrill` and again at the start of the next `openDrill`, so an aborted run leaves at most the six named databases behind and the next run reclaims them. Temp directories are removed in the same teardown.
+> - Fixes made before PR: the first `seedAndBackup` shape returned only the directory, which would have dropped the six backup-receipt assertions from the full-drill test; widened it to return the CLI result too and updated both call sites. The prerequisites test initially asserted the context's connection fields, which passes clause 1 while removing the honest demand for the URLs; changed to call `requireTestDatabaseUrl()` and `requireLocalCloneTestDatabaseUrl()` directly. `verify.receipt?.sets?.[0]` did not typecheck against the open receipt record and now goes through the shared `receiptSetField` narrowing.
+> - Known residual risk: the shared scratch database names, as above. Also `MIN_TOTAL_LIVE_TESTCASES` is derived from this branch's base copy of 285; `origin/main` has moved since, so the arithmetic needs reconciling if another registering branch lands first.
+> - SME review-memory update: [ ] `docs/sme/` updated or [x] not applicable because: every pattern this lane hit is already an entry or a lane-contract Tightening — the false-green skip is #878's own subject, `max-lines-per-function` measuring the describe callback and the shared helper taking `pool` as a parameter are round-39 Tightenings, and the harvest comment on this pull request records the one new observation.
+>
+> ## Review Gate
+>
+> - [x] Critical self-review fields above are filled with specific, non-placeholder content
+> - [x] MEDIUM+ review findings were captured in `docs/sme/` or explicitly marked not applicable
+> - Live Open Brain checks: [ ] linked below or [x] not applicable because: this changes test files and a CI manifest only; no server, tool, transport, or client behavior is altered.
+>
+> ## Contract Parity
+>
+> - Contract parity: [ ] fixtures updated
+> - Contract parity: [x] runtime-specific because: no contract, fixture, or client-facing shape is touched — the diff is two test files, one test-only helper module, and the CI anti-skip manifest.
+>
+> ## Downstream Rollout
+>
+> - [x] I checked `docs/downstream-rollout.md`
+> - [x] rtech-mcps handoff is complete or not applicable
+> - [x] mcp2cli cache/skill refresh is complete or not applicable
+> - [x] rtech-hermes Python runtime/plugin changes are complete or not applicable
+> - [x] Hermes live rollout/canaries are complete or not applicable
+>
+> Notes/evidence:
+>
+> - Not applicable across the board: no MCP tool, schema, protocol, transport, or Python client path is in the diff. The changed files are `scripts/__tests__/backup-restore-live.test.ts`, `scripts/__tests__/backup-restore-live-refusals.test.ts`, `scripts/__tests__/backup-restore-live-helpers.ts`, and `scripts/assert-db-tests-ran.ts`.
+>
 
 ---
 
