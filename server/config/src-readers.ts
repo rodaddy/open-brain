@@ -121,6 +121,10 @@ export const srcReaderEnvironmentFields = {
   // `:685-686` (rotation). `QMD_PATH` and `LOG_FILE` are already declared in
   // `server/config.ts`, so they are not repeated here.
   QMD_INDEX_PATH: rawOptional,
+  // `src/operator-doctor.ts:330-336` (lag denominator) and `:58,:63` (version
+  // fallback). Both fall back on an unusable value, so neither rejects.
+  OPENBRAIN_RAW_TURN_TTL_SECONDS: rawOptional,
+  npm_package_version: rawOptional,
   NODE_ENV: rawOptional,
   LOG_MAX_BYTES: rawOptional,
   LOG_MAX_FILES: rawOptional,
@@ -132,6 +136,8 @@ type SrcReaderEnvironment = z.infer<z.ZodObject<typeof srcReaderEnvironmentField
 const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
 /** The three values `src/operator-doctor.ts:649-652` recognizes. */
 const KNOWN_NODE_ENVIRONMENTS = ["production", "development", "test"] as const;
+/** The documented one-week raw-turn TTL — `src/operator-doctor.ts:40`. */
+const DISTILLATION_LAG_TTL_SECONDS_DEFAULT = 7 * 24 * 60 * 60;
 
 export interface EmbeddingWatchdogGroup {
   /** Consecutive restartable failures before a restart is attempted. */
@@ -171,6 +177,10 @@ export interface DoctorConfigGroup {
   readonly nodeEnvironment: (typeof KNOWN_NODE_ENVIRONMENTS)[number] | "unknown";
   /** Whether either rotation variable carries a non-blank value. */
   readonly rotationConfigured: boolean;
+  /** Raw-turn retention seconds: the distillation-lag alarm denominator. */
+  readonly rawTurnTtlSeconds: number;
+  /** Version reported when `package.json` itself cannot be read. */
+  readonly serviceVersionFallback: string;
 }
 
 export function embeddingGroup(parsed: SrcReaderEnvironment): EmbeddingConfigGroup {
@@ -211,6 +221,18 @@ export function mcpAuditGroup(parsed: SrcReaderEnvironment): McpAuditConfigGroup
  * as `ServerConfig.logging.file`, so combining the two here would duplicate a
  * value the consumer already holds.
  */
+/**
+ * The lag denominator, reproducing `readDistillationLagTtlSeconds`
+ * (`src/operator-doctor.ts:330-336`): `Number(...)` rather than `parseInt`, so
+ * a trailing suffix is `NaN` and falls back, and only a positive integer wins.
+ */
+function rawTurnTtlSeconds(raw: string | undefined): number {
+  const configured = Number(raw);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DISTILLATION_LAG_TTL_SECONDS_DEFAULT;
+}
+
 export function doctorGroup(parsed: SrcReaderEnvironment): DoctorConfigGroup {
   const qmdIndexPath = parsed.QMD_INDEX_PATH;
   const nodeEnvironment = KNOWN_NODE_ENVIRONMENTS.find(
@@ -220,5 +242,7 @@ export function doctorGroup(parsed: SrcReaderEnvironment): DoctorConfigGroup {
     ...(qmdIndexPath !== undefined ? { qmdIndexPath } : {}),
     nodeEnvironment: nodeEnvironment ?? "unknown",
     rotationConfigured: Boolean(parsed.LOG_MAX_BYTES) || Boolean(parsed.LOG_MAX_FILES),
+    rawTurnTtlSeconds: rawTurnTtlSeconds(parsed.OPENBRAIN_RAW_TURN_TTL_SECONDS),
+    serviceVersionFallback: parsed.npm_package_version ?? "unknown",
   };
 }
