@@ -1,6 +1,8 @@
 # L5 cut plan — move every src/ file into server/ (issue 864)
 
-**Status: WRITTEN 2026-08-29, no lane merged yet.**
+**Status: WRITTEN 2026-08-29. Merged lanes: pull requests #967, #968, #969,
+#970, #971, #972, #973, #974, #975, #976, #978.** (#977, contract and
+contract-schemas, was still open when this line was written.)
 
 Authority: `_plans/server-hardening-ladder.md` L5 (lines 291-330) and L6 (lines
 332-360). L5's own done-means is "zero imports from `src/` in non-test
@@ -67,6 +69,41 @@ with `src/` at L6, not by a move lane. `864-moved-out-of-src.sh` accepts a shim
 in clauses A and B and skips clause C for one, because the implementation has
 moved even though the path is still tracked.
 
+
+## L5 adapters
+
+Some legacy callers use a call form the `server/` version cannot keep. Rule M9
+(head decision 2026-08-29 after lanes 1 and 10) covers them, verbatim:
+
+> M9 ADAPTER (head decision 2026-08-29 after lanes 1 and 10): when a legacy
+> src/ or scripts/ caller uses a call form the server/ version cannot keep (a
+> zero-argument form that reads process.env inside, positional legacy
+> arguments, an options object widened with required env fields), the old src/
+> path becomes an ADAPTER instead of a shim: a file under 60 code lines whose
+> header line is `// L5 adapter (issue 864): legacy call form over
+> server/<dir>/<f>.ts; retired with src/ at L6.`, whose every relative import
+> names a server/ path (node and npm imports allowed), which preserves every
+> legacy export and call form, and which may read process.env itself (it is a
+> src/ file, lint-exempt, retired at L6). The server/ version takes its env
+> values as fields of one options parameter, filled by server/main.ts from
+> config. Done-means clause A accepts an adapter by the same test as a shim:
+> every relative import specifier resolves under server/. closure-count.sh
+> excludes shims and adapters alike (header regex `^// L5 (shim|adapter)`).
+
+Three candidates carry a legacy call form that rule M9 covers:
+
+| Path | Why an adapter and not a shim |
+|---|---|
+| `src/operator-doctor.ts` | zero-argument entrypoint reading env inside |
+| `src/promotion-service.ts` | positional legacy arguments its src/ callers pass |
+| `src/audit-log.ts` | options object the server/ version widens with required env fields |
+
+`scripts/done-means/864-moved-out-of-src.sh` accepts an adapter in clauses A
+and B and skips clause C for one, exactly as it does for a shim. Its
+no-argument discovery reports `judged=<n> shims, <m> adapters` once any adapter
+is on the tree, and a file that declares the M9 header while naming a relative
+specifier outside `server/` is judged and fails clause A with the offending
+line printed, rather than dropping out of the set unseen.
 ## Expected closure after each wave
 
 | After | Closure |
