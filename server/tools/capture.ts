@@ -1,20 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  authIdentity,
-  textResult,
-  type MemoryToolDependencies,
-} from "./types.ts";
+import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import {
   authorize,
   contentHash,
   decisionText,
   embeddingFields,
 } from "./memory-helpers.ts";
-import {
-  writeThoughtChunks,
-  chunkReceiptFields,
-} from "../../src/chunk-write.ts";
+import { writeThoughtChunks, chunkReceiptFields } from "../capture/chunk-write.ts";
 
 const sourceRefsSchema = z.array(z.record(z.string(), z.unknown())).max(20);
 
@@ -47,20 +40,14 @@ export function registerCaptureTools(
         requestedNamespace: args.namespace,
       });
       if (!auth.ok) return auth.response;
-      return writeThought(
-        dependencies,
-        auth.identity.clientId,
-        auth.namespace,
-        args,
-      );
+      return writeThought(dependencies, auth.identity.clientId, auth.namespace, args);
     },
   );
 
   server.registerTool(
     "log_decision",
     {
-      description:
-        "Record a decision with rationale and alternatives considered",
+      description: "Record a decision with rationale and alternatives considered",
       inputSchema: {
         title: z.string().min(1),
         rationale: z.string().min(1),
@@ -85,12 +72,7 @@ export function registerCaptureTools(
         requestedNamespace: args.namespace,
       });
       if (!auth.ok) return auth.response;
-      return writeDecision(
-        dependencies,
-        auth.identity.clientId,
-        auth.namespace,
-        args,
-      );
+      return writeDecision(dependencies, auth.identity.clientId, auth.namespace, args);
     },
   );
 }
@@ -107,9 +89,7 @@ async function writeThought(
 ) {
   const embedded = await embeddingFields(
     dependencies,
-    args.tags?.length
-      ? `${args.content}\n${args.tags.join(" ")}`
-      : args.content,
+    args.tags?.length ? `${args.content}\n${args.tags.join(" ")}` : args.content,
   );
   const rows = await dependencies.pool.query(
     `INSERT INTO thoughts
