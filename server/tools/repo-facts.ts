@@ -14,14 +14,8 @@ import { z } from "zod";
 import { toSql } from "pgvector/pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead, canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
-import {
-  isSharedNamespace,
-  sharedNamespaceConfig,
-} from "./shared-namespace.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
+import { isSharedNamespace, sharedNamespaceConfig } from "./shared-namespace.ts";
 import {
   FACT_TYPES,
   canonicalId,
@@ -32,7 +26,7 @@ import {
   looksLikeRawCodeDump,
   mergeRepoFactFallbackRows,
   repoFactMetadata,
-} from "../../src/tools/repo-facts.ts";
+} from "../domain/repo-facts.ts";
 import {
   authIdentity,
   errorResult,
@@ -52,9 +46,7 @@ const UPSERT_REPO_FACT_SCHEMA = {
     .max(500)
     .optional()
     .describe("Namespace for isolation (defaults to agent's clientId)."),
-  metadata: repoFactMetadata.describe(
-    "Curated qmd-derived repository fact metadata.",
-  ),
+  metadata: repoFactMetadata.describe("Curated qmd-derived repository fact metadata."),
 };
 
 /** Input schema for `list_repo_facts`, hoisted so the registrar stays small. */
@@ -164,9 +156,7 @@ function refuseUnstorableFact(
   metadata: z.infer<typeof repoFactMetadata>,
 ): ReturnType<typeof errorResult> | null {
   if (looksLikeRawCodeDump(metadata.fact)) {
-    return errorResult(
-      "Rejected repo fact: fact appears to contain a raw code chunk",
-    );
+    return errorResult("Rejected repo fact: fact appears to contain a raw code chunk");
   }
   if (containsSecretLikeValue(metadata.fact)) {
     return errorResult(
@@ -201,11 +191,7 @@ async function handleUpsertRepoFact(
     promoted_as: "repo_fact",
   };
 
-  const embedding = await embedRepoFact(
-    dependencies,
-    metadata,
-    factCanonicalId,
-  );
+  const embedding = await embedRepoFact(dependencies, metadata, factCanonicalId);
 
   const { rows } = await dependencies.pool.query(
     `INSERT INTO ob_entities
@@ -292,9 +278,7 @@ async function handleListRepoFacts(
 
   const rowCap = args.limit ?? 50;
   const offset = args.offset ?? 0;
-  const sharedNamespaceNames = sharedNamespaceConfig(
-    dependencies.sharedNamespaceNames,
-  );
+  const sharedNamespaceNames = sharedNamespaceConfig(dependencies.sharedNamespaceNames);
 
   /** Run the fact query against one explicit namespace scope. */
   const queryRows = async (
@@ -381,9 +365,6 @@ async function readWithLegacyFallback(input: {
   ) {
     return primary;
   }
-  const legacyRows = await queryRows(
-    sharedNamespaceNames.legacySharedNamespace,
-    0,
-  );
+  const legacyRows = await queryRows(sharedNamespaceNames.legacySharedNamespace, 0);
   return mergeRepoFactFallbackRows(primary, legacyRows, rowCap);
 }

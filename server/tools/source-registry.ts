@@ -6,10 +6,11 @@
  * active, so an unregistered location cannot be ingested by asking nicely.
  *
  * The authorization, namespace resolution, optimistic-concurrency, and
- * approval-transition rules all live in `src/source-registry.ts` and are reused
- * here rather than reimplemented. That module is the boundary that decides who
- * may approve what; duplicating its logic in the tool layer is how the two
- * would drift, and a drifted copy of an approval rule is a privilege bug.
+ * approval-transition rules all live in `server/domain/source-registry*.ts` and
+ * are reused here rather than reimplemented. That module is the boundary that
+ * decides who may approve what; duplicating its logic in the tool layer is how
+ * the two would drift, and a drifted copy of an approval rule is a privilege
+ * bug.
  *
  * ERROR TEXT HERE IS DELIBERATELY CONTENT-FREE. Failures return a typed code
  * and a fixed reason -- never a driver message, path, row value, or config,
@@ -30,17 +31,13 @@ import {
   updateSource,
   type SourceRecord,
   type SourceRegistryResult,
-} from "../../src/source-registry.ts";
+} from "../domain/source-registry.ts";
 import {
   collectDropFolder,
   type CollectDropFolderResult,
 } from "../../src/drop-folder-collector.ts";
 import type { AuthIdentity } from "../auth/types.ts";
-import {
-  authIdentity,
-  textResult,
-  type MemoryToolDependencies,
-} from "./types.ts";
+import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 
 /**
  * Convert the server's identity into the registry module's shape.
@@ -57,8 +54,7 @@ function registryAuth(identity: AuthIdentity): AuthInfo {
     role: identity.role,
     clientId: identity.clientId,
     tokenClientId: identity.tokenClientId,
-    namespaceSource:
-      identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
   };
 }
 
@@ -112,8 +108,7 @@ function registryFailure(result: SourceRegistryResult<unknown>) {
 function internalErrorLabel(error: unknown): string {
   if (error && typeof error === "object") {
     const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && /^[0-9A-Za-z_]{1,32}$/.test(code))
-      return code;
+    if (typeof code === "string" && /^[0-9A-Za-z_]{1,32}$/.test(code)) return code;
     const name = (error as { name?: unknown }).name;
     if (typeof name === "string" && /^[A-Za-z_]{1,64}$/.test(name)) return name;
   }

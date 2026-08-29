@@ -4,7 +4,7 @@
 import {
   REPO_FACT_METADATA_CONTRACT,
   REPO_FACT_VALIDATION_CONTRACT,
-} from "../../src/tools/repo-facts.ts";
+} from "../domain/repo-facts.ts";
 import type { ToolContract } from "./tool-contract.ts";
 
 export const REPO_FACT_TOOL_CONTRACTS: Record<string, ToolContract> = {
