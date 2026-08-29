@@ -42,7 +42,7 @@
 
 import type pg from "pg";
 
-import { NON_SPEECH_ROLES } from "../../src/dream-light.ts";
+import { NON_SPEECH_ROLES } from "../maintenance/dream-light.ts";
 
 /** One raw turn as the distiller reads it. Content is already redacted at write. */
 export interface DistillTurn {
