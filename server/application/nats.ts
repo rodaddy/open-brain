@@ -13,7 +13,7 @@
  *
  * WHY THE BOUNDARY IS PROJECTED RATHER THAN RE-READ. `server/config/nats.ts`
  * already parsed the environment into `NatsConfig`, including the local-broker
- * security rule. The bridge implementation in `src/nats-bridge.ts` wants the
+ * security rule. The bridge implementation in `./nats-bridge.ts` wants the
  * older `NatsRuntimeBoundary` shape. Projecting one onto the other keeps the
  * charter's single-env-read rule intact: if this file called
  * `readNatsRuntimeBoundary(process.env)` instead, the process would have two
@@ -27,7 +27,7 @@ import {
   startNatsContextPackBridge,
   type NatsBridgeHealth,
   type NatsBridgeRuntime,
-} from "../../src/nats-bridge.ts";
+} from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { ToolDeps } from "../../src/tools/index.ts";
 import type { AuthInfo } from "../types.ts";
