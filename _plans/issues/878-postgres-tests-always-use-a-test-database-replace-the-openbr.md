@@ -3,11 +3,12 @@
 
 # #878 — Postgres tests always use a test database: replace the OPENBRAIN_TEST_DATABASE_URL skip with a hard requirement (28 pg files + 10 readers)
 
-State: OPEN
+State: CLOSED
 Author: rodaddy
 Labels: enhancement
 Created: 2026-08-27T03:25:31Z
-Updated: 2026-08-28T18:15:23Z
+Updated: 2026-08-29T17:21:47Z
+Closed: 2026-08-29T17:21:47Z
 
 ---
 
@@ -24,7 +25,18 @@ Closes the question in #874 (no lint exemption).
 
 ---
 
-## Discussion (88)
+## Resolution
+
+Closed without a pull request.
+
+- Issue closed: 2026-08-29T17:21:48Z by rodaddy
+- State reason: COMPLETED
+
+The closing rationale, if it was written anywhere, is in the discussion below — most recently by rodaddy on 2026-08-29T17:21:46Z.
+
+---
+
+## Discussion (94)
 
 ### rodaddy — 2026-08-27T03:48:03Z
 
@@ -574,3 +586,49 @@ Session 12: #956 merged (a932cf2d), issue 951 closed; head re-ran 951-expect-def
 ### rodaddy — 2026-08-28T18:15:22Z
 
 Session 12: #957 merged (f93a16a0). src/tools/__tests__/append-session-event.test.ts is retired; the split is nine files (pg, helper module, auth, lane-creation, failure-paths, lane-state, provenance, share-gate, share-lifecycle, citation), 70 its (62 unit + 8 live), full suite 4010 pass on the committed tree. Manifest entry corrected minTests 4 -> 8, MIN_TOTAL_LIVE_TESTCASES 328 -> 332. Head re-ran on origin/main f93a16a0: CHANGED_FILES=<pg file> bash scripts/done-means/878-pg-tests-require-database.sh -> see receipt in the session record. Harvest and drain lanes running next.
+
+---
+
+### rodaddy — 2026-08-28T18:26:53Z
+
+Session 12 wrap: #958 merged (ed85531e) with the session-13 handover (_DOCS/_handover/2026-08-28-pg-tests-session13.md, validator PASS 98 lines), HANDOVER-RULES 58-61, and the round-42 harvest. Landed this session: #956 (a932cf2d, issue 951 closed), #957 (f93a16a0, append-session-event split, nine files, original retired, manifest 4 -> 8, floor 332). Census on origin/main: zero code-line process.env.OPENBRAIN_TEST_DATABASE_URL reads outside scripts/test-support, zero database-variable describe.skip; the plan's literal rg -l done-means still lists 34 comment mentions, so session 13's State 3 writes the executable program check before this issue closes. Drained: eleven clones detached at f93a16a0, check-drained PASS, aqmd up run.
+
+---
+
+### rodaddy — 2026-08-29T16:52:56Z
+
+Scribe, session 13: started (head claude-fable-5, graph mode T1 declared). origin/main 3a44eece; #961 (session-13 handover) open with the check job red on the #962 growth-scan timeout after its one rerun (7637 ms). Plan: a #962 fix lane per HANDOVER-RULES rule 45 (per-test allowance sized to the measured tail) so #961 can merge, State 3 (878-program-complete.sh) and State 4 (#924 diagnosis) in parallel clones.
+
+---
+
+### rodaddy — 2026-08-29T17:11:06Z
+
+Session 13, State 3: pull request #963 (chore/878-program-complete at a1df15b) adds scripts/done-means/878-program-complete.sh, three clauses (A no code-line process.env.OPENBRAIN_TEST_DATABASE_URL read, B no describe.skip/skipIf/dbDescribe outside the tests/enforcement.test.ts allowlist, C one pg file with the variable empty exits non-zero printing test_database_required). Lane receipts: deliberate miss exit 1 naming B src/tools/__tests__/append-session-event-share-gate.test.ts:13, then exit 0 with A: 0, B: 0, C: exit 1 seen; CI all green. Head re-run and merge follow #964 (issue 962 fix, pull request #964, in collection now so #961 can merge).
+
+---
+
+### rodaddy — 2026-08-29T17:17:22Z
+
+Session 13: pull request #961 (the session-13 handover) merged at 0317372a after a rebase onto #964's fix; its check job went green on the runner with the growth-scan allowance in place. Issue 962 closed. Pull request #963 (878-program-complete.sh, follow-up be57927 moves the clause-C log under OPENBRAIN_SCRATCH) is in collection. #924 has its session-13 diagnosis (seam scripts/__tests__/bulk-import.test.ts:17). #965 filed: aqmd in <repo> from a lane clone scopes on the clone since #960.
+
+---
+
+### rodaddy — 2026-08-29T17:19:23Z
+
+Session 13: pull request #963 merged at 163cf268; scripts/done-means/878-program-complete.sh is on main (State 3 done). Receipt lane running on origin/main for the three plan done-means before closure.
+
+---
+
+### rodaddy — 2026-08-29T17:21:46Z
+
+Closing, session 13 (State 5). Receipts on origin/main 163cf268, taken in a detached clone by a receipt lane and the first re-run by the head in the root checkout:
+
+1. `bash scripts/done-means/878-program-complete.sh` -> exit 0: `A: 0`, `B: 0`, `C: exit 1, test_database_required seen`, `PASS` (pull request #963).
+2. `bun run test:isolated` (whole suite, no path) -> exit 0: `4010 pass`, `0 fail`, `Ran 4010 tests across 289 files. [54.68s]`.
+3. `OPENBRAIN_TEST_DATABASE_URL='' bun test src/tools/__tests__/append-session-event.pg.test.ts` -> exit 1: `error: test_database_required: OPENBRAIN_TEST_DATABASE_URL is unset; run bun run test:isolated`.
+
+Census on origin/main: zero code-line `process.env.OPENBRAIN_TEST_DATABASE_URL` reads in tracked `*.test.ts` outside `scripts/test-support/`; the only code-line `describe.skip|skipIf|dbDescribe` is `tests/enforcement.test.ts:301`, a lint-config guard (allowlisted in the check with its reason). The plan's literal `rg -l` form still lists comment-only header mentions; the executable check is the program's done-means from here.
+
+Decision on `scripts/assert-db-tests-ran.test.ts`: keep. It is the anti-skip manifest's own test (16 pass on 163cf268), proving suite names and `MIN_TOTAL_LIVE_TESTCASES = 332` agree with the manifest; the helper's throw covers a different failure (a file that never demands the database), so the two are not redundant.
+
+Open follow-ons stay on their own issues: #924 (diagnosed this session), #915, #912, #965.

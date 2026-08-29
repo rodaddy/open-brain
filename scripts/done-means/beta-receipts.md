@@ -452,3 +452,48 @@ than through a pipeline.
 - **`sync-issues.ts` rendered 298 Resolutions across 406 issues**, and the
   stale-blocker pass surfaced 35 candidates. Both are reported to the
   controller; nothing was closed.
+
+## Run receipts, 2026-08-29 (session-13 merge pass, PRs #964, #963, #961)
+
+Every command below was run by the tracking-scribe lane in the root checkout on
+`docs/pg-tests-session13`, with the exit read directly from the command rather
+than through a pipeline.
+
+| # | command | exit | last line |
+|---|---|---|---|
+| 1 | `ratchet-bound/check.sh docs/lane-contract.md` (BEFORE round 43) | 1 | `live=16 graduated=33 bound=15 source=default shape=heading` |
+| 2 | `ratchet-bound/check.sh docs/lane-contract.md` (AFTER round 43) | 1 | `live=17 graduated=33 bound=15 source=default shape=heading` |
+| 3 | `placeholders/check.sh docs/lane-contract.md _DOCS/_handover/2026-08-28-pg-tests-session13.md scripts/done-means/878-program-complete.sh scripts/done-means/962-growth-scan-allowance.sh` | 1 | `FAIL: 2 unresolved placeholder hit(s)` |
+| 4 | `decisions/check.sh docs/decisions.md` | 0 | `ok: docs/decisions.md — 6 rows, 0 failures` |
+| 5 | `lane-report/check.sh .../reports/878-program-check.md` | 1 | `lane report invalid: 2 failure(s)` |
+| 6 | `lane-report/check.sh .../reports/924-diagnosis.md` | 1 | `lane report invalid: 2 failure(s)` |
+| 7 | `lane-report/check.sh .../reports/962-allowance.md` | 1 | `lane report invalid: 2 failure(s)` |
+| 8 | `bun run scripts/build-sme-indexes.ts` | 0 | `wrote docs/sme/gotcha-agent.md (59 entries)` |
+| 9 | `bun run scripts/sync-issues.ts` | 0 | `Now run: qmd update -c open-brain && qmd embed` |
+| 10 | `bun run scripts/stale-blockers.ts` | 0 | `38 open issue(s) reference only closed work — verify each against live state before closing.` |
+
+## Pilot findings, session 13
+
+- **The ratchet AFTER run exiting 1 is the recorded state, not a defect.** Live
+  rose 16 → 17 with round 43; graduation is Rico's call (decisions row 6), so
+  the lane records the red exit and does not reduce the file to satisfy it.
+- **Both placeholder hits are the same false positive.** Row 3's two hits are
+  `docs/lane-contract.md:100` and
+  `_DOCS/_handover/2026-08-28-pg-tests-session13.md:81`, and both are the
+  literal quoted command form `aqmd in <repo>` — the documented shape of the
+  command from #965, not an unfilled placeholder. The red exit is recorded as
+  red rather than suppressed; the checker cannot distinguish a quoted command
+  argument from a template slot. The lane-contract hit is the round 43 bullet
+  this same run added, so the count moved 1 → 2 as a direct result of the
+  harvest.
+- **All three lane-report checks refused, against session 12's result.** Each
+  failed `trailing-content` with 2 failures. These files are head-condensed
+  excerpts of the lane returns, and the condensation collapsed the report onto
+  lines the checker reads as content past the field block. Recorded as observed;
+  the previous session's ten files passed the same check, so this is a property
+  of this session's condensation, not a checker change.
+- **`decisions/check.sh` reports 6 rows, 0 failures with no new row this
+  session**, which is the state the brief called for.
+- **`sync-issues.ts` rendered 300 Resolutions across 408 issues**, and the
+  stale-blocker pass surfaced 38 candidates. Both are reported to the
+  controller; nothing was closed.
