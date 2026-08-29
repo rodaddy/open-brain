@@ -11,8 +11,7 @@ import {
 // Clearly-fake / documentation example values, split where needed so the repo's
 // own secret scanner (ggshield) does not flag the test fixtures themselves.
 const FAKE_AWS_ACCESS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
-const FAKE_JWT =
-  "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZXN0In0." + "abcdefghijklmnop";
+const FAKE_JWT = "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZXN0In0." + "abcdefghijklmnop";
 const FAKE_GH_PAT = "github" + "_pat_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ";
 const FAKE_SK = "sk" + "-" + "abcdefghijklmnopqrstuvwxyz0123456789";
 const FAKE_SLACK = "xoxb-" + "1234567890-abcdefghij";
@@ -71,9 +70,9 @@ describe("containsSecret", () => {
   });
 
   it("detects credentials embedded in a URL", () => {
-    expect(
-      containsSecret("db at postgres://admin:hunter2pw@10.0.0.1:5432/app"),
-    ).toBe(true);
+    expect(containsSecret("db at postgres://admin:hunter2pw@10.0.0.1:5432/app")).toBe(
+      true,
+    );
   });
 
   it("detects URL credentials regardless of scheme case", () => {
@@ -101,23 +100,19 @@ describe("containsSecret", () => {
   });
 
   it("detects a labeled long secret value", () => {
-    expect(containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz")).toBe(
-      true,
-    );
+    expect(containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz")).toBe(true);
   });
 
   it("does NOT flag a bare hex content-hash / git SHA (no over-rejection)", () => {
     // 64-char hex content_hash and a 40-char git SHA are pervasive + legitimate.
     expect(containsSecret("content_hash " + "a1b2c3d4".repeat(8))).toBe(false);
-    expect(
-      containsSecret("commit 4ba6c76e1f2a3b4c5d6e7f8091a2b3c4d5e6f708"),
-    ).toBe(false);
+    expect(containsSecret("commit 4ba6c76e1f2a3b4c5d6e7f8091a2b3c4d5e6f708")).toBe(
+      false,
+    );
   });
 
   it("does NOT flag a plain URL without credentials (no over-rejection)", () => {
-    expect(containsSecret("see https://github.com/rodaddy/open-brain")).toBe(
-      false,
-    );
+    expect(containsSecret("see https://github.com/rodaddy/open-brain")).toBe(false);
   });
 
   it("does not flag ordinary prose", () => {
@@ -310,15 +305,15 @@ describe("classifyShareCandidate — reject-private", () => {
 
 describe("classifyShareCandidate — reject-noise", () => {
   it("rejects a question event type", () => {
-    expect(
-      classifyShareCandidate({ event_type: "question", content: LONG_FACT }),
-    ).toBe("reject-noise");
+    expect(classifyShareCandidate({ event_type: "question", content: LONG_FACT })).toBe(
+      "reject-noise",
+    );
   });
 
   it("rejects an action event type", () => {
-    expect(
-      classifyShareCandidate({ event_type: "action", content: LONG_FACT }),
-    ).toBe("reject-noise");
+    expect(classifyShareCandidate({ event_type: "action", content: LONG_FACT })).toBe(
+      "reject-noise",
+    );
   });
 
   it("rejects cold importance", () => {
@@ -332,15 +327,13 @@ describe("classifyShareCandidate — reject-noise", () => {
   });
 
   it("rejects content shorter than minLen", () => {
-    expect(classifyShareCandidate({ content: "too short" })).toBe(
-      "reject-noise",
-    );
+    expect(classifyShareCandidate({ content: "too short" })).toBe("reject-noise");
   });
 
   it("rejects a non-shareable lane event type (blocker)", () => {
-    expect(
-      classifyShareCandidate({ event_type: "blocker", content: LONG_FACT }),
-    ).toBe("reject-noise");
+    expect(classifyShareCandidate({ event_type: "blocker", content: LONG_FACT })).toBe(
+      "reject-noise",
+    );
   });
 });
 
@@ -356,15 +349,15 @@ describe("classifyShareCandidate — share / manual-review", () => {
   });
 
   it("shares a thought (no event_type) that is long and warm", () => {
-    expect(
-      classifyShareCandidate({ importance: "warm", content: LONG_FACT }),
-    ).toBe("share");
+    expect(classifyShareCandidate({ importance: "warm", content: LONG_FACT })).toBe(
+      "share",
+    );
   });
 
   it("shares a handoff event", () => {
-    expect(
-      classifyShareCandidate({ event_type: "handoff", content: LONG_FACT }),
-    ).toBe("share");
+    expect(classifyShareCandidate({ event_type: "handoff", content: LONG_FACT })).toBe(
+      "share",
+    );
   });
 
   it("routes a just-over-min-length candidate to manual-review", () => {
@@ -376,8 +369,8 @@ describe("classifyShareCandidate — share / manual-review", () => {
 
   it("honors a custom minLen", () => {
     const content = "short fact here";
-    expect(
-      classifyShareCandidate({ event_type: "fact", content }, { minLen: 4 }),
-    ).toBe("share");
+    expect(classifyShareCandidate({ event_type: "fact", content }, { minLen: 4 })).toBe(
+      "share",
+    );
   });
 });

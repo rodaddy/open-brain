@@ -25,11 +25,8 @@ import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
-import {
-  canonicalNamespace,
-  sharedNamespaceConfig,
-} from "./shared-namespace.ts";
-import { classifyShareCandidate } from "../../src/sharing.ts";
+import { canonicalNamespace, sharedNamespaceConfig } from "./shared-namespace.ts";
+import { classifyShareCandidate } from "../domain/sharing.ts";
 import { promoteEntry } from "../../src/promotion-service.ts";
 import {
   authIdentity,
@@ -38,10 +35,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { ALL_TABLES } from "./curation-helpers.ts";
-import {
-  isPromotionIdentity,
-  legacyTargetRefusal,
-} from "./promotion-shared.ts";
+import { isPromotionIdentity, legacyTargetRefusal } from "./promotion-shared.ts";
 
 /** Tables `promote_shared` can lift into shared truth. */
 const PROMOTABLE_TABLES = ["thoughts", "decisions"] as const;
@@ -59,16 +53,12 @@ function promotionAuth(identity: AuthIdentity): AuthInfo {
     role: identity.role,
     clientId: identity.clientId,
     tokenClientId: identity.tokenClientId,
-    namespaceSource:
-      identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
   };
 }
 
 /** @returns The text a classifier fed for this row. */
-function shareContent(
-  table: PromotableTable,
-  row: Record<string, unknown>,
-): string {
+function shareContent(table: PromotableTable, row: Record<string, unknown>): string {
   if (table === "decisions") {
     const title = (row.title as string | null) ?? "";
     const rationale = (row.rationale as string | null) ?? "";
@@ -82,9 +72,7 @@ const listNamespacesInputSchema = {
   raw: z
     .boolean()
     .optional()
-    .describe(
-      "Return physical namespace names instead of canonical public names",
-    ),
+    .describe("Return physical namespace names instead of canonical public names"),
 };
 
 /** Tool annotations; `list_namespaces` reads and never mutates. */
@@ -210,9 +198,7 @@ async function handleListNamespaces(
 ): Promise<ReturnType<typeof textResult>> {
   const identity = authIdentity(authInfo as Parameters<typeof authIdentity>[0]);
   if (!identity) return errorResult("Permission denied: not authenticated");
-  const accessible = ALL_TABLES.filter((table) =>
-    canRead(identity.role, table),
-  );
+  const accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
   if (accessible.length === 0) {
     return errorResult("Permission denied: no readable tables");
   }
@@ -316,16 +302,8 @@ interface RunPromotionOptions {
 async function runPromotion(
   options: RunPromotionOptions,
 ): Promise<ReturnType<typeof textResult>> {
-  const {
-    dependencies,
-    identity,
-    table,
-    id,
-    target,
-    reason,
-    dryRun,
-    classification,
-  } = options;
+  const { dependencies, identity, table, id, target, reason, dryRun, classification } =
+    options;
   try {
     const result = await promoteEntry(
       dependencies.pool,
@@ -389,8 +367,7 @@ async function handlePromoteShared(
   const decision = classifyShareCandidate({
     content: shareContent(args.table, row),
     tags: (row.tags as string[] | null) ?? undefined,
-    metadata:
-      (row.extracted_metadata as Record<string, unknown> | null) ?? undefined,
+    metadata: (row.extracted_metadata as Record<string, unknown> | null) ?? undefined,
   });
 
   // An authorized identity is permission to promote SHAREABLE content, not
