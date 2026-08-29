@@ -140,11 +140,11 @@ describe("createRotatingFileSink", () => {
       expect(combined).toContain(line);
     }
     // Ordering: the last surviving line equals the last written line.
-    expect(survivingLines[survivingLines.length - 1]).toBe(
-      written[written.length - 1],
-    );
+    expect(survivingLines[survivingLines.length - 1]).toBe(written[written.length - 1]);
   });
+});
 
+describe("createRotatingFileSink edge sizes", () => {
   test("maxFiles=0 keeps only the active file (no rotated siblings)", () => {
     const path = join(dir, "app.log");
     const sink = createRotatingFileSink({

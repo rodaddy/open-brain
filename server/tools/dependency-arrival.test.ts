@@ -167,7 +167,7 @@ describe("ftsCorpusConfig arrives at search_brain's SQL", () => {
  *
  * A repo-relative scratch path is a developer-machine assumption: CI has no
  * such directory, so the file could never be written there. Same shape as
- * `src/rotating-file.test.ts`.
+ * `server/logging/rotating-file.test.ts`.
  */
 let walCounter = 0;
 function scratchWalPath(): string {
