@@ -1,634 +1,79 @@
-import { createHash } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
-import { chunkText } from "./chunking.ts";
-import { logger } from "./logger.ts";
+// L5 adapter (issue 864): legacy call form over server/embedding/provider.ts; retired with src/ at L6.
+//
+// The server/ module reads no environment. Legacy callers here, in scripts/,
+// and in tests expect the zero-argument form that reads `EMBEDDING_*` at the
+// moment of each call, plus the two module constants they import by name. This
+// adapter registers a reader that parses `process.env` on every call, so those
+// callers keep the behaviour they had, and computes the two constants at import
+// time exactly as the original did.
+import {
+  setEmbeddingSettingsReader,
+  type EmbeddingProviderSettings,
+} from "../server/embedding/provider.ts";
 
-const rawTimeout = parseInt(process.env.EMBEDDING_TIMEOUT_MS ?? "8000", 10);
-const EMBEDDING_TIMEOUT_MS = Number.isNaN(rawTimeout) ? 8000 : rawTimeout;
-const rawDimensions = parseInt(process.env.EMBEDDING_DIMENSIONS ?? "768", 10);
-export const EMBEDDING_DIMENSIONS =
-  Number.isNaN(rawDimensions) || rawDimensions <= 0 ? 768 : rawDimensions;
-
-const MAX_RETRIES = 2;
-const BACKOFF_DELAYS_MS = [200, 800];
-const WATCHDOG_RESTARTABLE_CODES = new Set<EmbeddingError["code"]>([
-  "timeout",
-  "network",
-  "server_error",
-]);
-
-let lastFailureCode: EmbeddingError["code"] | null = null;
-let consecutiveRestartableFailures = 0;
-let lastWatchdogRestartAt = 0;
-let watchdogRestartInFlight = false;
-let restartProcessSpawner = (restartScript: string): ChildProcess =>
-  spawn(restartScript, {
-    detached: true,
-    stdio: "ignore",
-  });
-
-/**
- * Embedding model identifier. Used by embedding.ts to call the provider and stored
- * in embedding_model columns so we can track which model produced each vector.
- * Override via EMBEDDING_MODEL env var (must match the provider deployment name).
- */
-export const EMBEDDING_MODEL =
-  process.env.EMBEDDING_MODEL ?? "gemini-embedding-001";
-
-export interface EmbeddingError {
-  code:
-    | "timeout"
-    | "network"
-    | "server_error"
-    | "client_error"
-    | "malformed_response"
-    | "input_invalid"
-    | "no_embedding_url";
-  message: string;
-  attempts: number;
-  lastStatus?: number;
+function parseIntegerSetting(
+  raw: string | undefined,
+  fallback: number,
+  accept: (value: number) => boolean,
+): number {
+  const parsed = parseInt(raw ?? String(fallback), 10);
+  return Number.isNaN(parsed) || !accept(parsed) ? fallback : parsed;
 }
 
-export interface EmbeddingResult {
-  embedding: number[] | null;
-  error?: EmbeddingError;
-  usageDetails?: Record<string, number>;
-}
-
-export interface EmbeddingOptions {
-  signal?: AbortSignal;
-}
-
-/**
- * Classify whether an error or HTTP status is transient and worth retrying.
- * Only 5xx, AbortError (timeout), and network-level errors are retried.
- * 4xx errors are never retried.
- */
-function isTransient(err: unknown, status?: number): boolean {
-  if (status !== undefined && status >= 400 && status < 500) return false;
-  if (status !== undefined && status >= 500) return true;
-  if (err instanceof DOMException && err.name === "AbortError") return true;
-  if (err instanceof Error) {
-    const msg = err.message;
-    if (
-      msg.includes("ECONNRESET") ||
-      msg.includes("ECONNREFUSED") ||
-      msg.includes("ETIMEDOUT") ||
-      msg.includes("ENETUNREACH") ||
-      msg.includes("fetch failed")
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function classifyError(err: unknown, status?: number): EmbeddingError["code"] {
-  if (err instanceof DOMException && err.name === "AbortError")
-    return "timeout";
-  if (status !== undefined && status >= 500) return "server_error";
-  if (err instanceof Error) return "network";
-  return "network";
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function watchdogFailureThreshold(): number {
-  const raw = parseInt(
-    process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD ?? "2",
-    10,
-  );
-  return Number.isNaN(raw) || raw <= 0 ? 2 : raw;
-}
-
-function watchdogCooldownMs(): number {
-  const raw = parseInt(
-    process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS ?? "300000",
-    10,
-  );
-  return Number.isNaN(raw) || raw < 0 ? 300000 : raw;
-}
-
-function resetWatchdogFailures(): void {
-  lastFailureCode = null;
-  consecutiveRestartableFailures = 0;
-}
-
-function recordWatchdogFailure(error: EmbeddingError): void {
-  if (!WATCHDOG_RESTARTABLE_CODES.has(error.code)) {
-    resetWatchdogFailures();
-    return;
-  }
-
-  lastFailureCode = error.code;
-  consecutiveRestartableFailures += 1;
-
-  logger.warn("embedding_watchdog_failure_recorded", {
-    code: error.code,
-    consecutiveFailures: consecutiveRestartableFailures,
-    threshold: watchdogFailureThreshold(),
-  });
-
-  if (consecutiveRestartableFailures >= watchdogFailureThreshold()) {
-    triggerEmbeddingWatchdogRestart(error.code);
-  }
-}
-
-function triggerEmbeddingWatchdogRestart(code: EmbeddingError["code"]): void {
+/** Every `EMBEDDING_*` key, parsed the way the original module parsed it. */
+export function readEmbeddingEnv(): EmbeddingProviderSettings {
   const restartScript = process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT;
-  if (!restartScript) return;
-
-  const now = Date.now();
-  const cooldownMs = watchdogCooldownMs();
-  if (watchdogRestartInFlight) {
-    logger.warn("embedding_watchdog_restart_skipped", {
-      code,
-      reason: "restart_in_flight",
-    });
-    return;
-  }
-  if (now - lastWatchdogRestartAt < cooldownMs) {
-    logger.warn("embedding_watchdog_restart_skipped", {
-      code,
-      reason: "cooldown",
-      cooldownMs,
-    });
-    return;
-  }
-
-  watchdogRestartInFlight = true;
-
-  logger.error("embedding_watchdog_restart_triggered", {
-    code,
-    restartScript,
-  });
-
-  let child: ChildProcess;
-  try {
-    child = restartProcessSpawner(restartScript);
-  } catch (err) {
-    watchdogRestartInFlight = false;
-    logger.error("embedding_watchdog_restart_failed", {
-      error: err instanceof Error ? err.message : String(err),
-      restartScript,
-    });
-    return;
-  }
-
-  child.once("error", (err) => {
-    watchdogRestartInFlight = false;
-    logger.error("embedding_watchdog_restart_failed", {
-      error: err.message,
-      restartScript,
-    });
-  });
-
-  child.once("spawn", () => {
-    child.unref();
-  });
-
-  child.once("close", (exitCode) => {
-    watchdogRestartInFlight = false;
-    if (exitCode !== 0) {
-      logger.error("embedding_watchdog_restart_failed", {
-        exitCode,
-        restartScript,
-      });
-      return;
-    }
-
-    lastWatchdogRestartAt = Date.now();
-    resetWatchdogFailures();
-    logger.warn("embedding_watchdog_restart_completed", {
-      restartScript,
-    });
-  });
-}
-
-export function __resetEmbeddingWatchdogForTests(): void {
-  resetWatchdogFailures();
-  lastWatchdogRestartAt = 0;
-  watchdogRestartInFlight = false;
-  restartProcessSpawner = (restartScript: string): ChildProcess =>
-    spawn(restartScript, {
-      detached: true,
-      stdio: "ignore",
-    });
-}
-
-export function __setEmbeddingWatchdogRestartSpawnerForTests(
-  spawner: typeof restartProcessSpawner,
-): void {
-  restartProcessSpawner = spawner;
-}
-
-export function getEmbeddingProviderDiagnostics(): {
-  configured: boolean;
-  model: string;
-  dimensions: number;
-  last_failure_code: EmbeddingError["code"] | null;
-  consecutive_restartable_failures: number;
-  restart_configured: boolean;
-  restart_in_flight: boolean;
-  last_restart_at: string | null;
-} {
+  const baseUrl = process.env.EMBEDDING_BASE_URL;
+  const apiKey = process.env.EMBEDDING_API_KEY;
   return {
-    configured: Boolean(embeddingBaseUrl()),
-    model: EMBEDDING_MODEL,
-    dimensions: EMBEDDING_DIMENSIONS,
-    last_failure_code: lastFailureCode,
-    consecutive_restartable_failures: consecutiveRestartableFailures,
-    restart_configured: Boolean(process.env.EMBEDDING_WATCHDOG_RESTART_SCRIPT),
-    restart_in_flight: watchdogRestartInFlight,
-    last_restart_at:
-      lastWatchdogRestartAt > 0
-        ? new Date(lastWatchdogRestartAt).toISOString()
-        : null,
+    timeoutMs: parseIntegerSetting(process.env.EMBEDDING_TIMEOUT_MS, 8000, () => true),
+    dimensions: parseIntegerSetting(
+      process.env.EMBEDDING_DIMENSIONS,
+      768,
+      (value) => value > 0,
+    ),
+    model: process.env.EMBEDDING_MODEL ?? "gemini-embedding-001",
+    watchdog: {
+      failureThreshold: parseIntegerSetting(
+        process.env.EMBEDDING_WATCHDOG_FAILURE_THRESHOLD,
+        2,
+        (value) => value > 0,
+      ),
+      cooldownMs: parseIntegerSetting(
+        process.env.EMBEDDING_WATCHDOG_COOLDOWN_MS,
+        300000,
+        (value) => value >= 0,
+      ),
+      ...(restartScript === undefined ? {} : { restartScript }),
+    },
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(apiKey === undefined ? {} : { apiKey }),
   };
 }
 
-function embeddingFailure(error: EmbeddingError): EmbeddingResult {
-  recordWatchdogFailure(error);
-  return { embedding: null, error };
-}
-
-export function embeddingBaseUrl(explicitUrl?: string): string | undefined {
-  const raw = explicitUrl ?? process.env.EMBEDDING_BASE_URL;
-  return raw?.replace(/\/+$/, "");
-}
-
-export function embeddingApiKey(): string | undefined {
-  return process.env.EMBEDDING_API_KEY;
-}
+setEmbeddingSettingsReader(readEmbeddingEnv);
 
 /**
- * Longest text sent to the provider in ONE request.
- *
- * A REQUEST-SHAPING number, not an acceptance rule. Text longer than this is
- * embedded in segments and combined; nothing is refused and nothing is cut.
- *
- * WHAT THIS REPLACES, and why the old number described nothing. The previous
- * `text.length > 32000` branch returned {embedding: null} for the WHOLE input,
- * so a caller stored a row no semantic search could ever reach. Measured
- * 2026-07-30 against the embedder actually configured here
- * (embeddinggemma-300m-8bit at EMBEDDING_BASE_URL, .env:24): the server accepts
- * 64,000 characters and answers HTTP 200 with a valid 768-dim vector, so 32,000
- * was not its limit. Two upstream modules (distiller.ts, distill-exchange.ts)
- * cut their own content citing that number as a hard provider constraint.
- *
- * WHY SEGMENT AT ALL, since the server accepts long input. The same measurement
- * embedded `<filler> + <distinct tail>` at increasing filler lengths and
- * compared the two vectors: cosine rose 0.79 (8k) -> 0.96 (16k) -> 0.995 (30k)
- * -> exactly 1.000000000 (60k). At 60,000 the tail stops changing the vector at
- * all -- the server truncates internally and still returns 200. Below that the
- * tail is not lost but is increasingly diluted. Segmenting keeps every part of
- * the text at full weight in its own vector instead of drowned in one.
+ * Vector width, read once at import. Callers import this as a value and a test
+ * re-imports this module with a cache-busting query to observe a new value.
  */
-const EMBEDDING_SEGMENT_CHARS = 6000;
+export const EMBEDDING_DIMENSIONS = readEmbeddingEnv().dimensions;
 
-/**
- * Overlap between adjacent segments, in characters.
- *
- * 20% of a segment. A claim that straddles a seam appears whole in both
- * neighbours, so it is embedded in context at least once rather than split
- * across two vectors that each hold half of it. Matches the ratio
- * src/chunking.ts already uses for its own defaults (200 of 2000).
- */
-const EMBEDDING_SEGMENT_OVERLAP = 1200;
+/** Provider deployment name, read once at import, as the original was. */
+export const EMBEDDING_MODEL = readEmbeddingEnv().model;
 
-/**
- * Combine segment vectors into the one vector stored for the whole text.
- *
- * Length-weighted so a 6,000-char segment is not outvoted by a 400-char
- * remainder, then L2-normalised because these vectors are compared by cosine
- * distance, which assumes unit length.
- */
-function combineEmbeddings(
-  segments: readonly { embedding: number[]; weight: number }[],
-): number[] {
-  const summed = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
-  let totalWeight = 0;
-  for (const segment of segments) {
-    totalWeight += segment.weight;
-    for (let i = 0; i < EMBEDDING_DIMENSIONS; i++) {
-      summed[i]! += (segment.embedding[i] ?? 0) * segment.weight;
-    }
-  }
-  if (totalWeight > 0) {
-    for (let i = 0; i < EMBEDDING_DIMENSIONS; i++) summed[i]! /= totalWeight;
-  }
-  let norm = 0;
-  for (const value of summed) norm += value * value;
-  norm = Math.sqrt(norm);
-  // A zero vector has no direction to normalise. Returning it unchanged is
-  // correct -- it is what the provider produced, and inventing a direction
-  // would silently place the row somewhere in the space it does not belong.
-  if (norm === 0) return summed;
-  return summed.map((value) => value / norm);
-}
-
-export async function generateEmbeddingWithMetadata(
-  text: string,
-  embeddingUrl?: string,
-  options: EmbeddingOptions = {},
-): Promise<EmbeddingResult> {
-  if (!text || text.trim().length === 0) {
-    const msg = "Embedding text empty";
-    logger.warn(msg, { length: text?.length ?? 0 });
-    return {
-      embedding: null,
-      error: {
-        code: "input_invalid",
-        message: msg,
-        attempts: 0,
-      },
-    };
-  }
-
-  // LONG TEXT IS EMBEDDED, NOT REFUSED AND NOT CUT. chunkText splits on
-  // sentence boundaries with overlap, so no segment begins mid-sentence and
-  // the seam between two segments appears in both.
-  if (text.length > EMBEDDING_SEGMENT_CHARS) {
-    const segments = chunkText(
-      text,
-      EMBEDDING_SEGMENT_CHARS,
-      EMBEDDING_SEGMENT_OVERLAP,
-    );
-    logger.info("embedding_segmented", {
-      length: text.length,
-      segments: segments.length,
-    });
-    const embedded: { embedding: number[]; weight: number }[] = [];
-    const usageDetails: Record<string, number> = {};
-    for (const segment of segments) {
-      const result = await embedOnce(segment.text, embeddingUrl, options);
-      // One failed segment fails the whole embedding. Combining the survivors
-      // would return a vector silently representing only PART of the text --
-      // a wrong answer wearing the shape of a right one, which is the failure
-      // mode this whole change exists to remove.
-      if (result.embedding === null) {
-        logger.error("embedding_segment_failed", {
-          segment_index: segment.index,
-          segments: segments.length,
-          length: text.length,
-          code: result.error?.code ?? "unknown",
-        });
-        return result;
-      }
-      embedded.push({
-        embedding: result.embedding,
-        weight: segment.text.length,
-      });
-      for (const [key, value] of Object.entries(result.usageDetails ?? {})) {
-        usageDetails[key] = (usageDetails[key] ?? 0) + value;
-      }
-    }
-    return {
-      embedding: combineEmbeddings(embedded),
-      ...(Object.keys(usageDetails).length === 0 ? {} : { usageDetails }),
-    };
-  }
-
-  return embedOnce(text, embeddingUrl, options);
-}
-
-/** Embed one text that already fits in a single provider request. */
-async function embedOnce(
-  text: string,
-  embeddingUrl?: string,
-  options: EmbeddingOptions = {},
-): Promise<EmbeddingResult> {
-  const baseUrl = embeddingBaseUrl(embeddingUrl);
-  if (!baseUrl) {
-    const msg = "No embedding URL configured";
-    logger.warn(msg);
-    return {
-      embedding: null,
-      error: {
-        code: "no_embedding_url",
-        message: msg,
-        attempts: 0,
-      },
-    };
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  const apiKey = embeddingApiKey();
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-
-  const body = JSON.stringify({
-    model: EMBEDDING_MODEL,
-    input: text,
-    dimensions: EMBEDDING_DIMENSIONS,
-  });
-
-  let lastError: unknown = null;
-  let lastStatus: number | undefined;
-  const totalAttempts = MAX_RETRIES + 1;
-
-  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
-    const controller = new AbortController();
-    const abortFromParent = () => controller.abort(options.signal?.reason);
-    if (options.signal?.aborted) {
-      abortFromParent();
-    } else {
-      options.signal?.addEventListener("abort", abortFromParent, {
-        once: true,
-      });
-    }
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      EMBEDDING_TIMEOUT_MS,
-    );
-    const start = Date.now();
-
-    try {
-      const response = await fetch(`${baseUrl}/embeddings`, {
-        method: "POST",
-        headers,
-        body,
-        signal: controller.signal,
-      });
-
-      lastStatus = response.status;
-
-      if (!response.ok) {
-        lastError = new Error(`HTTP ${response.status}`);
-
-        // 4xx: don't retry
-        if (response.status >= 400 && response.status < 500) {
-          const code: EmbeddingError["code"] =
-            response.status === 400 || response.status === 422
-              ? "input_invalid"
-              : response.status === 401 || response.status === 403
-                ? "client_error"
-                : "client_error";
-          const msg = `Embedding provider returned ${response.status}`;
-          logger.error("Embedding provider request failed (non-retryable)", {
-            status: response.status,
-            attempts: attempt,
-          });
-          return embeddingFailure({
-            code,
-            message: msg,
-            attempts: attempt,
-            lastStatus: response.status,
-          });
-        }
-
-        // 5xx: retry if attempts remain
-        if (attempt < totalAttempts) {
-          const delay = BACKOFF_DELAYS_MS[attempt - 1] ?? 800;
-          logger.warn("Embedding request failed, retrying", {
-            attempt,
-            status: response.status,
-            code: "server_error",
-            delayMs: delay,
-          });
-          await sleep(delay);
-          continue;
-        }
-
-        // Final attempt exhausted
-        logger.error("Embedding request failed after all attempts", {
-          status: response.status,
-          attempts: attempt,
-        });
-        return embeddingFailure({
-          code: "server_error",
-          message: `Embedding provider returned ${response.status} after ${attempt} attempt(s)`,
-          attempts: attempt,
-          lastStatus: response.status,
-        });
-      }
-
-      const json = (await response.json()) as {
-        data?: Array<{ embedding?: unknown }>;
-        usage?: {
-          prompt_tokens?: unknown;
-          total_tokens?: unknown;
-        };
-      };
-
-      const embedding = json.data?.[0]?.embedding;
-
-      if (
-        !Array.isArray(embedding) ||
-        embedding.length !== EMBEDDING_DIMENSIONS
-      ) {
-        const msg = "Embedding provider returned malformed embedding";
-        logger.error(msg, {
-          hasData: !!json.data,
-          length: Array.isArray(embedding) ? embedding.length : "not-array",
-          expectedLength: EMBEDDING_DIMENSIONS,
-          attempts: attempt,
-        });
-        return embeddingFailure({
-          code: "malformed_response",
-          message: msg,
-          attempts: attempt,
-          lastStatus: response.status,
-        });
-      }
-
-      const latency = Date.now() - start;
-      logger.info("Embedding generated", { latencyMs: latency, attempt });
-
-      resetWatchdogFailures();
-      const usageDetails: Record<string, number> = {};
-      if (typeof json.usage?.prompt_tokens === "number") {
-        usageDetails.promptTokens = json.usage.prompt_tokens;
-      }
-      if (typeof json.usage?.total_tokens === "number") {
-        usageDetails.totalTokens = json.usage.total_tokens;
-      }
-      return {
-        embedding: embedding as number[],
-        ...(Object.keys(usageDetails).length === 0 ? {} : { usageDetails }),
-      };
-    } catch (err) {
-      lastError = err;
-
-      if (!isTransient(err)) {
-        const code = classifyError(err);
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error("Embedding request failed (non-retryable)", {
-          error: msg,
-          attempts: attempt,
-        });
-        return embeddingFailure({
-          code,
-          message: msg,
-          attempts: attempt,
-          lastStatus,
-        });
-      }
-
-      if (attempt < totalAttempts) {
-        const delay = BACKOFF_DELAYS_MS[attempt - 1] ?? 800;
-        const code = classifyError(err);
-        logger.warn("Embedding request failed, retrying", {
-          attempt,
-          code,
-          error: err instanceof Error ? err.message : String(err),
-          delayMs: delay,
-        });
-        await sleep(delay);
-        continue;
-      }
-
-      // Final attempt exhausted
-      const code = classifyError(err);
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("Embedding request failed after all attempts", {
-        error: msg,
-        code,
-        attempts: attempt,
-      });
-      return embeddingFailure({
-        code,
-        message: `${msg} after ${attempt} attempt(s)`,
-        attempts: attempt,
-        lastStatus,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-      options.signal?.removeEventListener("abort", abortFromParent);
-    }
-  }
-
-  // Should never reach here, but TypeScript needs it
-  const code = classifyError(lastError);
-  return embeddingFailure({
-    code,
-    message: "Unexpected: exhausted all attempts",
-    attempts: totalAttempts,
-    lastStatus,
-  });
-}
-
-/**
- * Generate a 768-dimensional embedding vector for the given text.
- * Returns null on any failure (timeout, network, bad response, etc.).
- */
-export async function generateEmbedding(
-  text: string,
-  embeddingUrl?: string,
-  options: EmbeddingOptions = {},
-): Promise<number[] | null> {
-  const result = await generateEmbeddingWithMetadata(
-    text,
-    embeddingUrl,
-    options,
-  );
-  return result.embedding;
-}
-
-export function contentHash(text: string): string {
-  const normalized = text.toLowerCase().trim().replace(/\s+/g, " ");
-  return createHash("sha256").update(normalized).digest("hex");
-}
+export {
+  contentHash,
+  embeddingApiKey,
+  embeddingBaseUrl,
+  generateEmbedding,
+  generateEmbeddingWithMetadata,
+  getEmbeddingProviderDiagnostics,
+  setEmbeddingSettingsReader,
+  __resetEmbeddingWatchdogForTests,
+  __setEmbeddingWatchdogRestartSpawnerForTests,
+  type EmbeddingError,
+  type EmbeddingOptions,
+  type EmbeddingProviderSettings,
+  type EmbeddingResult,
+} from "../server/embedding/provider.ts";
