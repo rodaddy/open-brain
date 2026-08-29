@@ -39,8 +39,13 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOperatorDoctorStatus } from "../../src/operator-doctor.ts";
-import { readNatsRuntimeBoundary } from "../../src/nats-runtime.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import { readNatsRuntimeBoundary } from "../application/nats-runtime.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 
 /**
  * The boundary an unconfigured deployment declares.

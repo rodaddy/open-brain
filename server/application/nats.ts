@@ -28,16 +28,14 @@ import {
   type NatsBridgeHealth,
   type NatsBridgeRuntime,
 } from "../../src/nats-bridge.ts";
-import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
+import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
 import type { ToolDeps } from "../../src/tools/index.ts";
 import type { AuthInfo } from "../types.ts";
-import type { BackgroundTraceEmitter } from "../../src/background-tracing.ts";
+import type { BackgroundTraceEmitter } from "./background-tracing.ts";
 import type { BackgroundRuntime } from "./index.ts";
 
 /** Project the parsed config onto the bridge's runtime-boundary shape. */
-export function natsRuntimeBoundaryFromConfig(
-  config: NatsConfig,
-): NatsRuntimeBoundary {
+export function natsRuntimeBoundaryFromConfig(config: NatsConfig): NatsRuntimeBoundary {
   return {
     requested_transport: config.requestedTransport,
     fallback_transport: config.fallbackTransport,

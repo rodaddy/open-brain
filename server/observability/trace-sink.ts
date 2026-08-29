@@ -20,7 +20,7 @@ import {
 } from "@langfuse/tracing";
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
-import type { BackgroundObservation } from "../../src/background-tracing.ts";
+import type { BackgroundObservation } from "../application/background-tracing.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
   reportSinkFailure,
@@ -383,25 +383,16 @@ export async function shutdownSink(
 }
 
 /** The drain pair, each failure logged content-free and never rethrown. */
-async function drainSink(
-  sink: TracingSink,
-  logger: TracingLogger,
-): Promise<void> {
+async function drainSink(sink: TracingSink, logger: TracingLogger): Promise<void> {
   try {
     await sink.forceFlush();
   } catch (err: unknown) {
-    logger.warn(
-      { error: tracingErrorLabel(err) },
-      "mcp_tool_tracing_flush_failed",
-    );
+    logger.warn({ error: tracingErrorLabel(err) }, "mcp_tool_tracing_flush_failed");
   }
   try {
     await sink.shutdown();
   } catch (err: unknown) {
-    logger.warn(
-      { error: tracingErrorLabel(err) },
-      "mcp_tool_tracing_shutdown_failed",
-    );
+    logger.warn({ error: tracingErrorLabel(err) }, "mcp_tool_tracing_shutdown_failed");
   }
 }
 
@@ -421,10 +412,7 @@ async function withDeadline(
   const timed = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), timeoutMs);
   });
-  const outcome = await Promise.race([
-    work.then(() => "settled" as const),
-    timed,
-  ]);
+  const outcome = await Promise.race([work.then(() => "settled" as const), timed]);
   if (timer) clearTimeout(timer);
   return outcome;
 }
