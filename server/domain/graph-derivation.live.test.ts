@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
-import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import type { AuthInfo } from "./types.ts";
+import type { AuthInfo } from "../../src/types.ts";
 
 /**
  * Live-Postgres regression for the #346 P2 anchor-rename bug.
@@ -52,17 +52,13 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     await clearNamespace(ns);
 
     // First derivation: create the anchor under its original display name.
-    const first = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "release plan",
-        namespace: ns,
-        metadata: { topics: ["Migrations"], people: [] },
-      },
-    );
+    const first = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "release plan",
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
     expect(first.status).toBe("new");
 
     const beforeRes = await pool.query(
@@ -80,17 +76,13 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     // Second derivation: SAME anchor and derived terms, NEW display name only.
     // The derivation remains structurally `unchanged`, but the anchor's readable
     // storage name and exact display_name must still refresh in place.
-    const renamed = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "Release Plan v2",
-        namespace: ns,
-        metadata: { topics: ["Migrations"], people: [] },
-      },
-    );
+    const renamed = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "Release Plan v2",
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
     expect(renamed.status).toBe("unchanged");
 
     // The canonical index still points at exactly one active row — the SAME id,
@@ -108,17 +100,13 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(afterRes.rows[0].display_name).toBe("Release Plan v2");
 
     // Re-running the exact same (renamed) input is idempotent and content-free.
-    const again = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "Release Plan v2",
-        namespace: ns,
-        metadata: { topics: ["Migrations"], people: [] },
-      },
-    );
+    const again = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "Release Plan v2",
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
     expect(again.status).toBe("unchanged");
     expect(JSON.stringify(again)).not.toContain("Release Plan");
   });
@@ -135,114 +123,99 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
  * so lower(name) is unique exactly where canonical_id is, and preserves the
  * shared label in metadata.display_name.
  */
-describe(
-  "deriveGraphFromMetadata duplicate source titles (live Postgres)",
-  () => {
-    const ns = "test-graph-derivation-dup-title";
-    const anchorType = "source";
-    const idA = "cc000000-0000-4000-8000-0000000003a1";
-    const idB = "cc000000-0000-4000-8000-0000000003b2";
-    it("stores two same-titled anchors without a lower(name) unique violation", async () => {
-      await clearNamespace(ns);
-      const sharedTitle = "Q3 Release Plan";
+describe("deriveGraphFromMetadata duplicate source titles (live Postgres)", () => {
+  const ns = "test-graph-derivation-dup-title";
+  const anchorType = "source";
+  const idA = "cc000000-0000-4000-8000-0000000003a1";
+  const idB = "cc000000-0000-4000-8000-0000000003b2";
+  it("stores two same-titled anchors without a lower(name) unique violation", async () => {
+    await clearNamespace(ns);
+    const sharedTitle = "Q3 Release Plan";
 
-      // First anchor: title T under canonical source:idA.
-      const a = await deriveGraphFromMetadata(
-        store,
-        auth,
-        {
-          anchorType,
-          anchorId: idA,
-          anchorName: sharedTitle,
-          namespace: ns,
-          metadata: { topics: ["Migrations"], people: [] },
-        },
-      );
-      expect(a.status).toBe("new");
+    // First anchor: title T under canonical source:idA.
+    const a = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId: idA,
+      anchorName: sharedTitle,
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
+    expect(a.status).toBe("new");
 
-      // Second anchor: SAME title T under a DIFFERENT canonical source:idB.
-      // Pre-fix this raised "duplicate key value violates unique constraint
-      // idx_ob_entities_lookup_unique".
-      const b = await deriveGraphFromMetadata(
-        store,
-        auth,
-        {
-          anchorType,
-          anchorId: idB,
-          anchorName: sharedTitle,
-          namespace: ns,
-          metadata: { topics: ["Migrations"], people: [] },
-        },
-      );
-      expect(b.status).toBe("new");
+    // Second anchor: SAME title T under a DIFFERENT canonical source:idB.
+    // Pre-fix this raised "duplicate key value violates unique constraint
+    // idx_ob_entities_lookup_unique".
+    const b = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId: idB,
+      anchorName: sharedTitle,
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
+    expect(b.status).toBe("new");
 
-      // Both anchors persist as distinct active rows, each preserving the label.
-      const anchors = await pool.query(
-        `SELECT canonical_id, name, metadata ->> 'display_name' AS display_name
+    // Both anchors persist as distinct active rows, each preserving the label.
+    const anchors = await pool.query(
+      `SELECT canonical_id, name, metadata ->> 'display_name' AS display_name
          FROM ob_entities
         WHERE namespace = $1 AND entity_type = $2
           AND canonical_id = ANY($3::text[]) AND archived_at IS NULL
         ORDER BY canonical_id`,
-        [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
-      );
-      expect(anchors.rows.length).toBe(2);
-      for (const row of anchors.rows) {
-        expect(row.display_name).toBe(sharedTitle);
-      }
-      // Stored names differ (canonical-derived), so lower(name) never collided.
-      expect(anchors.rows[0].name).not.toBe(anchors.rows[1].name);
+      [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
+    );
+    expect(anchors.rows.length).toBe(2);
+    for (const row of anchors.rows) {
+      expect(row.display_name).toBe(sharedTitle);
+    }
+    // Stored names differ (canonical-derived), so lower(name) never collided.
+    expect(anchors.rows[0].name).not.toBe(anchors.rows[1].name);
+  });
+
+  it("renames an anchor onto a sibling's title without a lower(name) collision", async () => {
+    await clearNamespace(ns);
+
+    await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId: idA,
+      anchorName: "Existing Title",
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
+    });
+    await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId: idB,
+      anchorName: "Different Title",
+      namespace: ns,
+      metadata: { topics: ["Migrations"], people: [] },
     });
 
-    it("renames an anchor onto a sibling's title without a lower(name) collision", async () => {
-      await clearNamespace(ns);
+    // Rename B onto A's exact title, adding a term so the run takes the write
+    // path. Pre-fix the rename would set name = "Existing Title" and collide
+    // with A's row on lower(name).
+    const renamed = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId: idB,
+      anchorName: "Existing Title",
+      namespace: ns,
+      metadata: { topics: ["Migrations", "pgvector"], people: [] },
+    });
+    expect(renamed.status).toBe("changed");
 
-      await deriveGraphFromMetadata(store, auth, {
-        anchorType,
-        anchorId: idA,
-        anchorName: "Existing Title",
-        namespace: ns,
-        metadata: { topics: ["Migrations"], people: [] },
-      });
-      await deriveGraphFromMetadata(store, auth, {
-        anchorType,
-        anchorId: idB,
-        anchorName: "Different Title",
-        namespace: ns,
-        metadata: { topics: ["Migrations"], people: [] },
-      });
-
-      // Rename B onto A's exact title, adding a term so the run takes the write
-      // path. Pre-fix the rename would set name = "Existing Title" and collide
-      // with A's row on lower(name).
-      const renamed = await deriveGraphFromMetadata(
-        store,
-        auth,
-        {
-          anchorType,
-          anchorId: idB,
-          anchorName: "Existing Title",
-          namespace: ns,
-          metadata: { topics: ["Migrations", "pgvector"], people: [] },
-        },
-      );
-      expect(renamed.status).toBe("changed");
-
-      const anchors = await pool.query(
-        `SELECT canonical_id, metadata ->> 'display_name' AS display_name
+    const anchors = await pool.query(
+      `SELECT canonical_id, metadata ->> 'display_name' AS display_name
          FROM ob_entities
         WHERE namespace = $1 AND entity_type = $2
           AND canonical_id = ANY($3::text[]) AND archived_at IS NULL
         ORDER BY canonical_id`,
-        [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
-      );
-      // Two distinct anchor rows, both now titled "Existing Title" via display_name.
-      expect(anchors.rows.length).toBe(2);
-      for (const row of anchors.rows) {
-        expect(row.display_name).toBe("Existing Title");
-      }
-    });
-  },
-);
+      [ns, anchorType, [`${anchorType}:${idA}`, `${anchorType}:${idB}`]],
+    );
+    // Two distinct anchor rows, both now titled "Existing Title" via display_name.
+    expect(anchors.rows.length).toBe(2);
+    for (const row of anchors.rows) {
+      expect(row.display_name).toBe("Existing Title");
+    }
+  });
+});
 
 /**
  * Live-Postgres regression for the #346 stale-edge convergence bug.
@@ -269,10 +242,7 @@ async function anchorEntityId(
 }
 
 /** The active topic node's id, or undefined when no live row carries the name. */
-async function topicId(
-  ns: string,
-  name: string,
-): Promise<string | undefined> {
+async function topicId(ns: string, name: string): Promise<string | undefined> {
   const res = await pool.query(
     `SELECT id FROM ob_entities
         WHERE namespace = $1 AND entity_type = 'topic' AND lower(name) = lower($2)
@@ -291,17 +261,13 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     await clearNamespace(ns);
 
     // Initial: topics [migrations, indexing] -> two live anchor->term edges.
-    const first = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "release plan",
-        namespace: ns,
-        metadata: { topics: ["migrations", "indexing"], people: [] },
-      },
-    );
+    const first = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "release plan",
+      namespace: ns,
+      metadata: { topics: ["migrations", "indexing"], people: [] },
+    });
     expect(first.status).toBe("new");
     expect(first.links_new).toBe(2);
     expect(first.links_archived).toBe(0);
@@ -319,17 +285,13 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(liveBefore.rows[0].n).toBe(2);
 
     // Changed: topics [migrations] -> the indexing edge is now stale.
-    const changed = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "release plan",
-        namespace: ns,
-        metadata: { topics: ["migrations"], people: [] },
-      },
-    );
+    const changed = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "release plan",
+      namespace: ns,
+      metadata: { topics: ["migrations"], people: [] },
+    });
     expect(changed.status).toBe("changed");
     expect(changed.links_archived).toBe(1);
 
@@ -357,17 +319,13 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(indexingStillLive).toBe(indexingId);
 
     // Rerun the SAME shrunk set: unchanged content, nothing new to prune.
-    const again = await deriveGraphFromMetadata(
-      store,
-      auth,
-      {
-        anchorType,
-        anchorId,
-        anchorName: "release plan",
-        namespace: ns,
-        metadata: { topics: ["migrations"], people: [] },
-      },
-    );
+    const again = await deriveGraphFromMetadata(store, auth, {
+      anchorType,
+      anchorId,
+      anchorName: "release plan",
+      namespace: ns,
+      metadata: { topics: ["migrations"], people: [] },
+    });
     expect(again.status).toBe("unchanged");
     expect(again.links_archived).toBe(0);
 
