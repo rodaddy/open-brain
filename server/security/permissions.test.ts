@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canRead, canWrite, PERMISSIONS } from "./permissions.ts";
-import type { Role, Table } from "./types.ts";
+import type { Role, Table } from "../../src/types.ts";
 
 const ALL_TABLES: Table[] = [
   "thoughts",
@@ -56,12 +56,7 @@ describe("admin role", () => {
 });
 
 describe("agent role", () => {
-  const rwTables: Table[] = [
-    "thoughts",
-    "decisions",
-    "relationships",
-    "sessions",
-  ];
+  const rwTables: Table[] = ["thoughts", "decisions", "relationships", "sessions"];
   const roTables: Table[] = ["projects"];
 
   test.each(rwTables)("canRead(agent, %s) returns true", (table) => {
@@ -90,12 +85,7 @@ describe("discord role", () => {
     expect(canRead("discord", "thoughts")).toBe(false);
   });
 
-  const otherTables: Table[] = [
-    "decisions",
-    "relationships",
-    "projects",
-    "sessions",
-  ];
+  const otherTables: Table[] = ["decisions", "relationships", "projects", "sessions"];
 
   test.each(otherTables)("canRead(discord, %s) returns false", (table) => {
     expect(canRead("discord", table)).toBe(false);
