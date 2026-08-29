@@ -2,6 +2,14 @@
 # DONE-MEANS check for issue 864 -- each named src/ path has left src/.
 #
 #   bash scripts/done-means/864-moved-out-of-src.sh src/chunk-write.ts [more...]
+#   bash scripts/done-means/864-moved-out-of-src.sh
+#
+# With no arguments the paths to judge are discovered from the tree itself:
+# every tracked `src/*.ts` file that is an L5 shim by the clause A test. That
+# makes the check meaningful when the PR-body validator hands the whole
+# Done-means line over as a single path with nothing after it. The count is
+# always printed as `judged=<n> shims`; zero shims on the tree prints
+# `judged=0 shims` and exits 0 rather than passing in silence.
 #
 # Three clauses per path, all must pass:
 #   A  the old path has left src/. Either `git ls-files -- <path>` prints
@@ -23,7 +31,20 @@
 #
 # Exit 0: every clause passes for every path.
 # Exit 1: any clause fails; each failure printed as `FAIL <clause> <path>`.
-# Exit 3: harness error -- no arguments, bun or rg missing, not in a git tree.
+# Exit 3: harness error -- bun or rg missing, or not in a git tree.
+#
+# Receipts, all run from this checkout on branch chore/864-l5-tooling:
+#   RED    `bash scripts/done-means/864-moved-out-of-src.sh src/embedding.ts`
+#          -> `FAIL A src/embedding.ts` / `FAIL B src/embedding.ts`, exit 1.
+#          src/embedding.ts is still a tracked implementation, not a shim.
+#   GREEN  `bash scripts/done-means/864-moved-out-of-src.sh`
+#          -> `judged=0 shims` / `PASS`, exit 0. No src/*.ts on the branch is
+#          a shim yet, so the discovered set is empty and says so out loud.
+#   PROBE  an untracked `src/l5-shim-probe.ts` re-exporting `../server/config`,
+#          `git add`ed so discovery can see it, then the same no-argument run
+#          -> `judged=1 shims` / `PASS`, exit 0. Discovery finds a real shim
+#          and clause A accepts it. The probe was unstaged with
+#          `git restore --staged` and moved out of the tree afterwards.
 set -u
 
 cd "$(dirname "$0")/../.." || exit 3
@@ -31,7 +52,6 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
   printf 'HARNESS-ERROR: not run from a checkout\n' >&2
   exit 3
 }
-[ "$#" -gt 0 ] || { printf 'HARNESS-ERROR: no paths given\n' >&2; exit 3; }
 command -v bun >/dev/null 2>&1 || { printf 'HARNESS-ERROR: bun not on PATH\n' >&2; exit 3; }
 command -v rg >/dev/null 2>&1 || { printf 'HARNESS-ERROR: rg not on PATH\n' >&2; exit 3; }
 
@@ -52,8 +72,20 @@ is_shim() {
   [ -z "$NON_EXPORT" ]
 }
 
+# With explicit arguments the caller names the paths. With none, discover
+# every tracked src/*.ts that is a shim and announce the judged count.
+TARGETS=("$@")
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+  TARGETS=()
+  while IFS= read -r CANDIDATE; do
+    [ -n "$CANDIDATE" ] || continue
+    is_shim "$CANDIDATE" && TARGETS+=("$CANDIDATE")
+  done < <(git ls-files -- 'src/*.ts')
+  printf 'judged=%d shims\n' "${#TARGETS[@]}"
+fi
+
 FAILED=0
-for TARGET in "$@"; do
+for TARGET in ${TARGETS[@]+"${TARGETS[@]}"}; do
   BASE="$(basename "$TARGET" .ts)"
 
   IS_SHIM=no
