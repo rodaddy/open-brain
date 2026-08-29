@@ -50,7 +50,7 @@
  */
 
 import type pg from "pg";
-import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
+import type { MaintenanceQueueLogger } from "../maintenance/maintenance-queue-runner.ts";
 
 /**
  * Cosine DISTANCE at or below which two candidates are the same claim.

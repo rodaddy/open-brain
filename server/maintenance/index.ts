@@ -56,16 +56,16 @@ import type { Logger } from "pino";
 import type { ServerModuleBoundary } from "../module.ts";
 import type { MaintenanceConfig } from "../config/maintenance.ts";
 import type { BackgroundRuntime } from "../application/index.ts";
+import { MaintenanceQueue } from "./maintenance-queue.ts";
 import {
-  MaintenanceQueue,
   MaintenanceQueueRunner,
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
-} from "../../src/maintenance-queue.ts";
+} from "./maintenance-queue-runner.ts";
 import {
   startRecurringMaintenanceSweep,
   type MaintenanceSweepLiveness,
-} from "../../src/maintenance-sweep.ts";
+} from "./maintenance-sweep.ts";
 
 export const MAINTENANCE_BOUNDARY: ServerModuleBoundary = {
   name: "maintenance",
@@ -168,9 +168,7 @@ function runnerOptions(
     queue,
     handlers,
     logger,
-    ...(config.concurrency !== undefined
-      ? { concurrency: config.concurrency }
-      : {}),
+    ...(config.concurrency !== undefined ? { concurrency: config.concurrency } : {}),
     ...(config.pollIntervalMs !== undefined
       ? { pollIntervalMs: config.pollIntervalMs }
       : {}),

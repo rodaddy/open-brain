@@ -52,11 +52,8 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import pg from "pg";
 import pino from "pino";
-import {
-  MaintenanceTerminalError,
-  type MaintenanceJob,
-  type MaintenanceJobHandler,
-} from "../../src/maintenance-queue.ts";
+import { MaintenanceTerminalError, type MaintenanceJob } from "./maintenance-job.ts";
+import type { MaintenanceJobHandler } from "./maintenance-queue-runner.ts";
 import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { createMaintenanceRuntime } from "./index.ts";
 import type { MaintenanceConfig } from "../config/maintenance.ts";
@@ -506,9 +503,7 @@ describe("maintenance runtime composition (live Postgres)", () => {
     const namespace = `${KIND_PREFIX}.producer`;
     const contentHash = "a".repeat(64);
 
-    await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [
-      namespace,
-    ]);
+    await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [namespace]);
     await client.query(
       `INSERT INTO ob_sources
          (namespace, source_kind, external_id, title, approval_state,
@@ -573,13 +568,10 @@ describe("maintenance runtime composition (live Postgres)", () => {
       // Both sweep-produced kinds, for the same reason: leftover
       // `ob_raw_turns` fixtures (`parity-raw-turn-*`) make the distill arm
       // produce `memory.distill` rows just as globally.
-      await client.query(
-        `DELETE FROM maintenance_jobs WHERE job_kind = ANY($1)`,
-        [["graph.derive", "memory.distill"]],
-      );
-      await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [
-        namespace,
+      await client.query(`DELETE FROM maintenance_jobs WHERE job_kind = ANY($1)`, [
+        ["graph.derive", "memory.distill"],
       ]);
+      await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [namespace]);
     }
   });
 
