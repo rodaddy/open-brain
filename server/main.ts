@@ -74,7 +74,7 @@ import {
   composeMaintenanceHandlers,
   MAINTENANCE_GRAPH_AUTH,
 } from "../src/maintenance-bootstrap.ts";
-import { getOperatorDoctorStatus } from "../src/operator-doctor.ts";
+import { getOperatorDoctorStatus } from "./application/operator-doctor.ts";
 import type { ToolDeps } from "../src/tools/index.ts";
 import type { AuthInfo } from "./types.ts";
 
@@ -388,7 +388,16 @@ function composeApplication(input: {
     authenticate,
     logger: logger.child({ component: "rest" }),
     operatorDoctor: () =>
-      getOperatorDoctorStatus(database.pool, nats.boundary, nats.health),
+      getOperatorDoctorStatus(database.pool, nats.boundary, nats.health, {
+        serviceVersionFallback: config.doctor.serviceVersionFallback,
+        nodeEnvironment: config.doctor.nodeEnvironment,
+        fileLogConfigured: Boolean(config.logging.file?.trim()),
+        rotationConfigured: config.doctor.rotationConfigured,
+        rawTurnTtlSeconds: config.doctor.rawTurnTtlSeconds,
+        ...(config.doctor.qmdIndexPath !== undefined
+          ? { qmdIndexPath: config.doctor.qmdIndexPath }
+          : {}),
+      }),
   });
 
   return createShadowApplication({
