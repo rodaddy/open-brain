@@ -19,19 +19,20 @@ Read /Volumes/ThunderBolt/Development/_DOCS/HANDOVER-BASE.md in full
   merge pass appended to scripts/done-means/beta-receipts.md.
 
 ## State 1 — ORIENT
-- `origin/main` is `f93a16a0` (#957); session 12 merged #956 (issue 951, one `expectDefined` util) and #957 (append-session-event split, nine files, original retired) — MERGED (`git log --oneline origin/main -1`)
+- `origin/main` is `3a44eece` (#960); session 12 merged #956 (issue 951, one `expectDefined` util), #957 (append-session-event split, nine files, original retired), #958 (this handover, rules 58-61), #959 (qmd model pins to the fleet llama-swap) and #960 (repo-local `.qmd/` retired) — MERGED (`git log --oneline origin/main -1`)
+- `.qmd/` is untracked and gitignored; aqmd resolves this repo from the Development catalogue `/Volumes/ThunderBolt/Development/.qmd/index.yml` (open-brain card at :2879); `scripts/done-means/qmd-repo-config-retired.sh` judges it; a branch cut from a main older than `3a44eece` restores `.qmd/index.yml` on switch and re-scopes aqmd to an empty config — MERGED (#960) / RUNNING (`aqmd search` and `aqmd up` from the root → exit 0)
 - No `*.test.ts` on origin/main self-skips on a database var: the four `describe.skip|skipIf` hits are comment-only plus `tests/enforcement.test.ts:301`, a lint-config guard — RUNNING (`git grep -l 'describe.skip\|skipIf' origin/main -- '*.test.ts'` → 4; each read)
 - Zero code-line `process.env.OPENBRAIN_TEST_DATABASE_URL` reads outside `scripts/test-support/` — RUNNING (`git grep -n 'process.env.OPENBRAIN_TEST_DATABASE_URL' origin/main -- '*.test.ts' | rg -v 'scripts/test-support/' | rg -v ':\s*(//|\*)'` → 0 lines); the #878 plan's literal done-means (`rg -l 'OPENBRAIN_TEST_DATABASE_URL' --glob '*.test.ts'` → 0) still lists 34 files because comments and header docs name the variable
 - Manifest: `append_session_event create_if_missing (live Postgres)` at `scripts/assert-db-tests-ran.ts:40` minTests 8, `MIN_TOTAL_LIVE_TESTCASES = 332` at :520 — MERGED (#957)
 - Head re-ran on origin/main f93a16a0: `CHANGED_FILES=src/tools/__tests__/append-session-event.pg.test.ts bash scripts/done-means/878-pg-tests-require-database.sh` → exit 0, clauses 1-4 PASS — RUNNING
 - `_plans/878-append-session-event-split.md` is executed and stays as the record; its Lane 2-8 done-checks were replaced per rule 60 — MERGED (#952) / RUNNING (#957)
 - #951 CLOSED; #937 #924 #915 #912 #888 #878 OPEN; no open PR — RUNNING (`gh issue list --state open`, `gh pr list --state open`)
-- Development `wip/2026-08-27` carries five unmerged commits over Development `origin/main` (graph-mode lane-report clause 4, check-drained ignores .qmd/index.yml, qmd-wrapper temp-workspace refusal and node@24 keg, aqmd root-only rule) — WRITTEN (`git -C /Volumes/ThunderBolt/Development log --oneline origin/main..wip/2026-08-27` → 5)
+- Development `wip/2026-08-27` is merged into Development `origin/main` (`9698cc3d`) — RUNNING (`git -C /Volumes/ThunderBolt/Development merge-base --is-ancestor wip/2026-08-27 origin/main` → exit 0)
 - Reusable, temp: `/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session12/{lane,step,git,diag,plan,drain,scribe}.workflow.js` (`step.workflow.js` is the no-commit step lane, `lane.workflow.js` takes `setupExisting`), `collect.sh <pr> [CHANGED_FILES]`, `common-rules.txt` R1-R9 (R7 points at the util), `task-*.txt` briefs, `snap-step6/`, `snap-step7/` — WRITTEN
 - Graph mode: converted — RUNNING (`ls scripts/done-means/` has `878-*.sh`, `951-*.sh`, `827-*.sh`)
-- Drain: origin holds `main` plus this docs branch; eleven clones detached at `f93a16a0`, no stash, no extra worktree, only `.qmd/index.yml` drift — RUNNING (`check-drained.sh .` → PASS on the root checkout)
+- Drain: origin holds `main` plus this docs branch; lane-11 detached at `3a44eece`, ten clones at `f93a16a0`, no stash (lane-11 qmd drift archived as `_archive/session12/lane-11-qmd-index-drift.patch`), no extra worktree — RUNNING (`check-drained.sh` → PASS on the root checkout)
 Re-probe before dispatching anything (live state beats this doc):
-- `git log --oneline origin/main -1` → expect f93a16a0 or later with this PR merged
+- `git log --oneline origin/main -1` → expect 3a44eece or later with this PR merged
 - `gh pr list --state open --json number` → empty once this PR merges
 - `rg -n 'MIN_TOTAL_LIVE_TESTCASES =' scripts/assert-db-tests-ran.ts` → 332
 
@@ -62,15 +63,7 @@ Must NOT: edit any file; propose a fix in the comment beyond naming the owning s
 Record: #924 comment
 Done-check: `gh issue view 924 --comments | rg -c 'session 13'` → 1
 
-## State 5 — Development wip/2026-08-27 lands
-Tier: T1 — shared Development tooling (graph-mode checks, check-drained, qmd wrapper)
-Deliverable: one PR from Development `wip/2026-08-27` into Development `main` carrying the five commits, opened by a git lane from a clean clone of Development under `/Volumes/ThunderBolt/_tmp/Development/_worktrees/`, its checks green, merged by the head
-Scope: the Development repo only; the existing branch, no new commits unless a check demands one
-Must NOT: rebase or squash the five commits away; touch `/Volumes/ThunderBolt/Development` working tree (it carries user-owned `.claude/commands/get-on-track.md` untracked); `--no-verify`
-Record: #878 comment with the Development PR number and merge sha
-Done-check: `git -C /Volumes/ThunderBolt/Development log --oneline origin/main..wip/2026-08-27 | wc -l` → 0 after the merge (RED: not yet run)
-
-## State 6 — WAYFINDER
+## State 5 — WAYFINDER
 Close: https://github.com/rodaddy/open-brain/issues/878 — after State 3 merges
 and its check exits 0 on origin/main, the head posts the three plan done-means
 receipts (the new check, `bun run test:isolated` green on origin/main, the
@@ -84,7 +77,9 @@ Invoke the handover-author skill; next handover passes the validator; `aqmd up`.
 
 ## HANDED-OVER UNKNOWNS
 - ratchet-bound: round 42 takes live from 15 to 16 over the rule value 15 (decisions row 6 graduated round 27 for 15); graduating another round or raising the value is Rico's.
-- #937 (aqmd allowlist) was filed from the `.qmd/index.sqlite` view; Rico says the index now lives in Postgres — close or keep is his call.
+- #937 (aqmd allowlist) now points at the Development catalogue card (`/Volumes/ThunderBolt/Development/.qmd/index.yml:2879` lists no `_DOCS/_handover/` or `docs/sme/entries/` pattern); the regen line is on the issue; close or keep is Rico's call.
+- `aqmd research` reads `<repo>/.qmd/references.yml` (`_ob/bin/aqmd:378`); since #960 this repo declares no prior-art clones. The old file is at `58bf1b2a` and `_archive/session12/qmd-references.yml`; where a repo declares references under one store is Rico's call.
+- `_DOCS/STANDARDS-repo-search.md:139` (generated, source-hash 1f45b7a4503e) still says keep `.qmd/index.yml` tracked, and the AGENTS.md sync banner names `sqlite3 .qmd/index.sqlite`; both regenerate from Development `_DOCS/`, Rico's repo.
 - #915: the self-hosted `check` runner's PostgreSQL 17 versus the stack's 18 is a runner change (Rico's); `scripts/local-clone.test.ts` asserts `>= 17` until then.
 - #912: retire-collab-migration intermittent in the full isolated run; unowned.
 - #888 Forge migration — Rico decides when planning starts.
