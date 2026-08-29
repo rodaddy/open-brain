@@ -42,7 +42,7 @@
 
 import type { BackgroundTraceRecorder } from "../../src/background-tracing.ts";
 import { contentHash } from "../../src/embedding.ts";
-import { isHarnessNoise } from "../../src/tools/ingest-raw-turn.ts";
+import { isHarnessNoise } from "../capture/ingest-raw-turn.ts";
 import type { DistillTurn, DistillUnit } from "./distill-window.ts";
 
 /**
