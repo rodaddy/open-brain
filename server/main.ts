@@ -51,11 +51,7 @@ import {
 } from "./application/nats.ts";
 import { createAuthMiddleware } from "./auth/middleware.ts";
 import { createCaptureHealthRuntime } from "./capture/liveness-observer.ts";
-import {
-  loadServerConfig,
-  natsHealthFromConfig,
-  type ServerConfig,
-} from "./config.ts";
+import { loadServerConfig, natsHealthFromConfig, type ServerConfig } from "./config.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { createDatabase, type Database } from "./db/pool.ts";
 import { withLogging } from "./logging/decorate.ts";
@@ -73,10 +69,7 @@ import {
   parseAllowedOrigins,
 } from "./transport/rest.ts";
 import { installMcpAudit } from "../src/audit-log.ts";
-import {
-  generateEmbedding,
-  generateEmbeddingWithMetadata,
-} from "../src/embedding.ts";
+import { generateEmbedding, generateEmbeddingWithMetadata } from "../src/embedding.ts";
 import {
   composeMaintenanceHandlers,
   MAINTENANCE_GRAPH_AUTH,
@@ -135,14 +128,8 @@ export interface StartServerOptions {
  * an ordinary exit; only a genuine throw produces the failure line.
  */
 export function installToolLogging(server: McpServer, logger: Logger): void {
-  const original = server.registerTool.bind(server) as (
-    ...args: unknown[]
-  ) => unknown;
-  server.registerTool = ((
-    name: string,
-    configOrDescription: unknown,
-    cb?: unknown,
-  ) => {
+  const original = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  server.registerTool = ((name: string, configOrDescription: unknown, cb?: unknown) => {
     if (typeof cb !== "function") {
       return original(name, configOrDescription, cb);
     }
@@ -224,6 +211,7 @@ function createServerFactory(input: {
       // bridge and `/health` actually run on.
       searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
       ftsCorpusConfig: config.fts.corpusConfig,
+      promotionKillSwitch: config.promotion.killSwitch,
       // `config.qmd.path` is the validated parse of QMD_PATH (blank reads as
       // absent, `server/config/env-groups.ts:188,304`), so the handler no longer
       // needs an env record at all. Spread rather than assigned because the key
@@ -392,8 +380,7 @@ function composeApplication(input: {
   nats: NatsPhase;
   captureHealth: ReturnType<typeof createCaptureHealthRuntime>;
 }): ShadowApplication {
-  const { options, config, logger, database, tracing, nats, captureHealth } =
-    input;
+  const { options, config, logger, database, tracing, nats, captureHealth } = input;
   const authenticate = createAuthMiddleware(config.authTokens);
   const restSurface = createRestSurface({
     pool: database.pool,
@@ -423,8 +410,7 @@ function composeApplication(input: {
     // service.
     beforeRoutes: installHttpMiddleware({
       allowedOrigins:
-        options.allowedOrigins ??
-        parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
+        options.allowedOrigins ?? parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
       logger: logger.child({ component: "http" }),
     }),
     routers: [{ path: "/api/v1", handler: restSurface }],
@@ -485,10 +471,7 @@ async function openListener(input: {
   const address = server.address();
   const boundPort =
     typeof address === "object" && address !== null ? address.port : port;
-  logger.info(
-    { port: boundPort, bind_host: bindHost ?? "all" },
-    "server_started",
-  );
+  logger.info({ port: boundPort, bind_host: bindHost ?? "all" }, "server_started");
   return { server, boundPort };
 }
 
@@ -551,10 +534,7 @@ export async function startServer(
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
   const tracing = createTracingRuntime({ config: config.tracing, logger });
-  logger.info(
-    { enabled: tracing.sink !== undefined },
-    "mcp_tracing_configured",
-  );
+  logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
   let application: ShadowApplication | undefined;
   try {
     await applyMigrations({

@@ -27,7 +27,7 @@ import type { AuthInfo } from "../types.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import { canonicalNamespace, sharedNamespaceConfig } from "./shared-namespace.ts";
 import { classifyShareCandidate } from "../domain/sharing.ts";
-import { promoteEntry } from "../../src/promotion-service.ts";
+import { promoteEntry } from "../domain/promotion-service.ts";
 import {
   authIdentity,
   errorResult,
@@ -305,15 +305,13 @@ async function runPromotion(
   const { dependencies, identity, table, id, target, reason, dryRun, classification } =
     options;
   try {
-    const result = await promoteEntry(
-      dependencies.pool,
-      table,
-      id,
-      target,
+    const result = await promoteEntry(dependencies.pool, table, id, {
+      targetNamespace: target,
       reason,
-      promotionAuth(identity),
-      { dryRun },
-    );
+      auth: promotionAuth(identity),
+      dryRun,
+      killSwitch: dependencies.promotionKillSwitch ?? false,
+    });
     dependencies.logger.info(
       { tool: "promote_shared", id, status: result.status, dryRun },
       "tool_result",

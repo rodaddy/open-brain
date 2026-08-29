@@ -78,6 +78,15 @@ export interface MemoryToolDependencies {
    * engine read the environment itself.
    */
   readonly searchEmbeddingTimeoutMs?: number;
+  /**
+   * True refuses every apply-mode promotion before any write.
+   *
+   * From `config.promotion.killSwitch`. The promotion service reads no
+   * environment of its own, so the value arrives from the composition root;
+   * absent means the switch is off, which is what an unset variable produced
+   * when the service read it itself.
+   */
+  readonly promotionKillSwitch?: boolean;
 }
 
 export interface McpAuthInfo {
