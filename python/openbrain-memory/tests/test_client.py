@@ -1874,13 +1874,18 @@ def test_required_contract_tools_have_first_class_wrappers_and_help():
 def _server_contract_source() -> str:
     # tests/ -> openbrain-memory/ -> python/ -> repo root
     repo_root = pathlib.Path(__file__).resolve().parents[3]
-    contract = repo_root / "src" / "contract.ts"
-    return contract.read_text(encoding="utf-8")
+    contracts = repo_root / "server" / "contracts"
+    # Issue 864 split the old `src/contract.ts` in two: `contract.ts` keeps
+    # CONTRACT_VERSION, `contract-capabilities.ts` keeps the tool entries.
+    return "\n".join(
+        (contracts / name).read_text(encoding="utf-8")
+        for name in ("contract.ts", "contract-capabilities.ts")
+    )
 
 
 def _server_contract_version(source: str) -> str:
     match = re.search(r'CONTRACT_VERSION\s*=\s*"([^"]+)"', source)
-    assert match, "could not find CONTRACT_VERSION in src/contract.ts"
+    assert match, "could not find CONTRACT_VERSION in server/contracts/contract.ts"
     return match.group(1)
 
 
@@ -1897,8 +1902,8 @@ def _server_required_tools(source: str) -> set[str]:
 
 def test_required_contract_matches_server_source_of_truth():
     # Guards against silent drift between the Python snapshot and the server's
-    # canonical src/contract.ts. A server version bump or tool change must fail
-    # here, forcing both sides to update in one PR.
+    # canonical server/contracts/contract.ts. A server version bump or tool
+    # change must fail here, forcing both sides to update in one PR.
     source = _server_contract_source()
 
     assert CURRENT_CONTRACT_VERSION == _server_contract_version(source)

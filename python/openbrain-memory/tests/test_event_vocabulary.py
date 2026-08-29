@@ -126,7 +126,7 @@ def test_mcp_tool_schema_matches_python() -> None:
     client had every reason to believe was valid, and a value missing here is
     unreachable through the tool even though the server would accept it.
     """
-    source = (REPO_ROOT / "src" / "contract-schemas.ts").read_text()
+    source = (REPO_ROOT / "server" / "contracts" / "schemas-events.ts").read_text()
     # Anchor on this property's own `values: [`, found by seeking forward from
     # the `event_type` key. A bare `values: [` matches a different enum earlier
     # in the file, and anchoring on `event_type: {` alone picks up the
@@ -237,7 +237,9 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         "python/openbrain-memory/src/openbrain_memory/agent.py",
         "clients/ts/src/runtime.ts",
         "src/agent-memory.ts",
-        "src/contract-schemas.ts",
+        # Moved here from `src/contract-schemas.ts` by issue 864; the old path
+        # is a re-export shim.
+        "server/contracts/schemas-events.ts",
         "src/tiering.ts",
         # Moved here from `src/tools/table-constants.ts` by issue 864. The old
         # path keeps a re-export shim, which declares no member names and so
