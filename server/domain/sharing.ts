@@ -13,7 +13,7 @@
  * server enforces the same redaction surface the client already trusts.
  */
 
-import { logger } from "../../src/observability/index.ts";
+import { logger } from "../observability/log-surface.ts";
 
 /** Default minimum trimmed content length for a share-eligible entry. */
 export const DEFAULT_MIN_SHARE_LENGTH = 24;
