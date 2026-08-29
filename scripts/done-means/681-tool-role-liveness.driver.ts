@@ -8,7 +8,7 @@
  * ---------------------------------------------------------------------------
  * `server/capture/liveness-observer.ts` seeded `EXPECTED_ROLES =
  * ["user","assistant"]` while the server accepts three roles
- * (`server/tools/ingest-raw-turn.ts:24`, `z.enum(["user","assistant","tool"])`,
+ * (`server/capture/ingest-raw-turn.ts`, `z.enum(["user","assistant","tool"])`,
  * and the column's own `CHECK (role IN ('user','assistant','tool'))` at
  * `src/db/migrations/032_raw_turns.sql:99-100`).
  *
@@ -66,7 +66,7 @@
  * Clause (e) is a source-level assertion by necessity and is paired with the
  * behavioural clauses, never a substitute: it pins that the enum was not simply
  * duplicated a fourth time, by asserting the two remaining role-set copies in
- * the tree (`src/tools/ingest-raw-turn.ts`, the migration CHECK) agree with the
+ * the tree (`server/capture/ingest-raw-turn.ts`, the migration CHECK) agree with the
  * derived set. Drift between them is the defect class, so the check reads them.
  *
  * No database. No network. No wall-clock verdict (round 5, #632/#634).
@@ -139,22 +139,37 @@ interface ObserverModule {
     options: { autoStart: boolean },
   ) => {
     refresh: () => Promise<void>;
-    reading: () => { stale: boolean; silent_roles: string[]; reason: string } | undefined;
+    reading: () =>
+      { stale: boolean; silent_roles: string[]; reason: string } | undefined;
     observation: () => { turnsByRole: Record<string, number> } | undefined;
   };
 }
 
-async function main(): Promise<void> {
-  // ---------------------------------------------------------------------
-  // Load the subject. A resolution failure is REPORTED as a failing clause,
-  // never allowed to kill the driver before any clause prints (round 18).
-  // ---------------------------------------------------------------------
-  let observerModule: ObserverModule | undefined;
+type LivenessReading =
+  { stale: boolean; silent_roles: string[]; reason: string } | undefined;
+
+interface LaneReading {
+  reading: LivenessReading;
+  roles: string[];
+}
+
+type FixtureRows = ReadonlyArray<{
+  role: string;
+  turns: string;
+  sessions: string;
+  seconds_since_last: string | null;
+}>;
+
+/**
+ * Load the subject. A resolution failure is REPORTED as a failing clause,
+ * never allowed to kill the driver before any clause prints (round 18).
+ */
+async function loadObserver(): Promise<ObserverModule | undefined> {
   try {
-    observerModule = (await import(
-      "../../server/capture/liveness-observer.ts"
-    )) as unknown as ObserverModule;
+    const observerModule =
+      (await import("../../server/capture/liveness-observer.ts")) as unknown as ObserverModule;
     clause("load", true, "server/capture/liveness-observer.ts imported");
+    return observerModule;
   } catch (error: unknown) {
     clause(
       "load",
@@ -163,38 +178,40 @@ async function main(): Promise<void> {
         error instanceof Error ? error.name : typeof error
       }`,
     );
+    return undefined;
   }
+}
 
-  /** Drive the shipped gatherer over a fixture lane. */
-  async function read(
-    rows: ReadonlyArray<{
-      role: string;
-      turns: string;
-      sessions: string;
-      seconds_since_last: string | null;
-    }>,
-  ): Promise<{
-    reading: { stale: boolean; silent_roles: string[]; reason: string } | undefined;
-    roles: string[];
-  }> {
-    if (observerModule === undefined) return { reading: undefined, roles: [] };
-    const subject = observerModule.createCaptureLivenessObserver(
-      { pool: poolReturning(rows), logger: quietLogger(), window: WINDOW },
-      { autoStart: false },
-    );
-    await subject.refresh();
-    return {
-      reading: subject.reading(),
-      roles: Object.keys(subject.observation()?.turnsByRole ?? {}).sort(),
-    };
-  }
+/** Drive the shipped gatherer over a fixture lane. */
+async function readLane(
+  observerModule: ObserverModule | undefined,
+  rows: FixtureRows,
+): Promise<LaneReading> {
+  if (observerModule === undefined) return { reading: undefined, roles: [] };
+  const subject = observerModule.createCaptureLivenessObserver(
+    { pool: poolReturning(rows), logger: quietLogger(), window: WINDOW },
+    { autoStart: false },
+  );
+  await subject.refresh();
+  return {
+    reading: subject.reading(),
+    roles: Object.keys(subject.observation()?.turnsByRole ?? {}).sort(),
+  };
+}
 
-  // ---------------------------------------------------------------------
-  // (a) THE ISSUE'S OWN DONE-MEANS, verbatim: a dead `tool` role beside a
-  //     live user/assistant must produce stale=true silent_roles=[tool].
-  //     This is the clause that was RED on the pre-change tree.
-  // ---------------------------------------------------------------------
-  const dead = await read(DEAD_TOOL_LANE);
+/**
+ * (a) THE ISSUE'S OWN DONE-MEANS, verbatim: a dead `tool` role beside a
+ *     live user/assistant must produce stale=true silent_roles=[tool].
+ *     This is the clause that was RED on the pre-change tree.
+ * (b) The REASON names the role. A verdict an operator cannot act on is the
+ *     dead-end-error class (round 15): the fault text must say which role
+ *     went silent, not merely that something did.
+ * (c) The role is SEEDED, i.e. present as a key at zero, not merely absent.
+ *     Asserting the verdict alone would pass for an implementation that
+ *     special-cased the string "tool" in the judge while leaving the fold
+ *     blind — the seed is the mechanism under test.
+ */
+function checkDeadToolLane(dead: LaneReading): void {
   clause(
     "a",
     dead.reading?.stale === true &&
@@ -204,48 +221,40 @@ async function main(): Promise<void> {
     )} (want stale=true ["tool"])`,
   );
 
-  // ---------------------------------------------------------------------
-  // (b) The REASON names the role. A verdict an operator cannot act on is the
-  //     dead-end-error class (round 15): the fault text must say which role
-  //     went silent, not merely that something did.
-  // ---------------------------------------------------------------------
   clause(
     "b",
     typeof dead.reading?.reason === "string" && dead.reading.reason.includes("tool"),
     `reason names the silent role: ${JSON.stringify(dead.reading?.reason ?? null)}`,
   );
 
-  // ---------------------------------------------------------------------
-  // (c) The role is SEEDED, i.e. present as a key at zero, not merely absent.
-  //     Asserting the verdict alone would pass for an implementation that
-  //     special-cased the string "tool" in the judge while leaving the fold
-  //     blind — the seed is the mechanism under test.
-  // ---------------------------------------------------------------------
   clause(
     "c",
     JSON.stringify(dead.roles) === JSON.stringify(["assistant", "tool", "user"]),
     `observation seeds every accepted role: ${JSON.stringify(dead.roles)}`,
   );
+}
 
-  // ---------------------------------------------------------------------
-  // (d) DERIVATION — the load-bearing clause, proven by MUTATION.
-  //
-  //     A hardcoded ["user","assistant","tool"] satisfies (a),(b),(c) and
-  //     rebuilds this exact issue for role four. So: extend the ingest role
-  //     enum at runtime and re-drive the observer. A DERIVED seed grows with
-  //     it; a retyped literal cannot, however many roles it lists.
-  //
-  //     The mutation is applied to the module the observer derives FROM, and
-  //     the observer is re-imported with a cache-busting query so the fold
-  //     re-reads it. If the seed is a frozen literal captured at module load,
-  //     this clause fails — which is the whole point.
-  // ---------------------------------------------------------------------
+/**
+ * (d) DERIVATION — the clause this issue turns on, proven by MUTATION.
+ *
+ *     A hardcoded ["user","assistant","tool"] satisfies (a),(b),(c) and
+ *     rebuilds this exact issue for role four. So: extend the ingest role
+ *     enum at runtime and re-drive the observer. A DERIVED seed grows with
+ *     it; a retyped literal cannot, however many roles it lists.
+ *
+ *     The mutation is applied to the module the observer derives FROM, and
+ *     the observer is re-imported with a cache-busting query so the fold
+ *     re-reads it. If the seed is a frozen literal captured at module load,
+ *     this clause fails — which is the whole point.
+ */
+async function checkDerivation(dead: LaneReading): Promise<void> {
   let derivationDetail = "no derived role source exported by the ingest boundary";
   let derived = false;
   try {
-    const roleModule = (await import(
-      "../../server/domain/raw-turn-roles.ts"
-    )) as unknown as { RAW_TURN_ROLES: readonly string[] };
+    const roleModule =
+      (await import("../../server/domain/raw-turn-roles.ts")) as unknown as {
+        RAW_TURN_ROLES: readonly string[];
+      };
     const exported = [...roleModule.RAW_TURN_ROLES].sort();
     const matchesEnum =
       JSON.stringify(exported) === JSON.stringify(["assistant", "tool", "user"]);
@@ -253,8 +262,7 @@ async function main(): Promise<void> {
     // The observer must seed from THIS set, not from a copy of it. Proven by
     // asking the gatherer for the roles it seeds and comparing to the exported
     // members — set equality, so an extra hardcoded role also fails.
-    const seededMatchesSource =
-      JSON.stringify(dead.roles) === JSON.stringify(exported);
+    const seededMatchesSource = JSON.stringify(dead.roles) === JSON.stringify(exported);
 
     derived = matchesEnum && seededMatchesSource;
     derivationDetail = `exported=${JSON.stringify(exported)} seeded=${JSON.stringify(
@@ -265,16 +273,22 @@ async function main(): Promise<void> {
       error instanceof Error ? error.name : typeof error
     }`;
   }
-  clause("d", derived, `expected roles derive from one exported source — ${derivationDetail}`);
+  clause(
+    "d",
+    derived,
+    `expected roles derive from one exported source — ${derivationDetail}`,
+  );
+}
 
-  // ---------------------------------------------------------------------
-  // (e) NO FOURTH COPY. The defect is drift between copies of the role set,
-  //     so the check reads the remaining copies in the tree and requires them
-  //     to agree: the legacy ingest schema and the column's own CHECK.
-  //     A fix that adds a fourth retyped list has not removed the drift.
-  // ---------------------------------------------------------------------
+/**
+ * (e) NO FOURTH COPY. The defect is drift between copies of the role set,
+ *     so the check reads the remaining copies in the tree and requires them
+ *     to agree: the legacy ingest schema and the column's own CHECK.
+ *     A fix that adds a fourth retyped list has not removed the drift.
+ */
+function checkRemainingCopies(): void {
   const legacyIngest = readFileSync(
-    join(REPO_ROOT, "src/tools/ingest-raw-turn.ts"),
+    join(REPO_ROOT, "server/capture/ingest-raw-turn.ts"),
     "utf8",
   );
   const migration = readFileSync(
@@ -293,14 +307,23 @@ async function main(): Promise<void> {
       legacyHasThree,
     )} migration_check=${String(migrationHasThree)}`,
   );
+}
 
-  // ---------------------------------------------------------------------
-  // (f) CONTROL — HEALTHY. All three roles delivering stays green with
-  //     silent_roles empty. A check that fails everywhere proves only that it
-  //     fails (round 13); this clause PASSES on the pre-change tree by design,
-  //     and it is what stops the fix being "always report tool as silent".
-  // ---------------------------------------------------------------------
-  const healthy = await read(HEALTHY_THREE_ROLE_LANE);
+/**
+ * (f) CONTROL — HEALTHY. All three roles delivering stays green with
+ *     silent_roles empty. A check that fails everywhere proves only that it
+ *     fails (round 13); this clause PASSES on the pre-change tree by design,
+ *     and it is what stops the fix being "always report tool as silent".
+ * (g) CONTROL — ABSENCE IS NOT STALENESS survives the wider seed. An empty
+ *     window must still publish NOTHING rather than three silent roles.
+ *     Seeding more roles makes this regression easier to write, not harder:
+ *     a seed applied before the no-rows guard would turn every quiet window
+ *     into a three-role fault on every deployment. Rounds 8 and 13.
+ */
+async function checkHealthyControls(
+  observerModule: ObserverModule | undefined,
+): Promise<void> {
+  const healthy = await readLane(observerModule, HEALTHY_THREE_ROLE_LANE);
   clause(
     "f",
     healthy.reading?.stale === false &&
@@ -310,14 +333,7 @@ async function main(): Promise<void> {
     )} silent_roles=${JSON.stringify(healthy.reading?.silent_roles)}`,
   );
 
-  // ---------------------------------------------------------------------
-  // (g) CONTROL — ABSENCE IS NOT STALENESS survives the wider seed. An empty
-  //     window must still publish NOTHING rather than three silent roles.
-  //     Seeding more roles makes this regression easier to write, not harder:
-  //     a seed applied before the no-rows guard would turn every quiet window
-  //     into a three-role fault on every deployment. Rounds 8 and 13.
-  // ---------------------------------------------------------------------
-  const empty = await read([]);
+  const empty = await readLane(observerModule, []);
   clause(
     "g",
     empty.reading === undefined,
@@ -325,13 +341,17 @@ async function main(): Promise<void> {
       empty.reading === undefined ? "undefined" : JSON.stringify(empty.reading)
     }`,
   );
+}
 
-  // ---------------------------------------------------------------------
-  // (h) The #447 shape still fires — a dead ASSISTANT beside a live user and
-  //     tool. The original two-role behaviour must not regress while the third
-  //     is added, and a seed rebuilt as "tool only" would fail here.
-  // ---------------------------------------------------------------------
-  const deadAssistant = await read([
+/**
+ * (h) The #447 shape still fires — a dead ASSISTANT beside a live user and
+ *     tool. The original two-role behaviour must not regress while the third
+ *     is added, and a seed rebuilt as "tool only" would fail here.
+ */
+async function checkPriorShapeUnregressed(
+  observerModule: ObserverModule | undefined,
+): Promise<void> {
+  const deadAssistant = await readLane(observerModule, [
     { role: "user", turns: "300", sessions: "9", seconds_since_last: "12" },
     { role: "tool", turns: "900", sessions: "9", seconds_since_last: "5" },
   ]);
@@ -344,7 +364,10 @@ async function main(): Promise<void> {
       deadAssistant.reading?.stale,
     )} silent_roles=${JSON.stringify(deadAssistant.reading?.silent_roles)}`,
   );
+}
 
+/** Print the summary and exit with the verdict. */
+function report(): void {
   const failed = results.filter((r) => !r.ok);
   console.log("");
   console.log(
@@ -356,7 +379,16 @@ async function main(): Promise<void> {
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
-// A top-level `await main()` with no `.catch` EXITS 0 when it throws — a
+async function main(): Promise<void> {
+  const observerModule = await loadObserver();
+  const dead = await readLane(observerModule, DEAD_TOOL_LANE);
+  checkDeadToolLane(dead);
+  await checkDerivation(dead);
+  checkRemainingCopies();
+  await checkHealthyControls(observerModule);
+  await checkPriorShapeUnregressed(observerModule);
+  report();
+}
 // crashing subject banks a false GREEN (round 13, SME order 67).
 main().catch((error: unknown) => {
   console.log(

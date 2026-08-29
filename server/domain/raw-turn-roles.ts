@@ -24,7 +24,7 @@
  * tree (`server/`). Two further copies of the same set exist and are pinned by
  * a drift test rather than folded in here:
  *
- *   - `src/tools/ingest-raw-turn.ts` — the legacy tree's own schema. The two
+ *   - `server/capture/ingest-raw-turn.ts` — the legacy tree's own schema. The two
  *     trees are deliberately separate (core01 runs one, the local dogfood
  *     service the other, per `AGENTS.md`), and reaching across to import a
  *     serving-tree module into it would couple them in the direction this repo

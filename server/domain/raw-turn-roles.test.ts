@@ -37,7 +37,7 @@ describe("raw turn role set", () => {
     // separate (core01 serves one, the local dogfood service the other). It may
     // not drift from this one: a turn accepted by one and rejected by the other
     // is a capture loss that depends on which host received it.
-    const legacy = read("src/tools/ingest-raw-turn.ts");
+    const legacy = read("server/capture/ingest-raw-turn.ts");
     const match = legacy.match(/role:\s*z\.enum\(\[([^\]]*)\]\)/);
     expect(match).not.toBeNull();
     const roles = (match?.[1] ?? "")

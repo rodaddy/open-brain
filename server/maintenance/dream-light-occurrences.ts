@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import { isHarnessNoise } from "../../src/tools/ingest-raw-turn.ts";
+import { isHarnessNoise } from "../capture/ingest-raw-turn.ts";
 import { isCountable, MAX_SESSION_REFS } from "./dream-light.ts";
 
 /** One unswept raw turn, as claimed by a Light sweep. */
