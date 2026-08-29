@@ -213,6 +213,10 @@ function createServerFactory(input: {
       searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
       ftsCorpusConfig: config.fts.corpusConfig,
       promotionKillSwitch: config.promotion.killSwitch,
+      // The DROP_COLLECTOR_* overrides the L5 move lifted out of the collector.
+      // Without this fill the server runtime would silently run on
+      // DEFAULT_DROP_COLLECTOR_BOUNDS no matter what the deployment set.
+      dropCollectorBounds: config.dropCollector,
       // `config.qmd.path` is the validated parse of QMD_PATH (blank reads as
       // absent, `server/config/env-groups.ts:188,304`), so the handler no longer
       // needs an env record at all. Spread rather than assigned because the key

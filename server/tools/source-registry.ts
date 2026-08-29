@@ -35,7 +35,7 @@ import {
 import {
   collectDropFolder,
   type CollectDropFolderResult,
-} from "../../src/drop-folder-collector.ts";
+} from "../capture/drop-folder-collector.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 
@@ -489,6 +489,9 @@ function registerCollectDropFolder(
           { pool: dependencies.pool, embedFn: dependencies.embedFn },
           registryAuth(identity),
           args,
+          dependencies.dropCollectorBounds
+            ? { bounds: dependencies.dropCollectorBounds }
+            : {},
         );
         dependencies.logger.info(
           {

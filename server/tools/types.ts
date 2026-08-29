@@ -1,3 +1,4 @@
+import type { DropCollectorBounds } from "../capture/drop-folder-contract.ts";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
@@ -87,6 +88,16 @@ export interface MemoryToolDependencies {
    * when the service read it itself.
    */
   readonly promotionKillSwitch?: boolean;
+
+  /**
+   * Scan bounds for the drop-folder collector.
+   *
+   * The collector moved under `server/` (issue 864, L5) and no longer reads
+   * `DROP_COLLECTOR_*` itself, so the values arrive from the composition
+   * root. Absent means the collector uses its documented defaults, which is
+   * what an unset environment produced when it read them itself.
+   */
+  readonly dropCollectorBounds?: DropCollectorBounds;
 }
 
 export interface McpAuthInfo {

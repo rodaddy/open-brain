@@ -34,11 +34,13 @@ import {
 } from "./config/env-groups.ts";
 import {
   doctorGroup,
+  dropCollectorGroup,
   embeddingGroup,
   mcpAuditGroup,
   promotionGroup,
   srcReaderEnvironmentFields,
   type DoctorConfigGroup,
+  type DropCollectorBounds,
   type EmbeddingConfigGroup,
   type McpAuditConfigGroup,
   type PromotionConfigGroup,
@@ -271,6 +273,8 @@ export interface ServerConfig {
   readonly promotion: PromotionConfigGroup;
   readonly mcpAudit: McpAuditConfigGroup;
   readonly doctor: DoctorConfigGroup;
+  /** Scan bounds for the drop-folder collector — `server/capture/`. */
+  readonly dropCollector: DropCollectorBounds;
 }
 
 export interface ConfigIssue {
@@ -400,6 +404,7 @@ function buildConfig(
     promotion: promotionGroup(parsed),
     mcpAudit: mcpAuditGroup(parsed),
     doctor: doctorGroup(parsed),
+    dropCollector: dropCollectorGroup(parsed),
   };
 }
 
