@@ -40,7 +40,7 @@ BANNED_MACHINERY='describe\.skip|skipIf|dbDescribe'
 # self-skipping this program removes.
 CLAUSE_B_ALLOWED='tests/enforcement.test.ts'
 CLAUSE_C_FILE='src/tools/__tests__/append-session-event.pg.test.ts'
-CLAUSE_C_LOG='/Volumes/ThunderBolt/_tmp/open-brain/_scratch/session13/878-clause-c.log'
+CLAUSE_C_LOG="${OPENBRAIN_SCRATCH:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}/done-means-878/clause-c.log"
 HARD_FAIL_STRING='test_database_required'
 
 SUBJECT="$(git ls-files -- '*.test.ts' | rg -v '^scripts/test-support/' || true)"
