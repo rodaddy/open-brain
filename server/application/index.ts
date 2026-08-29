@@ -11,7 +11,7 @@ import {
   readCaptureLiveness,
   type CaptureObservation,
 } from "../capture/liveness-observer.ts";
-import type { MaintenanceJobHandler } from "../../src/maintenance-queue.ts";
+import type { MaintenanceJobHandler } from "../maintenance/maintenance-queue-runner.ts";
 import {
   createSingleWorkerTransportApp,
   createSessionTransportHandlers,
@@ -152,9 +152,7 @@ function composeSessions(
     config: input.config.transport,
     logger: transportLogger,
     serverFactory: input.serverFactory,
-    ...(input.transportFactory
-      ? { transportFactory: input.transportFactory }
-      : {}),
+    ...(input.transportFactory ? { transportFactory: input.transportFactory } : {}),
   });
 }
 
@@ -211,8 +209,7 @@ function composeHealth(
     // config makes the degraded case reachable; an explicit `natsHealth` still
     // wins, because a LIVE bridge knows its own failure counters and config
     // cannot.
-    natsHealth:
-      input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
+    natsHealth: input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
     producerHealth: readProducerHealth,
     // #652. The reading #648 built and nothing composed. Same LATE-BINDING as
     // `producerHealth` above and for the same reason: the closure is invoked

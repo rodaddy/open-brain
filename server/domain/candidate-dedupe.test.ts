@@ -33,7 +33,7 @@ import {
   runCandidateDedupe,
 } from "./candidate-dedupe.ts";
 import { DEFAULT_DUP_THRESHOLD } from "../../src/tiering.ts";
-import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
+import type { MaintenanceQueueLogger } from "../maintenance/maintenance-queue-runner.ts";
 
 const silentLogger: MaintenanceQueueLogger = {
   info: () => {},
