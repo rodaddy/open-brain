@@ -57,6 +57,7 @@ function ambientOptions(): OperatorDoctorOptions {
     rotationConfigured:
       Boolean(process.env.LOG_MAX_BYTES) || Boolean(process.env.LOG_MAX_FILES),
     rawTurnTtlSeconds: readDistillationLagTtlSeconds(),
+    ...(process.env.QMD_PATH !== undefined ? { qmdPath: process.env.QMD_PATH } : {}),
     ...(process.env.QMD_INDEX_PATH !== undefined
       ? { qmdIndexPath: process.env.QMD_INDEX_PATH, qmdIndexPathSource: "env" as const }
       : {}),

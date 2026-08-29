@@ -394,6 +394,7 @@ function composeApplication(input: {
         fileLogConfigured: Boolean(config.logging.file?.trim()),
         rotationConfigured: config.doctor.rotationConfigured,
         rawTurnTtlSeconds: config.doctor.rawTurnTtlSeconds,
+        ...(config.qmd.path !== undefined ? { qmdPath: config.qmd.path } : {}),
         ...(config.doctor.qmdIndexPath !== undefined
           ? { qmdIndexPath: config.doctor.qmdIndexPath }
           : {}),
