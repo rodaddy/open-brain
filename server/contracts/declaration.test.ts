@@ -9,7 +9,7 @@
  * has no failing input, which is exactly why nothing caught it.
  */
 import { describe, expect, test } from "bun:test";
-import { buildContract } from "../../src/contract.ts";
+import { buildContract } from "./contract.ts";
 import {
   contractRequiredTools,
   evaluateRewriteContractSatisfaction,
@@ -34,8 +34,7 @@ describe("serverContractDeclaration", () => {
     // not quietly change what the rewrite tells downstream clients.
     expect(serverContractDeclaration(GENERATED_AT)).toEqual({
       contractVersion: "2026-08-09.memory-tools.v24",
-      schemaHash:
-        "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c",
+      schemaHash: "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c",
     });
   });
 });

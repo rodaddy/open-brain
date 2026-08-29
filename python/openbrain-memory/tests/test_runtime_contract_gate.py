@@ -26,7 +26,12 @@ from ._runtime_fakes import (
 
 def test_runtime_tool_versions_match_server_contract_source() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    source = (repo_root / "src" / "contract-schemas.ts").read_text(encoding="utf-8")
+    # Issue 864 split `src/contract-schemas.ts` into `server/contracts/schemas-*.ts`;
+    # the runtime tools are spread across those siblings, so read them all.
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((repo_root / "server" / "contracts").glob("schemas-*.ts"))
+    )
     actual: dict[str, int] = {}
     for tool_name in FIRST_CLASS_RUNTIME_TOOL_VERSIONS:
         # Comment lines are allowed between the tool key and its `version:`.
@@ -40,7 +45,9 @@ def test_runtime_tool_versions_match_server_contract_source() -> None:
             rf"\n  {tool_name}: \{{\n(?:\s*(?://.*)?\n)*    version: (\d+),",
             source,
         )
-        assert match, f"could not find {tool_name} version in src/contract-schemas.ts"
+        assert match, (
+            f"could not find {tool_name} version in server/contracts/schemas-*.ts"
+        )
         actual[tool_name] = int(match.group(1))
 
     assert dict(FIRST_CLASS_RUNTIME_TOOL_VERSIONS) == actual

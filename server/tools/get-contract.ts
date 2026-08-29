@@ -33,13 +33,18 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import { buildContract } from "../../src/contract.ts";
+import { buildContract } from "../contracts/contract.ts";
 import {
   contractRequiredTools,
   evaluateRewriteContractSatisfaction,
 } from "../contracts/declaration.ts";
 import { rewriteRegisteredTools } from "../contracts/registered-tools.ts";
-import { authIdentity, errorResult, textResult, type MemoryToolDependencies } from "./types.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
 
 export function registerGetContractTool(
   server: McpServer,
