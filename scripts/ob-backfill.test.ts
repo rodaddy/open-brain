@@ -48,6 +48,12 @@ const GROWTH_RATIO_MAX = 8;
 const TOKEN_DENSE_N = 12_000;
 const URL_DENSE_N = 4_000;
 
+// Per-test allowance for the two growth-shape scans. The self-hosted CI
+// runner measured the URL-dense scan at 5152, 6306, 6697, 6909 and 7637 ms
+// on 2026-08-29 (issue 962) against bun's 5000 ms default; the ratio
+// assertion never failed. About four times the 7637 ms tail.
+const GROWTH_SCAN_ALLOWANCE_MS = 30_000;
+
 const tokenDenseInput = (size: number): string =>
   Array.from({ length: size }, (_, index) => `Ab${index % 10}cd`).join(" ");
 
@@ -296,27 +302,35 @@ describe("ob-backfill sanitize wrapped secrets", () => {
 // The two growth-shape scans get their own describe so each body stays under
 // the length rule.
 describe("ob-backfill sanitize scan growth", () => {
-  it("scans token-dense transcripts, growing about linearly with input size", () => {
-    const small = measureSanitize(tokenDenseInput(TOKEN_DENSE_N));
-    const large = measureSanitize(tokenDenseInput(TOKEN_DENSE_N * 4));
+  it(
+    "scans token-dense transcripts, growing about linearly with input size",
+    () => {
+      const small = measureSanitize(tokenDenseInput(TOKEN_DENSE_N));
+      const large = measureSanitize(tokenDenseInput(TOKEN_DENSE_N * 4));
 
-    expect(small.sanitized).toContain("Ab0cd");
-    expect(large.sanitized).toContain("Ab0cd");
+      expect(small.sanitized).toContain("Ab0cd");
+      expect(large.sanitized).toContain("Ab0cd");
 
-    const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
-    expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
-  });
+      const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
+      expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
+    },
+    GROWTH_SCAN_ALLOWANCE_MS,
+  );
 
-  it("scans URL-dense transcripts, growing about linearly with input size", () => {
-    const small = measureSanitize(urlDenseInput(URL_DENSE_N));
-    const large = measureSanitize(urlDenseInput(URL_DENSE_N * 4));
+  it(
+    "scans URL-dense transcripts, growing about linearly with input size",
+    () => {
+      const small = measureSanitize(urlDenseInput(URL_DENSE_N));
+      const large = measureSanitize(urlDenseInput(URL_DENSE_N * 4));
 
-    expect(small.sanitized).toContain("https://example.com/0");
-    expect(large.sanitized).toContain("https://example.com/0");
+      expect(small.sanitized).toContain("https://example.com/0");
+      expect(large.sanitized).toContain("https://example.com/0");
 
-    const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
-    expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
-  });
+      const ratio = large.elapsedMs / Math.max(small.elapsedMs, 1);
+      expect(ratio).toBeLessThan(GROWTH_RATIO_MAX);
+    },
+    GROWTH_SCAN_ALLOWANCE_MS,
+  );
 });
 
 describe("ob-backfill decision params", () => {
