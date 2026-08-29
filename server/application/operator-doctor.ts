@@ -23,7 +23,7 @@ import {
 import { checkPoolHealth } from "../db/legacy-pool.ts";
 import { logger } from "../../src/logger.ts";
 import { describeError } from "../../src/observability/index.ts";
-import type { NatsBridgeHealth } from "../../src/nats-bridge.ts";
+import type { NatsBridgeHealth } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
 import { isRequestedTransportDegraded } from "../../src/nats-runtime.ts";
 import {
@@ -43,7 +43,7 @@ import {
 } from "./operator-doctor-probes.ts";
 
 export * from "./operator-doctor-types.ts";
-export type { NatsBridgeHealth } from "../../src/nats-bridge.ts";
+export type { NatsBridgeHealth } from "./nats-bridge.ts";
 export {
   probeUrl,
   withTimeout,
