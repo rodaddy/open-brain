@@ -451,3 +451,27 @@ only when a session actually needed it.
     deletion is verified by `wc -l`, never by the exit code. A verbatim move
     plus hoisting can still exceed `max-lines`: shorten the hoisted names,
     factor repeated mock rows, then reuse the helper module's `withToolClient`.
+62. **A done-means clause that greps a source line anchors on the formatter's
+    output or a semantic token, never on a hand-typed multi-token line.** The
+    session-13 #962 brief named the literal closer `}, GROWTH_SCAN_ALLOWANCE_MS);`;
+    the pre-commit prettier pass expands a three-argument `it()` onto separate
+    lines and deletes that string, which voids the checker itself, not only a
+    receipt. Run prettier on the edited file before writing the clause, and
+    re-take RED, the deliberate miss, and GREEN on the committed tree (#964).
+    A committed check that writes a log names its path as
+    `${OPENBRAIN_SCRATCH:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}/done-means-<n>/`
+    (precedent `433-recall-sees-session-events.sh:140`), never a session folder
+    (#963 follow-up be57927).
+63. **`aqmd in <repo>` from a lane clone is broken since #960 (#965).** The
+    scope resolves from the cwd before the alias (`_ob/bin/aqmd:750-763`), a
+    clone's parent has no catalogue, and the fallback tries to build a private
+    index there. Until #965 is settled a clone brief names the Read-tool route
+    the design-lookup hook also accepts: Read one `docs/decisions/*.md` file
+    before the first edit. `aqmd search` and `aqmd up` stay root-only (rule 51).
+64. **A red check with its one rerun spent gets a fix lane per rule 45, then
+    the blocked PR is rebased onto the fix from a clean clone.** #961 sat red
+    on the #962 growth-scan timeout after its rerun; the allowance lane (#964)
+    merged first, then `git rebase origin/main` and
+    `git push --force-with-lease origin <branch>` from lane-11 gave #961 a
+    check job that ran with the fix, and it merged green. The root checkout
+    never pushes (rule 53), and a hand merge on red is never the answer (rule 52).
