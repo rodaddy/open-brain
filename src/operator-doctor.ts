@@ -1,7 +1,7 @@
 // L5 adapter (issue 864): legacy call form over server/application/operator-doctor.ts; retired with src/ at L6.
 import type pg from "pg";
-import type { NatsBridgeHealth } from "./nats-bridge.ts";
-import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
+import type { NatsBridgeHealth } from "../server/application/operator-doctor.ts";
+import type { NatsRuntimeBoundary } from "../server/application/nats-runtime.ts";
 import {
   buildOperatorDoctorStatus as buildStatus,
   getOperatorDoctorStatus as getStatus,

@@ -43,6 +43,7 @@ import {
 } from "./operator-doctor-probes.ts";
 
 export * from "./operator-doctor-types.ts";
+export type { NatsBridgeHealth } from "../../src/nats-bridge.ts";
 export {
   probeUrl,
   withTimeout,
