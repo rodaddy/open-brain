@@ -1,6 +1,6 @@
 import { describe, expect, test, mock } from "bun:test";
 import { buildTokenMap, verifyToken, authMiddleware } from "./auth.ts";
-import type { AuthInfo } from "./types.ts";
+import type { AuthInfo } from "../../src/types.ts";
 
 // Helper: create mock Express req/res/next
 function mockReq(headers: Record<string, string> = {}) {
@@ -30,6 +30,23 @@ function mockRes() {
     },
   };
   return res;
+}
+
+/**
+ * Call the middleware with the mock req/res. The mocks carry only the fields the
+ * middleware reads, so the widening to the Express types happens once, here.
+ */
+function invokeMiddleware(
+  middleware: ReturnType<typeof authMiddleware>,
+  req: ReturnType<typeof mockReq>,
+  res: ReturnType<typeof mockRes>,
+  next: () => void,
+): void {
+  (middleware as unknown as (r: unknown, s: unknown, n: () => void) => void)(
+    req,
+    res,
+    next,
+  );
 }
 
 describe("buildTokenMap", () => {
@@ -154,7 +171,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toEqual({ error: "Missing Bearer token" });
@@ -166,7 +183,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toEqual({ error: "Missing Bearer token" });
@@ -178,21 +195,32 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toEqual({ error: "Invalid token" });
     expect(next).not.toHaveBeenCalled();
   });
+});
+
+describe("authMiddleware identity and namespace delegation", () => {
+  const tokenMap = new Map<string, AuthInfo>([
+    ["valid-admin-token", { role: "admin", clientId: "admin" }],
+    ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
+  ]);
+
+  const middleware = authMiddleware(tokenMap);
 
   test("sets req.auth and calls next for valid admin token", () => {
     const req = mockReq({ authorization: "Bearer valid-admin-token" });
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
-    expect((req as any).auth).toEqual({
+    expect(req.auth).toEqual({
       role: "admin",
       clientId: "admin",
       tokenClientId: "admin",
@@ -207,9 +235,9 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
-    expect((req as any).auth).toEqual({
+    expect(req.auth).toEqual({
       role: "agent",
       clientId: "agent",
       tokenClientId: "agent",
@@ -229,9 +257,9 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
-    expect((req as any).auth).toEqual({
+    expect(req.auth).toEqual({
       role: "admin",
       clientId: "bilby",
       tokenClientId: "admin",
@@ -240,6 +268,17 @@ describe("authMiddleware", () => {
     });
     expect(next).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("authMiddleware refuses namespace delegation by role", () => {
+  const tokenMap = new Map<string, AuthInfo>([
+    ["valid-admin-token", { role: "admin", clientId: "admin" }],
+    ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
+  ]);
+
+  const middleware = authMiddleware(tokenMap);
 
   test("returns 403 when agent token sends X-Namespace", () => {
     const req = mockReq({
@@ -249,7 +288,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
@@ -264,7 +303,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({
@@ -281,7 +320,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
@@ -296,7 +335,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    middleware(req as any, res as any, next);
+    invokeMiddleware(middleware, req, res, next);
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toEqual({ error: "Invalid X-Namespace header" });
@@ -309,7 +348,7 @@ describe("authMiddleware", () => {
     const res = mockRes();
     const next = mock(() => {});
 
-    emptyMiddleware(req as any, res as any, next);
+    invokeMiddleware(emptyMiddleware, req, res, next);
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toEqual({ error: "Invalid token" });

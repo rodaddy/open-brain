@@ -11,7 +11,7 @@ import {
   resolveContextPackSubject,
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
-import { agentContextPackInputSchema } from "./tools/agent-context-pack.ts";
+import { agentContextPackInputSchema } from "../../src/tools/agent-context-pack.ts";
 
 const requestPayload = {
   operation: "agent_context_pack",
@@ -84,9 +84,8 @@ describe("fleet envelope codec", () => {
   it("warns but accepts a forward-compatible newer version", () => {
     const wire = { ...baseEnvelope, version: 2 };
     const warnings: number[] = [];
-    const parsed = envelopeFromBytes(
-      encoder.encode(JSON.stringify(wire)),
-      (v) => warnings.push(v),
+    const parsed = envelopeFromBytes(encoder.encode(JSON.stringify(wire)), (v) =>
+      warnings.push(v),
     );
     expect(parsed.version).toBe(2);
     expect(warnings).toEqual([2]);
@@ -108,9 +107,7 @@ describe("fleet envelope codec", () => {
 
   it("rejects an empty kind", () => {
     expect(() =>
-      envelopeFromBytes(
-        encoder.encode(JSON.stringify({ ...baseEnvelope, kind: "" })),
-      ),
+      envelopeFromBytes(encoder.encode(JSON.stringify({ ...baseEnvelope, kind: "" }))),
     ).toThrow(EnvelopeError);
   });
 
@@ -131,9 +128,7 @@ describe("fleet envelope codec", () => {
   });
 
   it("rejects undecodable bytes", () => {
-    expect(() => envelopeFromBytes(encoder.encode("{bad json"))).toThrow(
-      EnvelopeError,
-    );
+    expect(() => envelopeFromBytes(encoder.encode("{bad json"))).toThrow(EnvelopeError);
   });
 
   it("coerces non-string optional fields via _opt_str semantics", () => {
@@ -144,9 +139,7 @@ describe("fleet envelope codec", () => {
   });
 
   it("buildEnvelope rejects an empty from before it can be serialised", () => {
-    expect(() =>
-      buildEnvelope({ ...baseEnvelope, from: "" }),
-    ).toThrow(EnvelopeError);
+    expect(() => buildEnvelope({ ...baseEnvelope, from: "" })).toThrow(EnvelopeError);
   });
 });
 
@@ -162,9 +155,9 @@ describe("resolveContextPackSubject", () => {
   });
 
   it("slugs the env token (lowercase, spaces/dots -> hyphens)", () => {
-    expect(
-      resolveContextPackSubject({ OPENBRAIN_NATS_ENV: "Staging Lab.1" }),
-    ).toBe("staging-lab-1.ob.memory.context_pack");
+    expect(resolveContextPackSubject({ OPENBRAIN_NATS_ENV: "Staging Lab.1" })).toBe(
+      "staging-lab-1.ob.memory.context_pack",
+    );
   });
 
   it("honours the explicit subject override escape hatch", () => {
@@ -415,6 +408,10 @@ describe("planNatsContextPackBridge", () => {
 
     expect(plan.mcpToolCall.arguments.thread_id).toBe("thread-7");
   });
+});
+
+describe("planNatsContextPackBridge refuses out-of-contract requests", () => {
+  const subject = "dev.ob.memory.context_pack";
 
   it("rejects fallback planning when no bearer token is available", () => {
     const boundary = readNatsRuntimeBoundary({ OPENBRAIN_TRANSPORT: "nats" });

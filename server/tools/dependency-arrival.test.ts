@@ -32,7 +32,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import pino from "pino";
 import type { Pool } from "pg";
 import type { Role } from "../config.ts";
-import { readNatsRuntimeBoundary } from "../../src/nats-runtime.ts";
+import { readNatsRuntimeBoundary } from "../application/nats-runtime.ts";
 import { resetOperatorDoctorCache } from "../../src/operator-doctor.ts";
 import { registerMemoryTools } from "./index.ts";
 import type { MemoryToolDependencies } from "./types.ts";
@@ -71,8 +71,7 @@ async function clientFor(
     sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
     ...dependencies,
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options_) =>
     send(message, {
@@ -111,8 +110,7 @@ function onlyQuery(queries: readonly CapturedQuery[]): CapturedQuery {
 function payloadOf(result: unknown): Record<string, unknown> {
   const content = (result as { content?: Array<{ text?: string }> }).content;
   const text = content?.[0]?.text;
-  if (typeof text !== "string")
-    throw new Error("tool returned no text content");
+  if (typeof text !== "string") throw new Error("tool returned no text content");
   return JSON.parse(text) as Record<string, unknown>;
 }
 
@@ -242,12 +240,8 @@ describe("recoveryWalPath arrives at the fallback recovery WAL store", () => {
 
     expect(existsSync(firstPath)).toBe(true);
     expect(existsSync(secondPath)).toBe(true);
-    expect(readFileSync(firstPath, "utf8")).toContain(
-      '"content":"first-arrival"',
-    );
-    expect(readFileSync(secondPath, "utf8")).toContain(
-      '"content":"second-arrival"',
-    );
+    expect(readFileSync(firstPath, "utf8")).toContain('"content":"first-arrival"');
+    expect(readFileSync(secondPath, "utf8")).toContain('"content":"second-arrival"');
   });
 });
 
@@ -316,10 +310,7 @@ describe("natsRuntimeBoundary arrives at operator_doctor", () => {
  * @returns The absolute path to the stub.
  */
 function stubQmdEntryPoint(marker: string): string {
-  const path = join(
-    mkdtempSync(join(tmpdir(), "ob-arrival-qmd-")),
-    "qmd-stub.ts",
-  );
+  const path = join(mkdtempSync(join(tmpdir(), "ob-arrival-qmd-")), "qmd-stub.ts");
   writeFileSync(
     path,
     `console.log(JSON.stringify([{ path: ${JSON.stringify(marker)}, content: "stub hit", score: 0.9 }]));\n`,
@@ -353,11 +344,7 @@ describe("qmdPath arrives at the search_all qmd arm", () => {
   });
 
   test("no injected entry point leaves the qmd arm off rather than falling back to the environment", async () => {
-    const client = await clientFor(
-      { pool: capturingPool([]) },
-      "admin",
-      "operator",
-    );
+    const client = await clientFor({ pool: capturingPool([]) }, "admin", "operator");
 
     const result = await client.callTool({
       name: "search_all",

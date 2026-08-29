@@ -125,7 +125,7 @@ import type {
   BackgroundObservation,
   BackgroundTraceBody,
   BackgroundTraceEmitter,
-} from "../../src/background-tracing.ts";
+} from "../application/background-tracing.ts";
 import type { AuthInfo } from "../types.ts";
 
 /**
@@ -187,9 +187,7 @@ interface ActiveMcpTrace {
 const activeMcpTrace = new AsyncLocalStorage<ActiveMcpTrace>();
 
 /** Add trace-level metadata from inside the currently executing tool handler. */
-export function setActiveMcpTraceMetadata(
-  metadata: Record<string, unknown>,
-): void {
+export function setActiveMcpTraceMetadata(metadata: Record<string, unknown>): void {
   const active = activeMcpTrace.getStore();
   if (!active) return;
   Object.assign(active.metadata, metadata);
@@ -346,8 +344,7 @@ interface RetrievalSpanInput<T, R> {
 function recordRetrievalOutcome<T, R>(
   input: RetrievalSpanInput<T, R>,
   started: number,
-  outcome:
-    { status: "success"; result: T } | { status: "exception"; err: unknown },
+  outcome: { status: "success"; result: T } | { status: "exception"; err: unknown },
 ): void {
   const output =
     outcome.status === "success"
@@ -479,11 +476,7 @@ export function installMcpTracing(
   const tracker = sink.health;
 
   const original = server.registerTool.bind(server) as RegisterTool;
-  server.registerTool = ((
-    name: string,
-    configOrDescription: unknown,
-    cb?: unknown,
-  ) => {
+  server.registerTool = ((name: string, configOrDescription: unknown, cb?: unknown) => {
     if (typeof cb !== "function") {
       return (original as unknown as (...a: unknown[]) => unknown)(
         name,
@@ -543,9 +536,7 @@ export function installMcpTracing(
   return {
     active: true,
     shutdown: () =>
-      shared
-        ? Promise.resolve()
-        : shutdownSink(sink, logger, deps.shutdownTimeoutMs),
+      shared ? Promise.resolve() : shutdownSink(sink, logger, deps.shutdownTimeoutMs),
   };
 }
 
@@ -715,10 +706,7 @@ function createSinkSafely(
   try {
     return factory ? factory(config) : defaultSinkFactory(config, logger);
   } catch (err: unknown) {
-    logger.warn(
-      { error: tracingErrorLabel(err) },
-      "mcp_tool_tracing_sink_init_failed",
-    );
+    logger.warn({ error: tracingErrorLabel(err) }, "mcp_tool_tracing_sink_init_failed");
     return undefined;
   }
 }

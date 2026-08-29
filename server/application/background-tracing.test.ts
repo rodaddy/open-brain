@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
 import {
   BackgroundTraceRecorder,
   backgroundSessionId,
@@ -112,9 +113,13 @@ describe("BackgroundTraceRecorder", () => {
 
     expect(result).toBe("job-result");
     expect(emitter.bodies).toHaveLength(1);
-    expect(emitter.bodies[0]!.observations).toEqual([]);
+    expect(expectDefined(emitter.bodies[0], "emitted trace body").observations).toEqual(
+      [],
+    );
   });
+});
 
+describe("BackgroundTraceRecorder is best-effort", () => {
   test("a throwing emitter cannot fail finish()", () => {
     const trace = new BackgroundTraceRecorder(throwingEmitter(), {
       name: "best-effort-success",

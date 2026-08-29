@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { AuthIdentity } from "../auth/types.ts";
-import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
+import type { NatsRuntimeBoundary } from "../application/nats-runtime.ts";
 import type { FtsConfig } from "./fts-config.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { WorkingSetStore } from "../realtime/working-set.ts";

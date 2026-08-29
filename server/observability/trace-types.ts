@@ -5,7 +5,7 @@
  * (`langfuse-tracing.ts`) both need them, and a type-only module is what keeps
  * that from becoming an import cycle through the SDK.
  */
-import type { BackgroundObservation } from "../../src/background-tracing.ts";
+import type { BackgroundObservation } from "../application/background-tracing.ts";
 import type { SinkHealthTracker } from "./trace-sink-health.ts";
 
 export type McpTraceStatus = "success" | "error" | "exception";
