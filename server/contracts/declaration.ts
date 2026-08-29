@@ -1,4 +1,4 @@
-import { buildContract } from "../../src/contract.ts";
+import { buildContract } from "./contract.ts";
 import { rewriteRegisteredTools } from "./registered-tools.ts";
 
 export interface ServerContractDeclaration {
