@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: none
 Created: 2026-08-27T15:05:03Z
-Updated: 2026-08-27T15:05:03Z
+Updated: 2026-08-29T17:05:50Z
 
 ---
 
@@ -39,3 +39,17 @@ What differs between the two checkouts for these tests. Candidates not checked: 
 ## Why it matters
 
 The pre-push hook refuses a push from the root checkout, so a head pushing its own paperwork branch has to route through a lane clone. The rule already says lanes work in clones; this is the head's checkout disagreeing with them on the same tree.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-29T17:05:50Z
+
+Diagnosis, session 13 (State 4, read-only; lane finding re-run by the head, RUNNING):
+
+- Seam: `scripts/__tests__/bulk-import.test.ts:17` — a top-level `mock.module("../../src/logger.ts", ...)` replaces the logger module process-wide (Bun keys it by resolved specifier; `mock.restore()` does not undo it). The stub exports only `logger` with array-pushing `info/warn/error`, so nothing reaches `console.warn` (`src/logger.ts:539`), which is what the six assertions read: the `console.warn` spy blocks at `server/observability/langfuse-tracing.test.ts:324`, `:1250`, and the `outage alerts fire on state change only` describe at `:1298`. `src/observability/observability.test.ts:19-25`, `src/embedding-repair.test.ts:5-7`, and `scripts/backfill.test.ts:10` each carry a standing comment forbidding exactly this mock.
+- Reproducing pair, root checkout `/Volumes/ThunderBolt/Development/open-brain` at 92aed44a: `bun run test:isolated scripts/__tests__/bulk-import.test.ts server/observability/langfuse-tracing.test.ts` -> exit 1, `59 pass / 1 fail / 1 error`, `SyntaxError: Export named 'setLogContextReader' not found in module '.../src/logger.ts'` (the langfuse file fails to load against the stub). Stable across three runs (two by the lane, one by the head).
+- Same pair, same tree, clone `/Volumes/ThunderBolt/_tmp/open-brain/_worktrees/lane-11` at 92aed44a: exit 0, `129 pass / 0 fail` (lane run plus head re-run).
+- Ruled out: `bunfig.toml` identical (md5), bun 1.3.14 in both, `.env` key sets identical (earlier). Root's nested `node_modules/node_modules` (136 entries) is present only in root; whether it is what changes the mock's effect between the two checkouts is not established here.
+- Owning seam only; no fix proposed beyond naming it. Logs: `_scratch/session13/924-pair-{root,clone}.log`.

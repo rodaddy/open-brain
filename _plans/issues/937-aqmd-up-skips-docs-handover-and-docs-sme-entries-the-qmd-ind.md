@@ -7,7 +7,7 @@ State: OPEN
 Author: rodaddy
 Labels: bug
 Created: 2026-08-27T17:44:27Z
-Updated: 2026-08-27T17:44:44Z
+Updated: 2026-08-29T14:47:40Z
 
 ---
 
@@ -41,3 +41,11 @@ The rebuild rewrites `.qmd/index.yml`, the same tracked file whose three `models
 ## Ask
 
 Rico rules on `.qmd/index.yml`: commit the regenerated allowlist plus the fleet `models:` lines, or ignore the file, or something else. Then one `REGEN=1` run and a commit; a done-means check that greps `aqmd up` output for `NOT indexed` would keep it from drifting again.
+
+---
+
+## Discussion (1)
+
+### rodaddy — 2026-08-29T14:47:40Z
+
+Session 12 follow-up: the repo-local .qmd/index.yml is being retired (Rico 2026-08-28: the index is global now; PR on chore/retire-repo-qmd). The allowlist gap this issue names now lives in the Development catalogue: the open-brain card at /Volumes/ThunderBolt/Development/.qmd/index.yml:2879 lists no _DOCS/_handover/ or docs/sme/entries/ pattern. aqmd up prints the regen line for it: DEV=/Volumes/ThunderBolt/Development ONLY_REPO=open-brain REGEN=1 /Volumes/ThunderBolt/Development/_ob/bin/qmd-backfill. That is Development-repo work; close or keep stays Rico's call.
