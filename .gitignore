@@ -75,10 +75,10 @@ _reports/
 # Added by ggshield
 .cache_ggshield
 
-# qmd project-local search index: the database is rebuildable
-# and never committed; the allowlist config is tracked.
-.qmd/*
-!.qmd/index.yml
+# qmd: the index is ONE STORE, the Development catalogue
+# (/Volumes/ThunderBolt/Development/.qmd/index.yml, Rico ruling 2026-08-28);
+# a repo-local .qmd/ re-scopes aqmd to an empty config and is never tracked.
+.qmd/
 
 # Capture watermark store: the Python capture hooks default their SQLite
 # read-offset store to PACKAGE_ROOT/data/capture-watermarks.sqlite
