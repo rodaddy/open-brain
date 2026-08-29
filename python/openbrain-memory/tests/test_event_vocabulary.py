@@ -144,8 +144,12 @@ def test_tiering_union_matches_python() -> None:
 
 
 def test_table_constants_match_python() -> None:
-    """`src/tools/table-constants.ts` matches; it gates the SQL write path."""
-    source = (REPO_ROOT / "src" / "tools" / "table-constants.ts").read_text()
+    """`server/db/table-constants.ts` matches; it gates the SQL write path.
+
+    Moved out of `src/tools/` by issue 864. The old path is now a re-export
+    shim that declares nothing, so the anchor has to follow the declaration.
+    """
+    source = (REPO_ROOT / "server" / "db" / "table-constants.ts").read_text()
     found = _extract_quoted_block(source, "export const EVENT_TYPES = [")
     assert found == EVENT_TYPES, _drift("table-constants", found)
 
@@ -235,7 +239,10 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         "src/agent-memory.ts",
         "src/contract-schemas.ts",
         "src/tiering.ts",
-        "src/tools/table-constants.ts",
+        # Moved here from `src/tools/table-constants.ts` by issue 864. The old
+        # path keeps a re-export shim, which declares no member names and so
+        # never appears in this sweep -- listing it would weaken the census.
+        "server/db/table-constants.ts",
         # The port target's `EventType` StrEnum -- a seventh language-boundary
         # surface, sanctioned by `_plans/python-port-sequence.md` (THE WRITE
         # PATH: "the only openbrain_memory reference in the package today is a
