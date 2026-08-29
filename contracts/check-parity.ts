@@ -1,100 +1,23 @@
 import { SERVER_CONTRACT_PROVIDERS } from "./server-contract-providers.ts";
-
-type Runtime = "both" | "python" | "ts";
-type PythonStatus = "implemented";
-type TsStatus = "pending" | "implemented" | "runtime-specific";
-
-interface Fixture {
-  id: string;
-  description: string;
-  capability: string;
-  runtime: Runtime;
-  consumers: string[];
-  request: Record<string, unknown>;
-  expectation: Record<string, unknown>;
-}
-
-interface CapabilityEntry {
-  capability: string;
-  python: PythonStatus;
-  ts: TsStatus;
-  reason?: string;
-}
-
-interface ParityManifest {
-  id: string;
-  expected_fixture_ids: Record<string, Runtime>;
-  capabilities: CapabilityEntry[];
-  not_yet_extracted?: Array<{
-    capability: string;
-    scenario: string;
-    reason: string;
-  }>;
-}
-
-interface ServerFixture {
-  id: string;
-  description: string;
-  capability: string;
-  providers: string[];
-  auth: Record<string, unknown>;
-  steps: Array<{
-    tool: string;
-    arguments: Record<string, unknown>;
-    capture?: Record<string, unknown>;
-    expectation: Record<string, unknown>;
-  }>;
-}
-
-type ServerCapabilityStatus = "implemented" | "scaffold-declared";
-
-interface ServerParityManifest {
-  id: string;
-  expected_fixture_ids: string[];
-  providers: string[];
-  capabilities: string[];
-  provider_capability_status: Record<string, Record<string, ServerCapabilityStatus>>;
-}
-
-interface ServerToolGap {
-  tool: string;
-  capability: string;
-  reason: string;
-}
-
-interface ServerToolGapMap {
-  id: string;
-  source: string;
-  registered_tool_count: number;
-  fixture_covered_tool_count: number;
-  without_parity_fixture_count: number;
-  fixture_covered_tools: string[];
-  without_parity_fixture: ServerToolGap[];
-}
-
-const PLACEHOLDER_REASONS = new Set(["-", "n/a", "na", "none", "todo", "tbd"]);
-const CONSUMER_ALLOWLIST = new Set(["python", "ts"]);
+import {
+  CONSUMER_ALLOWLIST,
+  collectRegisteredTools,
+  isPlaceholderReason,
+  isRecord,
+  readJson,
+} from "./check-parity-manifests.ts";
+import type {
+  CapabilityEntry,
+  Fixture,
+  ParityManifest,
+  ServerFixture,
+  ServerParityManifest,
+  ServerToolGapMap,
+} from "./check-parity-manifests.ts";
 
 const fixtureDir = new URL("./memory/", import.meta.url);
 const serverFixtureDir = new URL("./server/", import.meta.url);
 const errors: string[] = [];
-
-function isPlaceholderReason(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase() ?? "";
-  return !normalized || PLACEHOLDER_REASONS.has(normalized);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function readJson<T>(url: URL): Promise<T> {
-  try {
-    return (await Bun.file(url).json()) as T;
-  } catch (error) {
-    throw new Error(`${url.pathname}: ${String(error)}`);
-  }
-}
 
 const manifest = await readJson<ParityManifest>(
   new URL("parity-manifest.json", fixtureDir),
@@ -141,9 +64,7 @@ for (const entry of manifest.capabilities ?? []) {
     continue;
   }
   if (capabilityMap.has(entry.capability)) {
-    errors.push(
-      `parity-manifest.json: duplicate capability '${entry.capability}'`,
-    );
+    errors.push(`parity-manifest.json: duplicate capability '${entry.capability}'`);
   }
   capabilityMap.set(entry.capability, entry);
   if (entry.python !== "implemented") {
@@ -184,6 +105,27 @@ const serverDeclarations = SERVER_CONTRACT_PROVIDERS.map((provider) => ({
   satisfaction: provider.satisfaction?.("1970-01-01T00:00:00.000Z"),
 }));
 
+// A contract-declaration fixture pins the contract id and schema hash every
+// declared provider must agree with. Hoisted out of the fixture loop so the
+// per-provider comparison is one level of nesting, not four.
+function checkDeclaredContractIdentity(
+  prefix: string,
+  request: Record<string, unknown>,
+): void {
+  for (const { provider, declaration } of serverDeclarations) {
+    if (request.contract_id !== declaration.contractVersion) {
+      errors.push(
+        `${prefix} declared contract_id '${String(request.contract_id)}' does not match ${provider.id} contract '${declaration.contractVersion}'`,
+      );
+    }
+    if (request.schema_hash !== declaration.schemaHash) {
+      errors.push(
+        `${prefix} declared schema_hash '${String(request.schema_hash)}' does not match ${provider.id} schema_hash '${declaration.schemaHash}'`,
+      );
+    }
+  }
+}
+
 const fixtureGlob = new Bun.Glob("*.fixture.json");
 const fixtureIds = new Set<string>();
 const fixtureCapabilities = new Set<string>();
@@ -220,10 +162,7 @@ for await (const name of fixtureGlob.scan({
     errors.push(
       `${prefix} fixture id '${fixture.id}' is absent from parity-manifest.json expected_fixture_ids`,
     );
-  } else if (
-    expectedRuntime !== undefined &&
-    expectedRuntime !== fixture.runtime
-  ) {
+  } else if (expectedRuntime !== undefined && expectedRuntime !== fixture.runtime) {
     errors.push(
       `${prefix} runtime '${String(fixture.runtime)}' does not match expected_fixture_ids runtime '${String(expectedRuntime)}'`,
     );
@@ -279,28 +218,13 @@ for await (const name of fixtureGlob.scan({
   if (!isRecord(fixture.expectation)) {
     errors.push(`${prefix} expectation must be an object`);
   }
-  if (
-    fixture.capability === "contract-declaration" &&
-    isRecord(fixture.request)
-  ) {
+  if (fixture.capability === "contract-declaration" && isRecord(fixture.request)) {
     contractDeclarationChecked = true;
-    for (const { provider, declaration } of serverDeclarations) {
-      if (fixture.request.contract_id !== declaration.contractVersion) {
-        errors.push(
-          `${prefix} declared contract_id '${String(fixture.request.contract_id)}' does not match ${provider.id} contract '${declaration.contractVersion}'`,
-        );
-      }
-      if (fixture.request.schema_hash !== declaration.schemaHash) {
-        errors.push(
-          `${prefix} declared schema_hash '${String(fixture.request.schema_hash)}' does not match ${provider.id} schema_hash '${declaration.schemaHash}'`,
-        );
-      }
-    }
+    checkDeclaredContractIdentity(prefix, fixture.request);
   }
 }
 
-if (fixtureCount === 0)
-  errors.push("contracts/memory: no *.fixture.json files found");
+if (fixtureCount === 0) errors.push("contracts/memory: no *.fixture.json files found");
 if (!contractDeclarationChecked) {
   errors.push(
     "contracts/memory: no contract-declaration fixture asserts the live TS schema_hash",
@@ -357,17 +281,23 @@ const serverCapabilities = new Set(serverManifest.capabilities ?? []);
 for (const providerId of providerIds) {
   const statuses = serverManifest.provider_capability_status?.[providerId];
   if (!statuses) {
-    errors.push(`server/parity-manifest.json: missing capability status for '${providerId}'`);
+    errors.push(
+      `server/parity-manifest.json: missing capability status for '${providerId}'`,
+    );
     continue;
   }
   const declaredCapabilities = Object.keys(statuses).sort();
   const expectedCapabilities = [...serverCapabilities].sort();
   if (JSON.stringify(declaredCapabilities) !== JSON.stringify(expectedCapabilities)) {
-    errors.push(`server/parity-manifest.json: '${providerId}' must declare every capability exactly once`);
+    errors.push(
+      `server/parity-manifest.json: '${providerId}' must declare every capability exactly once`,
+    );
   }
   for (const [capability, status] of Object.entries(statuses)) {
     if (status !== "implemented" && status !== "scaffold-declared") {
-      errors.push(`server/parity-manifest.json: '${providerId}' capability '${capability}' has invalid status '${String(status)}'`);
+      errors.push(
+        `server/parity-manifest.json: '${providerId}' capability '${capability}' has invalid status '${String(status)}'`,
+      );
     }
   }
 }
@@ -376,6 +306,23 @@ const observedServerCapabilities = new Set<string>();
 const observedServerTools = new Set<string>();
 const serverFixtures: ServerFixture[] = [];
 let serverFixtureCount = 0;
+// `capture` binds a value out of a step's response for later steps to
+// substitute. Each entry must be a dot path string; anything else would be
+// silently ignored by the harness and leave the fixture asserting less than it
+// appears to. Hoisted out of the step loop, with an early return in place of
+// the else branch, so the entry walk sits at one level of nesting.
+function checkStepCapture(prefix: string, index: number, capture: unknown): void {
+  if (!isRecord(capture)) {
+    errors.push(`${prefix} step ${index} capture must be an object`);
+    return;
+  }
+  for (const [name, path] of Object.entries(capture)) {
+    if (typeof path !== "string" || path.length === 0) {
+      errors.push(`${prefix} step ${index} capture '${name}' must be a non-empty path`);
+    }
+  }
+}
+
 const serverFixtureGlob = new Bun.Glob("*.fixture.json");
 for await (const name of serverFixtureGlob.scan({
   cwd: serverFixtureDir.pathname,
@@ -388,13 +335,19 @@ for await (const name of serverFixtureGlob.scan({
   observedServerFixtureIds.add(fixture.id);
   observedServerCapabilities.add(fixture.capability);
   if (!expectedServerFixtureIds.has(fixture.id)) {
-    errors.push(`${prefix} fixture id '${fixture.id}' is absent from the server manifest`);
+    errors.push(
+      `${prefix} fixture id '${fixture.id}' is absent from the server manifest`,
+    );
   }
   if (!serverCapabilities.has(fixture.capability)) {
-    errors.push(`${prefix} capability '${fixture.capability}' is absent from the server manifest`);
+    errors.push(
+      `${prefix} capability '${fixture.capability}' is absent from the server manifest`,
+    );
   }
   if (JSON.stringify(fixture.providers) !== JSON.stringify(providerIds)) {
-    errors.push(`${prefix} providers must declare current-src and server-rewrite-scaffold`);
+    errors.push(
+      `${prefix} providers must declare current-src and server-rewrite-scaffold`,
+    );
   }
   if (!fixture.description) errors.push(`${prefix} description must be non-empty`);
   if (!isRecord(fixture.auth)) errors.push(`${prefix} auth must be an object`);
@@ -405,7 +358,8 @@ for await (const name of serverFixtureGlob.scan({
   for (const [index, step] of fixture.steps.entries()) {
     if (!step.tool) errors.push(`${prefix} step ${index} tool must be non-empty`);
     if (step.tool) observedServerTools.add(step.tool);
-    if (!isRecord(step.arguments)) errors.push(`${prefix} step ${index} arguments must be an object`);
+    if (!isRecord(step.arguments))
+      errors.push(`${prefix} step ${index} arguments must be an object`);
     if (!isRecord(step.expectation) || !("is_error" in step.expectation)) {
       errors.push(`${prefix} step ${index} expectation must declare is_error`);
     }
@@ -414,26 +368,22 @@ for await (const name of serverFixtureGlob.scan({
     // silently ignored by the harness and leave the fixture asserting less than
     // it appears to.
     if (step.capture !== undefined) {
-      if (!isRecord(step.capture)) {
-        errors.push(`${prefix} step ${index} capture must be an object`);
-      } else {
-        for (const [name, path] of Object.entries(step.capture)) {
-          if (typeof path !== "string" || path.length === 0) {
-            errors.push(`${prefix} step ${index} capture '${name}' must be a non-empty path`);
-          }
-        }
-      }
+      checkStepCapture(prefix, index, step.capture);
     }
   }
 }
 for (const id of expectedServerFixtureIds) {
   if (!observedServerFixtureIds.has(id)) {
-    errors.push(`server/parity-manifest.json: expected fixture id '${id}' has no fixture file`);
+    errors.push(
+      `server/parity-manifest.json: expected fixture id '${id}' has no fixture file`,
+    );
   }
 }
 for (const capability of serverCapabilities) {
   if (!observedServerCapabilities.has(capability)) {
-    errors.push(`server/parity-manifest.json: capability '${capability}' has no fixture`);
+    errors.push(
+      `server/parity-manifest.json: capability '${capability}' has no fixture`,
+    );
   }
 }
 
@@ -463,6 +413,21 @@ for (const capability of serverCapabilities) {
 // Registering MORE than the contract requires is allowed: the rewrite carries
 // `record_skill_usage`/`skill_usage_report` (#469), which the frozen contract
 // never named. Only a shortfall against a claim can break a client.
+// Map each tool to the capability the server fixtures file it under, so a
+// missing tool can be judged against that capability's declared status. First
+// fixture to name a tool wins, exactly as the inline loop did.
+function mapToolsToCapabilities(fixtures: ServerFixture[]): Map<string, string> {
+  const toolCapability = new Map<string, string>();
+  for (const fixture of fixtures) {
+    for (const step of fixture.steps ?? []) {
+      if (step.tool && !toolCapability.has(step.tool)) {
+        toolCapability.set(step.tool, fixture.capability);
+      }
+    }
+  }
+  return toolCapability;
+}
+
 const satisfactionNotes: string[] = [];
 for (const { provider, satisfaction } of serverDeclarations) {
   if (!satisfaction) continue;
@@ -476,14 +441,7 @@ for (const { provider, satisfaction } of serverDeclarations) {
   const statuses = serverManifest.provider_capability_status?.[provider.id] ?? {};
   // Map each tool to the capability the server fixtures file it under, so a
   // missing tool can be judged against that capability's declared status.
-  const toolCapability = new Map<string, string>();
-  for (const fixture of serverFixtures) {
-    for (const step of fixture.steps ?? []) {
-      if (step.tool && !toolCapability.has(step.tool)) {
-        toolCapability.set(step.tool, fixture.capability);
-      }
-    }
-  }
+  const toolCapability = mapToolsToCapabilities(serverFixtures);
 
   const claimedMissing: string[] = [];
   const scaffoldMissing: string[] = [];
@@ -520,21 +478,9 @@ for (const { provider, satisfaction } of serverDeclarations) {
   }
 }
 
-const toolSourceDir = new URL("../src/tools/", import.meta.url);
-const toolSourceGlob = new Bun.Glob("*.ts");
 const registeredServerTools = new Set<string>();
-for await (const name of toolSourceGlob.scan({
-  cwd: toolSourceDir.pathname,
-  onlyFiles: true,
-})) {
-  const source = await Bun.file(new URL(name, toolSourceDir)).text();
-  for (const match of source.matchAll(
-    /server\.registerTool\(\s*["'`]([^"'`]+)["'`]/g,
-  )) {
-    const tool = match[1];
-    if (!tool) continue;
-    registeredServerTools.add(tool);
-  }
+for (const dir of ["../src/tools/", "../server/tools/"]) {
+  await collectRegisteredTools(new URL(dir, import.meta.url), registeredServerTools);
 }
 
 const declaredCoveredTools = new Set(serverToolGapMap.fixture_covered_tools ?? []);
@@ -552,7 +498,9 @@ for (const entry of serverToolGapMap.without_parity_fixture ?? []) {
     errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a capability`);
   }
   if (isPlaceholderReason(entry.reason)) {
-    errors.push(`server/tool-gap-map.json: '${entry.tool}' needs a non-placeholder reason`);
+    errors.push(
+      `server/tool-gap-map.json: '${entry.tool}' needs a non-placeholder reason`,
+    );
   }
 }
 
@@ -565,7 +513,9 @@ if (JSON.stringify(declaredCoveredSorted) !== JSON.stringify(observedToolsSorted
 }
 for (const tool of declaredCoveredTools) {
   if (declaredGapTools.has(tool)) {
-    errors.push(`server/tool-gap-map.json: '${tool}' is both covered and listed as a gap`);
+    errors.push(
+      `server/tool-gap-map.json: '${tool}' is both covered and listed as a gap`,
+    );
   }
 }
 
@@ -578,19 +528,23 @@ if (JSON.stringify(mappedToolsSorted) !== JSON.stringify(registeredToolsSorted))
   );
 }
 if (serverToolGapMap.registered_tool_count !== registeredServerTools.size) {
-  errors.push("server/tool-gap-map.json: registered_tool_count does not match current-src");
+  errors.push(
+    "server/tool-gap-map.json: registered_tool_count does not match current-src",
+  );
 }
 if (serverToolGapMap.fixture_covered_tool_count !== declaredCoveredTools.size) {
-  errors.push("server/tool-gap-map.json: fixture_covered_tool_count does not match its tool list");
+  errors.push(
+    "server/tool-gap-map.json: fixture_covered_tool_count does not match its tool list",
+  );
 }
 if (serverToolGapMap.without_parity_fixture_count !== declaredGapTools.size) {
-  errors.push("server/tool-gap-map.json: without_parity_fixture_count does not match its gap list");
+  errors.push(
+    "server/tool-gap-map.json: without_parity_fixture_count does not match its gap list",
+  );
 }
 
 if (errors.length > 0) {
-  console.error(
-    `Contract parity check failed with ${errors.length} violation(s):`,
-  );
+  console.error(`Contract parity check failed with ${errors.length} violation(s):`);
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
 }
@@ -600,7 +554,16 @@ for (const note of satisfactionNotes) console.log(`note: ${note}`);
 const satisfactionSummary = serverDeclarations
   .filter((entry) => entry.satisfaction)
   .map((entry) => {
-    const { registeredTools, requiredTools, missingTools } = entry.satisfaction!;
+    const { satisfaction } = entry;
+    // The filter above kept only entries whose satisfaction is set; a missing
+    // one here means the registry walk left a hole and the summary would be a
+    // silent lie, so fail with the provider that caused it.
+    if (!satisfaction) {
+      throw new Error(
+        `${entry.provider.id}: satisfaction missing after the registry walk`,
+      );
+    }
+    const { registeredTools, requiredTools, missingTools } = satisfaction;
     const met = requiredTools.length - missingTools.length;
     return `${entry.provider.id} registers ${registeredTools.length} tools covering ${met}/${requiredTools.length} contract-required${missingTools.length > 0 ? ` (${missingTools.length} scaffold-declared, not yet ported)` : ""}`;
   })
