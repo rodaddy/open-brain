@@ -23,16 +23,11 @@
  */
 import cors from "cors";
 import { Router } from "express";
-import type {
-  NextFunction,
-  Request,
-  RequestHandler,
-  Response,
-} from "express";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import { createRestRouter } from "../../src/rest-api.ts";
-import { createPromotionRouter } from "../../src/rest-promotion.ts";
+import { createPromotionRouter } from "./rest-promotion.ts";
 import { requestAuth } from "../auth/middleware.ts";
 
 export interface RestSurfaceInput {
@@ -167,23 +162,18 @@ export function createRestSurface(input: RestSurfaceInput): Router {
           .then((status) => {
             // Mirror `/health`: monitoring that alarms on the status code must
             // see a non-200 whenever the body is not fully healthy.
-            response
-              .status(status.status === "healthy" ? 200 : 503)
-              .json(status);
+            response.status(status.status === "healthy" ? 200 : 503).json(status);
           })
           .catch((error: unknown) => {
             input.logger.error(
               {
                 route: "/api/v1/operator/doctor",
                 client_id: auth?.clientId,
-                error_category:
-                  error instanceof Error ? error.name : typeof error,
+                error_category: error instanceof Error ? error.name : typeof error,
               },
               "doctor_route_failed",
             );
-            response
-              .status(500)
-              .json({ error: "operator doctor status unavailable" });
+            response.status(500).json({ error: "operator doctor status unavailable" });
           });
       },
     );
