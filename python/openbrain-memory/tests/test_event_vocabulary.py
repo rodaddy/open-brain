@@ -137,8 +137,9 @@ def test_mcp_tool_schema_matches_python() -> None:
 
 
 def test_tiering_union_matches_python() -> None:
-    """`src/tiering.ts` `EventType` matches; it decides what gets promoted."""
-    source = (REPO_ROOT / "src" / "tiering.ts").read_text()
+    """`server/domain/tiering.ts` `EventType` matches; it decides what gets promoted."""
+    # Moved here from `src/tiering.ts` by issue 864; the old path is an adapter.
+    source = (REPO_ROOT / "server" / "domain" / "tiering.ts").read_text()
     found = _extract_union(source, "export type EventType")
     assert found == EVENT_TYPES, _drift("tiering EventType", found)
 
@@ -240,7 +241,9 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         # Moved here from `src/contract-schemas.ts` by issue 864; the old path
         # is a re-export shim.
         "server/contracts/schemas-events.ts",
-        "src/tiering.ts",
+        # Moved here from `src/tiering.ts` by issue 864; the old path is an
+        # adapter that re-exports, so it declares no member names.
+        "server/domain/tiering.ts",
         # Moved here from `src/tools/table-constants.ts` by issue 864. The old
         # path keeps a re-export shim, which declares no member names and so
         # never appears in this sweep -- listing it would weaken the census.

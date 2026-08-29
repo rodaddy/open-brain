@@ -37,11 +37,7 @@ import type { AuthIdentity } from "../auth/types.ts";
 import { canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import { canonicalNamespace, physicalNamespace } from "./shared-namespace.ts";
-import {
-  newTierReceipt,
-  tierLaneEvent,
-  type LaneEventRow,
-} from "../../src/tiering.ts";
+import { newTierReceipt, tierLaneEvent, type LaneEventRow } from "../domain/tiering.ts";
 import {
   authIdentity,
   errorResult,
@@ -53,11 +49,7 @@ import {
 const DEFAULT_EVENTS_SCANNED = 100;
 
 const tierLaneInputSchema = {
-  session_key: z
-    .string()
-    .min(1)
-    .max(500)
-    .describe("Stable lane identifier to tier"),
+  session_key: z.string().min(1).max(500).describe("Stable lane identifier to tier"),
   namespace: z
     .string()
     .min(1)
@@ -293,10 +285,7 @@ async function handleTierLane(
     );
     return textResult({
       session_key: args.session_key,
-      namespace: canonicalNamespace(
-        namespace,
-        dependencies.sharedNamespaceNames,
-      ),
+      namespace: canonicalNamespace(namespace, dependencies.sharedNamespaceNames),
       ...receipt,
     });
   } catch (error) {
