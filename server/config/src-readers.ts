@@ -34,6 +34,9 @@
  * it.
  */
 import { z } from "zod";
+import type { DropCollectorBounds } from "../capture/drop-folder-contract.ts";
+
+export type { DropCollectorBounds } from "../capture/drop-folder-contract.ts";
 
 /**
  * A `parseInt`-shaped integer, falling back unless it satisfies `accept`.
@@ -91,6 +94,34 @@ const strictOneFlag = z.preprocess((value) => value === "1", z.boolean());
 /** Exactly `"0"` disables; every other value, absent included, enables. */
 const strictZeroDisablesFlag = z.preprocess((value) => value !== "0", z.boolean());
 
+/**
+ * A positive `parseInt` integer, falling back on anything else.
+ *
+ * Mirrors `boundedInt` in `src/drop-folder-collector.ts:19-24` exactly: `!raw`
+ * takes the fallback (absent AND blank), the parse is base-10 `parseInt` (so
+ * `256files` is 256 there and must stay 256 here), and only an integer greater
+ * than zero wins. Zero and negatives fall back rather than rejecting, so an
+ * environment that boots today still boots.
+ */
+function positiveParsedInteger(fallback: number) {
+  return z.preprocess((value) => {
+    if (typeof value !== "string" || value === "") return fallback;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }, z.number().int());
+}
+
+/**
+ * The scan-entry override, which is absent rather than defaulted.
+ *
+ * `src/drop-folder-collector.ts:25-26` reads it with the same `boundedInt` and
+ * a fallback of `0`, then treats any value at or below zero as "no override"
+ * (`:38`). The group below reproduces that by omitting the field entirely, so
+ * the collector derives the entry bound from `files` as an unconfigured
+ * deployment did.
+ */
+const scanEntriesOverride = positiveParsedInteger(0);
+
 /** Fields added by this rung, merged into `environmentSchema`. */
 export const srcReaderEnvironmentFields = {
   // embedding — `src/embedding.ts:6-9` (timeout, dimensions), `:36` (model),
@@ -128,6 +159,17 @@ export const srcReaderEnvironmentFields = {
   NODE_ENV: rawOptional,
   LOG_MAX_BYTES: rawOptional,
   LOG_MAX_FILES: rawOptional,
+  // drop-folder collector — the two env reads the L5 move lifted out of
+  // `src/drop-folder-collector.ts` and preserved in its adapter at
+  // `src/drop-folder-collector.ts:22-42`. The defaults are
+  // `DEFAULT_DROP_COLLECTOR_BOUNDS`
+  // (`server/capture/drop-folder-contract.ts:51-56`), which are the values an
+  // unconfigured deployment ran with.
+  DROP_COLLECTOR_MAX_FILES: positiveParsedInteger(256),
+  DROP_COLLECTOR_MAX_FILE_BYTES: positiveParsedInteger(1_048_576),
+  DROP_COLLECTOR_MAX_TOTAL_BYTES: positiveParsedInteger(16_777_216),
+  DROP_COLLECTOR_MAX_DEPTH: positiveParsedInteger(8),
+  DROP_COLLECTOR_MAX_SCAN_ENTRIES: scanEntriesOverride,
 } as const;
 
 type SrcReaderEnvironment = z.infer<z.ZodObject<typeof srcReaderEnvironmentFields>>;
@@ -196,6 +238,25 @@ export function embeddingGroup(parsed: SrcReaderEnvironment): EmbeddingConfigGro
       // falsy value, so an empty script name configures no restart.
       ...(restartScript ? { restartScript } : {}),
     },
+  };
+}
+
+/**
+ * Drop-folder scan bounds, in the shape the collector takes as options.
+ *
+ * `scanEntries` is SPREAD rather than assigned: the collector branches on the
+ * key being absent (`server/capture/drop-folder-contract.ts:46-47`), so a
+ * present-and-undefined key would not be the same value. The adapter reaches
+ * the same shape through the `> 0` test at `src/drop-folder-collector.ts:38`.
+ */
+export function dropCollectorGroup(parsed: SrcReaderEnvironment): DropCollectorBounds {
+  const scanEntries = parsed.DROP_COLLECTOR_MAX_SCAN_ENTRIES;
+  return {
+    files: parsed.DROP_COLLECTOR_MAX_FILES,
+    fileBytes: parsed.DROP_COLLECTOR_MAX_FILE_BYTES,
+    totalBytes: parsed.DROP_COLLECTOR_MAX_TOTAL_BYTES,
+    depth: parsed.DROP_COLLECTOR_MAX_DEPTH,
+    ...(scanEntries > 0 ? { scanEntries } : {}),
   };
 }
 

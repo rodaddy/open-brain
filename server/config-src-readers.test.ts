@@ -194,3 +194,61 @@ describe("doctor — src/operator-doctor.ts", () => {
     expect(configFrom({ LOG_MAX_BYTES: "" }).doctor.rotationConfigured).toBe(false);
   });
 });
+
+describe("drop-folder scan bounds — src/drop-folder-collector.ts:19-42", () => {
+  it("defaults to DEFAULT_DROP_COLLECTOR_BOUNDS when every key is unset", () => {
+    const bounds = configFrom().dropCollector;
+    // `server/capture/drop-folder-contract.ts:51-56`.
+    expect(bounds.files).toBe(256);
+    expect(bounds.fileBytes).toBe(1_048_576);
+    expect(bounds.totalBytes).toBe(16_777_216);
+    expect(bounds.depth).toBe(8);
+    // Absent, not zero: the collector derives the entry bound from `files`.
+    expect("scanEntries" in bounds).toBe(false);
+  });
+
+  it("takes each configured override", () => {
+    const bounds = configFrom({
+      DROP_COLLECTOR_MAX_FILES: "12",
+      DROP_COLLECTOR_MAX_FILE_BYTES: "2048",
+      DROP_COLLECTOR_MAX_TOTAL_BYTES: "4096",
+      DROP_COLLECTOR_MAX_DEPTH: "3",
+      DROP_COLLECTOR_MAX_SCAN_ENTRIES: "77",
+    }).dropCollector;
+    expect(bounds.files).toBe(12);
+    expect(bounds.fileBytes).toBe(2048);
+    expect(bounds.totalBytes).toBe(4096);
+    expect(bounds.depth).toBe(3);
+    expect(bounds.scanEntries).toBe(77);
+  });
+
+  it("falls back on every value `boundedInt` rejects at `:19-24`", () => {
+    // `!raw`, then a non-integer or non-positive parse: blank, zero, negative,
+    // and a word all take the fallback rather than rejecting the config.
+    for (const value of ["", "0", "-4", "nope"]) {
+      expect(configFrom({ DROP_COLLECTOR_MAX_FILES: value }).dropCollector.files).toBe(
+        256,
+      );
+    }
+    // `parseInt("1.5", 10)` is 1 to the reader at `:22`, which is a positive
+    // integer and therefore wins. Recorded rather than tidied: the bar is
+    // start-equivalence with the adapter, not a nicer parse.
+    expect(configFrom({ DROP_COLLECTOR_MAX_FILES: "1.5" }).dropCollector.files).toBe(1);
+  });
+
+  it("keeps the base-10 `parseInt` reading of a trailing suffix", () => {
+    // `parseInt("512files", 10)` is 512 to the reader at `:22`, not NaN.
+    expect(
+      configFrom({ DROP_COLLECTOR_MAX_FILE_BYTES: "512files" }).dropCollector.fileBytes,
+    ).toBe(512);
+  });
+
+  it("omits `scanEntries` for any value at or below zero — `:38`", () => {
+    for (const value of ["0", "-1", ""]) {
+      const bounds = configFrom({
+        DROP_COLLECTOR_MAX_SCAN_ENTRIES: value,
+      }).dropCollector;
+      expect("scanEntries" in bounds).toBe(false);
+    }
+  });
+});
