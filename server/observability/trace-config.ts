@@ -8,10 +8,7 @@
 import type { McpTracingConfig, TracingLogger } from "./trace-types.ts";
 
 /** One tracing coordinate, trimmed, with absent and blank both reading as "". */
-function trimmedEnv(
-  env: Record<string, string | undefined>,
-  key: string,
-): string {
+function trimmedEnv(env: Record<string, string | undefined>, key: string): string {
   return env[key]?.trim() ?? "";
 }
 
@@ -37,11 +34,10 @@ export function readMcpTracingConfig(
   const secretKey = trimmedEnv(env, "OPENBRAIN_TRACING_SECRET_KEY");
   const flagged = env.OPENBRAIN_TRACING_ENABLED === "1";
   const maskingEnabled = env.OPENBRAIN_TRACING_MASKING_ENABLED !== "0";
-  const complete =
-    endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
+  const complete = endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
   if (flagged && !complete) {
     // Field names deliberately avoid every substring in
-    // `SENSITIVE_KEY_PARTS` (`src/secret-patterns.ts:160-173` — `secret`,
+    // `SENSITIVE_KEY_PARTS` (`server/security/secret-patterns.ts:160-173` — `secret`,
     // `apikey`, `credential`, `privatekey`, ...). A field named `hasSecretKey`
     // is rewritten to "[REDACTED]" by the shared logger, which turns the one
     // line telling an operator WHICH variable they mistyped into noise. The
@@ -74,10 +70,7 @@ export function readMcpTracingConfig(
  * client-side traces the #523 sink already ships. The MCP transport's
  * `sessionId` is a per-connection fallback — real, but a different grain.
  */
-export function resolveSessionId(
-  args: unknown,
-  extra: unknown,
-): string | undefined {
+export function resolveSessionId(args: unknown, extra: unknown): string | undefined {
   const fromArgs =
     readStringField(args, "session_key") ??
     readStringField(readField(args, "scope"), "session_key");

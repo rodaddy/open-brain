@@ -20,10 +20,7 @@ import { toSql } from "pgvector/pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PoolClient } from "pg";
 import { canRead, canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import {
   DEFAULT_DECOMPOSITION_MAX_CHARS,
@@ -31,7 +28,7 @@ import {
   planEntryDecomposition,
   type DecompositionPlan,
   type ReplacementProposal,
-} from "../../src/decomposition.ts";
+} from "../domain/decomposition.ts";
 import { contentHash } from "./memory-helpers.ts";
 import {
   authIdentity,
@@ -108,9 +105,7 @@ const decomposeEntryAnnotations = {
   idempotentHint: true,
 };
 
-type DecomposeEntryArgs = z.infer<
-  z.ZodObject<typeof decomposeEntryInputSchema>
->;
+type DecomposeEntryArgs = z.infer<z.ZodObject<typeof decomposeEntryInputSchema>>;
 
 /** Chunk sizing after defaults, or a caller-facing reason the pair is unusable. */
 interface ChunkSizing {
@@ -128,8 +123,7 @@ interface ChunkSizing {
  */
 function resolveChunkSizing(args: DecomposeEntryArgs): ChunkSizing {
   const maxChunkChars = args.max_chunk_chars ?? DEFAULT_DECOMPOSITION_MAX_CHARS;
-  const overlapChars =
-    args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
+  const overlapChars = args.overlap_chars ?? DEFAULT_DECOMPOSITION_OVERLAP_CHARS;
   if (overlapChars >= maxChunkChars) {
     return {
       maxChunkChars,
@@ -145,9 +139,7 @@ async function loadSourceRow(
   dependencies: MemoryToolDependencies,
   identity: AuthIdentity,
   args: DecomposeEntryArgs,
-): Promise<
-  { id: unknown; namespace: unknown; content_text: unknown } | undefined
-> {
+): Promise<{ id: unknown; namespace: unknown; content_text: unknown } | undefined> {
   const predicate = namespacePredicate(identity, "read", 2);
   const { rows } = await dependencies.pool.query(
     `SELECT id, namespace, ${SOURCE_CONTENT_SQL[args.table]} AS content_text

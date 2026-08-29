@@ -25,7 +25,7 @@
  * separately rather than being inferred from the availability alone — a typo in
  * the broker URL used to be indistinguishable from a configuration choice.
  */
-import { obContextPackSubject } from "../../src/nats-subjects.ts";
+import { obContextPackSubject } from "./nats-subjects.ts";
 
 /** Hosts treated as a local broker for the plaintext-transport rule. */
 const LOCAL_NATS_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -115,9 +115,7 @@ export function resolveContextPackSubject(environment: Environment): string {
 /** Derive the whole NATS boundary from an explicit environment-shaped input. */
 export function parseNatsConfig(environment: Environment): NatsConfig {
   const requestedTransport =
-    environment.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats"
-      ? "nats"
-      : "http";
+    environment.OPENBRAIN_TRANSPORT?.trim().toLowerCase() === "nats" ? "nats" : "http";
   const url = readEnv(environment.OPENBRAIN_NATS_URL);
   const bridgeEnabled = isTrue(environment.OPENBRAIN_NATS_ENABLE_BRIDGE);
 

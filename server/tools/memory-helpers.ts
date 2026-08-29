@@ -29,10 +29,7 @@ import { errorResult } from "./types.ts";
  * (`server/tools/repo-facts.ts`, `get-contract.ts`, `promotion.ts` all import
  * their builders from `src/`), so it introduces no new coupling direction.
  */
-export {
-  EVENT_TYPES,
-  IMPORTANCE_LEVELS,
-} from "../../src/tools/table-constants.ts";
+export { EVENT_TYPES, IMPORTANCE_LEVELS } from "../db/table-constants.ts";
 
 export function contentHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");

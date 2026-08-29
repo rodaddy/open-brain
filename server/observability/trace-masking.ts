@@ -9,11 +9,11 @@
  * free to drop and depth-clamp — the two are separate concerns and neither
  * substitutes for the other.
  *
- * Detection itself is NOT owned here: `src/secret-patterns.ts` owns the
+ * Detection itself is NOT owned here: `server/security/secret-patterns.ts` owns the
  * detector set and the sensitive-key rule. This module is the application layer
  * over it, recursing structures the detectors never see.
  */
-import { isSensitiveKey, SECRET_DETECTORS } from "../../src/secret-patterns.ts";
+import { isSensitiveKey, SECRET_DETECTORS } from "../security/secret-patterns.ts";
 
 /**
  * The shared detectors, recompiled with the global flag.
@@ -87,9 +87,7 @@ function maskBuiltinContainer(value: object): unknown | undefined {
   if (ArrayBuffer.isView(value)) return binaryViewMarker(value);
   if (value instanceof Map) {
     return maskTraceValue(
-      Object.fromEntries(
-        Array.from(value, ([key, child]) => [String(key), child]),
-      ),
+      Object.fromEntries(Array.from(value, ([key, child]) => [String(key), child])),
     );
   }
   if (value instanceof Set) return maskTraceValue(Array.from(value));

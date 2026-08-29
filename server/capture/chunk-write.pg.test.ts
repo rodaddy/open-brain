@@ -16,12 +16,11 @@
  */
 import { afterAll, beforeAll, afterEach, describe, expect, it } from "bun:test";
 import { Pool } from "pg";
-import { runMigrations } from "./db/migrate.ts";
-import { EMBEDDING_DIMENSIONS, contentHash } from "./embedding.ts";
+import { runMigrations } from "../../src/db/migrate.ts";
+import { EMBEDDING_DIMENSIONS, contentHash } from "../../src/embedding.ts";
 import { writeEntryChunks } from "./chunk-write.ts";
 import { toSql } from "pgvector/pg";
-import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-database.ts";
-
+import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 
 // Per-process namespace so concurrent CI runs cannot collide. The `check` job
 // runs against a SHARED, persistent Postgres on the runner (unlike the
@@ -34,8 +33,7 @@ import { requireTestDatabaseUrl } from "../scripts/test-support/require-test-dat
 const NS = `ns-chunk-write-test-${process.pid}`;
 const CREATED_BY = "chunk-write-test";
 
-const stubEmbed = async (): Promise<number[]> =>
-  Array(EMBEDDING_DIMENSIONS).fill(0.01);
+const stubEmbed = async (): Promise<number[]> => Array(EMBEDDING_DIMENSIONS).fill(0.01);
 
 const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
@@ -79,10 +77,9 @@ describe("parent + chunk entry storage (live Postgres)", () => {
       embedFn: stubEmbed,
     });
 
-    const { rows } = await pool.query(
-      `SELECT content FROM thoughts WHERE id = $1`,
-      [parentId],
-    );
+    const { rows } = await pool.query(`SELECT content FROM thoughts WHERE id = $1`, [
+      parentId,
+    ]);
     // Not shortened, not marked, not summarised: byte-identical.
     expect(rows[0].content).toBe(content);
     expect((rows[0].content as string).length).toBe(content.length);
@@ -156,7 +153,6 @@ describe("parent + chunk entry storage (live Postgres)", () => {
     );
     expect(rows[0].hits).toBeGreaterThan(0);
   });
-
 });
 
 describe("chunk write duplicate and fallback handling (live Postgres)", () => {
