@@ -36,7 +36,7 @@ import type { AuthInfo } from "../types.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
 import { containsSecret } from "../domain/sharing.ts";
-import { resolveIngestionEligibility } from "../../src/source-registry.ts";
+import { resolveIngestionEligibility } from "../domain/source-registry.ts";
 import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import {
   conversationIngestSchema,
