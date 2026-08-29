@@ -76,6 +76,7 @@ import {
   MAINTENANCE_GRAPH_AUTH,
 } from "./maintenance/maintenance-bootstrap.ts";
 import { getOperatorDoctorStatus } from "./application/operator-doctor.ts";
+import { setEmbeddingSettingsReader } from "./embedding/provider.ts";
 import type { ToolDeps } from "../src/tools/index.ts";
 import type { AuthInfo } from "./types.ts";
 
@@ -548,6 +549,27 @@ export async function startServer(
   }));
   const logger = options.logger ?? createLogger(config.logging);
 
+  // The embedding provider reads no environment of its own (issue 864); in the
+  // server runtime its values come from the config this function already holds.
+  // Registered here rather than at module scope because `config` is what the
+  // reader answers from, and the `src/` adapter's env reader is what it
+  // replaces.
+  //
+  // The replaced reader is kept and restored at shutdown. The provider is one
+  // module-level slot in the process, so a started-and-stopped server that left
+  // its own reader installed would keep answering from a dead server's config
+  // for everything that ran afterwards — which in a test process is the next
+  // test file.
+  const previousEmbeddingSettingsReader = setEmbeddingSettingsReader(() => ({
+    ...config.embedding,
+    ...(config.transport.embeddingBaseUrl === undefined
+      ? {}
+      : { baseUrl: config.transport.embeddingBaseUrl }),
+    ...(config.transport.embeddingApiKey === undefined
+      ? {}
+      : { apiKey: config.transport.embeddingApiKey }),
+  }));
+
   // TOKENS FIRST, before anything is allocated. A process with no configured
   // tokens can authenticate nobody, so every request it could ever serve is a
   // 401. `src/index.ts:343-346` checks this only after the pool and the bridge
@@ -612,13 +634,19 @@ export async function startServer(
       server,
       port: boundPort,
       logger,
-      shutdown: () =>
-        shutdown({ application: composed, database, server, logger, tracing }),
+      shutdown: async () => {
+        try {
+          await shutdown({ application: composed, database, server, logger, tracing });
+        } finally {
+          setEmbeddingSettingsReader(previousEmbeddingSettingsReader);
+        }
+      },
     };
   } catch (error: unknown) {
     // A failure anywhere after the pool exists must not leak it. Everything
     // allocated so far is released, and the original failure is rethrown so the
     // caller sees the CAUSE rather than a cleanup error.
+    setEmbeddingSettingsReader(previousEmbeddingSettingsReader);
     await releaseAfterFailedStart({ application, database, tracing });
     throw error;
   }
