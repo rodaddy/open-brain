@@ -20,7 +20,7 @@
 #   capture     server/tools/capture.ts  — the rewrite-tree `log_thought` MCP
 #               tool, invoked through a real McpServer over an in-memory
 #               transport. Rows land with source='mcp'.
-#   rest        src/rest-api.ts          — POST /api/v1/thoughts on a real
+#   rest        server/transport/rest-api.ts — POST /api/v1/thoughts on a real
 #               express app over real HTTP. Rows land with source='rest'.
 #   graduation  src/tiering.ts           — graduateLaneEvent(). Rows land with
 #               source='lane-tiering'.

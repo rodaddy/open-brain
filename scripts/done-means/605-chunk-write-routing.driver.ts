@@ -10,8 +10,8 @@
  *   rewrite-tree log_thought  -> the registered MCP tool handler from
  *                                server/tools/capture.ts, invoked through a
  *                                real McpServer + in-memory transport.
- *   REST POST /api/v1/thoughts -> the router from src/rest-api.ts mounted on a
- *                                real express app and reached over HTTP.
+ *   REST POST /api/v1/thoughts -> the router from server/transport/rest-api.ts, on
+ *                                a real express app, reached over HTTP.
  *   lane graduation            -> graduateLaneEvent() from src/tiering.ts.
  *
  * The embedding PROVIDER is stubbed with a deterministic vector so the check
@@ -33,11 +33,9 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  InMemoryTransport,
-} from "@modelcontextprotocol/sdk/inMemory.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import pino from "pino";
-import { createRestRouter } from "../../src/rest-api.ts";
+import { createRestRouter, type RestDeps } from "../../server/transport/rest-api.ts";
 import { registerCaptureTools } from "../../server/tools/capture.ts";
 import { graduateLaneEvent } from "../../src/tiering.ts";
 import { EMBEDDING_DIMENSIONS } from "../../src/embedding.ts";
@@ -69,8 +67,7 @@ function longThought(tag: string): string {
   return text;
 }
 
-const stubEmbed = async (): Promise<number[]> =>
-  Array(EMBEDDING_DIMENSIONS).fill(0.01);
+const stubEmbed = async (): Promise<number[]> => Array(EMBEDDING_DIMENSIONS).fill(0.01);
 
 const pool = new Pool();
 
@@ -85,35 +82,41 @@ async function chunkCount(parentId: string): Promise<number> {
 /** Path 1 -- rewrite-tree log_thought, through a real MCP client/server pair. */
 async function driveCapture(): Promise<string> {
   const server = new McpServer({ name: "done-means-605", version: "0" });
-  registerCaptureTools(server as any, {
-    pool,
-    embedFn: stubEmbed,
-    logger: pino({ level: "silent" }),
-  } as any);
+  registerCaptureTools(
+    server as unknown as Parameters<typeof registerCaptureTools>[0],
+    {
+      pool,
+      embedFn: stubEmbed,
+      logger: pino({ level: "silent" }),
+    } as unknown as Parameters<typeof registerCaptureTools>[1],
+  );
 
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
 
   const client = new Client({ name: "done-means-605-client", version: "0" });
   // The handler reads identity from extra.authInfo, which the transport
   // carries per-request; InMemoryTransport forwards what we attach here.
-  (serverTransport as any).onmessage_authInfo = undefined;
+  const transportHooks = serverTransport as unknown as {
+    onmessage_authInfo?: unknown;
+    onmessage?: (msg: unknown, extra?: Record<string, unknown>) => void;
+  };
+  transportHooks.onmessage_authInfo = undefined;
   await client.connect(clientTransport);
 
   // Attach auth to every request the server sees.
-  const origOnMessage = (serverTransport as any).onmessage;
-  (serverTransport as any).onmessage = (msg: unknown, extra?: any) => {
+  const origOnMessage = transportHooks.onmessage;
+  transportHooks.onmessage = (msg: unknown, extra?: Record<string, unknown>) => {
     origOnMessage?.(msg, {
-      ...(extra ?? {}),
+      ...extra,
       authInfo: { role: "admin", clientId: CREATED_BY, namespaceSource: "token" },
     });
   };
 
-  const result: any = await client.callTool({
+  const result = (await client.callTool({
     name: "log_thought",
     arguments: { content: longThought("capture"), namespace: NS },
-  });
+  })) as { content?: { text?: string }[] };
   await client.close();
   await server.close();
 
@@ -128,10 +131,16 @@ async function driveRest(): Promise<string> {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    (req as any).auth = { role: "admin", clientId: CREATED_BY };
+    (req as unknown as { auth: unknown }).auth = {
+      role: "admin",
+      clientId: CREATED_BY,
+    };
     next();
   });
-  app.use("/api/v1", createRestRouter({ pool, embedFn: stubEmbed as any }));
+  app.use(
+    "/api/v1",
+    createRestRouter({ pool, embedFn: stubEmbed as unknown as RestDeps["embedFn"] }),
+  );
 
   const server = app.listen(0);
   await new Promise<void>((r) => server.once("listening", () => r()));
@@ -142,7 +151,7 @@ async function driveRest(): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content: longThought("rest"), namespace: NS }),
   });
-  const body: any = await res.json();
+  const body = (await res.json()) as { id?: string };
   await new Promise<void>((r) => server.close(() => r()));
 
   if (!body?.id) throw new Error(`rest path returned no id: ${JSON.stringify(body)}`);
@@ -164,7 +173,7 @@ async function driveGraduation(): Promise<string> {
       importance: 5,
       agent: CREATED_BY,
       namespace: NS,
-    } as any,
+    } as unknown as Parameters<typeof graduateLaneEvent>[1],
     NS,
     CREATED_BY,
     await stubEmbed(),

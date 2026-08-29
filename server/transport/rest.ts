@@ -8,7 +8,7 @@
  *
  * WHY THE ROUTER BODIES ARE STILL IMPORTED FROM `src/`. The charter's strangler
  * rule is that behavior moves only behind a parity test that proves the moved
- * copy answers identically (§4 Phase 2/3). `src/rest-api.ts` and
+ * copy answers identically (§4 Phase 2/3). `server/transport/rest-api.ts` and
  * `src/rest-promotion.ts` are 990 lines of namespace-predicated SQL with no
  * rewrite-side coverage yet, so copying them here would be a 990-line unproven
  * fork of a security boundary — precisely the thing the charter's "no old
@@ -26,7 +26,7 @@ import { Router } from "express";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
-import { createRestRouter } from "../../src/rest-api.ts";
+import { createRestRouter } from "./rest-api.ts";
 import { createPromotionRouter } from "./rest-promotion.ts";
 import { requestAuth } from "../auth/middleware.ts";
 
