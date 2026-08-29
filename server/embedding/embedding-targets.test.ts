@@ -4,7 +4,8 @@ import {
   EMBEDDING_TARGET_NAMES,
   getEmbeddingTarget,
 } from "./embedding-targets.ts";
-import { contentHash } from "./embedding.ts";
+import { contentHash } from "../../src/embedding.ts";
+import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
 
 describe("embedding-targets registry", () => {
   it("covers every current embedding-bearing table", () => {
@@ -36,7 +37,10 @@ describe("embedding-targets registry", () => {
     // actual source columns so a concurrent name/type edit can't be clobbered.
     expect(entities.sourceGuardColumns).toEqual(["entity_type", "name"]);
     // Every guarded column MUST be projected so its captured value is available.
-    for (const col of entities.sourceGuardColumns!) {
+    for (const col of expectDefined(
+      entities.sourceGuardColumns,
+      "entities.sourceGuardColumns",
+    )) {
       expect(entities.selectColumns).toContain(col);
     }
   });
@@ -55,10 +59,10 @@ describe("embedding-targets registry", () => {
     // Invariant: a target that cannot guard on a hash MUST snapshot-guard its
     // real source columns, and every such column must be in selectColumns.
     for (const name of EMBEDDING_TARGET_NAMES) {
-      const t = EMBEDDING_TARGETS[name]!;
+      const t = expectDefined(EMBEDDING_TARGETS[name], name);
       if (t.provenance.hasContentHash) continue;
       expect(t.sourceGuardColumns?.length ?? 0).toBeGreaterThan(0);
-      for (const col of t.sourceGuardColumns!) {
+      for (const col of expectDefined(t.sourceGuardColumns, "sourceGuardColumns")) {
         expect(t.selectColumns).toContain(col);
       }
     }
@@ -80,7 +84,9 @@ describe("embedding-targets registry", () => {
       expect(t.provenance.hasEmbeddingModel).toBe(true);
     }
   });
+});
 
+describe("embedding-targets canonical text", () => {
   it("thoughts: embeds content+tags but hashes content alone (matches write path)", () => {
     const t = getEmbeddingTarget("thoughts");
     const row = { id: "t1", content: "a thought", tags: ["x", "y"] };
@@ -157,7 +163,9 @@ describe("embedding-targets registry", () => {
     const row = { id: "p1", name: "OpenBrain", description: "AI memory" };
     expect(t.embedText(row)).toBe("OpenBrain\nAI memory");
   });
+});
 
+describe("embedding-targets canonical text for sessions, lanes, and entities", () => {
   it("sessions: hash is summary|project, embed is summary alone when no structured fields", () => {
     const t = getEmbeddingTarget("sessions");
     const row = { id: "s1", summary: "session summary text", project: "ob" };
@@ -218,24 +226,24 @@ describe("embedding-targets registry", () => {
     const row = { id: "en1", entity_type: "person", name: "Alice" };
     expect(t.embedText(row)).toBe("person: Alice");
   });
+});
 
+describe("embedding-targets lookup and isolation invariants", () => {
   it("getEmbeddingTarget throws on unknown table (allowlist gate)", () => {
-    expect(() =>
-      getEmbeddingTarget("robert'); DROP TABLE thoughts;--"),
-    ).toThrow();
+    expect(() => getEmbeddingTarget("robert'); DROP TABLE thoughts;--")).toThrow();
     expect(() => getEmbeddingTarget("not_a_table")).toThrow();
   });
 
   it("id column is included in every target's projection", () => {
     for (const name of EMBEDDING_TARGET_NAMES) {
-      const t = EMBEDDING_TARGETS[name]!;
+      const t = expectDefined(EMBEDDING_TARGETS[name], name);
       expect(t.selectColumns).toContain(t.idColumn);
     }
   });
 
   it("every target is namespace-scopable (direct column XOR FK binding)", () => {
     for (const name of EMBEDDING_TARGET_NAMES) {
-      const t = EMBEDDING_TARGETS[name]!;
+      const t = expectDefined(EMBEDDING_TARGETS[name], name);
       const direct = Boolean(t.namespaceColumn);
       const viaFk = Boolean(t.namespaceVia);
       // Exactly one path -- never both, never neither. A target with neither
@@ -255,6 +263,8 @@ describe("embedding-targets registry", () => {
       namespaceColumn: "namespace",
     });
     // The FK column MUST be projected so it is available for the join predicate.
-    expect(t.selectColumns).toContain(t.namespaceVia!.localKey);
+    expect(t.selectColumns).toContain(
+      expectDefined(t.namespaceVia, "namespaceVia").localKey,
+    );
   });
 });

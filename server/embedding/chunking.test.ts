@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { chunkText, shouldChunk, CHUNK_THRESHOLD } from "./chunking.ts";
+import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
 
 /**
  * Every non-whitespace character of `text` must appear inside some chunk.
@@ -50,15 +51,10 @@ function chunkSpans(
     let end = Math.min(start + chunkSize, text.length);
     if (end < text.length) {
       const zoneStart = Math.max(start, end - overlap);
-      const sentenceBreak = text
-        .slice(zoneStart, end)
-        .search(/[.!?\n]\s+[A-Z]/);
-      if (sentenceBreak !== -1) {
-        end = zoneStart + sentenceBreak + 1;
-      } else {
-        const lastSpace = text.lastIndexOf(" ", end);
-        if (lastSpace > start + chunkSize / 2) end = lastSpace;
-      }
+      const sentenceBreak = text.slice(zoneStart, end).search(/[.!?\n]\s+[A-Z]/);
+      const lastSpace = text.lastIndexOf(" ", end);
+      if (sentenceBreak !== -1) end = zoneStart + sentenceBreak + 1;
+      else if (lastSpace > start + chunkSize / 2) end = lastSpace;
     }
     if (text.slice(start, end).trim().length > 0) spans.push([start, end]);
     if (end >= text.length) break;
@@ -73,7 +69,7 @@ function uncoveredOffset(text: string, size: number, overlap: number): number {
     cover.fill(1, start, Math.min(end, text.length));
   }
   for (let i = 0; i < text.length; i++) {
-    if (!cover[i] && !/\s/.test(text[i]!)) return i;
+    if (!cover[i] && !/\s/.test(expectDefined(text[i], "text char"))) return i;
   }
   return -1;
 }
@@ -178,9 +174,11 @@ describe("chunkText", () => {
 
   it("emits strictly increasing indexes starting at zero", () => {
     const chunks = chunkText("Alpha. Beta! Gamma? Delta.\n".repeat(500), 2000, 400);
-    expect(chunks[0]!.index).toBe(0);
+    expect(expectDefined(chunks[0], "first chunk").index).toBe(0);
     for (let i = 1; i < chunks.length; i++) {
-      expect(chunks[i]!.index).toBe(chunks[i - 1]!.index + 1);
+      expect(expectDefined(chunks[i], "chunk").index).toBe(
+        expectDefined(chunks[i - 1], "prev chunk").index + 1,
+      );
     }
   });
 
@@ -191,8 +189,8 @@ describe("chunkText", () => {
     // Each chunk after the first must share a prefix with its predecessor's
     // tail -- that is what the overlap is for.
     for (let i = 1; i < chunks.length; i++) {
-      const prev = chunks[i - 1]!.text;
-      const head = chunks[i]!.text.slice(0, 30);
+      const prev = expectDefined(chunks[i - 1], "prev chunk").text;
+      const head = expectDefined(chunks[i], "chunk").text.slice(0, 30);
       expect(prev.includes(head) || text.includes(head)).toBe(true);
     }
   });

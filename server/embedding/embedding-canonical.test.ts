@@ -46,10 +46,7 @@ function decisionReference(args: {
 }
 
 /** session-save.ts / rest-api.ts POST /sessions inline hash formula. */
-function sessionHashReference(args: {
-  summary: string;
-  project?: string;
-}): string {
+function sessionHashReference(args: { summary: string; project?: string }): string {
   return args.summary + "|" + (args.project ?? "");
 }
 
@@ -61,8 +58,7 @@ function sessionEmbedReference(args: {
   blockers?: string[];
 }): string {
   const embedParts = [args.summary];
-  if (args.key_decisions?.length)
-    embedParts.push(args.key_decisions.join(". "));
+  if (args.key_decisions?.length) embedParts.push(args.key_decisions.join(". "));
   if (args.next_steps?.length) embedParts.push(args.next_steps.join(". "));
   if (args.blockers?.length) embedParts.push(args.blockers.join(". "));
   return embedParts.join("\n");
