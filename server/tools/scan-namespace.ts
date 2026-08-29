@@ -13,7 +13,7 @@
  * its scoring phases separate from its mutations.
  *
  * The nomination predicate and metadata projection are reused from
- * `src/promotion-nomination.ts` rather than restated. What counts as an
+ * `server/domain/promotion-nomination.ts` rather than restated. What counts as an
  * "explicit nomination" is one rule; a second copy here would drift and the two
  * servers would disagree about which entries are pending.
  */
@@ -31,7 +31,7 @@ import {
   explicitSharedNominationSqlPredicate,
   isExplicitSharedNomination,
   promotionMetadataSelect,
-} from "../../src/promotion-nomination.ts";
+} from "../domain/promotion-nomination.ts";
 import {
   authIdentity,
   errorResult,
@@ -74,19 +74,14 @@ const scanNamespaceInputSchema = {
       "Namespace to check for existing promoted duplicates (default shared-kb)",
     ),
   table: tableEnum.optional().describe("Limit scan to a specific table"),
-  since: z
-    .string()
-    .optional()
-    .describe("Only entries created after this ISO date"),
+  since: z.string().optional().describe("Only entries created after this ISO date"),
   limit: z
     .number()
     .int()
     .min(1)
     .max(100)
     .optional()
-    .describe(
-      `Max entries to scan per table (default ${DEFAULT_ENTRIES_PER_TABLE})`,
-    ),
+    .describe(`Max entries to scan per table (default ${DEFAULT_ENTRIES_PER_TABLE})`),
 };
 
 const scanNamespaceAnnotations = {
@@ -148,10 +143,7 @@ function resolveScanScope(
   // statement stays inside it.
   const scanned = physicalNamespace(args.namespace, sharedNamespaceNames);
   const targetPhysical = physicalNamespace(target, sharedNamespaceNames);
-  const targetCanonical = canonicalNamespace(
-    targetPhysical,
-    sharedNamespaceNames,
-  );
+  const targetCanonical = canonicalNamespace(targetPhysical, sharedNamespaceNames);
   return {
     scope: {
       tables: args.table ? [args.table as ResourceTable] : ALL_TABLES,
@@ -172,8 +164,7 @@ async function queryNominatedRows(
 ): Promise<Record<string, unknown>[]> {
   const values: unknown[] = [scope.scanned, scope.perTable];
   if (scope.since !== undefined) values.push(scope.since);
-  const sinceFilter =
-    scope.since !== undefined ? " AND t.created_at >= $3" : "";
+  const sinceFilter = scope.since !== undefined ? " AND t.created_at >= $3" : "";
 
   const { rows } = await dependencies.pool.query(
     `SELECT t.id, t.content_hash, t.namespace, t.created_at,
@@ -243,9 +234,7 @@ async function collectTable(options: {
       continue;
     }
 
-    if (
-      isExplicitSharedNomination(row.metadata as Record<string, unknown> | null)
-    ) {
+    if (isExplicitSharedNomination(row.metadata as Record<string, unknown> | null)) {
       candidates.push({
         table,
         id: row.id as string,

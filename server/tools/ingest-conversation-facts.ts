@@ -35,13 +35,9 @@ import type { AuthIdentity } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
-import { containsSecret } from "../../src/sharing.ts";
+import { containsSecret } from "../domain/sharing.ts";
 import { resolveIngestionEligibility } from "../../src/source-registry.ts";
-import {
-  authIdentity,
-  textResult,
-  type MemoryToolDependencies,
-} from "./types.ts";
+import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import {
   conversationIngestSchema,
   findRawTranscriptKey,
@@ -84,8 +80,7 @@ function ingestError(
 
 /** Writer provenance, mirroring `append_session_event`. */
 function writerProvenance(identity: AuthIdentity) {
-  const namespaceSource =
-    identity.namespaceSource === "delegated" ? "header" : "token";
+  const namespaceSource = identity.namespaceSource === "delegated" ? "header" : "token";
   return {
     writer_identity: identity.clientId,
     token_identity: identity.tokenClientId ?? identity.clientId,
@@ -99,8 +94,7 @@ function registryAuth(identity: AuthIdentity): AuthInfo {
   return {
     role: identity.role,
     clientId: identity.clientId,
-    namespaceSource:
-      identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
   } as AuthInfo;
 }
 
@@ -220,9 +214,7 @@ function refuseSecrets(
 }
 
 /** The approved source row this batch is bound to. */
-type ApprovedSource = Awaited<
-  ReturnType<typeof resolveIngestionEligibility>
->["data"];
+type ApprovedSource = Awaited<ReturnType<typeof resolveIngestionEligibility>>["data"];
 
 /**
  * Gate 4, approval half: the explicit-approval check through the single
@@ -475,9 +467,7 @@ async function writeBatch(
 ): Promise<WrittenUnit[]> {
   const { dependencies, namespace } = context;
   if (typeof dependencies.pool.connect !== "function") {
-    throw new Error(
-      "ingest_conversation_facts requires a transactional pg pool",
-    );
+    throw new Error("ingest_conversation_facts requires a transactional pg pool");
   }
   const client = await dependencies.pool.connect();
   const written: WrittenUnit[] = [];
