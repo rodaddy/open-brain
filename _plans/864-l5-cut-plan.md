@@ -59,6 +59,14 @@ Every lane follows drag rule M3: a moved file's imports of other `src/` files
 are rewritten to `../../src/<x>.ts` and those files are NOT pulled along. The
 closure after a lane equals the closure before minus exactly the files it moved.
 
+Rule M2 leaves non-`server/` importers untouched and leaves a SHIM at the old
+`src/` path — one header comment plus `export * from "../server/<dir>/<f>.ts"`.
+That keeps large unconverted `src/` and `scripts/` files out of the staged set,
+which is what the pre-commit gate lints whole. Shims are `src/` files and retire
+with `src/` at L6, not by a move lane. `864-moved-out-of-src.sh` accepts a shim
+in clauses A and B and skips clause C for one, because the implementation has
+moved even though the path is still tracked.
+
 ## Expected closure after each wave
 
 | After | Closure |
