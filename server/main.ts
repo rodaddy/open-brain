@@ -56,6 +56,7 @@ import { runMigrations } from "./db/migrations.ts";
 import { createDatabase, type Database } from "./db/pool.ts";
 import { withLogging } from "./logging/decorate.ts";
 import { createLogger } from "./logging/logger.ts";
+import { setLegacyLoggerSettingsReader } from "./logging/legacy-logger-settings.ts";
 import {
   createTracingRuntime,
   installMcpTracing,
@@ -526,6 +527,21 @@ export async function startServer(
   options: StartServerOptions = {},
 ): Promise<StartedServer> {
   const config = options.config ?? loadServerConfig();
+  // The legacy `src/logger.ts` singleton still emits from every tool this
+  // process loads, and under issue 864 it reads no environment of its own.
+  // Registering here — before the first line can be emitted — makes this
+  // process's own configuration the source of its envelope, rather than a
+  // second parse of the same variables. Fields config does not carry stay
+  // undefined, which is exactly the value the module defaults on.
+  setLegacyLoggerSettingsReader(() => ({
+    logLevel: config.logging.level,
+    hostName: config.transport.hostname,
+    logFile: config.logging.file,
+    logMaxBytes: undefined,
+    logMaxFiles: undefined,
+    serviceName: config.logging.service,
+    workerName: config.logging.workerName,
+  }));
   const logger = options.logger ?? createLogger(config.logging);
 
   // TOKENS FIRST, before anything is allocated. A process with no configured

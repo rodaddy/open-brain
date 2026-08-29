@@ -119,7 +119,11 @@
   "overrides": [
     // The logging modules ARE the thing that wraps the console sink.
     {
-      "files": ["src/logger.ts", "server/logging/logger.ts"],
+      "files": [
+        "src/logger.ts",
+        "server/logging/logger.ts",
+        "server/logging/legacy-logger.ts"
+      ],
       "rules": { "no-console": "off" }
     },
     // Entry points report a fatal error when the logger may be what failed.
@@ -166,11 +170,7 @@
     // or a test fixture; nothing outside a tests/ directory is exempted, and the
     // repo-root tests/ holds only a JSON fixture, no TypeScript at all.
     {
-      "files": [
-        "**/*.test.ts",
-        "**/__tests__/**/*.ts",
-        "**/tests/**/*.ts"
-      ],
+      "files": ["**/*.test.ts", "**/__tests__/**/*.ts", "**/tests/**/*.ts"],
       "rules": { "no-console": "off" }
     },
     // NO DIRECT ENV READS IN server/ -- the L2b rung of
@@ -202,11 +202,5 @@
     }
   ],
 
-  "ignorePatterns": [
-    "node_modules/**",
-    "dist/**",
-    "coverage/**",
-    "data/**",
-    "out/**"
-  ]
+  "ignorePatterns": ["node_modules/**", "dist/**", "coverage/**", "data/**", "out/**"]
 }
