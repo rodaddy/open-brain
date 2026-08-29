@@ -33,6 +33,17 @@ import {
   type TracingConfigGroup,
 } from "./config/env-groups.ts";
 import {
+  doctorGroup,
+  embeddingGroup,
+  mcpAuditGroup,
+  promotionGroup,
+  srcReaderEnvironmentFields,
+  type DoctorConfigGroup,
+  type EmbeddingConfigGroup,
+  type McpAuditConfigGroup,
+  type PromotionConfigGroup,
+} from "./config/src-readers.ts";
+import {
   readDeployedRevision,
   resolveServerIdentity,
 } from "./transport/server-identity.ts";
@@ -51,6 +62,13 @@ export type {
   SharedNamespaceGroup,
   TracingConfigGroup,
 } from "./config/env-groups.ts";
+export type {
+  DoctorConfigGroup,
+  EmbeddingConfigGroup,
+  EmbeddingWatchdogGroup,
+  McpAuditConfigGroup,
+  PromotionConfigGroup,
+} from "./config/src-readers.ts";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const ROLE_NAMES = [
@@ -124,8 +142,7 @@ export const OPTIONAL_SECRET_KEYS = [
  * rather than an omission.
  */
 const optionalSecret = z.preprocess(
-  (value) =>
-    typeof value === "string" && value.trim() === "" ? undefined : value,
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
   z.string().min(1).optional(),
 );
 const userTokenValue = z
@@ -176,6 +193,10 @@ const environmentSchema = z
     // `process.env`. Declarations and the reasoning behind each parser live in
     // `./config/env-groups.ts`; the readers themselves are rewired by L2b/L2c.
     ...extendedEnvironmentFields,
+    // The keys the remaining non-`server/` modules read. Declared so an L5
+    // move lane can hand the module a value instead of leaving it reaching for
+    // `process.env` behind the door. See `./config/src-readers.ts`.
+    ...srcReaderEnvironmentFields,
   })
   .catchall(z.string().optional());
 
@@ -246,6 +267,10 @@ export interface ServerConfig {
   readonly tracing: TracingConfigGroup;
   readonly captureHealth: CaptureHealthGroup;
   readonly http: HttpConfigGroup;
+  readonly embedding: EmbeddingConfigGroup;
+  readonly promotion: PromotionConfigGroup;
+  readonly mcpAudit: McpAuditConfigGroup;
+  readonly doctor: DoctorConfigGroup;
 }
 
 export interface ConfigIssue {
@@ -283,10 +308,16 @@ function parseUserTokens(environment: Environment): ConfigResult | AuthTokenConf
     if (!key.startsWith("AUTH_TOKEN_USER_") || value === undefined) continue;
     const parsed = userTokenValue.safeParse(value);
     if (!parsed.success) {
-      issues.push({ path: key, message: parsed.error.issues[0]?.message ?? "invalid user token" });
+      issues.push({
+        path: key,
+        message: parsed.error.issues[0]?.message ?? "invalid user token",
+      });
       continue;
     }
-    const clientId = key.slice("AUTH_TOKEN_USER_".length).toLowerCase().replaceAll("_", "-");
+    const clientId = key
+      .slice("AUTH_TOKEN_USER_".length)
+      .toLowerCase()
+      .replaceAll("_", "-");
     configured.push({ ...parsed.data, clientId });
   }
   return issues.length > 0 ? { ok: false, issues } : configured;
@@ -352,9 +383,7 @@ function buildConfig(
     // the whole point of the config boundary: one env read, at the composition
     // root, and no module behind it touching global state.
     nats: parseNatsConfig(parsed as Record<string, string | undefined>),
-    maintenance: parseMaintenanceConfig(
-      parsed as Record<string, string | undefined>,
-    ),
+    maintenance: parseMaintenanceConfig(parsed as Record<string, string | undefined>),
     sharedNamespace: parsed.SHARED_NAMESPACE_CANONICAL,
     search: searchGroup(parsed),
     fts: ftsGroup(parsed),
@@ -367,6 +396,10 @@ function buildConfig(
     tracing: tracingGroup(parsed),
     captureHealth: captureHealthGroup(parsed),
     http: httpGroup(parsed),
+    embedding: embeddingGroup(parsed),
+    promotion: promotionGroup(parsed),
+    mcpAudit: mcpAuditGroup(parsed),
+    doctor: doctorGroup(parsed),
   };
 }
 
@@ -415,6 +448,8 @@ function readDeployStamp(): string | undefined {
 export function loadServerConfig(): ServerConfig {
   const result = parseServerConfig(process.env, readDeployStamp());
   if (result.ok) return result.config;
-  const summary = result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ");
+  const summary = result.issues
+    .map((issue) => `${issue.path}: ${issue.message}`)
+    .join("; ");
   throw new Error(`server_configuration_invalid: ${summary}`);
 }
