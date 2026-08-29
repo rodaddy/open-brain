@@ -1,7 +1,7 @@
 /**
  * Canonical embed-text and source-hash builders for entry rewrites.
  *
- * These mirror `src/embedding-canonical.ts` byte-for-byte. The embedding-repair
+ * These mirror `server/embedding/embedding-canonical.ts` byte-for-byte. The embedding-repair
  * registry decides a row drifted by recomputing its source hash and comparing
  * it to the stored `content_hash`, so a writer that builds either string
  * differently -- even by one separator -- makes every row it writes look
