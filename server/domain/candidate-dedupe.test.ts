@@ -25,14 +25,15 @@
 
 import { describe, expect, it } from "bun:test";
 import type pg from "pg";
+import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
 import {
   CANDIDATE_DUP_DISTANCE,
   DEFAULT_DEDUPE_BATCH,
   readReinforcement,
   runCandidateDedupe,
 } from "./candidate-dedupe.ts";
-import { DEFAULT_DUP_THRESHOLD } from "./tiering.ts";
-import type { MaintenanceQueueLogger } from "./maintenance-queue.ts";
+import { DEFAULT_DUP_THRESHOLD } from "../../src/tiering.ts";
+import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
 
 const silentLogger: MaintenanceQueueLogger = {
   info: () => {},
@@ -105,7 +106,10 @@ describe("the merge threshold is settled, not fitted", () => {
   it("passes the settled threshold to the pairing query by default", async () => {
     const { pool, seen } = mergePool([]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const pairing = seen.find((s) => s.text.includes("WITH RECURSIVE scoped"))!;
+    const pairing = expectDefined(
+      seen.find((s) => s.text.includes("WITH RECURSIVE scoped")),
+      "pairing",
+    );
     expect(pairing.values[2]).toBe(CANDIDATE_DUP_DISTANCE);
     expect(pairing.values[1]).toBe(DEFAULT_DEDUPE_BATCH);
   });
@@ -133,9 +137,10 @@ describe("runCandidateDedupe — the reversibility contract", () => {
     const { pool, seen } = mergePool([pair]);
     await runCandidateDedupe({ pool, logger: silentLogger });
 
-    const insert = seen.find((s) =>
-      s.text.includes("INSERT INTO candidate_reinforcement"),
-    )!;
+    const insert = expectDefined(
+      seen.find((s) => s.text.includes("INSERT INTO candidate_reinforcement")),
+      "insert",
+    );
     expect(insert.values).toEqual([
       pair.namespace,
       pair.survivor_id,
@@ -153,9 +158,10 @@ describe("runCandidateDedupe — the reversibility contract", () => {
     const said = new Date("2026-05-01T09:00:00Z");
     const { pool, seen } = mergePool([pairRow({ dup_occurred_at: said })]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const insert = seen.find((s) =>
-      s.text.includes("INSERT INTO candidate_reinforcement"),
-    )!;
+    const insert = expectDefined(
+      seen.find((s) => s.text.includes("INSERT INTO candidate_reinforcement")),
+      "insert",
+    );
     expect(insert.values[3]).toBe(said);
     expect(insert.text).not.toContain("now()");
   });
@@ -163,9 +169,10 @@ describe("runCandidateDedupe — the reversibility contract", () => {
   it("is idempotent on replay -- reinforcement cannot be inflated by a retry", async () => {
     const { pool, seen } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const insert = seen.find((s) =>
-      s.text.includes("INSERT INTO candidate_reinforcement"),
-    )!;
+    const insert = expectDefined(
+      seen.find((s) => s.text.includes("INSERT INTO candidate_reinforcement")),
+      "insert",
+    );
     expect(insert.text).toContain(
       "ON CONFLICT (candidate_id, dup_content_hash) DO NOTHING",
     );
@@ -176,8 +183,7 @@ describe("runCandidateDedupe — the reversibility contract", () => {
     const { pool } = fakePool((sql) => {
       if (sql.includes("WITH RECURSIVE scoped")) return { rows: [pairRow()] };
       if (sql.includes("count(*)::text AS n")) return { rows: [{ n: "0" }] };
-      if (sql.includes("INSERT INTO candidate_reinforcement"))
-        return { rows: [] };
+      if (sql.includes("INSERT INTO candidate_reinforcement")) return { rows: [] };
       if (sql.includes("DELETE FROM candidate_memory")) return { rows: [{}] };
       return undefined;
     });
@@ -193,7 +199,10 @@ describe("runCandidateDedupe — the operator's grade is ground truth", () => {
     // grading exercise exists to produce.
     const { pool, seen } = mergePool([]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const pairing = seen.find((s) => s.text.includes("WITH RECURSIVE scoped"))!;
+    const pairing = expectDefined(
+      seen.find((s) => s.text.includes("WITH RECURSIVE scoped")),
+      "pairing",
+    );
     expect(pairing.text).toContain("reviewed_at IS NULL");
   });
 
@@ -202,9 +211,10 @@ describe("runCandidateDedupe — the operator's grade is ground truth", () => {
     // moves the SELECT.
     const { pool, seen } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const del = seen.find((s) =>
-      s.text.includes("DELETE FROM candidate_memory"),
-    )!;
+    const del = expectDefined(
+      seen.find((s) => s.text.includes("DELETE FROM candidate_memory")),
+      "del",
+    );
     expect(del.text).toContain("reviewed_at IS NULL");
   });
 
@@ -234,7 +244,10 @@ describe("runCandidateDedupe — the survivor's timestamps", () => {
     // bare new one; overwriting first_said_at erases it.
     const { pool, seen } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const update = seen.find((s) => s.text.includes("SET last_said_at"))!;
+    const update = expectDefined(
+      seen.find((s) => s.text.includes("SET last_said_at")),
+      "update",
+    );
     expect(update.text).toContain("last_said_at = GREATEST(");
     expect(update.text).not.toContain("first_said_at =");
   });
@@ -245,7 +258,10 @@ describe("runCandidateDedupe — the survivor's timestamps", () => {
       pairRow({ dup_occurred_at: new Date("2020-01-01T00:00:00Z") }),
     ]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const update = seen.find((s) => s.text.includes("SET last_said_at"))!;
+    const update = expectDefined(
+      seen.find((s) => s.text.includes("SET last_said_at")),
+      "update",
+    );
     expect(update.text).toContain("GREATEST");
     expect(update.values[0]).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
   });
@@ -262,7 +278,10 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
   it("locks duplicates AND survivors in id order so concurrent passes block, not deadlock", async () => {
     const { pool, seen } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger: silentLogger });
-    const lock = seen.find((s) => s.text.includes("FOR UPDATE"))!;
+    const lock = expectDefined(
+      seen.find((s) => s.text.includes("FOR UPDATE")),
+      "lock",
+    );
     expect(lock.text).toContain("ORDER BY id");
     // Both sides of every pair.
     expect(lock.values[0]).toEqual([
@@ -293,7 +312,10 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
   it("scopes to a namespace when asked", async () => {
     const { pool, seen } = mergePool([]);
     await runCandidateDedupe({ pool, logger: silentLogger, namespace: "rico" });
-    const pairing = seen.find((s) => s.text.includes("WITH RECURSIVE scoped"))!;
+    const pairing = expectDefined(
+      seen.find((s) => s.text.includes("WITH RECURSIVE scoped")),
+      "pairing",
+    );
     expect(pairing.values[0]).toBe("rico");
   });
 
@@ -306,9 +328,9 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
       }
       return undefined;
     });
-    await expect(
-      runCandidateDedupe({ pool, logger: silentLogger }),
-    ).rejects.toThrow("deadlock detected");
+    await expect(runCandidateDedupe({ pool, logger: silentLogger })).rejects.toThrow(
+      "deadlock detected",
+    );
   });
 
   it("logs counts and a distance, never content or a hash", async () => {
@@ -321,7 +343,10 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
     } as unknown as MaintenanceQueueLogger;
     const { pool } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger });
-    const done = records.find((r) => r.msg === "candidate_dedupe_complete")!;
+    const done = expectDefined(
+      records.find((r) => r.msg === "candidate_dedupe_complete"),
+      "done",
+    );
     expect(JSON.stringify(done.fields)).not.toContain("hash-dup");
     expect(done.fields).toMatchObject({ merged: 1, reinforced: 1 });
   });
@@ -355,9 +380,11 @@ describe("readReinforcement — receipts, computed every time", () => {
     // staleness bug this epic exists to remove.
     const { pool, seen } = fakePool(() => ({ rows: [] }));
     await readReinforcement(pool, ["c1"]);
-    expect(seen[0]!.text).toContain("FROM candidate_reinforcement");
-    expect(seen[0]!.text).not.toContain("candidate_memory");
-    expect(seen[0]!.text).toContain("count(*)");
+    expect(expectDefined(seen[0], "seen[0]").text).toContain(
+      "FROM candidate_reinforcement",
+    );
+    expect(expectDefined(seen[0], "seen[0]").text).not.toContain("candidate_memory");
+    expect(expectDefined(seen[0], "seen[0]").text).toContain("count(*)");
   });
 
   it("issues no query at all for an empty id list", async () => {
