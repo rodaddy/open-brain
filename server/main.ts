@@ -68,7 +68,7 @@ import {
   installHttpMiddleware,
   parseAllowedOrigins,
 } from "./transport/rest.ts";
-import { installMcpAudit } from "../src/audit-log.ts";
+import { installMcpAudit } from "./security/audit-log.ts";
 import { generateEmbedding, generateEmbeddingWithMetadata } from "../src/embedding.ts";
 import {
   composeMaintenanceHandlers,
@@ -185,7 +185,7 @@ function createServerFactory(input: {
   return () => {
     const server = new McpServer({ name: "open-brain", version: "1.0.0" });
     installToolLogging(server, toolLogger);
-    installMcpAudit(server, { pool });
+    installMcpAudit(server, { pool, config: config.mcpAudit });
     // `sink` undefined means tracing is off for this process; the install then
     // never wraps `registerTool` and costs nothing.
     if (input.tracing.sink) {
