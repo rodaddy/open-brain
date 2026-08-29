@@ -15,7 +15,7 @@
  * content gate from the curated path or impose thoughts/decisions-only on the
  * general one.
  *
- * Both delegate the actual copy to `src/promotion-service.ts`, which owns
+ * Both delegate the actual copy to `server/domain/promotion-service.ts`, which owns
  * provenance stamping, duplicate detection in the target, and its own re-check
  * of write authority. That re-check is why a single owning boundary matters: a
  * second copy of the promotion logic here would be a second place for the
@@ -37,7 +37,7 @@ import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import { sharedNamespaceConfig } from "./shared-namespace.ts";
-import { promoteEntry } from "../../src/promotion-service.ts";
+import { promoteEntry } from "../domain/promotion-service.ts";
 import {
   authIdentity,
   errorResult,
@@ -45,10 +45,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { tableEnum } from "./curation-helpers.ts";
-import {
-  isPromotionIdentity,
-  legacyTargetRefusal,
-} from "./promotion-shared.ts";
+import { isPromotionIdentity, legacyTargetRefusal } from "./promotion-shared.ts";
 
 /**
  * Convert the server identity into the promotion service's shape.
@@ -61,8 +58,7 @@ function promotionAuth(identity: AuthIdentity): AuthInfo {
   return {
     role: identity.role,
     clientId: identity.clientId,
-    namespaceSource:
-      identity.namespaceSource === "delegated" ? "header" : "token",
+    namespaceSource: identity.namespaceSource === "delegated" ? "header" : "token",
   } as AuthInfo;
 }
 
@@ -70,11 +66,7 @@ function promotionAuth(identity: AuthIdentity): AuthInfo {
 const promoteEntryInputSchema = {
   table: tableEnum.describe("Source table"),
   id: z.string().uuid().describe("Source entry UUID"),
-  reason: z
-    .string()
-    .max(1000)
-    .optional()
-    .describe("Why this entry is being promoted"),
+  reason: z.string().max(1000).optional().describe("Why this entry is being promoted"),
   target_namespace: z
     .string()
     .min(1)
@@ -183,10 +175,13 @@ async function runPromotion(options: {
       dependencies.pool,
       args.table as ResourceTable,
       args.id,
-      target,
-      args.reason,
-      promotionAuth(identity),
-      { dryRun },
+      {
+        targetNamespace: target,
+        reason: args.reason,
+        auth: promotionAuth(identity),
+        dryRun,
+        killSwitch: dependencies.promotionKillSwitch ?? false,
+      },
     );
     dependencies.logger.info(
       {
