@@ -1,23 +1,15 @@
-// Single source of truth for qmd entrypoint path resolution.
-//
-// Both the real qmd caller (src/tools/search-all.ts) and the operator doctor
-// (src/operator-doctor.ts) MUST consume resolveQmdPath() so their view of the
-// qmd binary location can never diverge. The default matches the documented
-// prod layout on production-host.
-export const DEFAULT_QMD_PATH = "/opt/qmd/src/qmd.ts";
+// L5 adapter (issue 864): legacy call form over server/config/qmd-path.ts; retired with src/ at L6.
+import {
+  resolveQmdPath as resolveQmdPathWithSettings,
+  type ResolvedQmdPath,
+} from "../server/config/qmd-path.ts";
 
-export interface ResolvedQmdPath {
-  path: string;
-  source: "env" | "default";
-}
+export { DEFAULT_QMD_PATH } from "../server/config/qmd-path.ts";
+export type { ResolvedQmdPath } from "../server/config/qmd-path.ts";
 
+/** The legacy form: an optional env record, defaulted to `process.env`. */
 export function resolveQmdPath(
   env: Record<string, string | undefined> = process.env,
 ): ResolvedQmdPath {
-  // Mirror the historical `process.env.QMD_PATH ?? DEFAULT_QMD_PATH` exactly
-  // (no trimming) so search_all behavior is unchanged.
-  if (env.QMD_PATH === undefined) {
-    return { path: DEFAULT_QMD_PATH, source: "default" };
-  }
-  return { path: env.QMD_PATH, source: "env" };
+  return resolveQmdPathWithSettings({ qmdPath: env.QMD_PATH });
 }

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { embeddingBaseUrl, embeddingApiKey } from "../../src/embedding.ts";
 import { readMcpAuditConfig } from "../../src/audit-log.ts";
-import { resolveQmdPath } from "../../src/qmd-path.ts";
+import { resolveQmdPath } from "../config/qmd-path.ts";
 import { logger } from "../../src/logger.ts";
 import { describeError } from "../../src/observability/index.ts";
 import type { QmdIndexProbeResult } from "../../src/qmd-index-probe-worker.ts";
@@ -429,12 +429,12 @@ async function readQmdIndexStatus(
 }
 
 // Availability = the qmd entrypoint file exists at the same resolved path
-// search_all executes (src/qmd-path.ts). This remains binary presence only;
+// search_all executes (server/config/qmd-path.ts). This remains binary presence only;
 // repo-local index freshness is reported separately below.
 export async function checkQmdStatus(
   options: OperatorDoctorBuildOptions,
 ): Promise<OperatorDoctorStatus["qmd"]> {
-  const resolved = resolveQmdPath();
+  const resolved = resolveQmdPath({ qmdPath: options.qmdPath });
   let available = false;
   try {
     available = existsSync(resolved.path);

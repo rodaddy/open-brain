@@ -20,7 +20,7 @@ import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
 } from "../../src/embedding.ts";
-import { checkPoolHealth } from "../../src/db/pool.ts";
+import { checkPoolHealth } from "../db/legacy-pool.ts";
 import { logger } from "../../src/logger.ts";
 import { describeError } from "../../src/observability/index.ts";
 import type { NatsBridgeHealth } from "../../src/nats-bridge.ts";

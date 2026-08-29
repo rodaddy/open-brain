@@ -135,6 +135,11 @@ export interface OperatorDoctorOptions {
   rotationConfigured: boolean;
   /** Raw-turn retention seconds: the distillation-lag alarm denominator. */
   rawTurnTtlSeconds: number;
+  /**
+   * Raw `QMD_PATH`: absent means the qmd entrypoint default, blank means a
+   * blank path. Not folded to absent -- see `server/config/qmd-path.ts`.
+   */
+  qmdPath?: string;
   /** Absent means the doctor falls back to its own default index path. */
   qmdIndexPath?: string;
   /** Where `qmdIndexPath` came from, reported verbatim in the payload. */
