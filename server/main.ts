@@ -73,7 +73,7 @@ import { generateEmbedding, generateEmbeddingWithMetadata } from "../src/embeddi
 import {
   composeMaintenanceHandlers,
   MAINTENANCE_GRAPH_AUTH,
-} from "../src/maintenance-bootstrap.ts";
+} from "./maintenance/maintenance-bootstrap.ts";
 import { getOperatorDoctorStatus } from "./application/operator-doctor.ts";
 import type { ToolDeps } from "../src/tools/index.ts";
 import type { AuthInfo } from "./types.ts";
