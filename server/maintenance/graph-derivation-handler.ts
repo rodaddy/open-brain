@@ -4,7 +4,7 @@ import { logger } from "../../src/logger.ts";
 import { canWriteNamespace } from "../../src/namespace-policy.ts";
 import { physicalNamespace } from "../../src/shared-namespace.ts";
 import type { AuthInfo } from "../../src/types.ts";
-import { extractMetadata } from "../../src/extraction.ts";
+import { extractMetadata } from "../domain/extraction.ts";
 import {
   CrossNamespaceEndpointError,
   deriveGraphFromMetadata,
