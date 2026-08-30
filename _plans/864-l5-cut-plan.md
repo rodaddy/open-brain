@@ -117,6 +117,34 @@ line printed, rather than dropping out of the set unseen.
 Per-cluster line counts come from the census in the measurement table; a lane
 reports its own before/after closure in its commit body (rule M6).
 
+## Status 2026-08-30 (session 14)
+
+Merged for issue 864 since `42944000` — 40 pull requests, MERGED on `origin/main`
+at `8e6cfeb8` (`git log --oneline 42944000..origin/main`):
+
+#967, #969, #968, #970, #971, #972, #973, #974, #975, #976, #978, #979, #977,
+#980, #981, #982, #983, #984, #985, #986, #987, #988, #989, #991, #993, #990,
+#995, #996, #997, #999, #994, #1000, #998, #1001, #1002, #992, #1003, #1004,
+#1005 — plus the census/tooling PR #967 that opened the program.
+
+Shim/adapter-excluded runtime closure on `main` is **3** — MERGED
+(`src/tools/agent-context-pack.ts`, `src/tools/agent-context-pack-durable-lane.ts`,
+`src/tools/agent-context-pack-durable-memory.ts`).
+
+Open pull requests, all WRITTEN with green local verification, each blocked only
+on CI jobs scheduled to runner `open-brain-ct108` whose root filesystem is full:
+
+| PR | Branch | Head | State |
+|---|---|---|---|
+| #1007 | `fix/864-bulk-import-logger-mock` | `1bf16fa2` | WRITTEN — the `mock.module` fix plus `scripts/done-means/864-logger-never-mocked-process-wide.sh` |
+| #1009 | `refactor/864-c9d-context-pack-adapters` | `fd45ce6f` | WRITTEN — carries #1007; takes closure to 0 |
+| #1006 | `docs/864-session14-harvest` | `0ea19dca` | WRITTEN — lane-contract round 44 and two SME entries |
+
+### L5 adapter inventory
+
+Gate `scripts/done-means/864-moved-out-of-src.sh` on #1009 reports
+`judged=48 shims 19 adapters` — WRITTEN (branch receipt, not yet on `main`).
+
 ## L6 preconditions (from the ladder, lines 332-360)
 
 1. Runtime closure of `src/` at 0.
@@ -126,3 +154,24 @@ reports its own before/after closure in its commit body (rule M6).
 
 Only then does L6 (Docker image, k3s deploy against the CNPG database, `src/`
 deleted) open.
+
+Measured items (session 14 survey at `3ca00acb`, RUNNING unless marked):
+
+5. `package.json:4` `module` and `package.json:8` `start` still name
+   `src/index.ts` — RUNNING.
+6. `scripts/run-two-worker.ts:30` still defaults its entrypoint to
+   `src/index.ts` — RUNNING.
+7. The `HOST` and `HOSTNAME` env keys read by the `src/logger.ts` adapter have
+   no `server/` config reader — RUNNING.
+8. `server/main.ts` registers no reader for the search-embedding timeout; the
+   `src/tools/search-brain.ts` adapter registers the env reader at import
+   (#1005), so env behavior holds in both runtimes until the reader is
+   registered from config — MERGED.
+9. `server/application/nats-bridge-envelope.ts:3` imports `SECTION_NAMES` from
+   the `src/` agent-context-pack — MERGED (an adapter path once #1009 lands).
+10. 170 tests live under `src/`: 67 import a shim or adapter, 97 import only
+    real `src/` sources, 6 import neither — RUNNING.
+11. `src/index.ts` is 498 lines and composes 18 symbols nothing else composes —
+    RUNNING.
+12. `scripts/done-means/744-recall-serves-durable.sh` FAILs both clauses at
+    `main`; pre-existing and unchanged by #1009 — RUNNING.
