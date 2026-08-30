@@ -475,3 +475,32 @@ only when a session actually needed it.
     `git push --force-with-lease origin <branch>` from lane-11 gave #961 a
     check job that ran with the fix, and it merged green. The root checkout
     never pushes (rule 53), and a hand merge on red is never the answer (rule 52).
+65. **A Done-means is executed by `bash <path>`, so it must be a script under
+    `scripts/done-means/`.** #1007's first collect named a `*.test.ts` path on
+    the Done-means line; `scripts/verify-lane.ts` runs the value with `bash`, a
+    TypeScript file exits 2, and the verifier posts no receipt at all — while
+    `scripts/validate-pr-body.ts` still passes, because it only checks that the
+    line exists. A green body validation is therefore not evidence the check
+    ran. Write the clause as a shell script beside its siblings and cite that
+    path (#1007, issue 864 comment 5465646022).
+66. **A pass-alone/fail-in-suite test is a whole-run shared-state question, not
+    a bug in the failing test.** Search first for `mock.module` over a module
+    the failing test observes: `scripts/__tests__/bulk-import.test.ts:17`
+    replaced `src/logger.ts` process-wide, so any later suite reading the logger
+    through a sink saw nothing, and a previously vacuous structural assertion
+    hid it until #1009 made the assertion non-empty. Run the FULL isolated suite
+    before committing a test split, never only the split files (#1007, #1009).
+67. **M16 twin adapters: search `server/` by exported SYMBOL before moving a
+    `src/` module.** The three context-pack modules already had hardened
+    `server/tools/` twins, so the correct L5 move was an M9 adapter over the
+    twin rather than a relocation; a filename search finds neither twin. A
+    done-means driver that compared the two sides is rewritten in the same
+    commit to assert the two imports resolve to the SAME function, never left
+    as a vacuous self-comparison (#1009, issue 864 comment 5465646022).
+68. **CI jobs scheduled on `open-brain-ct108` fail at `Set up job` while its
+    root filesystem is full.** `10.71.20.116` was 100% (50G/50G, 1.0M free)
+    through session 14, and #1006, #1007 and #1009 each failed there at setup
+    with `Disk quota exceeded` while jobs landing on `open-brain-ct107` passed.
+    Rerun once with `gh run rerun <id> --failed`; a second failure at setup is
+    not a lane problem — the docker prune is an operator action and recurrence
+    prevention is an rtech-infra item (issue 864 comment 5465646022).
