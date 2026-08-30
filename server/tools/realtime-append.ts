@@ -107,7 +107,7 @@ export function registerRealtimeAppendTools(
 }
 
 /** RAM-only scoped working-set append. */
-function registerWorkingSetAppendTool(
+export function registerWorkingSetAppendTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {
@@ -183,7 +183,7 @@ function registerWorkingSetAppendTool(
 }
 
 /** Quarantined recovery WAL append. */
-function registerRecoveryWalAppendTool(
+export function registerRecoveryWalAppendTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {
@@ -250,7 +250,7 @@ function registerRecoveryWalAppendTool(
 }
 
 /** Review decision or purge on one quarantined record. */
-function registerRecoveryWalMarkTool(
+export function registerRecoveryWalMarkTool(
   server: McpServer,
   dependencies: MemoryToolDependencies,
 ): void {

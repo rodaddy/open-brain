@@ -59,7 +59,7 @@ import type { SearchRow } from "../../../src/tools/search-brain.ts";
 import {
   recordCitationId,
   recordStructuralSourceRef,
-} from "../../../src/tools/agent-context-pack-durable-memory.ts";
+} from "../context-pack-durable-memory.ts";
 import {
   resolveItemBudget,
   type SectionBudget,

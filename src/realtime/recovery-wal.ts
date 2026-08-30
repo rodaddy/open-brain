@@ -49,6 +49,15 @@ type LegacyMarkArgs = [
 export class RecoveryWalStore {
   private readonly inner: ServerRecoveryWalStore;
 
+  /** The server store this legacy wrapper forwards to.
+   *
+   * Exposed so an adapter passing legacy `ToolDeps` to a server entry point can
+   * hand over the one store both halves of the realtime surface already share,
+   * rather than constructing a second one that would start empty. */
+  get serverStore(): ServerRecoveryWalStore {
+    return this.inner;
+  }
+
   constructor(options: RecoveryWalStoreOptions = {}) {
     this.inner = new ServerRecoveryWalStore(options);
   }

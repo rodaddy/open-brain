@@ -55,9 +55,12 @@
 # Both trees are probed because both are live: `server/tools/` is the local
 # clone's serving entrypoint (server/main.ts per scripts/local-clone.ts), and
 # `src/tools/` still serves through `bun start`, deploy/open-brain.service, and
-# scripts/run-two-worker.ts. The deciding line is byte-identical in both, so a
-# fix landing in one tree only would leave a live path broken. A PASS requires
-# BOTH trees to consult durable memory on a bare request.
+# scripts/run-two-worker.ts. At L5 `src/tools/agent-context-pack.ts` became a
+# thin adapter that re-exports the server twin, so the two probes now exercise
+# the same implementation through the two entrypoints that callers actually
+# reach. That is still worth probing separately: the adapter is the live src
+# path, and a broken re-export would break it while the twin stayed green. A
+# PASS requires BOTH entrypoints to consult durable memory on a bare request.
 #
 # ---------------------------------------------------------------------------
 # Clauses
@@ -220,7 +223,7 @@ else
     BLIND=""
     has_durable "$SRC_SERVED"    || BLIND="src"
     has_durable "$SERVER_SERVED" || BLIND="${BLIND:+$BLIND and }server"
-    CLAUSE1_EVIDENCE="SKIPPED: a bare recall did not consult durable memory in the ${BLIND} tree. src served [${SRC_SERVED}], server served [${SERVER_SERVED}]. The deciding branch is the asymmetric default at server/tools/agent-context-pack.ts:139 (twin src/tools/agent-context-pack.ts:352): working_set treats an absent requested_sections as INCLUDED, durable_memory treats it as EXCLUDED."
+    CLAUSE1_EVIDENCE="SKIPPED: a bare recall did not consult durable memory in the ${BLIND} tree. src served [${SRC_SERVED}], server served [${SERVER_SERVED}]. The deciding branch is the asymmetric default in server/tools/agent-context-pack.ts, which src/tools/agent-context-pack.ts now re-exports as an L5 adapter: working_set treats an absent requested_sections as INCLUDED, durable_memory treats it as EXCLUDED."
   fi
 
   # Clause 2 — no silent omission. Evaluated independently of clause 1: a fix

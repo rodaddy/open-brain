@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SECTION_NAMES } from "../../src/tools/agent-context-pack.ts";
+import { SECTION_NAMES } from "../tools/context-pack-args.ts";
 import { obContextPackSubject } from "../../src/nats-subjects.ts";
 import { logger } from "../../src/logger.ts";
 
