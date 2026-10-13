@@ -532,8 +532,7 @@ describe("local clone real PostgreSQL boundary (live Postgres)", () => {
     // The stack targets PostgreSQL 18 and `assertProductionShape` in
     // scripts/local-clone.ts still demands exactly 18 for a real clone. This
     // suite, however, runs in the `check` job against whatever server the
-    // self-hosted runner already has listening on 127.0.0.1 (.github/
-    // workflows/ci.yml:26,32-33) — currently 17, and ci.yml provisions no
+    // self-hosted runner already has listening on 127.0.0.1 — currently 17, and CI provisions no
     // cluster there, so it cannot pin the major. The digest-pinned pg18
     // container in `db-integration` is what covers the exact-18 path. Assert
     // the floor here so the runner mismatch cannot mask a genuinely broken

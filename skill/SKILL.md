@@ -3,7 +3,7 @@ name: brain
 description: Query, write, and manage your Open Brain knowledge base with automatic namespace resolution. USE WHEN logging thoughts, decisions, searching brain, session saves, or any OB interaction. All OB calls MUST go through this skill for proper namespace tagging.
 metadata:
   version: 0.4.0
-  author: Rico
+  author: Open Brain contributors
   source: https://github.com/rodaddy/open-brain
   category: utility
 triggers:
@@ -33,7 +33,7 @@ Before ANY write to OB, resolve the namespace. See [references/namespace-guide.m
 
 **Quick version:**
 1. **Explicit intent** -- user says "personal"/"my brain" -> `<caller_identity>`; says "shared"/"team"/"acme" -> `shared-kb`
-2. **Host type** -- `cc-*` LXC -> `shared-kb`; `*.local` -> `<caller_identity>`
+2. **Host type** -- `team-*` container -> `shared-kb`; `*.local` -> `<caller_identity>`
 3. **Directory** -- personal machines only: `acme*` dirs -> `shared-kb`
 4. **Fallback** -- `<caller_identity>` from auth token
 

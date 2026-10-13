@@ -59,5 +59,3 @@ specs/*.html
 # this line when it is made.
 *.md
 
-# Eval evidence is sealed by sha256 custody manifests and must stay byte-identical.
-eval/recall/evidence/

@@ -8,9 +8,8 @@
  * migrated Postgres, but neither carries the 32 dogfood rows, so the suite
  * failed with `recall_corpus_required` in every run.
  *
- * Ruling #878, restated by `.forgejo/workflows/ci.yml` in the repo's own
- * words: "tests never skip, so the suite runner supplies what the tests
- * demand." This is the supplier. It derives the seed FROM `fixtures.json`
+ * The rule is that tests never skip, so the suite runner supplies what the
+ * tests demand. This is the supplier. It derives the seed FROM `fixtures.json`
  * rather than duplicating it, so a fixture added to the file is seeded without
  * touching this module.
  *

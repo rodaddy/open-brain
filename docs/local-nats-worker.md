@@ -72,11 +72,10 @@ plist.
 
 The worker runs through a named exec: the plist's first `ProgramArguments`
 entry is `~/.local/libexec/agents/OpenBrainLocalNatsWorker`, which runs the
-wrapper so the process shows a readable name. rtech-infra's Claudex named-exec
-step (`named-exec.swift`) builds it; the installer only renders it into the
+wrapper so the process shows a readable name. a separate named-exec
+build step creates it; the installer only renders it into the
 plist (override with `NAMED_EXEC_PATH`), and a real install refuses when it is
-missing (Rico ruling 2026-10-05,
-issue 1689).
+missing.
 
 ```zsh
 DRY_RUN=1 LAUNCH_AGENTS_DIR=<scratch dir> scripts/install-nats-worker-launchagent.sh

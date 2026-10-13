@@ -73,7 +73,7 @@ def test_a_path_beside_the_orca_root_is_not_admitted(orca_root: Path) -> None:
     "path",
     [
         "/srv/_tmp/development/_worktrees/pr65-audit",
-        "/mnt/collab/tmp_space/development/_worktrees/pr65-audit/nested",
+        "/mnt/shared/tmp_space/development/_worktrees/pr65-audit/nested",
     ],
 )
 def test_legacy_temp_worktree_shape_is_still_admitted(path: str) -> None:

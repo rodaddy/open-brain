@@ -38,7 +38,7 @@ line.
 |---|---|---|
 | `.env` (from `.env.example`) | server process | database, embedding, auth tokens, port |
 | `~/.local/share/openbrain-memory/env/openbrain.env` | every runtime's client (install-managed; read by `openbrain-hook-env`) | `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN` |
-| CI job `env:` blocks | `.github/workflows/ci.yml` | throwaway per-run database coordinates |
+| CI job `env:` blocks | your CI workflow | throwaway per-run database coordinates |
 | runtime `config` mapping | Python CLI JSON envelope | per-call override of base_url / namespace / role / timeout |
 
 **Never hardcode a host.** Not `192.0.2.21`, not `127.0.0.1`. The endpoint comes

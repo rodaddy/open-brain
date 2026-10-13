@@ -5,11 +5,9 @@
 #
 # THIS FILE IS BUILT IN THE CLUSTER, NOT ON A WORKSTATION.
 #
-# There is no Docker on the operator's machine and that is deliberate (Rico
-# ruling 2026-08-11). The build is a Kaniko Job dispatched from rtech-infra by
-# `scripts/image-build-job.sh --app open-brain --tag <tag> --context
-# git://git.example.internal/you/open-brain.git#<40-char-sha> --apply --wait`.
-# See rtech-infra/_DOCS/app-delivery-rail.md §4.
+# The reference deployment builds it with an in-cluster Kaniko Job using a git
+# build context pinned to a 40-character commit sha, e.g.
+# `--context git://git.example.internal/you/open-brain.git#<40-char-sha>`.
 #
 # Kaniko implements the CLASSIC builder, so BuildKit-only syntax fails
 # in-cluster after a clone and a base pull — a slow way to learn it. This file

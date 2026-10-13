@@ -367,7 +367,7 @@ def test_a_write_into_system_temp_is_refused(
         "cat /tmp/some.sock",
         "ls /tmp",
         "rg pattern /var/tmp/log.txt",
-        # rtech-infra #954 item 3: prose naming a tmp write is not a write.
+        # prose naming a tmp write is not a write.
         "cat > /srv/_tmp/r/_scratch/n.md <<'EOF'\n"
         "never cp a.txt /tmp/a.txt\nEOF",
         "git commit -m 'docs: never tee into /tmp/x'",

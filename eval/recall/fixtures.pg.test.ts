@@ -10,17 +10,16 @@ import { fileURLToPath } from "node:url";
  * the eval reports a miss that no code change can fix. So this suite queries
  * the corpus for every expected and forbidden id rather than trusting the file.
  *
- * REQUIRES a database and fails hard without one (operator ruling 2026-08-27,
- * issue #878). No `describe.skip`, no `skipIf`: a suite that skips itself
- * exits 0 and is indistinguishable from one that passed.
+ * REQUIRES a database and fails hard without one. No `describe.skip`, no `skipIf`: a suite that
+ * skips itself exits 0 and is indistinguishable from one that passed.
  *
  * IT RUNS EVERYWHERE, BECAUSE THE RUNNER SUPPLIES ITS ROWS. Locally it reads
  * the dogfood corpus, where all 32 fixture rows already exist. In CI neither
  * job carries those rows -- both provision a real migrated Postgres, and a
  * migrated schema is empty -- so `seedRecallCorpus` inserts the ids
  * `fixtures.json` names, minimally and idempotently, before the assertions
- * run. That is ruling #878 applied as `.forgejo/workflows/ci.yml` states it:
- * tests never skip, the runner supplies what they demand. Against the real
+ * run. The rule is that
+ * tests never skip: the runner supplies what they demand. Against the real
  * corpus every seed insert conflicts and nothing changes.
  *
  * THE GUARD IS AT THE CALL SITE, NOT AT MODULE TOP LEVEL (HANDOVER-RULES rule
@@ -113,7 +112,7 @@ function resolveCorpusUrl(): string {
 
 beforeAll(async () => {
   pool = new Pool({ connectionString: resolveCorpusUrl() });
-  // Ruling #878: the suite never skips, so the runner supplies what it demands.
+  // The suite never skips, so the runner supplies what it demands.
   // Against the real corpus every insert conflicts and this changes nothing.
   await seedRecallCorpus(pool);
 });

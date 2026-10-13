@@ -1,6 +1,6 @@
 # Brain Skill -- Agent Usage Guide
 
-Instructions for autonomous agents (Skippy OC, n8n-spawned agents, etc.) using Open Brain.
+Instructions for autonomous agents (a personal assistant agent, n8n-spawned agents, etc.) using Open Brain.
 
 ## Before ANY OB Write
 
@@ -16,8 +16,8 @@ HOST=$(hostname)
 CWD_BASE=$(basename "$PWD")
 
 # 3. Resolve
-if [[ "$HOST" == cc-* ]]; then
-  # LXC -- default shared-kb
+if [[ "$HOST" == team-* ]]; then
+  # shared container -- default shared-kb
   NS="shared-kb"
 elif [[ "$CWD_BASE" == acme* ]] || [[ "$CWD_BASE" == Acme* ]]; then
   # Personal machine + acme directory
@@ -29,15 +29,15 @@ else
 fi
 ```
 
-### For Skippy OC Specifically
+### For a Personal Assistant Agent
 
-- You run on `laptop.local` (Air) or `mini.local` (local)
-- Your `clientId` is `skippy`
-- Default: `namespace = "skippy"` (unless in a acme dir -> "shared-kb")
+- You run on `notebook.local` or `desktop.local`
+- Your `clientId` is `assistant`
+- Default: `namespace = "assistant"` (unless in a acme dir -> "shared-kb")
 - If a user explicitly tells you "this is for the team" or "push to shared-kb" -> use "shared-kb"
-- If a user says "save this to Rico's brain" or "this is personal for me" -> use that user's identity, NOT "skippy"
+- If a user says "save this to Jane's brain" or "this is personal for me" -> use that user's identity, NOT "assistant"
 
-### For LXC Agents (cc-team, cc-alex, cc-sam)
+### For Shared-Container Agents (team-shared, team-alex, team-sam)
 
 - Default: `namespace = "shared-kb"` (you're doing team work)
 - Only switch to personal namespace if the user explicitly asks
@@ -62,7 +62,7 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 |-----------|-----------------|
 | Acme Co code | `["acme", "<repo-name>"]` |
 | Infrastructure | `["infra", "<service>"]` |
-| PAI system itself | `["pai", "<component>"]` |
+| Agent tooling | `["agents", "<component>"]` |
 | Agent/OC work | `["oc", "<task-domain>"]` |
 | User-requested personal | `["personal"]` |
 | Session summaries | `["session", "<project>"]` |
@@ -70,14 +70,14 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 ## Common Mistakes
 
 1. **Omitting namespace** -- the server defaults to your `clientId`, which may be wrong for shared work
-2. **Hardcoding "rico"** -- use the authenticated identity, not a hardcoded string
+2. **Hardcoding a user name** -- use the authenticated identity, not a hardcoded string
 3. **Ignoring user intent** -- "save this to my brain" means THEIR namespace, not yours
 4. **No tags** -- always tag with at least the project context for traceability
 
-## Example: Skippy OC Logging a Thought from Acme Work
+## Example: An Assistant Agent Logging a Thought from Acme Work
 
 ```bash
-# On laptop.local, in ~/Development/acme-trading
+# On notebook.local, in ~/Development/acme-trading
 mcp2cli open-brain log_thought --params '{
   "content": "The RRF fusion weights need tuning -- k=60 is too aggressive for short queries",
   "tags": ["acme", "acme-trading", "search", "rrf"],
@@ -85,24 +85,24 @@ mcp2cli open-brain log_thought --params '{
 }'
 ```
 
-## Example: Skippy OC Logging a Personal Observation
+## Example: An Assistant Agent Logging a Personal Observation
 
 ```bash
-# On laptop.local, in ~/Development/pai-skills
+# On notebook.local, in ~/Development/agent-skills
 mcp2cli open-brain log_thought --params '{
   "content": "Skill enforcement hooks should check recent messages deeper than 20",
-  "tags": ["pai", "hooks", "skills"],
-  "namespace": "skippy"
+  "tags": ["agents", "hooks", "skills"],
+  "namespace": "assistant"
 }'
 ```
 
 ## Example: User Says "Save This to My Brain"
 
 ```bash
-# User = Rico, on any host
+# User = Jane, on any host
 mcp2cli open-brain log_thought --params '{
   "content": "Whatever the user asked to save",
   "tags": ["personal"],
-  "namespace": "rico"
+  "namespace": "jane"
 }'
 ```

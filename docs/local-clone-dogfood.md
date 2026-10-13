@@ -32,8 +32,7 @@ old clone. Never restore over or refresh the running clone in place.
   ```
 
 - Release tags for this clone use the `dogfood-v<version>` prefix. A pushed
-  `v*` tag runs only the `.forgejo/workflows/ci.yml` validation jobs and
-  deploys nothing: no workflow in `.forgejo/workflows/` deploys this clone.
+  `v*` tag deploys nothing to this clone: no CI workflow deploys it.
   See `docs/GOTCHAS.md`, section "2026-09-27 release traps".
 - Server child output goes through the rotating sink; see the log bound in
   section 5.
@@ -403,6 +402,5 @@ address.
 Preferred, from any device including off the LAN: the TLS name
 `openbrain.example.internal` already routes through the k3s edge to this service, so a
 client needs only `OPENBRAIN_BASE_URL=https://openbrain.example.internal` and no
-insecure-http flag. The older name `openbrain-old.example.internal` still routes to
-a retired host, which runs nothing, and returns 502 until the edge route is repointed
-(tracked in rtech-infra issue 1900).
+insecure-http flag. An older name may still route to a retired host and return 502 until its edge route
+is repointed.
