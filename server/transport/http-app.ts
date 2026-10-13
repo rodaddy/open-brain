@@ -143,7 +143,7 @@ export function createSingleWorkerTransportApp(
   // database blip into a rolling restart of every replica at once, which is
   // strictly worse than the blip it was reporting. This answers only "is this
   // process still serving its event loop?" -- the one question a restart can
-  // actually fix (`rtech-infra/templates/k3s-app-template/app/healthz.md`).
+  // actually fix.
   app.get(
     "/healthz",
     routeHandler(input.logger, "GET", "/healthz", async (_request, response) => {

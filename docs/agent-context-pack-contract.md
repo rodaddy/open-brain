@@ -597,7 +597,7 @@ NATS subjects and downstream rollout are still release-gated separately.
 
 Decision date: 2026-07-07. Refs #271 (sprint #265,
 `docs/plan-3f-gbrain-sprint.md`). Closing #271 on this decision requires
-explicit Rico approval because the outcome is a documented boundary plus
+explicit operator approval because the outcome is a documented boundary plus
 deferred implementation, not shipped runtime behavior.
 
 ### Decision
@@ -725,10 +725,9 @@ that advertise earlier context-pack or append semantics; v21 is not represented
 by a v22-shaped compatibility fixture. The post-merge sequence in
 `docs/downstream-rollout.md`
 therefore applies: deploy through the current gated production-host workflow, verify the
-hosted v22 manifest and changed operations, complete the authoritative rtech-mcps
+hosted v22 manifest and changed operations, complete the MCP registry
 handoff, then refresh and verify mcp2cli through the documented local-direct and
 daemon-credential paths, regenerate skills when agent guidance changes, and
 complete applicable client canaries. Daemon-routed `mcp2cli cache warm open-brain --force` remains a
-known-broken path under `rodaddy/mcp2cli#60` and is not a required command while
-that issue is open. Those live mutations are intentionally deferred from this
+known-broken path (a daemon self-discovery deadlock) and is not a required command. Those live mutations are intentionally deferred from this
 local candidate.

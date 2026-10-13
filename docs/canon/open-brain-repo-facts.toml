@@ -1,10 +1,8 @@
-# OPEN BRAIN REPO FACTS — 5 operational truths from the #522 harvest, walked
-# with Rico 2026-08-03. One harvested fact (CI container bridge networking)
-# was DROPPED by his call: it self-documents in .github/workflows/ci.yml and
-# the runner fleet is migrating to the software factory.
+# OPEN BRAIN REPO FACTS — 5 operational truths from a review harvest
+# (2026-08-03). One harvested fact (CI container bridge networking) was
+# dropped as self-documenting in the CI workflow.
 #
-# STATUS: WRITTEN, awaiting Rico's read-through (merge = approval), then
-# `openbrain-canon-reconcile --apply`. repo_facts bind to the repo slug
+# Apply with `openbrain-canon-reconcile --apply`. repo_facts bind to the repo slug
 # (git-root basename, lowercased) and travel the upsert_repo_fact route with
 # file-at-commit provenance — not the guidance-lane promote path.
 # The fact keyed `repo.service_user_not_root` replaced an earlier subject; when this pack is applied, retire the earlier subject's live row with the canon relegate step (reconcile never retires undeclared rows; see python/openbrain/src/openbrain/apps/canon/README.md).
@@ -24,7 +22,7 @@ collides with the local Postgres on port 5432 and fails at container init. \
 Postgres 18, run with --network host on a free port; it exists because the \
 runner-native Postgres is v17 and shared, and restore tests are destructive.)\
 """
-source = "open-brain PR #84, .github/workflows/ci.yml; approved 2026-08-03"
+source = "CI workflow configuration; approved 2026-08-03"
 
 [[entries]]
 key = "repo.health_check_uses_public_health_endpoint"
@@ -51,7 +49,7 @@ domain fails with exit 113 and SILENTLY leaves the old process running with \
 new code staged beside it. scripts/local-clone-deploy.sh restarts in the gui \
 domain — keep it that way.\
 """
-source = "open-brain#287, scripts/local-clone-deploy.sh; [REWORDED 2026-08-03 to Rico's user-not-root principle]"
+source = "open-brain#287, scripts/local-clone-deploy.sh; [REWORDED 2026-08-03 to the user-not-root principle]"
 
 [[entries]]
 key = "repo.open_brain.apple_silicon_idle_signal"

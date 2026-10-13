@@ -49,11 +49,10 @@ Both paths use the shared `python/.venv`.
 
 ## Pinned interpreter
 
-`.python-version` pins **3.13**, matching `PYTHON_VERSION` in
-`.github/workflows/ci.yml`. Without it uv selects the newest interpreter on the
-box (3.14 here), so local gates would run on a different Python than CI — a
-divergence the standards forbid, since local and CI must run the same commands
-over the same paths.
+`.python-version` pins **3.13**, so every machine runs the same
+interpreter. Without it uv selects the newest interpreter on the
+box (3.14 here), so local gates would run on a different Python than other
+machines.
 
 ## Build output
 

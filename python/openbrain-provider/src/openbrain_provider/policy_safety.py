@@ -84,12 +84,9 @@ _TMP_REMEDY: Final[str] = (
     "There is no writable system temp directory on this machine. $TMPDIR is "
     "already pointed at this repo's temp workspace, so just use it, or write to "
     "{temp_workspace}/{project-or-repo}/_scratch/ directly "
-    # NOT scrubbed (#636): this module is a byte-parity port of
-    # `_ob/scripts/policy-refresh-gate.ts:320`, which lives outside this repo and
-    # still emits this exact sentence. `tests/test_ts_parity.py` asserts the two
-    # answers are identical, so neutralising only this side fails that contract.
-    # Scrubbing it means changing the TypeScript twin first.
-    "(/srv/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
+    # Byte-parity with the TypeScript gate: `tests/test_ts_parity.py` compares
+    # this sentence to the recorded fixture, so change both together.
+    "(/srv/_tmp on a workstation, /mnt/shared/tmp_space on shared boxes). "
     "Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene."
 )
 
@@ -231,7 +228,7 @@ _TMP_WRITER_HEADS: Final[frozenset[str]] = frozenset(
 def _tmp_write_in_shell(command: str) -> bool:
     """Report whether a shell command WRITES into a system temp path.
 
-    Judges commands, not text (rtech-infra #954 item 3, the #164 shape). The
+    Judges commands, not text. The
     rule used to be two regexes over the raw line, so a heredoc body that said
     "never cp a.txt /tmp/a.txt" or a commit message quoting "tee into /tmp/x"
     was refused. ``_shell_commands`` drops data heredoc bodies, keeps a shell's
@@ -406,7 +403,7 @@ def _without_heredoc_bodies(command: str) -> str:
     """Remove heredoc DATA while retaining the command lines that consume it.
 
     A body owned by a shell (``bash <<EOF``) is kept, because there the body is
-    the program (rtech-infra #954 item 3 kept ``cp x /tmp/y`` inside one
+    the program (an earlier version kept ``cp x /tmp/y`` inside one
     refused while dropping the same words from a ``cat`` body).
     """
     kept: list[str] = []

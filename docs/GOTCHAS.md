@@ -1091,7 +1091,7 @@ the exact variable to declare or drop.
 
 ### Clients cannot install from GitHub — wheels from the Mini are the paved road
 
-**Symptom.** `uv tool install git+ssh://git@github.com/rodaddy/open-brain...`
+**Symptom.** `uv tool install git+https://github.com/rodaddy/open-brain.git...`
 fails on a client box, and reaching for a package index does not help either.
 
 **Cause.** The repo is private and the client boxes have no deploy key. There is

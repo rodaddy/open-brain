@@ -99,11 +99,11 @@ def development_root_origin() -> str:
 
 
 #: Temp roots a Development worktree may legitimately live under, matching
-#: ``APPROVED_TEMP_WORKTREE_ROOTS``. The first is Rico's Mac, the second the
-#: cc-* boxes.
+#: ``APPROVED_TEMP_WORKTREE_ROOTS``. The first is a workstation, the second
+#: shared boxes.
 APPROVED_TEMP_WORKTREE_ROOTS = (
     Path("/srv/_tmp"),
-    Path("/mnt/collab/tmp_space"),
+    Path("/mnt/shared/tmp_space"),
 )
 
 #: The slug used when no better name can be derived, matching ``projectSlug``.

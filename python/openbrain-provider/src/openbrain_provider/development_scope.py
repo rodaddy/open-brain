@@ -184,7 +184,7 @@ def render_scope_diagnosis(diagnosis: ScopeDiagnosis) -> str:
 #: :func:`resolve_development_scope`.
 APPROVED_TEMP_WORKTREE_ROOTS: Final[tuple[Path, ...]] = (
     Path("/srv/_tmp"),
-    Path("/mnt/collab/tmp_space"),
+    Path("/mnt/shared/tmp_space"),
 )
 
 #: ob-memory-provider.ts:162-165. The environment variable that relocates the

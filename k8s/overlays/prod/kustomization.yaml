@@ -29,7 +29,7 @@ resources:
 # The tag must already exist in the registry before this merges, because Argo
 # deploys whatever lands on main and a Deployment pointing at an unbuilt image
 # is an ImagePullBackOff that selfHeal retries forever. Build first (Kaniko Job
-# from rtech-infra), verify the tag through the registry API, then merge.
+# in the cluster), verify the tag through the registry API, then merge.
 #
 # v0.9.0 matches package.json. NOTHING HAS BEEN BUILT AT THIS TAG YET — this
 # lane wrote manifests and did not build an image. That is safe only because

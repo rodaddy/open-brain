@@ -2,8 +2,8 @@
  * Observability surface for open-brain.
  *
  * Implements the shared contract in `_DOCS/CODING_STANDARDS.md`
- * (`## Observability` + `### TypeScript observability spellings`). rtech-infra's
- * standards repo will eventually publish this as an installable package; this
+ * (`## Observability` + `### TypeScript observability spellings`). A shared
+ * standards package may eventually publish this as an installable package; this
  * module is open-brain's conforming implementation until then, and is
  * deliberately shaped so it can be swapped for that import.
  *

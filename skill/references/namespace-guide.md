@@ -4,19 +4,19 @@
 
 | Hostname Pattern | Type | Default Namespace | Example |
 |-----------------|------|-------------------|---------|
-| `cc-*` | LXC container | `shared-kb` | cc-team, cc-alex, cc-sam |
-| `*.local` | Personal machine | `<caller_identity>` | mini.local, laptop.local |
+| `team-*` | shared container | `shared-kb` | team-shared, team-alex, team-sam |
+| `*.local` | Personal machine | `<caller_identity>` | desktop.local, notebook.local |
 | Other | Unknown | `<caller_identity>` | |
 
 ## Known Hosts
 
 | Hostname | Owner | Location |
 |----------|-------|----------|
-| `mini.local` | Rico | Local Mac Mini |
-| `laptop.local` | Rico/Skippy | MacBook Air |
-| `cc-team` | Acme (shared-kb) | LXC container |
-| `cc-alex` | Alex | LXC container |
-| `cc-sam` | Sam | LXC container |
+| `desktop.local` | Jane | Desktop |
+| `notebook.local` | Jane (assistant agent) | Laptop |
+| `team-shared` | Acme (shared-kb) | shared container |
+| `team-alex` | Alex | shared container |
+| `team-sam` | Sam | shared container |
 
 ## Directory-Based Override (Personal Machines Only)
 
@@ -27,7 +27,7 @@ On `*.local` hosts, the working directory overrides the default:
 | `*/acme*` or `*/Acme*` | `shared-kb` | Acme Co work is shared |
 | Everything else | `<caller_identity>` | Personal by default |
 
-LXC boxes do NOT use directory detection -- they default to `shared-kb` regardless of cwd.
+Shared containers do NOT use directory detection -- they default to `shared-kb` regardless of cwd.
 
 ## Intent Keywords
 
@@ -52,58 +52,58 @@ Result: `namespace = "shared-kb"`
 ## Resolution Order
 
 1. **Explicit intent** -- user says "personal" or "shared-kb" -> use that
-2. **Host type** -- `cc-*` -> shared-kb default; `*.local` -> identity default
+2. **Host type** -- `team-*` -> shared-kb default; `*.local` -> identity default
 3. **Directory** -- only on personal machines; `acme*` -> shared-kb
 4. **Fallback** -- `<caller_identity>`
 
 ## Examples
 
-### Rico on local Mac, in ~/Development/acme-trading
+### Jane on her desktop, in ~/Development/acme-trading
 ```
-Host: mini.local (personal machine)
+Host: desktop.local (personal machine)
 CWD: acme-trading (matches acme*)
 -> namespace: "shared-kb"
 ```
 
-### Rico on local Mac, in ~/Development/tax-strategy
+### Jane on her desktop, in ~/Development/tax-strategy
 ```
-Host: mini.local (personal machine)
+Host: desktop.local (personal machine)
 CWD: tax-strategy (no acme match)
--> namespace: "rico"
+-> namespace: "jane"
 ```
 
-### Rico on local Mac, in ~/Development/tax-strategy, says "push this to shared-kb"
+### Jane on her desktop, in ~/Development/tax-strategy, says "push this to shared-kb"
 ```
-Host: mini.local (personal machine)
+Host: desktop.local (personal machine)
 CWD: tax-strategy (no acme match)
 Intent: "shared-kb" override
 -> namespace: "shared-kb" (intent wins)
 ```
 
-### Alex on cc-alex LXC, working on anything
+### Alex on team-alex container, working on anything
 ```
-Host: cc-alex (LXC)
+Host: team-alex (shared container)
 -> namespace: "shared-kb"
 ```
 
-### Alex on cc-alex LXC, says "save this to my brain"
+### Alex on team-alex container, says "save this to my brain"
 ```
-Host: cc-alex (LXC)
+Host: team-alex (shared container)
 Intent: "my brain" -> personal override
 -> namespace: "alex" (intent wins)
 ```
 
-### Skippy on laptop.local, in ~/Development/open-brain
+### The assistant on notebook.local, in ~/Development/open-brain
 ```
-Host: laptop.local (personal machine)
+Host: notebook.local (personal machine)
 CWD: open-brain (no acme match)
-Caller: skippy
--> namespace: "skippy"
+Caller: assistant
+-> namespace: "assistant"
 ```
 
-### Skippy on laptop.local, says "this is for the team"
+### The assistant on notebook.local, says "this is for the team"
 ```
-Host: laptop.local (personal machine)
+Host: notebook.local (personal machine)
 Intent: "team" -> shared-kb override
 -> namespace: "shared-kb" (intent wins)
 ```

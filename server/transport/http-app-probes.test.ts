@@ -2,7 +2,7 @@
  * Probe-endpoint boundary tests for the single-worker transport app (issue 762).
  *
  * The k3s delivery rail splits liveness from readiness on purpose
- * (`rtech-infra/templates/k3s-app-template/app/healthz.md`): a failing liveness
+ * (the standard k8s probe split): a failing liveness
  * probe RESTARTS the pod, a failing readiness probe only takes it out of the
  * service. The property that keeps that split honest is that `/healthz` does no
  * dependency I/O at all, so these tests assert it by supplying a health input

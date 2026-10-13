@@ -709,7 +709,7 @@
         "file_path": "/tmp/evil.txt"
       }
     },
-    "stdout": "{\"decision\":\"block\",\"reason\":\"That path does not exist as an agent-writable location. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/srv/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"That path does not exist as an agent-writable location. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/srv/_tmp on a workstation, /mnt/shared/tmp_space on shared boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
     "stderr": "",
     "status": 0
   },
@@ -736,7 +736,7 @@
         "command": "echo hi > /tmp/x.txt"
       }
     },
-    "stdout": "{\"decision\":\"block\",\"reason\":\"That path is not an agent-writable location: it is on the small main disk and is sandbox-local, so anything written there is invisible to runners and to the operator. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/srv/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
+    "stdout": "{\"decision\":\"block\",\"reason\":\"That path is not an agent-writable location: it is on the small main disk and is sandbox-local, so anything written there is invisible to runners and to the operator. There is no writable system temp directory on this machine. $TMPDIR is already pointed at this repo's temp workspace, so just use it, or write to {temp_workspace}/{project-or-repo}/_scratch/ directly (/srv/_tmp on a workstation, /mnt/shared/tmp_space on shared boxes). Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene.\"}\n",
     "stderr": "",
     "status": 0
   },

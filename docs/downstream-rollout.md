@@ -52,18 +52,18 @@ If none of those apply, say so explicitly in the PR and release notes.
      succeeds, run a real hosted MCP call for every changed tool or behavior and
      record the returned contract/version evidence.
 
-3. **rtech-mcps handoff**
+3. **MCP registry handoff**
    - Land any required registry, secret-map, or process documentation update in
-     `rodaddy/rtech-mcps`.
+     the MCP registry repo that serves your mcp2cli install.
    - Do this before treating mcp2cli refresh as complete. Direct hosted schema
-     refresh is not a substitute for the rtech-mcps handoff.
+     refresh is not a substitute for the registry handoff.
 
 4. **mcp2cli pull, cache verification, and generated skill refresh**
    - Have mcp2cli consume the registry-backed service definition.
    - Known limitation: `mcp2cli cache warm open-brain --force` is currently
      broken for a daemon-routed Open Brain service because `cache warm` asks the
-     running daemon to discover through itself. The command times out with the
-     deadlock tracked in `rodaddy/mcp2cli#60`. Do not make that known-broken
+     running daemon to discover through itself. The command times out with a
+     self-discovery deadlock. Do not make that known-broken
      daemon-routed command a rollout requirement.
    - A local, no-daemon refresh is supported only when the selected mcp2cli
      config can connect to Open Brain directly and supplies service-level auth
@@ -231,9 +231,9 @@ Local classification:
 
 - Open Brain local verification applies.
 - Python package contract-version pin applies.
-- Hosted Open Brain deploy, mcp2cli cache refresh/generated skills, rtech-mcps
-  handoff and live agent canaries are deferred to #216 and must not run during the local-complete
-  slice without explicit Rico approval.
+- Hosted Open Brain deploy, mcp2cli cache refresh/generated skills, MCP registry
+  handoff and live agent canaries are deferred and must not run during the local-complete
+  slice without explicit operator approval.
 
 Required #216 evidence later:
 

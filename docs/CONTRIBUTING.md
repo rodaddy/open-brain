@@ -25,7 +25,7 @@ const EMBEDDING_BASE_URL =
 
 **Where to put real values:**
 - `.env` (gitignored, never committed)
-- `.env.schema` — use fake but realistic placeholder IPs (e.g., `192.168.1.50`) with a comment explaining what goes there
+- `.env.schema` — use a placeholder host (e.g., `localhost` or `db.example.com`) with a comment explaining what goes there
 - `.env.example` — use descriptive placeholders like `your-postgres-host`
 
 **If you need a fallback in code**, default to `localhost`:
@@ -42,10 +42,10 @@ DB_HOST=your-postgres-host
 EMBEDDING_API_KEY=your-embedding-api-key
 ```
 
-`.env.schema` (for varlock) uses fake but realistic values with comments:
+`.env.schema` (for varlock) uses placeholder values with comments:
 ```env
-# Replace with your PostgreSQL host — e.g., localhost, db.example.com, or a LAN IP
-DB_HOST=192.168.1.50
+# Replace with your PostgreSQL host — e.g., localhost or db.example.com
+DB_HOST=localhost
 ```
 
 ### Private Development Artifacts

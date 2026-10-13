@@ -65,7 +65,7 @@ This data drives the dream cycle's promotion/demotion decisions.
 
 ## Dream Cycle
 
-The dream cycle is a periodic process that adjusts tiers based on access patterns. Currently run manually (guided by Skippy at 3am), not yet automated.
+The dream cycle is a periodic process that adjusts tiers based on access patterns. Currently run manually (by an operator), not yet automated.
 
 ### What It Does
 

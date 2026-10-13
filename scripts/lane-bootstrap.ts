@@ -588,9 +588,8 @@ function createFreshDatabase(
     const pgEnv: NodeJS.ProcessEnv = { ...process.env };
     if (password) pgEnv.PGPASSWORD = password;
 
-    // Reuses the CI mechanism verbatim: `createdb -E UTF8 -T template0`
-    // (.github/workflows/ci.yml:68). The explicit encoding is NOT decoration —
-    // ci.yml:59-66 records that a bare createdb inherits the cluster's
+    // Uses `createdb -E UTF8 -T template0`. The explicit encoding is NOT
+    // decoration: a bare createdb inherits the cluster's
     // template1 encoding, and a C/POSIX cluster yields SQL_ASCII, under which
     // the snowball stemmers split multibyte accented characters and every
     // non-English FTS assertion (#341) silently fails while ASCII-only English
