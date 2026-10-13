@@ -2,7 +2,7 @@
  * Run one DREAM REM pass against the configured database. Issues #391/#392/#398.
  *
  * Operator entrypoint, same shape as scripts/dream-light-run.ts: a thin shell
- * over src/dream-rem.ts that opens its own pool. Exists so REM can be measured
+ * over server/maintenance/dream-rem.ts that opens its own pool. Exists so REM can be measured
  * against the REAL corpus, which is this repo's standing bar for calling a
  * stage proven.
  *
@@ -20,23 +20,14 @@
  * them would drop the item out of the human queue (037:43-57).
  */
 
-import { Pool } from "pg";
-import { runRemPass, DEFAULT_REM_BATCH } from "../src/dream-rem.ts";
+import type { Pool } from "pg";
+import { runRemPass, DEFAULT_REM_BATCH } from "../server/maintenance/dream-rem.ts";
+import { createDreamRemRepository } from "../server/db/dream-rem-repository.ts";
+import { createDreamRemGradingRepository } from "../server/db/dream-rem-grading-repository.ts";
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
-
-const logger = {
-  info: (msg: string, fields: Record<string, string | number>) =>
-    console.log(msg, JSON.stringify(fields)),
-  warn: (msg: string, fields: Record<string, string | number>) =>
-    console.warn(msg, JSON.stringify(fields)),
-  error: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-};
+const logger = createConsoleLogger();
 
 async function stats(pool: Pool): Promise<void> {
   const q = await pool.query<Record<string, string>>(
@@ -49,7 +40,11 @@ async function stats(pool: Pool): Promise<void> {
        (SELECT count(*) FROM candidate_reinforcement) AS reinforcements,
        (SELECT count(*) FROM thoughts WHERE tier = 'hot') AS hot_thoughts`,
   );
-  const r = q.rows[0]!;
+  const r = q.rows[0];
+  if (!r) {
+    console.log("no stats row returned");
+    return;
+  }
   console.log("candidates      :", r.candidates);
   console.log("unreviewed      :", r.unreviewed);
   console.log("machine graded  :", r.machine_graded);
@@ -60,13 +55,7 @@ async function stats(pool: Pool): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
-  });
+  const pool = createPool();
 
   try {
     if (has("--stats")) {
@@ -76,6 +65,8 @@ async function main(): Promise<void> {
 
     const summary = await runRemPass({
       pool,
+      rem: createDreamRemRepository(pool),
+      grading: createDreamRemGradingRepository(pool),
       logger,
       batchSize: Number(arg("--batch") ?? DEFAULT_REM_BATCH),
       ...(has("--no-dedupe") ? { skipDedupe: true } : {}),

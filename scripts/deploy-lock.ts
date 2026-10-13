@@ -41,8 +41,6 @@
  * The refusal NAMES the deploy, because a refusal that does not tell the
  * operator what to reconcile is a dead end (docs/lane-contract.md, round 15).
  */
-import type pg from "pg";
-
 /**
  * The advisory-lock key expression. Namespaced by database name so two
  * databases on one server never serialize against each other, and suffixed
@@ -72,9 +70,7 @@ export interface LockQueryable {
  * Used by the backup path in the negative direction: if this returns false,
  * something else (a deploy) holds it.
  */
-export async function tryAcquireDeployLock(
-  client: LockQueryable,
-): Promise<boolean> {
+export async function tryAcquireDeployLock(client: LockQueryable): Promise<boolean> {
   const { rows } = await client.query(
     `SELECT pg_try_advisory_lock(${DEPLOY_LOCK_KEY_SQL}) AS acquired`,
   );
@@ -109,9 +105,7 @@ export async function releaseDeployLock(client: LockQueryable): Promise<void> {
  *
  * @throws when a deploy holds the lock. The thrown message names the cause.
  */
-export async function assertNoDeployInProgress(
-  client: LockQueryable,
-): Promise<void> {
+export async function assertNoDeployInProgress(client: LockQueryable): Promise<void> {
   const acquired = await tryAcquireDeployLock(client);
   if (!acquired) {
     throw new DeployInProgressError(DEPLOY_IN_PROGRESS_MESSAGE);
@@ -127,45 +121,68 @@ export class DeployInProgressError extends Error {
   }
 }
 
+/** Parse the `--timeout-seconds` value, refusing anything that is not positive. */
+function parseTimeoutSeconds(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error("--timeout-seconds requires a positive number");
+    process.exit(2);
+  }
+  return parsed;
+}
+
 /**
- * CLI entry point used by the DEPLOY side (scripts/core01-deploy-local.sh).
+ * Parent-death watch (PR 1659 review). The deploy shell runs this process as
+ * a background child. If that shell is killed outright its EXIT trap never
+ * runs, and an orphaned holder would keep the lock and wedge every backup.
+ * An orphan is re-parented, so a changed ppid means the deploy is gone: exit,
+ * and the session-scoped lock goes with the connection.
+ */
+function exitWhenParentExits(): void {
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) {
+      console.error(
+        "openbrain-deploy lock holder: the deploy that started it exited; releasing the lock",
+      );
+      process.exit(3);
+    }
+  }, 1000);
+}
+
+/**
+ * CLI entry point used by the DEPLOY side (scripts/local-clone-deploy.sh).
  *
  * Takes the lock and holds it for as long as this process lives, so the shell
  * script can hold it across staging + migrate + swap simply by keeping this
  * process alive. It waits (bounded) rather than refusing, per the asymmetry
  * documented above.
  *
- *   bun run scripts/deploy-lock.ts --hold [--timeout-seconds N]
+ *   node scripts/deploy-lock.ts --hold [--timeout-seconds N]
  *
  * Prints READY on stdout once the lock is held, then blocks until killed.
  */
 async function main(): Promise<void> {
-  const argv = Bun.argv.slice(2);
+  const argv = process.argv.slice(2);
   let hold = false;
   let timeoutSeconds = 900;
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = argv[i];
     if (arg === "--hold") hold = true;
     else if (arg === "--timeout-seconds") {
-      const parsed = Number(argv[++i]);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        console.error("--timeout-seconds requires a positive number");
-        process.exit(2);
-      }
-      timeoutSeconds = parsed;
+      timeoutSeconds = parseTimeoutSeconds(argv[++i]);
     } else {
       console.error(`Unknown argument: ${arg}`);
       process.exit(2);
     }
   }
   if (!hold) {
-    console.error(
-      "Usage: bun run scripts/deploy-lock.ts --hold [--timeout-seconds N]",
-    );
+    console.error("Usage: node scripts/deploy-lock.ts --hold [--timeout-seconds N]");
     process.exit(2);
   }
+  exitWhenParentExits();
 
-  const { createPool } = await import("../src/db/pool.ts");
+  const { createPool } = await import("./settings.ts");
   const pool = createPool({ max: 1, application_name: "openbrain-deploy-lock" });
   const client = await pool.connect();
   // Bounded wait: a deploy should queue behind a running backup, but it must

@@ -21,11 +21,32 @@ export function coerceStringArray(value: unknown): string[] {
     try {
       candidate = JSON.parse(candidate);
     } catch {
+      // Deliberate fail-open, per the doc comment at :15-16: a damaged legacy
+      // value collapses to `[]` so the caller degrades to "no optional field"
+      // instead of aborting a scan on one bad row. This module is pure and
+      // import-free, mirroring embedding/embedding-canonical.ts:61.
       return [];
     }
   }
   if (!Array.isArray(candidate)) return [];
   return candidate.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * Render one canonical text field from an untyped column value.
+ *
+ * Mirrors `canonicalField` in `server/embedding/embedding-canonical.ts`. A
+ * string passes through unchanged, so every well-formed row produces exactly the
+ * byte sequence it produced before this helper existed. `null`/`undefined` is
+ * the empty string, as it always was. Anything else is rendered as JSON rather
+ * than through the default object stringification, which turned an object into
+ * `[object Object]` -- one indistinguishable token for every distinct object, so
+ * two different damaged rows hashed the same. JSON keeps them distinguishable.
+ * Primitives such as numbers and booleans render identically either way.
+ */
+function canonicalField(value: unknown): string {
+  if (value == null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 /** Deduplicate and sort decision tags, matching the canonical builder. */
@@ -35,8 +56,8 @@ function normalizeDecisionTags(tags: string[]): string[] {
 
 /** Canonical decision embed text and hash input. */
 export function decisionCanonicalText(source: Record<string, unknown>): string {
-  const title = source.title == null ? "" : String(source.title);
-  const rationale = source.rationale == null ? "" : String(source.rationale);
+  const title = canonicalField(source.title);
+  const rationale = canonicalField(source.rationale);
   const parts: string[] = [title, rationale];
   const context = typeof source.context === "string" ? source.context : undefined;
   if (context) parts.push(context);
@@ -55,14 +76,14 @@ export function decisionCanonicalText(source: Record<string, unknown>): string {
  * as drifted by the repair registry.
  */
 export function sessionSourceHashInput(source: Record<string, unknown>): string {
-  const summary = source.summary == null ? "" : String(source.summary);
-  const project = source.project == null ? "" : String(source.project);
+  const summary = canonicalField(source.summary);
+  const project = canonicalField(source.project);
   return `${summary}|${project}`;
 }
 
 /** Canonical session EMBED text. */
 export function sessionCanonicalEmbedText(source: Record<string, unknown>): string {
-  const summary = source.summary == null ? "" : String(source.summary);
+  const summary = canonicalField(source.summary);
   const parts: string[] = [summary];
   const keyDecisions = coerceStringArray(source.key_decisions);
   if (keyDecisions.length) parts.push(keyDecisions.join(". "));

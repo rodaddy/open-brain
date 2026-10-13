@@ -20,7 +20,7 @@ replace the package entrypoint without renaming the new application's internals.
 - `observability/` — logging, correlation, and safe error reporting.
 - `security/` — authentication, role permissions, and namespace policy.
 - `tools/` — MCP schemas, registration, and handlers composed from domain ports.
-- `transport/` — HTTP/MCP sessions, health, and worker-proxy behavior.
+- `transport/` — HTTP/MCP sessions and health.
 
 Each module currently exports only an ownership declaration. Runtime code arrives
 through the charter's strangler phases after its contract tests exist.

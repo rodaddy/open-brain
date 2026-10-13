@@ -52,14 +52,23 @@ See Also:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
-from openbrain.apps.capture.deliver import Delivery, RawLane, deliver_new_turns
+from openbrain.apps.capture.deliver import (
+    CaptureSourceChangedError,
+    Delivery,
+    RawLane,
+    deliver_new_turns,
+)
 from openbrain.apps.capture.langfuse_emitter import LangfuseEmitter
 from openbrain.apps.capture.observe import (
     ObservationEmitter,
@@ -495,7 +504,7 @@ class StartedLane(BaseModel):
     close: Callable[[], None]
 
 
-async def run_stop(
+async def run_stop(  # noqa: PLR0913 -- deadline is hook-owned, other injections predate it
     payload: StopHook,
     settings: CaptureSettings,
     *,
@@ -503,6 +512,7 @@ async def run_stop(
     observation: ObservationSettings | None = None,
     emitter_factory: Callable[[ObservationSettings], ObservationEmitter]
     | None = None,
+    deadline: float | None = None,
 ) -> Delivery | None:
     """Deliver the turns written since the watermark for one ``Stop`` payload.
 
@@ -518,6 +528,7 @@ async def run_stop(
             inactive or absent sink is an ordinary state, not a failure.
         emitter_factory: Builds the observation emitter. Injected so tests hand
             in a recorder; defaults to the real Langfuse client.
+        deadline: Monotonic Stop deadline; optional for injected capability tests.
 
     Returns:
         The :class:`~openbrain.apps.capture.deliver.Delivery`, or ``None`` when
@@ -535,27 +546,61 @@ async def run_stop(
     if payload.transcript_path is None or payload.session_id is None:
         return None
 
+    origin = _capture_origin(settings)
+    store = WatermarkStore(settings.watermark_path)
+    watermark_key = (
+        _scoped_watermark_key(origin, payload.session_id)
+        if origin is not None else payload.session_id
+    )
+    pending = (
+        await store.register_pending(
+            origin, payload.session_id, payload.transcript_path,
+            watermark_key=watermark_key,
+        )
+        if origin is not None else None
+    )
+    if pending is not None and pending.state != "pending":
+        raise CaptureSourceChangedError
+
     build = lane_factory if lane_factory is not None else _started_memory
     started = build(settings, payload.session_id)
-    store = WatermarkStore(settings.watermark_path)
 
     try:
+        if (
+            origin is not None
+            and not await store.has_position(watermark_key)
+            and await store.has_position(payload.session_id)
+        ):
+            # Old rows have no authenticated origin. Reuse would let a second
+            # token skip another namespace's bytes; replay from zero is safe
+            # because the server dedupes stable turn UUIDs.
+            logger.warning("legacy capture watermark ignored; replaying from start")
         delivery = await deliver_new_turns(
-            payload.transcript_path, payload.session_id, store, started.lane
+            payload.transcript_path, payload.session_id, store, started.lane,
+            watermark_key=watermark_key,
+            expected_identity=pending.identity if pending else None,
+            minimum_size=pending.source_size if pending else None,
+            checkpoint_chunks=deadline is not None,
+            deadline=deadline,
         )
+        # A returned delivery acknowledged every complete record it read, even
+        # when the writer has left a partial trailing record for the next Stop.
+        # A raised delivery (including a deadline) never reaches this receipt.
+        note_capture(payload.session_id, payload.cwd)
+        if origin is not None and pending is not None:
+            if delivery.source_complete:
+                await store.complete_pending(
+                    origin, payload.session_id, pending.generation
+                )
+            await _replay_one_pending(
+                store, origin, payload.session_id, started.lane, deadline=deadline
+            )
     finally:
         # Success or failure, the session slot is released here -- the one place
         # that owns the lane's lifecycle. The closer is content-free and swallows
         # its own transport errors (``openbrain_memory.client.close``), so it
         # cannot itself break the delivery's outcome.
         started.close()
-
-    # Only reached when the delivery RETURNED, so the receipt is evidence rather
-    # than a claim: a raised delivery leaves the watermark unadvanced and skips
-    # this, which correctly leaves the gate's capture block standing. Written for
-    # a delivery of zero turns too -- the gate's question is "did this session
-    # reach Open Brain", and a turn with nothing new to send did.
-    note_capture(payload.session_id, payload.cwd)
 
     # The second sink (#523), after the receipt because it must never affect
     # it. Ordered after the memory delivery on purpose: when the memory lane
@@ -570,6 +615,64 @@ async def run_stop(
         emitter_factory,
     )
     return delivery
+
+
+def _capture_origin(settings: CaptureSettings) -> str | None:
+    """Bind local pending state to endpoint, token, and attribution identity."""
+    if settings.base_url is None or settings.token is None:
+        return None
+    parsed = urlsplit(settings.base_url)
+    normalized = urlunsplit((
+        parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"),
+        parsed.query, "",
+    ))
+    token_hash = hashlib.sha256(
+        settings.token.get_secret_value().encode("utf-8")
+    ).hexdigest()
+    material = json.dumps(
+        [normalized, token_hash, settings.agent_id], separators=(",", ":")
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _scoped_watermark_key(origin: str, session_key: str) -> str:
+    return f"capture:v1:{origin}:{session_key}"
+
+
+async def _replay_one_pending(
+    store: WatermarkStore, origin: str, current_session: str, lane: RawLane,
+    *, deadline: float | None,
+) -> None:
+    """Use the current healthy lane for one old source without delaying it."""
+    pending = await store.oldest_pending(origin, except_session=current_session)
+    if pending is None:
+        return
+    if pending.identity is None:
+        pending = await store.bind_missing_pending(origin, pending)
+        if pending is None:
+            return
+    key = _scoped_watermark_key(origin, pending.session_key)
+    remaining = deadline - time.monotonic() if deadline is not None else None
+    # One extra transport request can take CAPTURE_REQUEST_TIMEOUT_SECONDS;
+    # reserve time for the lane's close and hook process cleanup.
+    if remaining is not None and remaining <= CAPTURE_REQUEST_TIMEOUT_SECONDS + 0.3:
+        return
+    try:
+        replay = deliver_new_turns(
+            pending.path, pending.session_key, store, lane,
+            watermark_key=key, expected_identity=pending.identity,
+            minimum_size=pending.source_size, checkpoint_chunks=True,
+            deadline=deadline,
+        )
+        delivery = await replay
+    except CaptureSourceChangedError:
+        await store.source_changed(origin, pending.session_key, pending.generation)
+        logger.warning("pending capture source_changed; locator retained")
+    except Exception as error:  # noqa: BLE001 -- current delivery already landed
+        logger.warning("pending capture retry failed ({})", type(error).__name__)
+    else:
+        if delivery.source_complete:
+            await store.complete_pending(origin, pending.session_key, pending.generation)
 
 
 async def _observe_best_effort(
@@ -804,7 +907,7 @@ async def run_post_tool_use(
     2026-08-08, ledger item 24: "counts into existing telemetry, facts only").
     Recall reuses the EXISTING ``canon`` kind rather than adding a third: the
     value is pinned by a Zod enum (``server/tools/skill-usage.ts:119-122``) AND
-    a database CHECK constraint (``src/db/migrations/046_skill_usage_log.sql``),
+    a database CHECK constraint (``server/db/migrations/046_skill_usage_log.sql``),
     so a new kind would be a schema change -- an explicit non-goal of #451.
     ``canon`` is also honest rather than merely convenient: every tool in the
     allowlist is a read of assembled canon, which is what that kind already
@@ -1023,7 +1126,7 @@ def _derive_repo_slug(cwd: str | Path | None) -> str | None:
     Walks up from ``cwd`` to the nearest directory containing ``.git`` (the
     repository root -- a plain directory for a checkout, a file for a worktree)
     and returns its basename, lowercased. That is the slug convention the
-    existing fact rows already use (``open-brain``, ``king-core``); rows bound
+    existing fact rows already use (``open-brain``, ``acme-core``); rows bound
     under other shapes are rebind work, not a fallback here.
 
     Returns ``None`` when no repository contains ``cwd``. The server then

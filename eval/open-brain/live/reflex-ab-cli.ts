@@ -1,10 +1,10 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Single-command live REFLEX A/B suppression gate (REFLEX-4, issue #335).
 //
-//   bun run eval/open-brain/live/reflex-ab-cli.ts
-//   bun run eval/open-brain/live/reflex-ab-cli.ts --json
-//   bun run eval/open-brain/live/reflex-ab-cli.ts --report <path>
-//   bun run eval/open-brain/live/reflex-ab-cli.ts --budget-tokens 8000
+//   node eval/open-brain/live/reflex-ab-cli.ts
+//   node eval/open-brain/live/reflex-ab-cli.ts --json
+//   node eval/open-brain/live/reflex-ab-cli.ts --report <path>
+//   node eval/open-brain/live/reflex-ab-cli.ts --budget-tokens 8000
 //
 // Requires opt-in: OPEN_BRAIN_LIVE_EVAL=1 plus base URL + token env vars (see
 // eval/open-brain/README.md). One invocation seeds a unique throwaway namespace
@@ -18,7 +18,13 @@
 // Output is content-free: only ids, namespaces, labels, counts, and statuses.
 // No memory bodies, tokens, or secrets are ever printed.
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { loadLiveConfig, makeRunId } from "./config.ts";
 import { loadReflexAbFixture } from "./reflex-ab-fixtures.ts";
 import { runReflexAbGate } from "./reflex-ab-gate.ts";
@@ -47,23 +53,23 @@ const REFLEX_SCOPE = {
 
 function argValue(name: string): string | undefined {
   const prefix = `--${name}=`;
-  for (const arg of Bun.argv.slice(2)) {
+  for (const arg of process.argv.slice(2)) {
     if (arg.startsWith(prefix)) return arg.slice(prefix.length);
   }
-  const index = Bun.argv.indexOf(`--${name}`);
-  const next = index >= 0 ? Bun.argv[index + 1] : undefined;
+  const index = process.argv.indexOf(`--${name}`);
+  const next = index >= 0 ? process.argv[index + 1] : undefined;
   return next && !next.startsWith("--") ? next : undefined;
 }
 
 async function gitCommit(): Promise<string> {
   try {
-    const proc = Bun.spawn(["git", "rev-parse", "HEAD"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const output = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    return code === 0 ? output.trim() : "unknown";
+    // execFile rather than a hand-rolled spawn: the command is bounded and
+    // one-shot, so there is no pipe to drain and no race to run. Note the
+    // control-flow difference this replaces -- Bun's `.exited` RESOLVED with a
+    // non-zero code, which the old `code === 0` test read; execFile REJECTS
+    // instead, so the failure path is the catch below rather than a branch.
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"]);
+    return stdout.trim() || "unknown";
   } catch {
     return "unknown";
   }
@@ -104,13 +110,14 @@ async function main(): Promise<number> {
 
     const reportPath = argValue("report");
     if (reportPath) {
-      await Bun.write(
-        reportPath,
-        `${JSON.stringify(outcome.receipt, null, 2)}\n`,
-      );
+      // The Bun write global created missing parent directories; writeFile
+      // does not, and --report is an operator-supplied path that may name one
+      // that does not exist yet. mkdir keeps the prior behaviour (issue 751).
+      await mkdir(dirname(reportPath), { recursive: true });
+      await writeFile(reportPath, `${JSON.stringify(outcome.receipt, null, 2)}\n`);
     }
 
-    if (Bun.argv.includes("--json")) {
+    if (process.argv.includes("--json")) {
       console.log(JSON.stringify(outcome.receipt, null, 2));
     } else {
       printReceipt(outcome.receipt);

@@ -31,6 +31,7 @@ import os
 import re
 import shlex
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Final
 
@@ -88,7 +89,7 @@ _TMP_REMEDY: Final[str] = (
     # still emits this exact sentence. `tests/test_ts_parity.py` asserts the two
     # answers are identical, so neutralising only this side fails that contract.
     # Scrubbing it means changing the TypeScript twin first.
-    "(/Volumes/ThunderBolt/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
+    "(/srv/_tmp on this Mac, /mnt/collab/tmp_space on cc-* boxes). "
     "Temp policy: _DOCS/CODING_STANDARDS.md ## Workspace Hygiene."
 )
 
@@ -101,14 +102,6 @@ _TMP_FILE_PATH: Final[re.Pattern[str]] = re.compile(
     r"^/(?:private/)?tmp(?:/|$)|^/var/tmp(?:/|$)"
 )
 _TMP_ANYWHERE: Final[re.Pattern[str]] = re.compile(_TMP_PATH)
-_TMP_REDIRECT: Final[re.Pattern[str]] = re.compile(
-    rf"(?:^|[^>\d])\d?>>?\s*[\"']?(?:{_TMP_PATH})"
-)
-_TMP_WRITER: Final[re.Pattern[str]] = re.compile(
-    r"(^|[\s;&|(])"
-    r"(?:cp|mv|rsync|touch|mkdir|install|tee|dd|curl|wget|git\s+clone|tar|unzip|zip)"
-    rf"\b[^\n;|&]*?(?:{_TMP_PATH})"
-)
 
 #: policy-refresh-gate.ts:419-436 — the git and gh operations that need an
 #: explicit human decision.
@@ -180,7 +173,7 @@ _SUDO_VALUE_OPTIONS: Final[frozenset[str]] = frozenset(
 
 #: policy-refresh-gate.ts:466-473 — the transient image-output directory.
 _GENERATED_DIR: Final[str] = (
-    r"(?:~/\.codex/generated_images/|/Users/rico/\.codex/generated_images/"
+    r"(?:~/\.codex/generated_images/|/home/user/\.codex/generated_images/"
     r"|\$HOME/\.codex/generated_images/|\$\{HOME\}/\.codex/generated_images/)"
 )
 _WRITES_INTO_GENERATED: Final[re.Pattern[str]] = re.compile(
@@ -189,7 +182,7 @@ _WRITES_INTO_GENERATED: Final[re.Pattern[str]] = re.compile(
 )
 _GENERATED_EGRESS: Final[re.Pattern[str]] = re.compile(
     rf"^\s*(?:cp|mv)\s+(?:--\s+)?[\"']?{_GENERATED_DIR}[^\s\"']+[\"']?\s+"
-    rf"[\"']?(?!/Users/rico/\.codex(?:/|$))/[^\s\"']+[\"']?\s*$"
+    rf"[\"']?(?!/home/user/\.codex(?:/|$))/[^\s\"']+[\"']?\s*$"
 )
 
 #: A branch read that hangs would hang the hook.
@@ -212,6 +205,61 @@ def _file_path_of(tool_input: dict[str, Any]) -> str:
         if value:
             return str(value)
     return ""
+
+
+#: Command words whose job is to create or place a file (policy-refresh-gate.ts
+#: ``WRITERS``); ``git clone`` is the one two-word writer.
+_TMP_WRITER_HEADS: Final[frozenset[str]] = frozenset(
+    {
+        "cp",
+        "mv",
+        "rsync",
+        "touch",
+        "mkdir",
+        "install",
+        "tee",
+        "dd",
+        "curl",
+        "wget",
+        "tar",
+        "unzip",
+        "zip",
+    }
+)
+
+
+def _tmp_write_in_shell(command: str) -> bool:
+    """Report whether a shell command WRITES into a system temp path.
+
+    Judges commands, not text (rtech-infra #954 item 3, the #164 shape). The
+    rule used to be two regexes over the raw line, so a heredoc body that said
+    "never cp a.txt /tmp/a.txt" or a commit message quoting "tee into /tmp/x"
+    was refused. ``_shell_commands`` drops data heredoc bodies, keeps a shell's
+    body, and keeps a quoted argument as one word, so only a real write verb
+    whose operand is a tmp path, or a redirect whose target is one, counts.
+
+    Args:
+        command: The shell command text.
+
+    Returns:
+        True when a redirect target or a writer's operand is a system temp path.
+    """
+    for argv, _separator in _shell_commands(command):
+        words = _unwrapped_argv(argv)
+        if not words:
+            continue
+        # Redirects: shlex splits `>` / `>>` into their own words; the target
+        # is the word after. `2>` arrives as `2`, `>`, target.
+        for index, word in enumerate(words[:-1]):
+            if word in (">", ">>") and _TMP_ANYWHERE.search(words[index + 1]):
+                return True
+        head = words[0].rsplit("/", 1)[-1]
+        is_writer = head in _TMP_WRITER_HEADS or (
+            head == "git" and words[1:2] == ["clone"]
+        )
+        if is_writer and any(_TMP_ANYWHERE.search(word) for word in words[1:]):
+            return True
+    return False
 
 
 def tmp_write_block_reason(
@@ -256,7 +304,7 @@ def tmp_write_block_reason(
     # `mktemp` is deliberately allowed: it resolves through $TMPDIR, which every
     # repo points at its own temp-workspace bucket. `mktemp -p /tmp` still trips
     # the literal-path check.
-    if _TMP_REDIRECT.search(command) or _TMP_WRITER.search(command):
+    if _tmp_write_in_shell(command):
         return (
             "That path is not an agent-writable location: it is on the small main "
             "disk and is sandbox-local, so anything written there is invisible to "
@@ -297,19 +345,51 @@ def _agent_tool_block_reason(env: dict[str, str]) -> str | None:
     )
 
 
+#: A newline inside a quoted word is ordinary text, not a command separator, so
+#: it is swapped for this sentinel before lexing and restored afterwards. Without
+#: it, `git commit -m 'subject\n\nbody'` raised "No closing quotation" and the
+#: caller convicted from command TEXT rather than branch state (issues 740, 618).
+_QUOTED_NEWLINE: Final[str] = "\x00nl\x00"
+_QUOTED_SPAN: Final[re.Pattern[str]] = re.compile(r"'[^']*'|\"[^\"]*\"", re.DOTALL)
+
+
+def _protect_quoted_newlines(text: str) -> str:
+    """Replace newlines inside quoted spans so they cannot split commands."""
+    return _QUOTED_SPAN.sub(
+        lambda match: match.group(0).replace("\n", _QUOTED_NEWLINE), text
+    )
+
+
 def _shell_words(text: str, *, posix: bool = True) -> list[str]:
     """Split shell text while retaining command separators and quoted words."""
-    lexer = shlex.shlex(text, posix=posix, punctuation_chars=";&|<>\n")
+    lexer = shlex.shlex(
+        _protect_quoted_newlines(text), posix=posix, punctuation_chars=";&|<>\n"
+    )
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     lexer.commenters = "#"
-    return list(lexer)
+    return [word.replace(_QUOTED_NEWLINE, "\n") for word in lexer]
 
 
-def _heredoc_specs(line: str) -> list[tuple[str, bool]]:
-    """Return heredoc delimiters declared by one shell command line."""
+#: A heredoc handed to one of these is its PROGRAM, not data, and its body is
+#: kept for judging. ``commands()`` in ``command-gate-shell.ts`` keeps the same
+#: set (``HEREDOC_SCRIPT_READERS``).
+_HEREDOC_SCRIPT_READERS: Final[frozenset[str]] = frozenset(
+    {"sh", "bash", "zsh", "dash", "ksh"}
+)
+
+
+def _heredoc_specs(line: str) -> list[tuple[str, bool, bool]]:
+    """Return ``(delimiter, strips_tabs, keep_body)`` per heredoc on one line.
+
+    ``keep_body`` is True when a word of the opening line names a shell: the
+    body is then the script being run, so it stays visible to every rule.
+    """
     words = _shell_words(line, posix=False)
-    specs: list[tuple[str, bool]] = []
+    keep_body = any(
+        word.rsplit("/", 1)[-1] in _HEREDOC_SCRIPT_READERS for word in words
+    )
+    specs: list[tuple[str, bool, bool]] = []
     for index, word in enumerate(words[:-1]):
         if word != "<<":
             continue
@@ -318,20 +398,27 @@ def _heredoc_specs(line: str) -> list[tuple[str, bool]]:
         if strips_tabs:
             raw_delimiter = raw_delimiter[1:]
         delimiter = shlex.split(raw_delimiter, posix=True)[0]
-        specs.append((delimiter, strips_tabs))
+        specs.append((delimiter, strips_tabs, keep_body))
     return specs
 
 
 def _without_heredoc_bodies(command: str) -> str:
-    """Remove heredoc data while retaining the command lines that consume it."""
+    """Remove heredoc DATA while retaining the command lines that consume it.
+
+    A body owned by a shell (``bash <<EOF``) is kept, because there the body is
+    the program (rtech-infra #954 item 3 kept ``cp x /tmp/y`` inside one
+    refused while dropping the same words from a ``cat`` body).
+    """
     kept: list[str] = []
-    pending: list[tuple[str, bool]] = []
+    pending: list[tuple[str, bool, bool]] = []
     for line in command.splitlines():
         if pending:
-            delimiter, strips_tabs = pending[0]
+            delimiter, strips_tabs, keep_body = pending[0]
             candidate = line.lstrip("\t") if strips_tabs else line
             if candidate == delimiter:
                 pending.pop(0)
+            elif keep_body:
+                kept.append(line)
             continue
         kept.append(line)
         pending.extend(_heredoc_specs(line))
@@ -482,6 +569,22 @@ def _history_mutators(
     return mutators
 
 
+def _unverified_branch_reason(cwd: Path, detail: str) -> str:
+    """Return the fail-closed refusal, naming the read that failed and its result.
+
+    A bare "unable to verify the current branch" told the operator nothing
+    actionable: it read as "the parser gave up" even when git itself answered
+    fine. Naming the command, the directory, and what came back makes the
+    difference between a real unreadable checkout and a guard defect visible in
+    the refusal itself (issue 740).
+    """
+    return (
+        f"git guard: unable to verify the current branch in {cwd}; "
+        f"`git branch --show-current` {detail}. Commit/push is blocked until "
+        "branch state is readable."
+    )
+
+
 def _branch_block_reason(cwd: Path) -> str | None:
     """Return the protected-branch or unreadable-branch refusal for ``cwd``."""
     try:
@@ -493,11 +596,16 @@ def _branch_block_reason(cwd: Path) -> str | None:
             timeout=_GIT_TIMEOUT_SECONDS,
             check=True,
         )
-    except (OSError, subprocess.SubprocessError):
-        return (
-            "git guard: unable to verify the current branch; commit/push is "
-            "blocked until branch state is readable."
+    except subprocess.CalledProcessError as error:
+        stderr = (error.stderr or "").strip().splitlines()
+        first = stderr[0] if stderr else "(no stderr)"
+        return _unverified_branch_reason(cwd, f"exited {error.returncode}: {first}")
+    except subprocess.TimeoutExpired:
+        return _unverified_branch_reason(
+            cwd, f"did not answer within {_GIT_TIMEOUT_SECONDS}s"
         )
+    except OSError as error:
+        return _unverified_branch_reason(cwd, f"could not be run: {error.strerror}")
     branch = completed.stdout.strip()
     if branch in ("main", "master"):
         return (
@@ -507,19 +615,67 @@ def _branch_block_reason(cwd: Path) -> str | None:
     return None
 
 
+_MAIN_PUSH_APPROVAL_MARKER: Final[str] = "guard-main-push-approved"
+_MAIN_PUSH_APPROVAL_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^expires=(\d+)\s*$", re.MULTILINE
+)
+
+
+def _main_push_approved(cwd: Path) -> bool:
+    """Return whether Rico's timed main-push approval is live for ``cwd``'s repo.
+
+    Rico ruling 2026-09-11. The protected-ref refusal says "without explicit
+    approval", and this is the approval: `_ob/bin/approve-main-push` writes
+    `<gitdir>/guard-main-push-approved` holding one `expires=<unix epoch>`
+    line, and Rico running that command is what makes it explicit. The expiry
+    is what stops it becoming a standing exemption. The TypeScript guard
+    (`_ob/scripts/policy-refresh-gate.ts`, readMainPushApproval) honored the
+    marker from the day it existed; this guard did not, so on 2026-09-11 an
+    approved `git -C ai-agents push origin main` was still refused here.
+
+    Small on purpose: read one file, answer yes/no. A missing gitdir, an
+    unreadable marker, a malformed line, and a past expiry are all "no", so
+    every failure keeps the guard refusing.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    git_dir = completed.stdout.strip()
+    if not git_dir:
+        return False
+    try:
+        raw = (Path(git_dir) / _MAIN_PUSH_APPROVAL_MARKER).read_text(encoding="utf8")
+    except OSError:
+        return False
+    match = _MAIN_PUSH_APPROVAL_LINE.search(raw)
+    if match is None:
+        return False
+    return int(match.group(1)) > time.time()
+
+
 def _git_history_block_reason(command: str, command_cwd: str) -> str | None:
     """Refuse a commit or push that would land on a protected branch."""
     try:
         mutators = _history_mutators(command, command_cwd)
     except ValueError:
+        # Unparseable shell text is not evidence of the target: fall back to the
+        # branch git actually reports for the command's own directory, so a
+        # message mentioning `main` cannot convict a feature branch (issue 618).
         if not _GIT_MUTATES_HISTORY.search(command):
             return None
-        return (
-            "git guard: unable to verify the current branch; commit/push is "
-            "blocked until branch state is readable."
-        )
+        return _branch_block_reason(Path(command_cwd or os.getcwd()))
     if any(
-        mutator[0] == "push" and _pushes_to_protected_ref(mutator[1])
+        mutator[0] == "push"
+        and _pushes_to_protected_ref(mutator[1])
+        and not _main_push_approved(mutator[2])
         for mutator in mutators
     ):
         return (
@@ -575,7 +731,7 @@ def _shell_safety_block_reason(command: str, command_cwd: str) -> str | None:
             # Byte-parity with `policy-refresh-gate.ts:475`; see the note on
             # TEMP_GUIDANCE above. Not scrubbed for the same reason (#636).
             "Treat ~/.codex/generated_images as transient output. Move the selected "
-            "image to /Volumes/ThunderBolt/_tmp/_image-gen2/ or the user-requested "
+            "image to /srv/_tmp/_image-gen2/ or the user-requested "
             "destination."
         )
     return None

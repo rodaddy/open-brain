@@ -8,8 +8,8 @@
       "output": {
         "candidate_count": 2,
         "candidates": [
-          {"row_id": null, "path": "docs/c.md"},
-          {"row_id": null, "path": "docs/d.md"}
+          { "row_id": null, "path": "docs/c.md" },
+          { "row_id": null, "path": "docs/d.md" }
         ]
       }
     }

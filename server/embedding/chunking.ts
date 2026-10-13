@@ -1,4 +1,4 @@
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 /**
  * Default chunk size in characters (~500 tokens).
@@ -92,7 +92,7 @@ export function chunkText(
     // at chunkSize=2000/overlap=400 produced 410 chunks instead of 11 -- the
     // first 10 correct, then 400 shrinking copies of the tail down to a final
     // chunk whose entire text was ".". Every caller paid for them: log-thought
-    // wrote them as rows, and embedText (src/embedding.ts) spent one network
+    // wrote them as rows, and embedText in the provider spent one network
     // embed call on each.
     if (end >= text.length) break;
 

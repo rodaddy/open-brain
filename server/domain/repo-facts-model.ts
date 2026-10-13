@@ -9,7 +9,7 @@ import {
   isTrustedSourceUrl,
   sourceUrlMatchesSource,
 } from "./repo-facts-source-urls.ts";
-import { canonicalNamespace } from "../../src/shared-namespace.ts";
+import { canonicalNamespace } from "../security/shared-namespace-ambient.ts";
 
 export const FACT_TYPES = [
   "ownership",
@@ -81,7 +81,7 @@ export const repoFactMetadata = z
     },
   );
 
-export type RepoFactMetadata = z.infer<typeof repoFactMetadata>;
+type RepoFactMetadata = z.infer<typeof repoFactMetadata>;
 
 export const REPO_FACT_METADATA_CONTRACT = {
   source_system: {
@@ -325,6 +325,18 @@ export function canonicalizeRepoFactRows(rows: Record<string, unknown>[]) {
   }));
 }
 
+// Dedupe keys are built from `Record<string, unknown>` fields, so each part is
+// rendered explicitly rather than relying on implicit template stringification.
+// The rendering is the one the template already performed, for every input:
+// strings pass through untouched, null/undefined render as the empty string
+// exactly as the previous `?? ""` interpolation did, and anything else goes
+// through the same `String()` conversion a template literal would apply.
+function keyPart(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  return String(value as { toString(): string });
+}
+
 // The identity a row carries in its own metadata: repo, path, subject (or the
 // symbol standing in for it), and fact type. Undefined when the row carries
 // none of the four, so the caller falls through to the row id rather than
@@ -334,21 +346,21 @@ function metadataDedupeKey(row: Record<string, unknown>): string | undefined {
     row.metadata && typeof row.metadata === "object"
       ? (row.metadata as Record<string, unknown>)
       : {};
-  const subject = metadata.subject ?? metadata.symbol ?? "";
-  const key = `${metadata.repo ?? ""}:${metadata.path ?? ""}:${subject}:${metadata.fact_type ?? ""}`;
+  const subject = keyPart(metadata.subject ?? metadata.symbol);
+  const key = `${keyPart(metadata.repo)}:${keyPart(metadata.path)}:${subject}:${keyPart(metadata.fact_type)}`;
   return key === ":::" ? undefined : key;
 }
 
-export function repoFactDedupeKey(row: Record<string, unknown>) {
+function repoFactDedupeKey(row: Record<string, unknown>) {
   return (
     row.canonical_id ??
-    (row.name ? `${row.entity_type}:${row.name}` : undefined) ??
+    (row.name ? `${keyPart(row.entity_type)}:${keyPart(row.name)}` : undefined) ??
     metadataDedupeKey(row) ??
     row.id
   );
 }
 
-export function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
+function dedupeRepoFactRows(rows: Record<string, unknown>[]) {
   const seen = new Set<unknown>();
   const deduped: Record<string, unknown>[] = [];
   for (const row of rows) {

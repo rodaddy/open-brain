@@ -11,7 +11,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
  * database, never the dogfood database. `bun run test:isolated` sets it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -35,8 +35,7 @@ async function getEntity(
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -92,10 +91,9 @@ describe("get_entity namespace isolation (live Postgres)", () => {
   });
 
   afterAll(async () => {
-    await pool.query(
-      `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
-      [[NAMESPACE, FOREIGN_NAMESPACE]],
-    );
+    await pool.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
+      [NAMESPACE, FOREIGN_NAMESPACE],
+    ]);
     await pool.end();
   });
 

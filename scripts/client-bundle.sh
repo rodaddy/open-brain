@@ -58,10 +58,51 @@ command -v uv >/dev/null 2>&1 || die "uv not on PATH"
 command -v python3 >/dev/null 2>&1 || die "python3 not on PATH"
 
 [ -d "$SOURCE_ENV_DIR" ] || die "env dir not found: $SOURCE_ENV_DIR"
-[ -f "$SOURCE_ENV_DIR/claudex-observation.env" ] || \
-  die "env file missing: $SOURCE_ENV_DIR/claudex-observation.env"
-[ -f "$SOURCE_ENV_DIR/openbrain-hook-env" ] || \
-  die "hook wrapper missing: $SOURCE_ENV_DIR/openbrain-hook-env"
+
+# --- 2a. legacy env file name on the build machine (issue 1371) -------------
+# Resolved here, in preflight, so a build machine with NEITHER name still fails
+# before anything is staged -- the promise the preflight section makes above.
+#
+# The client env file used to be named after one harness
+# (`claudex-observation.env`) even though every runtime reads it. A build machine
+# that has not yet run a post-1371 install still has only the old name on disk,
+# and the installer's own migration cannot help: it runs from a bundle, and there
+# is no bundle until this script produces one. So stage the old file under the
+# NEW name and announce it, per the repo's "nothing is adjusted silently" rule.
+#
+# The live source dir is never written here -- no mv, no rename, no marker. That
+# is setup-client.sh's job on install, and a build script that mutates the
+# machine it reads from is a surprise nobody asked for. Section 2 copies
+# SOURCE_ENV_FILE to "$STAGE/env/openbrain.env", so everything downstream reads
+# the new name either way.
+SOURCE_ENV_FILE="$SOURCE_ENV_DIR/openbrain.env"
+STAGED_ENV_FROM_LEGACY=no
+if [ ! -f "$SOURCE_ENV_FILE" ]; then
+  if [ -f "$SOURCE_ENV_DIR/claudex-observation.env" ]; then
+    SOURCE_ENV_FILE="$SOURCE_ENV_DIR/claudex-observation.env"
+    STAGED_ENV_FROM_LEGACY=yes
+  else
+    die "env file missing: $SOURCE_ENV_DIR/openbrain.env"
+  fi
+fi
+# The hook wrapper has an IN-REPO source of truth (issue 1375). Before that,
+# this script copied the LIVE installed wrapper, and setup-client.sh rewrote
+# only the managed ENV_FILE block on the way back out -- so every line of prose
+# outside that block was inherited from whatever wrote the file first, and
+# nothing in the repo could ever correct it. Measured 2026-09-03: the installed
+# wrapper still named the pre-1371 env file in two comments while resolving the
+# right one in code. Repo source first, live copy only as an ANNOUNCED fallback
+# for a build machine that predates the vendored file.
+REPO_HOOK_WRAPPER="$REPO_DIR/clients/hook-env/openbrain-hook-env"
+if [ -f "$REPO_HOOK_WRAPPER" ]; then
+  SOURCE_HOOK_WRAPPER="$REPO_HOOK_WRAPPER"
+  HOOK_WRAPPER_FROM_LIVE=no
+elif [ -f "$SOURCE_ENV_DIR/openbrain-hook-env" ]; then
+  SOURCE_HOOK_WRAPPER="$SOURCE_ENV_DIR/openbrain-hook-env"
+  HOOK_WRAPPER_FROM_LIVE=yes
+else
+  die "hook wrapper missing: no $REPO_HOOK_WRAPPER and no $SOURCE_ENV_DIR/openbrain-hook-env"
+fi
 [ -f "$SOURCE_SETTINGS" ] || die "settings.json not found: $SOURCE_SETTINGS"
 
 for pkg in "${PACKAGES[@]}"; do
@@ -124,9 +165,21 @@ fi
 # token, and the wrapper is 0755 because settings.json execs it.
 
 log "==> copying env dir"
-cp -p "$SOURCE_ENV_DIR/claudex-observation.env" "$STAGE/env/"
-cp -p "$SOURCE_ENV_DIR/openbrain-hook-env" "$STAGE/env/"
-chmod 600 "$STAGE/env/claudex-observation.env"
+cp -p "$SOURCE_ENV_FILE" "$STAGE/env/openbrain.env"
+if [ "$STAGED_ENV_FROM_LEGACY" = yes ]; then
+  log "    staged env file: $(basename "$SOURCE_ENV_FILE") -> env/openbrain.env (issue 1371)"
+  log "    the name carried a harness word; this build machine has not been"
+  log "    re-installed yet, so the installer renames its live file next run"
+fi
+cp -p "$SOURCE_HOOK_WRAPPER" "$STAGE/env/openbrain-hook-env"
+if [ "$HOOK_WRAPPER_FROM_LIVE" = yes ]; then
+  log "    hook wrapper: $SOURCE_HOOK_WRAPPER (LIVE installed copy, issue 1375)"
+  log "    this checkout has no clients/hook-env/openbrain-hook-env, so the"
+  log "    bundle carries whatever prose the build machine happens to hold"
+else
+  log "    hook wrapper: clients/hook-env/openbrain-hook-env (in-repo source)"
+fi
+chmod 600 "$STAGE/env/openbrain.env"
 chmod 755 "$STAGE/env/openbrain-hook-env"
 
 # setup-client.sh normalizes the wrapper's ENV_FILE block on every install, so
@@ -158,7 +211,7 @@ fi
 [ -n "$BUILD_DEV_ROOT" ] || \
   die "set OPENBRAIN_DEVELOPMENT_ROOT (or DEV_ROOT) to the build machine's Development root"
 
-python3 - "$STAGE/env/claudex-observation.env" "$BUILD_DEV_ROOT" <<'PY'
+python3 - "$STAGE/env/openbrain.env" "$BUILD_DEV_ROOT" <<'PY'
 import re
 import shlex
 import sys
@@ -312,7 +365,7 @@ log "==> writing setup-client.sh"
 cp -p "$REPO_DIR/scripts/setup-client.sh" "$STAGE/setup-client.sh"
 chmod 755 "$STAGE/setup-client.sh"
 
-BASE_URL="$(python3 - "$STAGE/env/claudex-observation.env" <<'PY'
+BASE_URL="$(python3 - "$STAGE/env/openbrain.env" <<'PY'
 import sys
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
@@ -349,7 +402,7 @@ rather than one assembled from documentation.
 | Path | What it is |
 |---|---|
 | \`wheels/\` | \`openbrain\`, \`openbrain-memory\`, \`openbrain-provider\` wheels |
-| \`env/claudex-observation.env\` | base URL, token, namespace, observation keys |
+| \`env/openbrain.env\` | base URL, token, namespace, observation keys |
 | \`env/openbrain-hook-env\` | the wrapper every hook command runs through |
 | \`settings-hooks.json\` | the \`openbrain-*\` hook entries, for merging |
 | \`setup-client.sh\` | the installer — run this on the CLIENT |
@@ -369,7 +422,7 @@ It installs the three wheels, places the env dir, merges the hook entries into
 
 ## SECURITY
 
-\`env/claudex-observation.env\` contains a **live bearer token**. This bundle is
+\`env/openbrain.env\` contains a **live bearer token**. This bundle is
 not in git and must never be committed, attached to an issue or PR, or copied
 anywhere a token should not go.
 

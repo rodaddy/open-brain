@@ -11,7 +11,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
  * database, never the dogfood database. `bun run test:isolated` sets it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -35,8 +35,7 @@ async function callTierRecommendations(
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -56,8 +55,7 @@ async function callTierRecommendations(
       arguments: args,
     });
     const text = (result.content as Array<{ text: string }>)[0]?.text;
-    if (text === undefined)
-      throw new Error("tier_recommendations returned no content");
+    if (text === undefined) throw new Error("tier_recommendations returned no content");
     return JSON.parse(text);
   } finally {
     await client.close();
@@ -97,9 +95,7 @@ describe("tier_recommendations (live Postgres)", () => {
   });
 
   afterAll(async () => {
-    await pool.query(`DELETE FROM entry_access_log WHERE entry_id = $1`, [
-      accessedId,
-    ]);
+    await pool.query(`DELETE FROM entry_access_log WHERE entry_id = $1`, [accessedId]);
     await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
       [NAMESPACE, OTHER_NAMESPACE],
     ]);
@@ -112,9 +108,7 @@ describe("tier_recommendations (live Postgres)", () => {
     });
     expect(result.action).toBe("demote");
     expect(result.threshold_days).toBe(30);
-    const ids = (result.candidates as Array<{ id: string }>).map(
-      (row) => row.id,
-    );
+    const ids = (result.candidates as Array<{ id: string }>).map((row) => row.id);
     expect(ids).toContain(staleId);
     expect(result.candidates_found).toBe(ids.length);
     for (const candidate of result.candidates as Array<{
@@ -146,9 +140,9 @@ describe("tier_recommendations (live Postgres)", () => {
     const result = await callTierRecommendations(NAMESPACE, {
       action: "demote",
     });
-    const previews = (
-      result.candidates as Array<{ content_preview: string }>
-    ).map((row) => row.content_preview);
+    const previews = (result.candidates as Array<{ content_preview: string }>).map(
+      (row) => row.content_preview,
+    );
     expect(previews).not.toContain("tiering foreign entry");
   });
 });

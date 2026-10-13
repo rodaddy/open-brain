@@ -10,7 +10,7 @@
  * Everything here runs against a fake pool, so there is no database and no
  * fixture state to reset between tests.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -54,23 +54,30 @@ async function clientCapturingQueries(
 ): Promise<{ client: Client; queries: CapturedQuery[] }> {
   const queries: CapturedQuery[] = [];
   const server = new McpServer({ name: "search-scope-test", version: "1.0.0" });
-  const pool = {
-    query: async (sql: string, values: unknown[] = []) => {
-      queries.push({ sql, values });
+  const query = async (sql: string, values: unknown[] = []) => {
+    if (
+      sql === "BEGIN READ ONLY" ||
+      sql === "COMMIT" ||
+      sql === "ROLLBACK" ||
+      sql.includes("set_config('hnsw.")
+    ) {
       return { rows: [] };
-    },
+    }
+    queries.push({ sql, values });
+    return { rows: [] };
+  };
+  const pool = {
+    query,
+    connect: async () => ({ query, release: () => undefined }),
   } as unknown as Pool;
   registerMemoryTools(server, {
     pool,
     embedFn: async () =>
-      options.embedding === undefined
-        ? Array(768).fill(0.01)
-        : options.embedding,
+      options.embedding === undefined ? Array(768).fill(0.01) : options.embedding,
     logger: pino({ level: "silent" }),
     sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options_) =>
     send(message, {
@@ -106,10 +113,7 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
   });
 
   test("a global role emits no namespace predicate at all", async () => {
-    const { client, queries } = await clientCapturingQueries(
-      "ob-admin",
-      "operator",
-    );
+    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
 
     await client.callTool({
       name: "search_brain",
@@ -226,10 +230,7 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("an admin gets the on-the-fly to_tsvector path with the requested config", async () => {
-    const { client, queries } = await clientCapturingQueries(
-      "admin",
-      "operator",
-    );
+    const { client, queries } = await clientCapturingQueries("admin", "operator");
 
     await client.callTool({
       name: "search_brain",
@@ -249,10 +250,7 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("english reads the stored GIN-indexed column, never a recomputed vector", async () => {
-    const { client, queries } = await clientCapturingQueries(
-      "admin",
-      "operator",
-    );
+    const { client, queries } = await clientCapturingQueries("admin", "operator");
 
     await client.callTool({
       name: "search_brain",
@@ -269,10 +267,7 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("an unrecognized language token falls back rather than reaching SQL", async () => {
-    const { client, queries } = await clientCapturingQueries(
-      "admin",
-      "operator",
-    );
+    const { client, queries } = await clientCapturingQueries("admin", "operator");
 
     await client.callTool({
       name: "search_brain",
@@ -302,12 +297,7 @@ describe("brain_answer scopes its retrieval identically", () => {
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("t.namespace = ANY($4::text[])");
-    expect(query.values).toEqual([
-      "what is known",
-      5,
-      0,
-      ["rico", "shared-kb"],
-    ]);
+    expect(query.values).toEqual(["what is known", 5, 0, ["rico", "shared-kb"]]);
   });
 
   test("an unreadable namespace is refused before any query runs", async () => {
@@ -343,10 +333,7 @@ describe("list_recent scopes both its data and its count query", () => {
   });
 
   test("a global role emits no predicate in either query", async () => {
-    const { client, queries } = await clientCapturingQueries(
-      "ob-admin",
-      "operator",
-    );
+    const { client, queries } = await clientCapturingQueries("ob-admin", "operator");
 
     await client.callTool({ name: "list_recent", arguments: {} });
 

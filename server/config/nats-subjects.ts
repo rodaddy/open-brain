@@ -2,7 +2,7 @@
 //
 // This is the TS mirror of fleet-bus'
 // `packages/fleet-nats/src/fleet_nats/subjects.py` (rodaddy/fleet-bus).
-// fleet uses the live King convention `{env}.{domain}.{...}` — dot-delimited,
+// fleet uses the live Acme convention `{env}.{domain}.{...}` — dot-delimited,
 // env-prefixed, hierarchical — and builds every subject through helpers so
 // nothing downstream hand-formats a subject string.
 //

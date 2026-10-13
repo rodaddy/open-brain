@@ -40,6 +40,10 @@ import {
   tierEnum,
   type Tier,
 } from "./curation-helpers.ts";
+import {
+  createTieringStatements,
+  type StaleCountRow,
+} from "../db/tiering-repository.ts";
 
 /** Query alias per table, matching observed current-src SQL. */
 const TABLE_ALIAS: Readonly<Record<ResourceTable, string>> = {
@@ -186,33 +190,20 @@ interface TierScan {
  * this one uses the stored counter for a coarse "barely touched" signal, while
  * promotion must go to the access LOG for real recency.
  */
-async function collectDemotionCandidates(
-  scan: TierScan,
-): Promise<TierCandidate[]> {
+async function collectDemotionCandidates(scan: TierScan): Promise<TierCandidate[]> {
   const alias = TABLE_ALIAS[scan.table];
   const preview = ALIASED_PREVIEW[scan.table];
-  const scoped = qualifyNamespacePredicate(
-    scan.predicate,
-    `${alias}.namespace`,
-    3,
-  );
-  const { rows } = await scan.dependencies.pool.query(
-    `SELECT ${alias}.id,
-                    LEFT(${preview}, ${PREVIEW_WIDTH}) AS content_preview,
-                    COALESCE(${alias}.tier, 'warm') AS tier,
-                    COALESCE(${alias}.access_count, 0) AS access_count,
-                    ${alias}.last_accessed_at
-               FROM ${scan.table} ${alias}
-              WHERE ${alias}.archived_at IS NULL
-                AND COALESCE(${alias}.tier, 'warm') = 'warm'
-                AND (${alias}.last_accessed_at IS NULL
-                     OR ${alias}.last_accessed_at < NOW() - INTERVAL '1 day' * $1)
-                AND COALESCE(${alias}.access_count, 0) < 3
-                ${scoped}
-              ORDER BY COALESCE(${alias}.access_count, 0) ASC, ${alias}.created_at ASC
-              FETCH FIRST $2 ROWS ONLY`,
-    [scan.thresholdDays, scan.remaining, ...scan.predicate.values],
-  );
+  const scoped = qualifyNamespacePredicate(scan.predicate, `${alias}.namespace`, 3);
+  const rows = await createTieringStatements(
+    scan.dependencies.pool,
+  ).scanDemotionCandidates({
+    table: scan.table,
+    alias,
+    preview,
+    previewWidth: PREVIEW_WIDTH,
+    scopedPredicate: scoped,
+    params: [scan.thresholdDays, scan.remaining, ...scan.predicate.values],
+  });
   return rows.map((row) => ({
     id: row.id,
     table: scan.table,
@@ -226,34 +217,19 @@ async function collectDemotionCandidates(
 }
 
 /** Promotion arm: recency/frequency come from the access LOG, not a lossy counter. */
-async function collectPromotionCandidates(
-  scan: TierScan,
-): Promise<TierCandidate[]> {
+async function collectPromotionCandidates(scan: TierScan): Promise<TierCandidate[]> {
   const alias = TABLE_ALIAS[scan.table];
   const preview = ALIASED_PREVIEW[scan.table];
-  const { rows } = await scan.dependencies.pool.query(
-    `SELECT sub.id, sub.content_preview, sub.tier, sub.access_count,
-                    sub.last_accessed_at, sub.recent_accesses
-               FROM (
-                 SELECT ${alias}.id,
-                        LEFT(${preview}, ${PREVIEW_WIDTH}) AS content_preview,
-                        COALESCE(${alias}.tier, 'warm') AS tier,
-                        COALESCE(${alias}.access_count, 0) AS access_count,
-                        ${alias}.last_accessed_at,
-                        (SELECT COUNT(*) FROM entry_access_log eal
-                          WHERE eal.entry_id = ${alias}.id
-                            AND eal.source_table = $3
-                            AND eal.accessed_at >= NOW() - INTERVAL '1 day' * $1) AS recent_accesses
-                   FROM ${scan.table} ${alias}
-                  WHERE ${alias}.archived_at IS NULL
-                    AND COALESCE(${alias}.tier, 'warm') IN ('warm', 'cold')
-                    ${qualifyNamespacePredicate(scan.predicate, `${alias}.namespace`, 4)}
-               ) sub
-              WHERE sub.recent_accesses > 5
-              ORDER BY sub.recent_accesses DESC
-              FETCH FIRST $2 ROWS ONLY`,
-    [scan.thresholdDays, scan.remaining, scan.table, ...scan.predicate.values],
-  );
+  const rows = await createTieringStatements(
+    scan.dependencies.pool,
+  ).scanPromotionCandidates({
+    table: scan.table,
+    alias,
+    preview,
+    previewWidth: PREVIEW_WIDTH,
+    scopedPredicate: qualifyNamespacePredicate(scan.predicate, `${alias}.namespace`, 4),
+    params: [scan.thresholdDays, scan.remaining, scan.table, ...scan.predicate.values],
+  });
   return rows.map((row) => ({
     id: row.id,
     table: scan.table,
@@ -278,19 +254,14 @@ async function handleTierRecommendations(
 ) {
   const identity = authIdentity(extra.authInfo);
   if (!identity) return errorResult("Permission denied: not authenticated");
-  const accessible = ALL_TABLES.filter((table) =>
-    canRead(identity.role, table),
-  );
+  const accessible = ALL_TABLES.filter((table) => canRead(identity.role, table));
   if (accessible.length === 0)
     return errorResult("Permission denied: no readable tables");
 
   const wanted = args.candidates ?? 20;
-  const thresholdDays =
-    args.threshold_days ?? (args.action === "demote" ? 30 : 7);
+  const thresholdDays = args.threshold_days ?? (args.action === "demote" ? 30 : 7);
   const collect =
-    args.action === "demote"
-      ? collectDemotionCandidates
-      : collectPromotionCandidates;
+    args.action === "demote" ? collectDemotionCandidates : collectPromotionCandidates;
   const candidates: TierCandidate[] = [];
 
   for (const table of accessible) {
@@ -405,21 +376,28 @@ async function handleListStale(
   );
   const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${countSelects.join("\nUNION ALL\n")}) counts`;
 
-  const [dataResult, countResult] = await Promise.all([
-    dependencies.pool.query(sql, [
-      days,
-      rowCap,
-      offset,
-      ...dataPredicate.values,
-    ]),
-    dependencies.pool
-      .query(countSql, [days, ...countPredicate.values])
-      .catch(() => null),
+  const statements = createTieringStatements(dependencies.pool);
+  const [dataRows, countRows] = await Promise.all([
+    statements.runStaleScan({
+      text: sql,
+      params: [days, rowCap, offset, ...dataPredicate.values],
+    }),
+    statements
+      .runStaleScan({ text: countSql, params: [days, ...countPredicate.values] })
+      .catch((error: unknown) => {
+        dependencies.logger.warn(
+          {
+            tool: "list_stale",
+            errorName: error instanceof Error ? error.name : "unknown",
+          },
+          "list_stale_total_count_unavailable",
+        );
+        return null;
+      }),
   ]);
 
-  const totalCount = countResult?.rows[0]?.total_count ?? null;
-  const hasMore =
-    totalCount !== null ? offset + dataResult.rows.length < totalCount : false;
+  const totalCount = (countRows?.[0] as StaleCountRow | undefined)?.total_count ?? null;
+  const hasMore = totalCount !== null ? offset + dataRows.length < totalCount : false;
 
   dependencies.logger.info(
     { tool: "list_stale", tables: accessible.length, days },
@@ -428,9 +406,9 @@ async function handleListStale(
 
   return textResult(
     useArray
-      ? dataResult.rows
+      ? dataRows
       : {
-          entries: dataResult.rows,
+          entries: dataRows,
           total_count: totalCount,
           offset,
           limit: rowCap,

@@ -1,0 +1,41 @@
+# Open Brain — base Service (issue 762).
+#
+# STATUS: WRITTEN. Not applied.
+#
+# ClusterIP, deliberately. THE BASE NEVER CLAIMS A LOAD-BALANCER ADDRESS. The
+# LB band 10.0.20.150-179 is reservation-controlled and finite, so a base that
+# defaults to `type: LoadBalancer` means every environment silently asks for an
+# address and two apps asking for the same one is a collision discovered at
+# apply time.
+#
+# An in-cluster consumer never needs an LB address at all: pod-to-pod traffic
+# uses the Service DNS name, which costs nothing from the pool. Open Brain's
+# consumers are in-cluster, so no reservation is requested here. If something
+# outside the cluster must dial it directly, that is a reservation request to
+# the infra head and a prod-overlay patch — not a change to this file.
+#
+# The selector matches ONLY the server pods. The NATS worker Deployment carries
+# a different `app.kubernetes.io/component`, so it is deliberately excluded: it
+# serves no HTTP traffic, and putting it behind this Service would send
+# requests to a pod with nothing listening.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-brain
+  labels:
+    app.kubernetes.io/name: open-brain
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: open-brain
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 3100
+      # Named target, not a number. When the container port changes, one edit
+      # in the Deployment moves both ends; a numeric targetPort here would be a
+      # second place to forget.
+      targetPort: http
+      protocol: TCP

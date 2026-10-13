@@ -3,32 +3,30 @@
 #
 # Why this exists: until 2026-07-30 the local dogfood service ran `bun run
 # src/index.ts` with cwd set to the DEV CHECKOUT (verified live: pid 79427,
-# cwd=/Volumes/ThunderBolt/Development/open-brain). Every uncommitted edit was
+# cwd=/srv/dev/open-brain). Every uncommitted edit was
 # one restart away from being the running memory service. This script puts a
 # commit boundary between editing and running.
 #
-# Differences from scripts/core01-deploy-local.sh, which this mirrors:
+# Design points:
 #
-#   1. NO ORIGIN GATE. core01 requires HEAD to be an ancestor of origin/main
-#      because it is production. This is a local dogfood clone, so any local
-#      commit is deployable and nothing touches the network.
+#   1. NO ORIGIN GATE. This is a local dogfood clone, so any local commit is
+#      deployable and nothing touches the network.
 #
-#   2. `git archive`, NOT `tar` of the working tree. core01 tars $REPO_DIR
-#      directly, which copies uncommitted edits along with everything else.
-#      `git archive` reads git object storage, so the working tree is
-#      structurally invisible. Proven 2026-07-30: appending a line to
-#      src/index.ts and re-exporting HEAD produced an archive with zero
-#      occurrences of it.
+#   2. `git archive`, NOT `tar` of the working tree. A tar of $REPO_DIR would
+#      copy uncommitted edits along with everything else. `git archive` reads
+#      git object storage, so the working tree is structurally invisible.
+#      Proven 2026-07-30: appending a line to src/index.ts and re-exporting
+#      HEAD produced an archive with zero occurrences of it.
 #
-#   3. A REVISION PROOF, which core01's script does not have. The deploy only
-#      succeeds if the process LISTENING on the clone port changed pid, is
-#      running out of the runtime directory, and that directory is stamped with
-#      the revision this run shipped. Added 2026-08-02 after a deploy reported
-#      success while the previous process still held the port and served the
-#      previous revision; see `check_new_process_serving` for the receipt.
+#   3. A REVISION PROOF. The deploy only succeeds if the process LISTENING on
+#      the clone port changed pid, is running out of the runtime directory, and
+#      that directory is stamped with the revision this run shipped. Added
+#      2026-08-02 after a deploy reported success while the previous process
+#      still held the port and served the previous revision; see
+#      `check_new_process_serving` for the receipt.
 #
 # Everything else -- staging dir, atomic swap, .previous rollback, health
-# check -- is the core01 shape, deliberately.
+# check -- is the conventional release shape, deliberately.
 #
 # Usage:
 #   scripts/local-clone-deploy.sh                 # deploy HEAD
@@ -36,7 +34,7 @@
 #   scripts/local-clone-deploy.sh --rollback      # restore the previous runtime
 #
 # Environment:
-#   OPENBRAIN_LOCAL_CLONE_ROOT  clone root (default /Volumes/ThunderBolt/open-brain-local)
+#   OPENBRAIN_LOCAL_CLONE_ROOT  clone root (default /srv/open-brain-local)
 #   OPENBRAIN_RUNTIME_NAME      runtime dir name under the root (default "app")
 #   OPENBRAIN_CLONE_ENV_FILE    env file to migrate against (default <root>/local-clone.env)
 #   OPENBRAIN_SERVICE_LABEL     launchd label to restart, if any
@@ -45,26 +43,50 @@
 #                               Unset = no worker installed; nothing happens.
 set -euo pipefail
 
-REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
-CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-/Volumes/ThunderBolt/open-brain-local}"
+REPO_DIR="${OPENBRAIN_REPO_DIR:-/srv/dev/open-brain}"
+CLONE_ROOT="${OPENBRAIN_LOCAL_CLONE_ROOT:-/srv/open-brain-local}"
 RUNTIME_NAME="${OPENBRAIN_RUNTIME_NAME:-app}"
 RUNTIME_DIR="${CLONE_ROOT}/${RUNTIME_NAME}"
 STAGING_DIR="${RUNTIME_DIR}.next"
 PREVIOUS_DIR="${RUNTIME_DIR}.previous"
+ARCHIVE_DIR="${CLONE_ROOT}/runtime-history"
 ENV_FILE="${OPENBRAIN_CLONE_ENV_FILE:-${CLONE_ROOT}/local-clone.env}"
 SERVICE_LABEL="${OPENBRAIN_SERVICE_LABEL:-}"
-# The NATS worker is a SEPARATE launchd service (docs/core01-nats-worker-runbook.md
-# "Boundary"), so swapping the runtime directory under it leaves it executing the
-# PREVIOUS revision's scripts/run-nats-worker.ts until something restarts it.
-# core01's deploy has always kickstarted its worker
-# (scripts/core01-deploy-local.sh NATS_WORKER_LABEL); this script did not, which
-# meant a local deploy silently left the two ingresses on different revisions.
+# The NATS worker is a SEPARATE launchd service, so swapping the runtime
+# directory under it leaves it executing the PREVIOUS revision's
+# scripts/run-nats-worker.ts until something restarts it. This script once did
+# not kickstart it, which meant a local deploy silently left the two ingresses
+# on different revisions.
 # Empty by default so a clone with no worker installed is unaffected.
 NATS_WORKER_LABEL="${OPENBRAIN_NATS_WORKER_LABEL:-}"
-BUN_BIN="${BUN_BIN:-/opt/homebrew/bin/bun}"
+NODE_BIN="${NODE_BIN:-/opt/homebrew/opt/node@24/bin/node}"
+NPM_CLI="${NPM_CLI:-/opt/homebrew/opt/node@24/lib/node_modules/npm/bin/npm-cli.js}"
 
 log() { printf '%s local-clone-deploy: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
 fatal() { printf 'FATAL: %s\n' "$1" >&2; exit 1; }
+
+archive_runtime_slot() {
+  local slot="$1" reason="$2" slot_name destination timestamp
+  case "$slot" in
+    "$STAGING_DIR"|"$PREVIOUS_DIR"|"${RUNTIME_DIR}.failed"|"${RUNTIME_DIR}.rollback-discard") ;;
+    *) fatal "refusing unrecognized runtime slot: ${slot}" ;;
+  esac
+  [[ ! -L "$slot" ]] || fatal "refusing symlink runtime slot: ${slot}"
+  [[ -e "$slot" ]] || return 0
+  [[ -d "$slot" ]] || fatal "runtime slot is not a directory: ${slot}"
+  [[ ! -L "$ARCHIVE_DIR" ]] || fatal "refusing symlink runtime history: ${ARCHIVE_DIR}"
+  [[ ! -e "$ARCHIVE_DIR" || -d "$ARCHIVE_DIR" ]] \
+    || fatal "runtime history is not a directory: ${ARCHIVE_DIR}"
+  mkdir -p "$ARCHIVE_DIR"
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  slot_name="${slot##*/}"
+  destination="${ARCHIVE_DIR}/${slot_name}.${timestamp}.$$"
+  [[ "$destination" != "$slot" ]] || fatal "runtime archive source equals destination: ${slot}"
+  [[ ! -e "$destination" && ! -L "$destination" ]] \
+    || fatal "runtime archive collision: ${destination}"
+  log "ADJUSTED: ${slot} -> ${destination}; why: ${reason}"
+  mv -- "$slot" "$destination"
+}
 
 restart_service() {
   [[ -n "$SERVICE_LABEL" ]] || { log "no service label set; not restarting"; return 0; }
@@ -77,7 +99,7 @@ restart_service() {
 
 # Restart the NATS worker onto the newly-swapped runtime.
 #
-# NON-FATAL by design, matching core01's WARN (scripts/core01-deploy-local.sh).
+# NON-FATAL by design: a WARN, not a failure.
 # The HTTP service is the deploy's success criterion and has a revision proof
 # behind it; the NATS worker is a second, optional ingress. A clone that has
 # never installed the worker is the COMMON case, and failing the deploy for a
@@ -122,7 +144,7 @@ wait_for_health() {
 # knows that.
 listening_pid() {
   local port="$1"
-  lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | head -1
+  lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
 }
 
 # The working directory of a running process, used to prove the listener is
@@ -223,7 +245,8 @@ if [[ "${1:-}" == "--rollback" ]]; then
   ROLLBACK_PORT="${PORT:-3100}"
 
   log "rolling back to ${PREVIOUS_DIR}"
-  rm -rf "${RUNTIME_DIR}.rollback-discard"
+  archive_runtime_slot "${RUNTIME_DIR}.rollback-discard" \
+    "preserve the runtime discarded by this manual rollback"
   [[ -d "$RUNTIME_DIR" ]] && mv "$RUNTIME_DIR" "${RUNTIME_DIR}.rollback-discard"
   mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
 
@@ -250,10 +273,9 @@ fi
 
 REF="${1:-HEAD}"
 
-[[ -d "/Volumes/ThunderBolt" ]] || fatal "/Volumes/ThunderBolt is not mounted"
+[[ -d "/srv" ]] || fatal "/srv is not mounted"
 [[ -d "$REPO_DIR/.git" ]] || fatal "not a git repository: ${REPO_DIR}"
 [[ -r "$ENV_FILE" ]] || fatal "env file missing or unreadable: ${ENV_FILE}"
-[[ -x "$BUN_BIN" ]] || fatal "bun not found at ${BUN_BIN}"
 
 # Resolve the ref to a concrete commit BEFORE anything mutates. An unknown ref
 # has to fail here, not halfway through a swap.
@@ -278,9 +300,82 @@ set -a
 source "$ENV_FILE"
 set +a
 
+if [[ -n "${BUN_BIN:-}" ]]; then
+  log "NOTE: BUN_BIN is retired and ignored; NODE_BIN and NPM_CLI select the runtimes"
+fi
+[[ -x "$NODE_BIN" ]] || fatal "node not found at ${NODE_BIN}"
+[[ -r "$NPM_CLI" ]] || fatal "npm CLI not found at ${NPM_CLI}"
+log "runtime: node=${NODE_BIN} npm_cli=${NPM_CLI}"
+
 CLONE_PORT="${PORT:-3100}"
 
-rm -rf "$STAGING_DIR"
+# Deploy/backup mutual exclusion (issue 1643; the shape first built for
+# #677). Taken HERE: after the env
+# file is sourced (the lock helper needs DB_* to connect) and BEFORE the
+# first mutation of staging, migrate, or the runtime swap. A lock
+# acquired after the migration would protect nothing while reading
+# identically in a diff, which is why the done-means check asserts this
+# ordering by line number rather than by presence.
+#
+# The lock is HELD BY A CHILD PROCESS for the rest of this script. It is a
+# session-scoped Postgres advisory lock, so if this deploy dies at any point
+# the child dies with it and the lock is released — there is no stale-lock
+# file to clean up and no path where a crashed deploy wedges backups.
+DEPLOY_LOCK_PID=""
+release_deploy_lock() {
+  if [[ -n "$DEPLOY_LOCK_PID" ]]; then
+    kill "$DEPLOY_LOCK_PID" 2>/dev/null || true
+    wait "$DEPLOY_LOCK_PID" 2>/dev/null || true
+    DEPLOY_LOCK_PID=""
+  fi
+}
+trap release_deploy_lock EXIT
+
+# Ready-file lives beside the runtime, never in /tmp or $TMPDIR: those are
+# process- and sandbox-local, so a runner and the host see different ones
+# (AGENTS.md hard rule). This path is deterministic and inspectable after a
+# failed deploy, which is when its contents matter most.
+DEPLOY_LOCK_STATE_DIR="${DEPLOY_LOCK_STATE_DIR:-${CLONE_ROOT}/deploy-state}"
+if ! mkdir -p "$DEPLOY_LOCK_STATE_DIR"; then
+  fatal "could not create the deploy-lock state dir: $DEPLOY_LOCK_STATE_DIR"
+fi
+DEPLOY_LOCK_READY_FILE="$DEPLOY_LOCK_STATE_DIR/deploy-lock.$$.log"
+: > "$DEPLOY_LOCK_READY_FILE"
+
+"$NODE_BIN" "$REPO_DIR/scripts/deploy-lock.ts" --hold > "$DEPLOY_LOCK_READY_FILE" 2>&1 &
+DEPLOY_LOCK_PID=$!
+
+# Wait for the child to report READY. A deploy that proceeded without
+# confirming the lock is held would be a guard in name only.
+deploy_lock_ready=0
+for _ in $(seq 1 60); do
+  if grep -q '^READY$' "$DEPLOY_LOCK_READY_FILE" 2>/dev/null; then
+    deploy_lock_ready=1
+    break
+  fi
+  if ! kill -0 "$DEPLOY_LOCK_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$deploy_lock_ready" -ne 1 ]]; then
+  echo "could not acquire the openbrain-deploy lock before deploying." >&2
+  echo "A backup may be in flight; retry once it completes. Detail:" >&2
+  cat "$DEPLOY_LOCK_READY_FILE" >&2 || true
+  fatal "could not acquire the openbrain-deploy lock before deploying"
+fi
+log "openbrain-deploy lock held for the duration of this deploy"
+
+# The lock lives only as long as its holder (PR 1659 review). Re-check the
+# holder right before each protected step: a holder that died after READY
+# means the lock is gone, and going on would migrate or swap unprotected.
+assert_deploy_lock_held() {
+  kill -0 "$DEPLOY_LOCK_PID" 2>/dev/null \
+    || fatal "the openbrain-deploy lock holder (pid ${DEPLOY_LOCK_PID}) exited before ${1}; aborting so it does not run unprotected"
+}
+
+archive_runtime_slot "$STAGING_DIR" "preserve an incomplete prior staging runtime"
 mkdir -p "$STAGING_DIR"
 
 # The commit, not the working tree. .env and other gitignored files are absent
@@ -301,12 +396,14 @@ subject=${SUBJECT}
 EOF
 
 log "installing dependencies"
-"$BUN_BIN" install --cwd "$STAGING_DIR" --frozen-lockfile
+(cd "$STAGING_DIR" && "$NODE_BIN" "$NPM_CLI" ci)
 
+assert_deploy_lock_held migrate
 log "running migrations against ${DB_NAME:-<unset>}"
-(cd "$STAGING_DIR" && "$BUN_BIN" run migrate)
+(cd "$STAGING_DIR" && "$NODE_BIN" scripts/migrate.ts)
 
-rm -rf "$PREVIOUS_DIR"
+assert_deploy_lock_held swap
+archive_runtime_slot "$PREVIOUS_DIR" "preserve the prior rollback runtime before replacement"
 if [[ -d "$RUNTIME_DIR" ]]; then
   mv "$RUNTIME_DIR" "$PREVIOUS_DIR"
 fi
@@ -337,7 +434,8 @@ if [[ -n "$SERVICE_LABEL" ]]; then
   if [[ "$deploy_ok" -eq 0 ]]; then
     log "deploy verification FAILED; rolling back"
     if [[ -d "$PREVIOUS_DIR" ]]; then
-      rm -rf "${RUNTIME_DIR}.failed"
+      archive_runtime_slot "${RUNTIME_DIR}.failed" \
+        "preserve the previously failed runtime before replacement"
       mv "$RUNTIME_DIR" "${RUNTIME_DIR}.failed"
       mv "$PREVIOUS_DIR" "$RUNTIME_DIR"
       rollback_pid="$(listening_pid "$CLONE_PORT")"

@@ -7,9 +7,9 @@
  */
 import { resolve } from "node:path";
 import type pg from "pg";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 import { canWriteNamespace } from "../security/namespace-policy.ts";
-import { physicalNamespace } from "../../src/shared-namespace.ts";
+import { physicalNamespace } from "../security/shared-namespace-ambient.ts";
 import {
   resolveIngestionEligibility,
   type SourceRecord,

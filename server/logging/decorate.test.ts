@@ -5,7 +5,7 @@
  * specification the rung is gated on. Both use an in-memory destination so the
  * assertions read the real emitted envelope rather than a mock's record of it.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import type { DestinationStream } from "pino";
 import { withCorrelation } from "./context.ts";
@@ -111,9 +111,7 @@ describe("withLogging", () => {
       },
     );
 
-    await expect(
-      withCorrelation(async () => add(2, 3), "corr-ok"),
-    ).resolves.toBe(5);
+    await expect(withCorrelation(async () => add(2, 3), "corr-ok")).resolves.toBe(5);
     const entries = capture.entries();
     expect(messages(entries)).toEqual(["operation_entry", "operation_result"]);
     expect(entries.some((entry) => entry.level === "error")).toBe(false);
@@ -129,9 +127,9 @@ describe("withLogging", () => {
       },
     );
 
-    await expect(
-      withCorrelation(async () => explode(), "corr-async"),
-    ).rejects.toThrow("async_boom");
+    await expect(withCorrelation(async () => explode(), "corr-async")).rejects.toThrow(
+      "async_boom",
+    );
 
     const failure = capture
       .entries()

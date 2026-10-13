@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Regenerate the six SME lane index files from the per-entry files in
  * `docs/sme/entries/`.
@@ -187,7 +187,12 @@ interface Entry {
  * library would accept far more than the format allows and would invite
  * structure the build cannot round-trip.
  */
-function parseEntry(path: string, raw: string): Entry {
+/**
+ * Split the raw entry into its frontmatter text and its verbatim body. The
+ * body offsets are exact: `4` past the opening `---\n`, `5` past the closing
+ * `\n---\n`, so the body is emitted byte-for-byte as written.
+ */
+function splitFrontmatter(path: string, raw: string): { fmText: string; body: string } {
   if (!raw.startsWith("---\n")) {
     throw new Error(`${path}: missing opening '---' frontmatter delimiter`);
   }
@@ -195,9 +200,11 @@ function parseEntry(path: string, raw: string): Entry {
   if (end === -1) {
     throw new Error(`${path}: missing closing '---' frontmatter delimiter`);
   }
-  const fmText = raw.slice(4, end + 1);
-  const body = raw.slice(end + 5);
+  return { fmText: raw.slice(4, end + 1), body: raw.slice(end + 5) };
+}
 
+/** `key: value` lines into a flat map. Blank lines are ignored. */
+function parseFrontmatterFields(path: string, fmText: string): Record<string, string> {
   const fm: Record<string, string> = {};
   for (const line of fmText.split("\n")) {
     if (!line.trim()) continue;
@@ -205,24 +212,53 @@ function parseEntry(path: string, raw: string): Entry {
     if (idx === -1) throw new Error(`${path}: malformed frontmatter line: ${line}`);
     fm[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   }
+  return fm;
+}
 
-  const lane = fm.lane as Lane;
+function parseLaneField(path: string, raw: string | undefined): Lane {
+  const lane = raw as Lane;
   if (!LANES.includes(lane)) {
-    throw new Error(`${path}: unknown lane '${fm.lane}'`);
+    throw new Error(`${path}: unknown lane '${raw}'`);
   }
-  const order = Number(fm.order);
+  return lane;
+}
+
+function parseOrderField(path: string, raw: string | undefined): number {
+  const order = Number(raw);
   if (!Number.isInteger(order)) {
-    throw new Error(`${path}: 'order' must be an integer, got '${fm.order}'`);
+    throw new Error(`${path}: 'order' must be an integer, got '${raw}'`);
   }
-  const section = fm.section ? fm.section : null;
+  return order;
+}
+
+function parseSectionField(path: string, raw: string | undefined): string | null {
+  const section = raw ? raw : null;
   if (section && !(section in SECTION_DIVIDERS)) {
     throw new Error(`${path}: unknown section '${section}'`);
   }
-  const gap = fm.gap === undefined ? 1 : Number(fm.gap);
+  return section;
+}
+
+function parseGapField(path: string, raw: string | undefined): number {
+  const gap = raw === undefined ? 1 : Number(raw);
   if (!Number.isInteger(gap) || gap < 0) {
-    throw new Error(`${path}: 'gap' must be a non-negative integer, got '${fm.gap}'`);
+    throw new Error(`${path}: 'gap' must be a non-negative integer, got '${raw}'`);
   }
-  return { file: path, lane, order, section, gap, body };
+  return gap;
+}
+
+function parseEntry(path: string, raw: string): Entry {
+  const { fmText, body } = splitFrontmatter(path, raw);
+  const fm = parseFrontmatterFields(path, fmText);
+
+  return {
+    file: path,
+    lane: parseLaneField(path, fm.lane),
+    order: parseOrderField(path, fm.order),
+    section: parseSectionField(path, fm.section),
+    gap: parseGapField(path, fm.gap),
+    body,
+  };
 }
 
 function loadEntries(): Entry[] {
@@ -239,14 +275,42 @@ function preambleFor(lane: Lane): string {
   const headerPath = join(HEADERS_DIR, `${lane}.md`);
   if (existsSync(headerPath)) return readFileSync(headerPath, "utf8");
   const inline = PREAMBLES[lane];
-  if (!inline) throw new Error(`no preamble for lane '${lane}' (expected ${headerPath})`);
+  if (!inline)
+    throw new Error(`no preamble for lane '${lane}' (expected ${headerPath})`);
   return inline;
+}
+
+/**
+ * Emit the divider that opens `section`, preceded by the blank lines the
+ * previous entry owed.
+ *
+ * The divider template opens at its `---` rule, so the blank line that
+ * separated it from the preceding entry is supplied here, and a second blank
+ * separates the template's closing paragraph from the first entry of the new
+ * section.
+ */
+function pushSectionDivider(
+  parts: string[],
+  entry: Entry,
+  section: string,
+  pendingGap: number,
+): void {
+  // `parseEntry` rejects any section name that is not a key here, so a miss is
+  // a programming error rather than bad input — say so loudly instead of
+  // emitting `undefined` into a lane file.
+  const divider = SECTION_DIVIDERS[section];
+  if (divider === undefined) {
+    throw new Error(`${entry.file}: no divider registered for section '${section}'`);
+  }
+  parts.push("\n".repeat(Math.max(pendingGap, 1)), divider);
 }
 
 function renderLane(lane: Lane, entries: Entry[]): string {
   const mine = entries
     .filter((e) => e.lane === lane)
-    .sort((a, b) => (a.order !== b.order ? a.order - b.order : a.file < b.file ? -1 : 1));
+    .sort((a, b) =>
+      a.order !== b.order ? a.order - b.order : a.file < b.file ? -1 : 1,
+    );
 
   const parts: string[] = [BANNER, "\n", preambleFor(lane)];
 
@@ -259,18 +323,7 @@ function renderLane(lane: Lane, entries: Entry[]): string {
   for (const entry of mine) {
     if (entry.section !== currentSection) {
       if (entry.section) {
-        // `parseEntry` rejects any section name that is not a key here, so a
-        // miss is a programming error rather than bad input — say so loudly
-        // instead of emitting `undefined` into a lane file.
-        const divider = SECTION_DIVIDERS[entry.section];
-        if (divider === undefined) {
-          throw new Error(`${entry.file}: no divider registered for section '${entry.section}'`);
-        }
-        // The divider template opens at its `---` rule, so the blank line that
-        // separated it from the preceding entry is supplied here, and a second
-        // blank separates the template's closing paragraph from the first
-        // entry of the new section.
-        parts.push("\n".repeat(Math.max(pendingGap, 1)), divider);
+        pushSectionDivider(parts, entry, entry.section, pendingGap);
         pendingGap = 1;
       }
       currentSection = entry.section;
@@ -285,38 +338,60 @@ function renderLane(lane: Lane, entries: Entry[]): string {
   return parts.join("");
 }
 
-function main(): void {
-  const check = process.argv.includes("--check");
-  const entries = loadEntries();
-
-  // Duplicate (lane, order) is not fatal — filename breaks the tie
-  // deterministically — but it means two findings claim one slot, which is a
-  // sign of a bad merge and is worth saying out loud.
+/**
+ * Duplicate (lane, order) is not fatal — filename breaks the tie
+ * deterministically — but it means two findings claim one slot, which is a sign
+ * of a bad merge and is worth saying out loud.
+ */
+function warnOnDuplicateOrders(entries: Entry[]): void {
   const seen = new Map<string, string>();
   for (const e of entries) {
     const key = `${e.lane}#${e.order}`;
     const prior = seen.get(key);
-    if (prior) console.warn(`warning: ${e.lane} order ${e.order} claimed by both ${prior} and ${e.file}`);
+    if (prior)
+      console.warn(
+        `warning: ${e.lane} order ${e.order} claimed by both ${prior} and ${e.file}`,
+      );
     else seen.set(key, e.file);
   }
+}
+
+/**
+ * Reconcile one lane file against its entries. Returns true when the file was
+ * stale — reported under `--check`, rewritten otherwise.
+ */
+function syncLaneFile(lane: Lane, entries: Entry[], check: boolean): boolean {
+  const target = join(SME_DIR, `${lane}.md`);
+  const next = renderLane(lane, entries);
+  const current = existsSync(target) ? readFileSync(target, "utf8") : null;
+  if (current === next) return false;
+
+  if (check) {
+    console.error(`stale: docs/sme/${lane}.md differs from its entries`);
+  } else {
+    writeFileSync(target, next);
+    console.log(
+      `wrote docs/sme/${lane}.md (${entries.filter((e) => e.lane === lane).length} entries)`,
+    );
+  }
+  return true;
+}
+
+function main(): void {
+  const check = process.argv.includes("--check");
+  const entries = loadEntries();
+
+  warnOnDuplicateOrders(entries);
 
   let stale = 0;
   for (const lane of LANES) {
-    const target = join(SME_DIR, `${lane}.md`);
-    const next = renderLane(lane, entries);
-    const current = existsSync(target) ? readFileSync(target, "utf8") : null;
-    if (current === next) continue;
-    stale += 1;
-    if (check) {
-      console.error(`stale: docs/sme/${lane}.md differs from its entries`);
-    } else {
-      writeFileSync(target, next);
-      console.log(`wrote docs/sme/${lane}.md (${entries.filter((e) => e.lane === lane).length} entries)`);
-    }
+    if (syncLaneFile(lane, entries, check)) stale += 1;
   }
 
   if (check && stale > 0) {
-    console.error(`\n${stale} lane file(s) out of date. Run: bun scripts/build-sme-indexes.ts`);
+    console.error(
+      `\n${stale} lane file(s) out of date. Run: bun scripts/build-sme-indexes.ts`,
+    );
     process.exit(1);
   }
   if (!check && stale === 0) console.log("all lane files already up to date");

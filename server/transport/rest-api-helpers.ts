@@ -1,19 +1,53 @@
 /**
- * Shared plumbing for the REST router families (issue 864 split of
- * `src/rest-api.ts`). Request shapes, generic zod parsing, auth extraction and
+ * Shared plumbing for the REST router families (split of the REST router in
+ * the L5 move, issue 864). Request shapes, generic zod parsing, auth extraction and
  * the namespace predicate helpers used by both the write and read families.
  */
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import type pg from "pg";
-import type { generateEmbedding } from "../../src/embedding.ts";
+import type { Logger } from "pino";
+import type { generateEmbedding } from "../embedding/provider.ts";
+import type { SharedNamespaceGroup } from "../config/env-groups.ts";
+import type { JevConfig } from "../integrations/jev.ts";
 import { canReadNamespace, readableNamespaces } from "../domain/read-policy.ts";
 import { canWriteNamespace } from "../security/namespace-policy.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 
 export interface RestDeps {
   pool: pg.Pool;
   embedFn: typeof generateEmbedding;
+  /**
+   * The route's logger, forwarded to the search engine's `SearchDependencies`.
+   *
+   * Required, not optional: the modern engine takes its collaborators by
+   * injection, and an optional field with a `??` default cannot tell a caller
+   * that supplied one apart from a caller that forgot (issue 779). A missing
+   * logger is a composition bug the typechecker should catch at the call site.
+   */
+  logger: Logger;
+  /**
+   * Milliseconds the query-embedding call may take, from
+   * `config.search.embeddingTimeoutMs`.
+   *
+   * Required for the same reason as `logger`: the value reaching the engine is
+   * the thing being proved, and a default here would make its arrival
+   * unobservable.
+   */
+  searchEmbeddingTimeoutMs: number;
+  jev?: { config: JevConfig };
+  /**
+   * The validated shared-namespace name set, from `config.sharedNamespaceNames`.
+   *
+   * Required for the same reason as the two above, with a sharper edge: the
+   * modern engine's shared-namespace helpers do not default when this is
+   * absent, they THROW (`server/tools/shared-namespace.ts` `requireNames`,
+   * reached from `search-engine.ts` and `search-engine-scoped-fallback.ts`).
+   * Namespace resolution is an isolation boundary, so the composition root
+   * supplies the names and no module behind this seam reads the environment
+   * for them.
+   */
+  sharedNamespaceNames: SharedNamespaceGroup;
 }
 
 export function getAuth(req: Request): AuthInfo | null {
@@ -57,6 +91,10 @@ export function parseQuery<T>(
 
 export function asyncHandler(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
+    // Deliberate: already logged downstream. `next` is Express's error
+    // forwarder, so a rejected handler reaches the error middleware exactly as
+    // a thrown synchronous handler would — that forwarding is the whole point
+    // of this wrapper, and reporting here would double the line.
     handler(req, res).catch(next);
   };
 }

@@ -39,7 +39,7 @@ export interface OpenBrainContract {
         jetstream_store_dir: "/opt/open-brain/nats/jetstream";
       };
       // Subjects are env-prefixed via the fleet-bus builder convention
-      // (src/nats-subjects.ts obContextPackSubject). The `{env}.` template below
+      // (server/config/nats-subjects.ts obContextPackSubject). The `{env}.` template below
       // is a documentation placeholder; the live subject substitutes the slugged
       // OPENBRAIN_NATS_ENV value (default "dev"), e.g. dev.ob.memory.context_pack.
       subject_convention: "env_prefixed_fleet_bus";
@@ -146,7 +146,7 @@ export interface OpenBrainContract {
     working_set: {
       status: "local-runtime-boundary";
       parent_issue: 222;
-      implementation: "src/realtime/working-set.ts";
+      implementation: "server/realtime/working-set.ts";
       storage: "ram_first_in_process";
       availability: "mcp_tool_available";
       item_label: "working_context";
@@ -165,7 +165,7 @@ export interface OpenBrainContract {
     recovery: {
       status: "local-quarantine-boundary";
       parent_issue: 221;
-      implementation: "src/realtime/recovery-wal.ts";
+      implementation: "server/realtime/recovery-wal.ts";
       storage: "env_configured_file_wal_with_in_memory_fallback";
       availability: "mcp_tool_available";
       item_label: "quarantined_recovery";
@@ -203,7 +203,7 @@ export interface OpenBrainContract {
     };
     durable_lane_context: {
       status: "runtime-available";
-      implementation: "src/tools/agent-context-pack.ts";
+      implementation: "server/tools/agent-context-pack.ts";
       storage: "ob_session_lanes_and_events";
       availability: "mcp_tool_available";
       item_label: "durable_memory";

@@ -5,8 +5,8 @@
  * reads as "gate, discover, fold, stamp" and each file's disposition — skipped,
  * deduped, or collected — is decided in one place.
  */
-import type { AuthInfo } from "../../src/types.ts";
-import { contentHash } from "../../src/embedding.ts";
+import type { AuthInfo } from "../types.ts";
+import { normalizedContentHash } from "../embedding/provider.ts";
 import type { DropCollectorDeps, DropFileReceipt } from "./drop-folder-contract.ts";
 import type { DiscoveredFile } from "./drop-folder-discovery.ts";
 import { readConfinedFile } from "./drop-folder-read.ts";
@@ -120,13 +120,13 @@ export async function ingestOneFile(
   }
 
   // Durable identity: the SAME normalized hash the durable upsert dedupes on.
-  const hash = contentHash(raw);
+  const hash = normalizedContentHash(raw);
   // byte_length is the descriptor-read byte count (the durable truth), not a
   // pre-read metadata size.
   const byteLength = read.byteLength;
 
   // In-batch dedupe against the full observed set (covers [A,B,A] and
-  // case/whitespace collisions, since contentHash normalizes both).
+  // case/whitespace collisions, since normalizedContentHash normalizes both).
   if (totals.observedHashes.has(hash)) {
     totals.files.push({
       status: "deduped",

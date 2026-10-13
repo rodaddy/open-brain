@@ -1,8 +1,10 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 /**
  * Structured logging boundary tests.
  * Design authority: `_DOCS/STANDARDS-observability.md`.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ import type { DestinationStream } from "pino";
 import { withCorrelation } from "./context.ts";
 import { createLogger, withOperation, workerLogPath } from "./logger.ts";
 import { sanitizeValue } from "./sanitize.ts";
+import { readAmbientEnv } from "../../scripts/test-support/ambient-env.ts";
 
 // A repo-relative scratch dir, never `/tmp` or `$TMPDIR`: those are
 // sandbox-local, so a runner, a sandbox, and the host each see a different one
@@ -18,12 +21,17 @@ import { sanitizeValue } from "./sanitize.ts";
 // AGENTS.md, hard rule).
 //
 // Repo-relative rather than the shared `{temp_workspace}` path, because this
-// runs in CI too. An absolute `/Volumes/...` default is unwritable on the Linux
+// runs in CI too. An absolute macOS-volume default is unwritable on the Linux
 // runner and fails with `EACCES: permission denied, mkdir '/Volumes'` — which
 // is exactly how the first push of this test failed. `_scratch/` is already
 // gitignored and already used by `src/operator-doctor.test.ts`.
+// The override is read through `scripts/test-support/ambient-env.ts` rather
+// than inline: `server/**` may not touch `process.env` (`.oxlintrc.json`, the
+// L2b rung), and that helper is the repo's one named, greppable reader living
+// outside the rule's scope. The resolved value is unchanged either way.
 const SCRATCH_ROOT =
-  process.env.OPENBRAIN_TEST_SCRATCH_DIR ?? join(import.meta.dir, "../../_scratch/logging");
+  readAmbientEnv("OPENBRAIN_TEST_SCRATCH_DIR") ??
+  join(dirname(fileURLToPath(import.meta.url)), "../../_scratch/logging");
 await mkdir(SCRATCH_ROOT, { recursive: true });
 
 const CONFIG = {
@@ -46,9 +54,13 @@ function captureLogger(): {
   });
   return {
     logger: createLogger(CONFIG, stream as DestinationStream),
-    entries: () => lines.flatMap((line) =>
-      line.split("\n").filter(Boolean).map((item) => JSON.parse(item)),
-    ),
+    entries: () =>
+      lines.flatMap((line) =>
+        line
+          .split("\n")
+          .filter(Boolean)
+          .map((item) => JSON.parse(item)),
+      ),
   };
 }
 
@@ -72,31 +84,47 @@ describe("structured logging boundary", () => {
   it("redacts declared secret fields and safely projects nested values", () => {
     const capture = captureLogger();
     const sensitiveValue = randomUUID();
-    capture.logger.info({ authorization: sensitiveValue, nested: { apiKey: sensitiveValue, ok: "yes" } }, "safe_event");
+    capture.logger.info(
+      { authorization: sensitiveValue, nested: { apiKey: sensitiveValue, ok: "yes" } },
+      "safe_event",
+    );
     expect(capture.entries()[0]?.authorization).toBe("[REDACTED]");
     expect(capture.entries()[0]?.nested).toEqual({ apiKey: "[REDACTED]", ok: "yes" });
     expect((sanitizeValue("x".repeat(250)) as string).length).toBeLessThan(250);
-    expect(sanitizeValue(new URL("https://example.invalid/path"))).toEqual({ type: "URL", key_count: 0 });
+    expect(sanitizeValue(new URL("https://example.invalid/path"))).toEqual({
+      type: "URL",
+      key_count: 0,
+    });
   });
 
   it("emits entry, result, duration, and failure through the operation wrapper", async () => {
     const capture = captureLogger();
     await withOperation({ logger: capture.logger, name: "ok", work: async () => 7 });
     const sensitiveMessage = randomUUID();
-    await expect(withOperation({ logger: capture.logger, name: "bad", work: async () => { throw new TypeError(sensitiveMessage); } })).rejects.toThrow(sensitiveMessage);
+    await expect(
+      withOperation({
+        logger: capture.logger,
+        name: "bad",
+        work: async () => {
+          throw new TypeError(sensitiveMessage);
+        },
+      }),
+    ).rejects.toThrow(sensitiveMessage);
     expect(capture.entries().map((entry) => entry.message)).toEqual([
       "operation_entry",
       "operation_result",
       "operation_entry",
       "operation_failure",
     ]);
-    expect(capture.entries()[1]?.duration_ms).toBeNumber();
+    expect(typeof capture.entries()[1]?.duration_ms).toBe("number");
     expect(capture.entries()[3]?.error).toEqual({ type: "TypeError" });
     expect(JSON.stringify(capture.entries())).not.toContain(sensitiveMessage);
   });
 
   it("derives a separate file path for every worker", () => {
-    expect(workerLogPath("logs/open-brain.log", "worker/2")).toBe("logs/open-brain.worker_2.log");
+    expect(workerLogPath("logs/open-brain.log", "worker/2")).toBe(
+      "logs/open-brain.worker_2.log",
+    );
   });
 
   // Regression for #612. Every other test in this file injects an in-memory
@@ -114,20 +142,31 @@ describe("structured logging boundary", () => {
     const logger = createLogger({ ...CONFIG, file: configured });
 
     logger.info({ probe: "module" }, "routing_probe_module");
-    logger.child({ component: "maintenance" }).info({ probe: "child" }, "routing_probe_child");
+    logger
+      .child({ component: "maintenance" })
+      .info({ probe: "child" }, "routing_probe_child");
 
     // pino-roll appends an index to the configured name and writes through a
     // worker thread, so poll for the content rather than assuming it is
     // flushed synchronously.
-    const expectedFile = workerLogPath(configured, CONFIG.workerName)
-      .replace(/\.log$/, ".1.log");
+    const expectedFile = workerLogPath(configured, CONFIG.workerName).replace(
+      /\.log$/,
+      ".1.log",
+    );
     let contents = "";
-    for (let attempt = 0; attempt < 100 && !contents.includes("routing_probe_child"); attempt++) {
+    for (
+      let attempt = 0;
+      attempt < 100 && !contents.includes("routing_probe_child");
+      attempt++
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       contents = await readFile(expectedFile, "utf8").catch(() => "");
     }
 
-    const lines = contents.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const lines = contents
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
     const moduleLine = lines.find((line) => line.message === "routing_probe_module");
     const childLine = lines.find((line) => line.message === "routing_probe_child");
 

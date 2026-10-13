@@ -1,16 +1,18 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   appendFileSync,
   existsSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { join } from "node:path";
+
+import { testScratchDir } from "../../../scripts/test-support/scratch-dir.ts";
 
 import { ValidationError } from "../src/policy.ts";
 import {
@@ -23,9 +25,14 @@ import {
 // Assembled at runtime so no credential-shaped literal lands in source.
 const SENTINEL = ["leakmark", "unit", "sentinel", "987654"].join("-");
 const SECRET_LINE = ["password", `${SENTINEL}`].join(": ");
+// Lock wait for the cross-process children. Twelve children serialise on one
+// lock, each doing a file fsync and a directory fsync, and on the CI runner the
+// last one waited past 5 s twice on 2026-09-25 (runs 7128, 7141). The test is
+// about exclusion, so the production default stays 5000 ms (issue 1518).
+const CHILD_LOCK_WAIT_MS = 30_000;
 
 function tempSpool(options: ConstructorParameters<typeof JsonlSpool>[1] = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "obmem-ts-spool-"));
+  const dir = testScratchDir("obmem-ts-spool-");
   return new JsonlSpool(join(dir, "spool.jsonl"), options);
 }
 
@@ -49,9 +56,7 @@ describe("JsonlSpool caps and backpressure", () => {
     spool.append("three", { content: "3" });
     expect(spool.status().pending_count).toBe(3);
     const before = readFileSync(spool.path);
-    expect(() => spool.append("four", { content: "4" })).toThrow(
-      SpoolFullError,
-    );
+    expect(() => spool.append("four", { content: "4" })).toThrow(SpoolFullError);
     expect(readFileSync(spool.path).equals(before)).toBe(true);
     expect(spool.status().pending_count).toBe(3);
   });
@@ -113,9 +118,9 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
         if (calls === 1) throw new Error("injected directory fsync failure");
       },
     });
-    expect(() =>
-      spool.append("after", { content: "must not acknowledge" }),
-    ).toThrow("injected directory fsync failure");
+    expect(() => spool.append("after", { content: "must not acknowledge" })).toThrow(
+      "injected directory fsync failure",
+    );
     expect(calls).toBe(2);
     expect(readFileSync(baseline.path).equals(original)).toBe(true);
     expect(baseline.records().map((record) => record.idempotency_key)).toEqual([
@@ -132,13 +137,50 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
         if (calls === 1) throw new Error("injected directory fsync failure");
       },
     });
-    expect(() =>
-      spool.append("first", { content: "must not acknowledge" }),
-    ).toThrow("injected directory fsync failure");
+    expect(() => spool.append("first", { content: "must not acknowledge" })).toThrow(
+      "injected directory fsync failure",
+    );
     expect(calls).toBe(2);
     expect(existsSync(baseline.path)).toBe(false);
   });
+});
 
+/**
+ * Spawns one child that waits on `gate`, then appends `key` to the spool.
+ *
+ * The exit and stderr subscriptions are registered HERE, at spawn, not in the
+ * caller's join loop: node's `close` is an event, so a child that finished
+ * while the loop awaited an earlier sibling would already have fired it and a
+ * later `once()` would wait forever.
+ */
+function gatedAppendChild(options: {
+  gate: string;
+  workerModule: string;
+  spoolPath: string;
+  key: string;
+}): { closed: Promise<[number | null]>; stderr: string[] } {
+  const { gate, workerModule, spoolPath, key } = options;
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      [
+        `import { existsSync } from "node:fs";`,
+        `import { JsonlSpool } from ${JSON.stringify(workerModule)};`,
+        `import { setTimeout as delay } from "node:timers/promises";`,
+        `while (!existsSync(${JSON.stringify(gate)})) await delay(1);`,
+        `new JsonlSpool(${JSON.stringify(spoolPath)}, { lockTimeoutMs: ${CHILD_LOCK_WAIT_MS} }).append("child", { content: "${key}" }, "${key}");`,
+      ].join("\n"),
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  const stderr: string[] = [];
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => stderr.push(chunk));
+  return { closed: once(child, "close") as Promise<[number | null]>, stderr };
+}
+
+describe("JsonlSpool durability and cross-process exclusion", () => {
   it("recovers a lock whose recorded owner process is dead", () => {
     const spool = tempSpool();
     writeFileSync(
@@ -146,9 +188,9 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
       JSON.stringify({ token: "dead-owner", pid: 2_147_483_647 }),
       { mode: 0o600 },
     );
-    expect(
-      spool.append("after-crash", { content: "recover" }, "recovered-key"),
-    ).toBe("recovered-key");
+    expect(spool.append("after-crash", { content: "recover" }, "recovered-key")).toBe(
+      "recovered-key",
+    );
   });
 
   it("recovers stale malformed lock metadata", () => {
@@ -159,9 +201,9 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
       lockTimeoutMs: 50,
       lockStaleMs: 1,
     });
-    expect(
-      spool.append("after-stale", { content: "recover" }, "stale-key"),
-    ).toBe("stale-key");
+    expect(spool.append("after-stale", { content: "recover" }, "stale-key")).toBe(
+      "stale-key",
+    );
   });
 
   it("recovers stale locks with invalid numeric owner pids", () => {
@@ -203,30 +245,20 @@ describe("JsonlSpool durability and cross-process exclusion", () => {
 
   it("preserves every acknowledged key from independently opened child spools", async () => {
     const spool = tempSpool();
-    const gate = join(tmpdir(), `obmem-ts-spool-gate-${crypto.randomUUID()}`);
+    const gate = join(
+      testScratchDir("obmem-ts-spool-gate-"),
+      `gate-${crypto.randomUUID()}`,
+    );
     const workerModule = new URL("../src/spool.ts", import.meta.url).href;
     const keys = Array.from({ length: 12 }, (_, index) => `child-key-${index}`);
     const children = keys.map((key) =>
-      Bun.spawn({
-        cmd: [
-          process.execPath,
-          "-e",
-          [
-            `import { existsSync } from "node:fs";`,
-            `import { JsonlSpool } from ${JSON.stringify(workerModule)};`,
-            `while (!existsSync(${JSON.stringify(gate)})) await Bun.sleep(1);`,
-            `new JsonlSpool(${JSON.stringify(spool.path)}).append("child", { content: "${key}" }, "${key}");`,
-          ].join("\n"),
-        ],
-        stdout: "ignore",
-        stderr: "pipe",
-      }),
+      gatedAppendChild({ gate, workerModule, spoolPath: spool.path, key }),
     );
     writeFileSync(gate, "go", { mode: 0o600 });
     for (const child of children) {
-      const exitCode = await child.exited;
+      const [exitCode] = await child.closed;
       if (exitCode !== 0) {
-        throw new Error(await new Response(child.stderr).text());
+        throw new Error(child.stderr.join(""));
       }
     }
     expect(
@@ -368,9 +400,7 @@ describe("JsonlSpool quarantine lifecycle", () => {
     const sidecar = readFileSync(spool.quarantinePath, "utf-8");
     const envelopes = sidecar
       .split("\n")
-      .filter((line) =>
-        line.includes('"schema":"openbrain.spool_quarantine.v1"'),
-      );
+      .filter((line) => line.includes('"schema":"openbrain.spool_quarantine.v1"'));
     expect(envelopes.length).toBe(1);
     // Freshest category wins on replacement.
     expect(envelopes[0]).toContain('"error_category":"RangeError"');

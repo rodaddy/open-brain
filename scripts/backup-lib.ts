@@ -11,8 +11,10 @@
  * fixed allowlists below (COUNT_TABLE_ALLOWLIST / NAMESPACE_TABLE_ALLOWLIST /
  * ARCHIVED_AT_TABLE_ALLOWLIST), never from arguments or the manifest.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -164,11 +166,37 @@ export type ManifestFileEntry = z.infer<typeof fileEntrySchema>;
 // Minimal query interface (Pool or PoolClient), matching repo convention
 // ---------------------------------------------------------------------------
 
+/**
+ * A query result row. Callers read individual columns and coerce them
+ * themselves (`Number(...)`, `String(...)`), which is what the pg driver's
+ * untyped row already required — this makes that coercion explicit instead of
+ * implicit.
+ *
+ * Every column this module and scripts/restore.ts read is named here, each
+ * optional and `unknown`, which is what lets the row be something other than
+ * `any`: a reader gets a value it must coerce rather than one it may treat as
+ * anything, and a caller supplying rows (the fakes in scripts/restore.test.ts
+ * declare their own narrower interfaces) still satisfies the shape. Adding a
+ * column to a query means adding it here — deliberately, so the set of columns
+ * that cross this boundary stays written down.
+ */
+export interface QueryRow {
+  filename?: unknown;
+  count?: unknown;
+  extversion?: unknown;
+  namespace?: unknown;
+  col_type?: unknown;
+  schemaname?: unknown;
+  content?: unknown;
+  /** The unnamed column of an existence probe (`SELECT 1 FROM ...`). */
+  "1"?: unknown;
+}
+
 export interface Queryable {
   query(
     sql: string,
     params?: unknown[],
-  ): Promise<{ rows: any[]; rowCount?: number | null }>;
+  ): Promise<{ rows: QueryRow[]; rowCount?: number | null }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +208,10 @@ export async function sha256File(
 ): Promise<{ sha256: string; bytes: number }> {
   const hash = createHash("sha256");
   let bytes = 0;
-  const stream = Bun.file(path).stream();
+  // createReadStream yields Buffers where the Bun stream yielded Uint8Arrays.
+  // Both are accepted by hash.update() and both expose .length as the byte
+  // count, so the sha256 and the byte total are unchanged.
+  const stream = createReadStream(path);
   for await (const chunk of stream) {
     hash.update(chunk);
     bytes += chunk.length;
@@ -195,7 +226,7 @@ export async function sha256File(
 const REPO_MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
-  "src",
+  "server",
   "db",
   "migrations",
 );
@@ -245,6 +276,47 @@ async function columnExists(
  * version strings ever leave the database; no row content and no namespace
  * names are read into this process's output.
  */
+async function gatherRowCounts(db: Queryable): Promise<Record<string, number>> {
+  const rowCounts: Record<string, number> = {};
+  for (const table of COUNT_TABLE_ALLOWLIST) {
+    if (!(await tableExists(db, table))) continue;
+    // Table name comes from COUNT_TABLE_ALLOWLIST above, never from input.
+    const { rows } = await db.query(`SELECT COUNT(*)::bigint AS count FROM ${table}`);
+    rowCounts[table] = Number(rows[0]?.count ?? 0);
+  }
+  return rowCounts;
+}
+
+async function gatherArchivedRowCounts(db: Queryable): Promise<Record<string, number>> {
+  const archivedRowCounts: Record<string, number> = {};
+  for (const table of ARCHIVED_AT_TABLE_ALLOWLIST) {
+    if (!(await tableExists(db, table))) continue;
+    if (!(await columnExists(db, table, "archived_at"))) continue;
+    // Table name comes from ARCHIVED_AT_TABLE_ALLOWLIST above.
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::bigint AS count FROM ${table} WHERE archived_at IS NOT NULL`,
+    );
+    archivedRowCounts[table] = Number(rows[0]?.count ?? 0);
+  }
+  return archivedRowCounts;
+}
+
+async function gatherDistinctNamespaces(db: Queryable): Promise<number> {
+  const namespaceParts: string[] = [];
+  for (const table of NAMESPACE_TABLE_ALLOWLIST) {
+    if (!(await tableExists(db, table))) continue;
+    if (!(await columnExists(db, table, "namespace"))) continue;
+    // Table name comes from NAMESPACE_TABLE_ALLOWLIST above. UNION dedupes,
+    // and only COUNT(*) leaves the query — names never reach the manifest.
+    namespaceParts.push(`SELECT namespace FROM ${table}`);
+  }
+  if (namespaceParts.length === 0) return 0;
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS count FROM (${namespaceParts.join(" UNION ")}) AS ns`,
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function gatherDbInfo(db: Queryable): Promise<BackupDbInfo> {
   if (!(await tableExists(db, "_migrations"))) {
     throw new Error(
@@ -261,51 +333,14 @@ export async function gatherDbInfo(db: Queryable): Promise<BackupDbInfo> {
     "SELECT extversion FROM pg_extension WHERE extname = 'vector'",
   );
   const pgvectorVersion =
-    vectorRows.length > 0 ? String(vectorRows[0].extversion) : null;
-
-  const rowCounts: Record<string, number> = {};
-  for (const table of COUNT_TABLE_ALLOWLIST) {
-    if (!(await tableExists(db, table))) continue;
-    // Table name comes from COUNT_TABLE_ALLOWLIST above, never from input.
-    const { rows } = await db.query(
-      `SELECT COUNT(*)::bigint AS count FROM ${table}`,
-    );
-    rowCounts[table] = Number(rows[0]?.count ?? 0);
-  }
-
-  const archivedRowCounts: Record<string, number> = {};
-  for (const table of ARCHIVED_AT_TABLE_ALLOWLIST) {
-    if (!(await tableExists(db, table))) continue;
-    if (!(await columnExists(db, table, "archived_at"))) continue;
-    // Table name comes from ARCHIVED_AT_TABLE_ALLOWLIST above.
-    const { rows } = await db.query(
-      `SELECT COUNT(*)::bigint AS count FROM ${table} WHERE archived_at IS NOT NULL`,
-    );
-    archivedRowCounts[table] = Number(rows[0]?.count ?? 0);
-  }
-
-  const namespaceParts: string[] = [];
-  for (const table of NAMESPACE_TABLE_ALLOWLIST) {
-    if (!(await tableExists(db, table))) continue;
-    if (!(await columnExists(db, table, "namespace"))) continue;
-    // Table name comes from NAMESPACE_TABLE_ALLOWLIST above. UNION dedupes,
-    // and only COUNT(*) leaves the query — names never reach the manifest.
-    namespaceParts.push(`SELECT namespace FROM ${table}`);
-  }
-  let distinctNamespaces = 0;
-  if (namespaceParts.length > 0) {
-    const { rows } = await db.query(
-      `SELECT COUNT(*)::int AS count FROM (${namespaceParts.join(" UNION ")}) AS ns`,
-    );
-    distinctNamespaces = Number(rows[0]?.count ?? 0);
-  }
+    vectorRows.length > 0 ? String(vectorRows[0]?.extversion) : null;
 
   return {
     appliedMigrations,
     pgvectorVersion,
-    rowCounts,
-    archivedRowCounts,
-    distinctNamespaces,
+    rowCounts: await gatherRowCounts(db),
+    archivedRowCounts: await gatherArchivedRowCounts(db),
+    distinctNamespaces: await gatherDistinctNamespaces(db),
   };
 }
 
@@ -335,7 +370,7 @@ export function buildManifest(input: ManifestBuildInput): BackupManifestV1 {
       hostname: input.hostname ?? osHostname(),
     },
     migrations: {
-      head: applied.length > 0 ? applied[applied.length - 1]! : null,
+      head: applied.length > 0 ? (applied[applied.length - 1] ?? null) : null,
       applied,
     },
     contract: {
@@ -362,9 +397,7 @@ export function buildManifest(input: ManifestBuildInput): BackupManifestV1 {
 
 export function parseManifest(
   raw: unknown,
-):
-  | { manifest: BackupManifestV1; errors: [] }
-  | { manifest: null; errors: string[] } {
+): { manifest: BackupManifestV1; errors: [] } | { manifest: null; errors: string[] } {
   const result = manifestSchema.safeParse(raw);
   if (result.success) return { manifest: result.data, errors: [] };
   const errors = result.error.issues.map(
@@ -408,8 +441,7 @@ function normalizeAppliedMigrationHistory(
   for (const file of applied) {
     const replacement = LEGACY_MIGRATION_REPLACEMENTS.get(file);
     if (replacement) {
-      if (!repoSet.has(replacement) || !appliedSet.has(replacement))
-        return null;
+      if (!repoSet.has(replacement) || !appliedSet.has(replacement)) return null;
       continue;
     }
     normalized.add(file);
@@ -430,10 +462,7 @@ export function compareMigrationSets(
   repoMigrations: string[],
 ): MigrationCompat {
   const repoSorted = [...repoMigrations].sort();
-  const backupSorted = normalizeAppliedMigrationHistory(
-    backupApplied,
-    repoMigrations,
-  );
+  const backupSorted = normalizeAppliedMigrationHistory(backupApplied, repoMigrations);
   if (!backupSorted) return "unknown_migrations";
   const repoSet = new Set(repoSorted);
   for (const file of backupSorted) {
@@ -454,12 +483,11 @@ export interface ParsedContractVersion {
 }
 
 /** Parses versions shaped like "2026-07-17.memory-tools.v22". */
-export function parseContractVersion(
-  version: string,
-): ParsedContractVersion | null {
+export function parseContractVersion(version: string): ParsedContractVersion | null {
   const m = version.match(/^(\d{4}-\d{2}-\d{2})\.(.+)\.v(\d+)$/);
-  if (!m) return null;
-  return { date: m[1]!, family: m[2]!, rev: Number(m[3]!) };
+  const [, date, family, rev] = m ?? [];
+  if (date === undefined || family === undefined || rev === undefined) return null;
+  return { date, family, rev: Number(rev) };
 }
 
 export type ContractCompat = "equal" | "older" | "newer" | "unparseable";
@@ -482,425 +510,27 @@ export function compareContractVersions(
 }
 
 // ---------------------------------------------------------------------------
-// Backup-set verification
+// Backup-set verification (implemented in ./backup-verify-lib.ts)
 // ---------------------------------------------------------------------------
 
-export type Verdict = "ok" | "warn" | "fail";
-
-export interface ElementVerdict {
-  element: string;
-  verdict: Verdict;
-  reason: string;
-}
-
-export interface CurrentRuntime {
-  repoMigrations: string[];
-  contractVersion: string;
-  embeddingModel: string;
-  embeddingDimensions: number;
-}
-
-export interface VerifyOptions {
-  allowEmbeddingMismatch?: boolean;
-  maxAgeHours?: number;
-  now?: Date;
-}
-
-export type VerifySetStatus = "passed" | "warned" | "failed";
-
-export interface VerifySetResult {
-  dir: string;
-  status: VerifySetStatus;
-  verdicts: ElementVerdict[];
-  manifest: BackupManifestV1 | null;
-  migration_compat: MigrationCompat | null;
-  contract_compat: ContractCompat | null;
-  age_hours: number | null;
-}
-
-function statusFromVerdicts(verdicts: ElementVerdict[]): VerifySetStatus {
-  if (verdicts.some((v) => v.verdict === "fail")) return "failed";
-  if (verdicts.some((v) => v.verdict === "warn")) return "warned";
-  return "passed";
-}
-
-export function ageHours(createdAt: string, now: Date): number | null {
-  const created = Date.parse(createdAt);
-  if (Number.isNaN(created)) return null;
-  return (now.getTime() - created) / 3_600_000;
-}
-
-/**
- * Verify one backup-set directory against the filesystem and the CURRENT
- * runtime. Never mutates anything. Every distinct failure class gets its own
- * element verdict so operators can tell missing / corrupt / incomplete /
- * drifted apart at a glance.
- */
-export async function verifyBackupSet(
-  dir: string,
-  runtime: CurrentRuntime,
-  opts: VerifyOptions = {},
-): Promise<VerifySetResult> {
-  const verdicts: ElementVerdict[] = [];
-  const now = opts.now ?? new Date();
-  let manifest: BackupManifestV1 | null = null;
-  let migrationCompat: MigrationCompat | null = null;
-  let contractCompat: ContractCompat | null = null;
-  let age: number | null = null;
-
-  const manifestPath = join(dir, MANIFEST_FILENAME);
-  let manifestStat: Awaited<ReturnType<typeof stat>> | null = null;
-  try {
-    manifestStat = await stat(manifestPath);
-  } catch {
-    verdicts.push({
-      element: "manifest",
-      verdict: "fail",
-      reason: "missing",
-    });
-  }
-
-  if (manifestStat) {
-    let raw: unknown = null;
-    let parseFailed = false;
-    try {
-      raw = JSON.parse(await Bun.file(manifestPath).text());
-    } catch {
-      parseFailed = true;
-      verdicts.push({
-        element: "manifest",
-        verdict: "fail",
-        reason: "unparseable_json",
-      });
-    }
-    if (!parseFailed) {
-      const schemaId =
-        raw && typeof raw === "object" ? (raw as any).schema : undefined;
-      if (schemaId !== MANIFEST_SCHEMA_ID) {
-        verdicts.push({
-          element: "manifest",
-          verdict: "fail",
-          reason: "unknown_schema_id",
-        });
-      } else {
-        const parsed = parseManifest(raw);
-        if (!parsed.manifest) {
-          for (const err of parsed.errors) {
-            verdicts.push({
-              element: "manifest_field",
-              verdict: "fail",
-              reason: err,
-            });
-          }
-        } else {
-          manifest = parsed.manifest;
-          verdicts.push({
-            element: "manifest",
-            verdict: "ok",
-            reason: "valid",
-          });
-        }
-      }
-    }
-  }
-
-  if (manifest) {
-    // --- file inventory: every manifest file present, nothing extra --------
-    let entries: string[] = [];
-    try {
-      entries = (await readdir(dir)).filter((e) => !e.startsWith("."));
-    } catch {
-      verdicts.push({
-        element: "backup_dir",
-        verdict: "fail",
-        reason: "unreadable",
-      });
-    }
-    const expected = new Set<string>([
-      MANIFEST_FILENAME,
-      ...manifest.files.map((f) => f.name),
-    ]);
-    for (const extra of entries.filter((e) => !expected.has(e))) {
-      verdicts.push({
-        element: `file:${extra}`,
-        verdict: "fail",
-        reason: "unexpected_file",
-      });
-    }
-
-    if (!manifest.files.some((f) => f.name === DUMP_FILENAME)) {
-      verdicts.push({
-        element: `file:${DUMP_FILENAME}`,
-        verdict: "fail",
-        reason: "dump_not_listed_in_manifest",
-      });
-    }
-
-    for (const file of manifest.files) {
-      const filePath = join(dir, file.name);
-      let fileStat: Awaited<ReturnType<typeof stat>>;
-      try {
-        fileStat = await stat(filePath);
-      } catch {
-        verdicts.push({
-          element: `file:${file.name}`,
-          verdict: "fail",
-          reason: "missing",
-        });
-        continue;
-      }
-      const { sha256, bytes } = await sha256File(filePath);
-      if (bytes !== file.bytes) {
-        verdicts.push({
-          element: `file:${file.name}`,
-          verdict: "fail",
-          reason: "size_mismatch",
-        });
-      } else if (sha256 !== file.sha256) {
-        verdicts.push({
-          element: `file:${file.name}`,
-          verdict: "fail",
-          reason: "checksum_mismatch",
-        });
-      } else {
-        verdicts.push({
-          element: `file:${file.name}`,
-          verdict: "ok",
-          reason: "checksum_verified",
-        });
-      }
-      // Drift heuristic: a dump modified AFTER the manifest was written is
-      // reported distinctly. sha256 above is the integrity authority — when
-      // the checksum still matches this is a warn (content proven identical),
-      // and when it does not match the checksum failure above already fails
-      // the set.
-      if (
-        manifestStat &&
-        fileStat.mtimeMs > manifestStat.mtimeMs &&
-        sha256 === file.sha256
-      ) {
-        verdicts.push({
-          element: `file:${file.name}`,
-          verdict: "warn",
-          reason: "modified_after_manifest",
-        });
-      }
-    }
-
-    // --- migration compatibility ------------------------------------------
-    const applied = manifest.migrations.applied;
-    const expectedHead =
-      applied.length > 0 ? [...applied].sort().at(-1)! : null;
-    if (manifest.migrations.head !== expectedHead) {
-      verdicts.push({
-        element: "migrations",
-        verdict: "fail",
-        reason: "head_inconsistent_with_applied_list",
-      });
-    } else {
-      migrationCompat = compareMigrationSets(applied, runtime.repoMigrations);
-      if (migrationCompat === "equal") {
-        verdicts.push({
-          element: "migrations",
-          verdict: "ok",
-          reason: "equal_head",
-        });
-      } else if (migrationCompat === "restorable_with_migrations") {
-        verdicts.push({
-          element: "migrations",
-          verdict: "ok",
-          reason: "restorable_with_migrations",
-        });
-      } else if (migrationCompat === "incompatible_interleaved") {
-        verdicts.push({
-          element: "migrations",
-          verdict: "fail",
-          reason: "interleaved_migration_gap_fail_closed",
-        });
-      } else {
-        verdicts.push({
-          element: "migrations",
-          verdict: "fail",
-          reason: "unknown_or_newer_migrations_fail_closed",
-        });
-      }
-    }
-
-    // --- contract compatibility -------------------------------------------
-    contractCompat = compareContractVersions(
-      manifest.contract.version,
-      runtime.contractVersion,
-    );
-    if (contractCompat === "equal") {
-      verdicts.push({ element: "contract", verdict: "ok", reason: "equal" });
-    } else if (contractCompat === "older") {
-      verdicts.push({
-        element: "contract",
-        verdict: "warn",
-        reason: "older_contract_restorable",
-      });
-    } else if (contractCompat === "newer") {
-      verdicts.push({
-        element: "contract",
-        verdict: "fail",
-        reason: "newer_contract_fail_closed",
-      });
-    } else {
-      verdicts.push({
-        element: "contract",
-        verdict: "fail",
-        reason: "unparseable_contract_fail_closed",
-      });
-    }
-
-    // --- embedding compatibility ------------------------------------------
-    const embeddingMatches =
-      manifest.embedding.model === runtime.embeddingModel &&
-      manifest.embedding.dimensions === runtime.embeddingDimensions;
-    if (embeddingMatches) {
-      verdicts.push({ element: "embedding", verdict: "ok", reason: "equal" });
-    } else if (opts.allowEmbeddingMismatch) {
-      verdicts.push({
-        element: "embedding",
-        verdict: "warn",
-        reason: "mismatch_allowed_by_flag",
-      });
-    } else {
-      // Re-embedding is not built; a restored database whose vectors came
-      // from a different model/dimension would silently corrupt retrieval.
-      verdicts.push({
-        element: "embedding",
-        verdict: "fail",
-        reason: "model_or_dimension_mismatch_fail_closed",
-      });
-    }
-
-    age = ageHours(manifest.created_at, now);
-    if (age === null) {
-      verdicts.push({
-        element: "created_at",
-        verdict: "fail",
-        reason: "unparseable_timestamp",
-      });
-    } else if (age < 0) {
-      // Future-dated created_at: same fail-closed semantics as an
-      // unparseable timestamp — the set is invalid and cannot be trusted to
-      // satisfy a staleness window.
-      verdicts.push({
-        element: "created_at",
-        verdict: "fail",
-        reason: "future_dated_timestamp",
-      });
-    }
-  }
-
-  return {
-    dir,
-    status: statusFromVerdicts(verdicts),
-    verdicts,
-    manifest,
-    migration_compat: migrationCompat,
-    contract_compat: contractCompat,
-    age_hours: age,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Directory-level verification + staleness
-// ---------------------------------------------------------------------------
-
-export interface VerifyRootResult {
-  status: VerifySetStatus | "stale";
-  stale: boolean;
-  newest_valid_age_hours: number | null;
-  sets: VerifySetResult[];
-}
-
-export function evaluateStaleness(
-  validAges: Array<number | null>,
-  maxAgeHours: number | undefined,
-): { stale: boolean; newestValidAgeHours: number | null } {
-  // A negative age means a FUTURE-DATED created_at. Such a set is invalid
-  // (verifyBackupSet fails it as future_dated_timestamp) and must never count
-  // as the "newest" backup — clamping it would let one bogus timestamp mask
-  // real staleness forever.
-  const ages = validAges.filter((a): a is number => a !== null && a >= 0);
-  const newest = ages.length > 0 ? Math.min(...ages) : null;
-  if (maxAgeHours === undefined)
-    return { stale: false, newestValidAgeHours: newest };
-  if (newest === null) return { stale: true, newestValidAgeHours: null };
-  return { stale: newest > maxAgeHours, newestValidAgeHours: newest };
-}
-
-/**
- * Verify either a single backup set (dir contains manifest.json) or a root
- * directory whose immediate subdirectories are backup sets. Staleness is
- * evaluated over the newest VALID (passed or warned) set.
- */
-export async function verifyBackupPath(
-  path: string,
-  runtime: CurrentRuntime,
-  opts: VerifyOptions = {},
-): Promise<VerifyRootResult> {
-  const sets: VerifySetResult[] = [];
-  const singleManifest = await Bun.file(join(path, MANIFEST_FILENAME)).exists();
-  if (singleManifest) {
-    sets.push(await verifyBackupSet(path, runtime, opts));
-  } else {
-    let entries: string[] = [];
-    try {
-      entries = await readdir(path);
-    } catch {
-      // fall through: zero sets found
-    }
-    for (const entry of entries.sort()) {
-      const setDir = join(path, entry);
-      let entryStat;
-      try {
-        entryStat = await stat(setDir);
-      } catch {
-        continue;
-      }
-      if (!entryStat.isDirectory()) continue;
-      if (!(await Bun.file(join(setDir, MANIFEST_FILENAME)).exists())) continue;
-      sets.push(await verifyBackupSet(setDir, runtime, opts));
-    }
-  }
-
-  if (sets.length === 0) {
-    // No backup sets at all: with a max-age window this is the stale-alert
-    // condition (no valid backup exists); without one it is a plain failure.
-    return {
-      status: opts.maxAgeHours !== undefined ? "stale" : "failed",
-      stale: opts.maxAgeHours !== undefined,
-      newest_valid_age_hours: null,
-      sets: [],
-    };
-  }
-
-  const validAges = sets
-    .filter((s) => s.status !== "failed")
-    .map((s) => s.age_hours);
-  const { stale, newestValidAgeHours } = evaluateStaleness(
-    validAges,
-    opts.maxAgeHours,
-  );
-
-  let status: VerifyRootResult["status"];
-  if (sets.some((s) => s.status === "failed")) status = "failed";
-  else if (sets.some((s) => s.status === "warned")) status = "warned";
-  else status = "passed";
-  // Staleness dominates: a directory whose newest valid backup is too old is
-  // an alertable condition even if every set is individually intact.
-  if (stale) status = "stale";
-
-  return {
-    status,
-    stale,
-    newest_valid_age_hours: newestValidAgeHours,
-    sets,
-  };
-}
+// The verification pass lives in its own module so each file stays under the
+// size .oxlintrc.json enforces. It is re-exported here because every existing
+// caller imports it from this module; the split is a file boundary only.
+export {
+  ageHours,
+  evaluateStaleness,
+  verifyBackupPath,
+  verifyBackupSet,
+} from "./backup-verify-lib.ts";
+export type {
+  CurrentRuntime,
+  ElementVerdict,
+  Verdict,
+  VerifyOptions,
+  VerifyRootResult,
+  VerifySetResult,
+  VerifySetStatus,
+} from "./backup-verify-lib.ts";
 
 // ---------------------------------------------------------------------------
 // pg tool resolution (host binaries by default; docker-exec override for CI)
@@ -920,9 +550,7 @@ export function resolvePgTool(
   env: Record<string, string | undefined> = process.env,
 ): string[] {
   const override =
-    tool === "pg_dump"
-      ? env.OPENBRAIN_PG_DUMP_BIN
-      : env.OPENBRAIN_PG_RESTORE_BIN;
+    tool === "pg_dump" ? env.OPENBRAIN_PG_DUMP_BIN : env.OPENBRAIN_PG_RESTORE_BIN;
   if (override && override.trim().length > 0) {
     return override.trim().split(/\s+/);
   }
@@ -934,12 +562,18 @@ export function pgToolAvailable(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   try {
-    const argv = resolvePgTool(tool, env);
-    const result = Bun.spawnSync([...argv, "--version"], {
-      stdout: "pipe",
-      stderr: "pipe",
+    const [command, ...rest] = resolvePgTool(tool, env);
+    if (command === undefined) return false;
+    // spawnSync, not execFileSync: resolvePgTool may return a multi-word
+    // wrapper (e.g. a docker-exec override), so the argv array shape has to
+    // survive. Node reports the exit code as `status`, NOT `exitCode`, and
+    // `status` is null when the child was killed by a signal or never
+    // launched -- both of which must read as unavailable, so the comparison
+    // to 0 is what makes null fall through to false.
+    const result = spawnSync(command, [...rest, "--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    return result.exitCode === 0;
+    return result.error === undefined && result.status === 0;
   } catch {
     return false;
   }
@@ -972,18 +606,35 @@ export function redactSecret(text: string, secret: string | undefined): string {
  * in a receipt regardless: they are non-printable payload that can reposition
  * a cursor or recolor an operator's terminal when a receipt is displayed.
  */
+/**
+ * The control characters these patterns MUST match, named rather than written
+ * as literals inside the regexes. Matching control characters is the entire
+ * point of this function, so the patterns are assembled from these constants:
+ * the intent is stated once, here, instead of asserted per-expression.
+ */
+const ESC = "\u001B";
+const BEL = "\u0007";
+/** C0 (NUL..US), DEL, and the C1 range — everything non-printable. */
+const C0_C1_CLASS = "[\u0000-\u001F\u007F-\u009F]";
+
+/** OSC: ESC ] ... BEL, or ESC ] ... ESC backslash — consumed whole, payload included. */
+const OSC_RE = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g");
+/** CSI: ESC [ parameter bytes, intermediate bytes, one final byte. */
+const CSI_RE = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g");
+/** Remaining two-character escapes: ESC followed by one final byte. */
+const TWO_CHAR_ESCAPE_RE = new RegExp(`${ESC}[@-Z\\\\-_]`, "g");
+/** Any leftover control character, including a bare ESC or BEL. */
+const CONTROL_CHAR_RE = new RegExp(C0_C1_CLASS, "g");
+
 function stripControlSequences(line: string): string {
   return (
     line
-      // OSC sequences (ESC ] ... BEL, or ESC ] ... ESC \) consumed whole,
-      // payload included: the title/hyperlink text is data-bearing.
-      .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, "")
-      // CSI sequences (ESC [ ... final byte): colors, cursor moves.
-      .replace(/\u001B\[[0-?]*[ -\/]*[@-~]/g, "")
-      // Remaining two-character escapes (ESC followed by one final byte).
-      .replace(/\u001B[@-Z\\-_]/g, "")
-      // Any leftover C0/C1 control characters, including a bare ESC or BEL.
-      .replace(/[\u0000-\u001F\u007F-\u009F]/g, "")
+      // OSC payload (title/hyperlink text) is data-bearing, so it goes too.
+      .replace(OSC_RE, "")
+      // Colors and cursor moves.
+      .replace(CSI_RE, "")
+      .replace(TWO_CHAR_ESCAPE_RE, "")
+      .replace(CONTROL_CHAR_RE, "")
   );
 }
 
@@ -1005,15 +656,11 @@ export function summarizeChildStderr(stderrText: string): string {
   if (firstLine.length === 0) return "no stderr output";
   let line = firstLine;
   for (let i = 0; i < 4; i++) {
-    const prefix = line.match(
-      /^(pg_dump|pg_restore|error|warning|fatal|panic):\s*/i,
-    );
+    const prefix = line.match(/^(pg_dump|pg_restore|error|warning|fatal|panic):\s*/i);
     if (!prefix) break;
     line = line.slice(prefix[0].length);
   }
   const cut = line.search(/[:"'`]/);
-  const classPortion = (cut === -1 ? line : line.slice(0, cut))
-    .trim()
-    .slice(0, 160);
+  const classPortion = (cut === -1 ? line : line.slice(0, cut)).trim().slice(0, 160);
   return classPortion.length > 0 ? classPortion : "unclassifiable stderr";
 }

@@ -3,7 +3,7 @@
  * Design authority: `docs/identity-boundary.md` and `docs/decisions/
  * admin-and-promoter-identities.md`.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { canDelete, canRead, canWrite } from "./permissions.ts";
 import {
@@ -25,12 +25,12 @@ describe("token and role authorization", () => {
   it("derives role and client identity only from the configured token", () => {
     const configuredToken = randomUUID();
     const identity = resolveBearerToken(configuredToken, [
-      { token: configuredToken, role: "readonly", clientId: "kevin" },
+      { token: configuredToken, role: "readonly", clientId: "alex" },
     ]);
     expect(identity).toEqual({
       role: "readonly",
-      clientId: "kevin",
-      tokenClientId: "kevin",
+      clientId: "alex",
+      tokenClientId: "alex",
       namespaceSource: "token",
     });
     expect(resolveBearerToken(randomUUID(), [])).toBeUndefined();
@@ -47,7 +47,9 @@ describe("token and role authorization", () => {
 
 describe("namespace isolation policy", () => {
   it("adds an auth-derived namespace boundary to ID-only operations", () => {
-    expect(namespacePredicate(AGENT, "read", 2).values).toEqual([["bilby", "shared-kb"]]);
+    expect(namespacePredicate(AGENT, "read", 2).values).toEqual([
+      ["bilby", "shared-kb"],
+    ]);
     expect(namespacePredicate(AGENT, "delete", 2).values).toEqual([["bilby"]]);
   });
 
@@ -58,8 +60,17 @@ describe("namespace isolation policy", () => {
   });
 
   it("applies the recorded promoter and global-role rulings", () => {
-    const promoter = { ...AGENT, role: "promoter" as const, clientId: "openbrain-promoter" };
-    const admin = { ...AGENT, role: "admin" as const, clientId: "rico", tokenClientId: "rico" };
+    const promoter = {
+      ...AGENT,
+      role: "promoter" as const,
+      clientId: "openbrain-promoter",
+    };
+    const admin = {
+      ...AGENT,
+      role: "admin" as const,
+      clientId: "rico",
+      tokenClientId: "rico",
+    };
     expect(canTargetNamespace(promoter, "write", "shared-kb")).toBe(true);
     expect(canTargetNamespace(promoter, "read", "all")).toBe(false);
     expect(canTargetNamespace(admin, "read", "all")).toBe(true);
@@ -69,7 +80,12 @@ describe("namespace isolation policy", () => {
 
   it("permits delegation only for token-authenticated global roles", () => {
     expect(delegateNamespace(AGENT, "skippy")).toBeUndefined();
-    const admin = { ...AGENT, role: "admin" as const, clientId: "rico", tokenClientId: "rico" };
+    const admin = {
+      ...AGENT,
+      role: "admin" as const,
+      clientId: "rico",
+      tokenClientId: "rico",
+    };
     expect(delegateNamespace(admin, "attacker")?.clientId).toBe("attacker");
     expect(delegateNamespace(admin, "all")).toBeUndefined();
   });

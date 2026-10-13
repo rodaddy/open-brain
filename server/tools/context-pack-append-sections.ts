@@ -58,8 +58,7 @@ export function admitAppendSection(options: {
     serving,
   );
 
-  const starvedOut =
-    fitted.starved && serializedLength(fitted.section) > serving;
+  const starvedOut = fitted.starved && serializedLength(fitted.section) > serving;
   let admitted: Record<string, unknown> | null = null;
   if (!starvedOut) {
     admitted = fitted.section as unknown as Record<string, unknown>;

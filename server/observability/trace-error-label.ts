@@ -1,7 +1,7 @@
 /**
  * Content-free error label for tracing warn lines.
  *
- * Copied in spirit from `auditErrorLabel` (`src/audit-log.ts:526-534`) and for
+ * Copied in spirit from `auditErrorLabel` in `server/security/audit-log.ts`, and for
  * the same reason: an SDK/transport error message can contain the endpoint, a
  * request body, or an auth header, and these warns go to the local log. Only
  * the code/name is ever emitted.

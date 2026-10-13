@@ -3,7 +3,7 @@
  * Design authority: `docs/code-brain-design.md` section 2 requires explicit
  * runtime health evidence rather than inferring success from silence.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import pino from "pino";
 import { createDatabase, ownDatabasePool, type DatabasePool } from "./pool.ts";
 import { selectById } from "./query.ts";
@@ -14,7 +14,11 @@ class FakePool implements DatabasePool {
   readonly waitingCount = 1;
   closed = false;
 
-  constructor(private readonly queryError?: Error) {}
+  private readonly queryError?: Error;
+
+  constructor(queryError?: Error) {
+    this.queryError = queryError;
+  }
 
   async query(_text: string): Promise<unknown> {
     if (this.queryError) throw this.queryError;
@@ -31,7 +35,9 @@ class FakePool implements DatabasePool {
 }
 
 const logger = pino({ level: "silent" });
-const OWNED_POOL_IS_QUERYABLE: ReturnType<typeof createDatabase>["pool"] extends Parameters<typeof selectById>[0]
+const OWNED_POOL_IS_QUERYABLE: ReturnType<
+  typeof createDatabase
+>["pool"] extends Parameters<typeof selectById>[0]
   ? true
   : false = true;
 
@@ -54,7 +60,10 @@ describe("database pool ownership", () => {
   });
 
   it("returns a stable failure category without inventing zero counts", async () => {
-    const database = ownDatabasePool(new FakePool(new TypeError("unavailable")), logger);
+    const database = ownDatabasePool(
+      new FakePool(new TypeError("unavailable")),
+      logger,
+    );
     expect(await database.health()).toEqual({
       connected: false,
       total: 3,

@@ -4,13 +4,15 @@
  * maintenance sweep converges on. Split out of
  * graph-derivation-isolation.test.ts so each suite stays a readable size.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import {
   auth,
   baseInput,
   captureLoggerFields,
+  asRepository,
   FakeGraph,
 } from "./graph-derivation-test-helpers.ts";
 
@@ -45,7 +47,7 @@ async function stampsAnchorContentHashSoTheSweepCanConverge() {
   // records content_hash (distinct from derivation_hash) on the anchor row.
   const g = new FakeGraph();
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: "c".repeat(64) }),
   );
@@ -62,7 +64,7 @@ async function changedSourceBytesRefreshTheStampedContentHash() {
   // or the sweep re-selects this source on every pass.
   const g = new FakeGraph();
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: "a".repeat(64) }),
   );
@@ -72,7 +74,7 @@ async function changedSourceBytesRefreshTheStampedContentHash() {
 
   // Same metadata (=> same derivation_hash, `unchanged`), new content hash.
   const receipt = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: "b".repeat(64) }),
   );
@@ -93,13 +95,13 @@ async function unchangedTermsAndBytesAreATrueNoOp() {
   // superfluous UPDATE — the whole point of the content-hash short-circuit.
   const g = new FakeGraph();
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: "a".repeat(64) }),
   );
   const callsAfterFirst = g.calls.length;
   const receipt = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: "a".repeat(64) }),
   );
@@ -114,7 +116,7 @@ async function unchangedTermsAndBytesAreATrueNoOp() {
 async function anchorContentHashNeverLeaksSourceTextIntoTheReceipt() {
   const g = new FakeGraph();
   const receipt = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorContentHash: "d".repeat(64),
@@ -130,9 +132,9 @@ async function anchorContentHashNeverLeaksSourceTextIntoTheReceipt() {
 async function aNewDerivationNeverLogsNamespaceHashIdOrTerms() {
   const g = new FakeGraph();
   const sensitiveHash = "c".repeat(64);
-  const fields = await captureLoggerFields(async () => {
+  const fields = await captureLoggerFields(logger, async () => {
     await deriveGraphFromMetadata(
-      g,
+      asRepository(g),
       auth,
       baseInput({ anchorContentHash: sensitiveHash }),
     );
@@ -157,13 +159,13 @@ async function anUnchangedShortCircuitNeverLogsNamespaceOrHash() {
   const sensitiveHash = "e".repeat(64);
   // Prime the anchor so the second run takes the unchanged path.
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ anchorContentHash: sensitiveHash }),
   );
-  const fields = await captureLoggerFields(async () => {
+  const fields = await captureLoggerFields(logger, async () => {
     const receipt = await deriveGraphFromMetadata(
-      g,
+      asRepository(g),
       auth,
       baseInput({ anchorContentHash: sensitiveHash }),
     );

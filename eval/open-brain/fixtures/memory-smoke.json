@@ -105,7 +105,7 @@
       "namespace": "shared-kb",
       "type": "decision",
       "title": "Old runner policy",
-      "content": "Old note: use GitHub-hosted runners for King Capital automation.",
+      "content": "Old note: use GitHub-hosted runners for Acme Co automation.",
       "tags": ["runner", "stale"],
       "created_at": "2024-01-01T00:00:00.000Z",
       "source_ref": {
@@ -123,8 +123,8 @@
       "namespace": "shared-kb",
       "type": "decision",
       "title": "Current runner policy",
-      "content": "Current policy: King Capital automation should use the King self-hosted runner fleet, not personal local quota.",
-      "tags": ["runner", "current", "king-capital"],
+      "content": "Current policy: Acme Co automation should use the Acme self-hosted runner fleet, not personal local quota.",
+      "tags": ["runner", "current", "acme-co"],
       "created_at": "2026-06-12T00:00:00.000Z",
       "source_ref": {
         "source": "brain",
@@ -132,7 +132,7 @@
         "id": "decision-runner-new",
         "namespace": "shared-kb",
         "label": "Current runner policy",
-        "preview": "King Capital automation should use the King self-hosted runner fleet.",
+        "preview": "Acme Co automation should use the Acme self-hosted runner fleet.",
         "created_at": "2026-06-12T00:00:00.000Z"
       }
     },
@@ -252,7 +252,7 @@
     {
       "id": "temporal-runner-policy",
       "category": "temporal",
-      "query": "current King Capital runner policy",
+      "query": "current Acme Co runner policy",
       "readable_namespaces": ["shared-kb"],
       "top_k": 3,
       "relevant_ids": ["decision-runner-new"],

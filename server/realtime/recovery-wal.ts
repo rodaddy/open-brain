@@ -106,14 +106,14 @@ export type {
  * and `now` in one object so a call site reads as named fields rather than a
  * run of same-typed positional strings.
  */
-export interface RecoveryWalMarkDecision {
+interface RecoveryWalMarkDecision {
   action: RecoveryWalAction;
   status: RecoveryWalStatus;
   purge?: boolean;
   now?: Date;
 }
 
-export interface RecoveryWalStoreOptions {
+interface RecoveryWalStoreOptions {
   walPath?: string | null;
   budget?: Partial<RecoveryWalBudget>;
   logger?: Logger;
@@ -191,10 +191,7 @@ export class RecoveryWalStore {
       return "content_too_large";
     }
 
-    const metadataChars = serializedJsonLength(
-      input.metadata ?? {},
-      this.logger,
-    );
+    const metadataChars = serializedJsonLength(input.metadata ?? {}, this.logger);
     if (metadataChars === null) return "metadata_too_large";
     if (metadataChars > this.budget.max_metadata_chars) {
       return "metadata_too_large";
@@ -233,10 +230,8 @@ export class RecoveryWalStore {
     const { action, status } = decision;
     this.purgeExpired(decision.now ?? new Date());
 
-    if (!isRecoveryWalAction(action))
-      return this.rejectedMark("invalid_action");
-    if (!isRecoveryWalStatus(status))
-      return this.rejectedMark("invalid_status");
+    if (!isRecoveryWalAction(action)) return this.rejectedMark("invalid_action");
+    if (!isRecoveryWalStatus(status)) return this.rejectedMark("invalid_status");
 
     const normalizedScope = normalizeWorkingSetScope(scope);
     const key = workingSetScopeKey(normalizedScope);
@@ -258,9 +253,7 @@ export class RecoveryWalStore {
     item: RecoveryWalItem,
     scope: NormalizedWorkingSetScope,
   ): RecoveryWalMarkResult {
-    session.items = session.items.filter(
-      (candidate) => candidate.id !== item.id,
-    );
+    session.items = session.items.filter((candidate) => candidate.id !== item.id);
     deleteIfEmpty(this.sessions, session);
     this.counters.purged += 1;
     this.writeWal({ op: "purge", scope, id: item.id });
@@ -473,6 +466,10 @@ export class RecoveryWalStore {
       try {
         this.applyWalRecord(record);
       } catch (error) {
+        // Deliberate: already logged, in aggregate. The counter and the first
+        // error are reported together by logReplay at :500-508 as
+        // `rows_unapplicable` and `error_name`, so one warn line covers a
+        // whole replay instead of one per bad row.
         unapplicable += 1;
         if (firstApplyError === undefined) firstApplyError = error;
       }

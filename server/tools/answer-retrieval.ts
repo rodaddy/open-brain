@@ -17,7 +17,7 @@ import {
 } from "./search-engine.ts";
 import { selectEvidence, type EvidenceSelection } from "./answer-evidence.ts";
 import type { MemoryToolDependencies } from "./types.ts";
-import type { NamespaceFilter } from "./read-scope.ts";
+import type { NamespaceFilter } from "../domain/read-scope.ts";
 import type { Tier } from "./search-constants.ts";
 
 /** The retrieval-relevant fields of a resolved `brain_answer` request. */
@@ -85,9 +85,7 @@ export function selectCitableEvidence(rows: SearchRow[]): EvidenceSelection {
           const chosen = selected.has(row.id);
           let filteredBy: string | null = null;
           if (!chosen) {
-            filteredBy = row.source_ref
-              ? "empty_excerpt"
-              : "missing_source_ref";
+            filteredBy = row.source_ref ? "empty_excerpt" : "missing_source_ref";
           }
           return { row_id: row.id, chosen, filtered_by: filteredBy };
         }),

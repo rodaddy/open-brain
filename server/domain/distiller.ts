@@ -20,7 +20,7 @@
  * is pre-filtered on a guess. The extractor is deliberately GENEROUS, and where
  * it is unsure it sets `uncertain = true` with a reason and emits the candidate
  * anyway. The rationale is the same asymmetry that removed the length floor
- * from Light (src/dream-light.ts:159-190): the tier system is the precision
+ * from Light (the Light sweep module): the tier system is the precision
  * filter, applied later, reversibly, on months of usage evidence. Content that
  * never entered has no usage history to be judged by and no path back.
  *
@@ -40,8 +40,8 @@
  * grade on day one.
  */
 
-import type { BackgroundTraceRecorder } from "../../src/background-tracing.ts";
-import { contentHash } from "../../src/embedding.ts";
+import type { BackgroundTraceRecorder } from "../observability/background-tracing.ts";
+import { normalizedContentHash } from "../embedding/provider.ts";
 import { isHarnessNoise } from "../capture/ingest-raw-turn.ts";
 import type { DistillTurn, DistillUnit } from "./distill-window.ts";
 
@@ -129,7 +129,7 @@ export interface NamedDistillModel {
  * ran is part of the reply chain) and they are useful as WINDOW CONTEXT, but a
  * candidate whose content is "[tool_use: Bash]" is not a claim about anything.
  *
- * Same shape as Light's UNCOUNTABLE (src/dream-light.ts:88-95), deliberately
+ * Same shape as Light's UNCOUNTABLE set, deliberately
  * duplicated rather than shared: Light decides what to COUNT, this decides what
  * to EXTRACT FROM. Coupling them would mean a change to one silently retunes
  * the other, and they answer different questions.
@@ -148,7 +148,7 @@ function carriesNoClaim(text: string): boolean {
  * Bare acknowledgement shapes -- the SHORT operator turns.
  *
  * These are NOT dropped. Per the governing decision they are emitted as
- * `decision` candidates flagged uncertain, because src/dream-light.ts:161-176
+ * `decision` candidates flagged uncertain, because the Light sweep module
  * establishes measured-from-the-corpus why: a few characters can be the whole
  * decision, converting a proposal into an authorization, and the same string is
  * assent after one turn and doubt after another. Only the surrounding turns
@@ -227,7 +227,7 @@ const NARRATION_RE =
  *
  * Renamed on 2026-07-30, when the helper beside it that shortened a
  * candidate's stored text and appended a marker was deleted. That helper
- * justified itself by saying src/embedding.ts refused input over 32,000
+ * justified itself by saying the embedding module refused input over 32,000
  * characters; measurement that day showed the configured embedder accepts far
  * more, and long text is now embedded in overlapping segments instead. On the
  * live clone, 740 of 5,434 stored candidates carried that helper's marker.
@@ -463,7 +463,7 @@ export async function runDistillUnit(
         (_candidate, index) => `${unit.current.id}:${index}`,
       ),
       candidate_hashes: response.candidates.map((candidate) =>
-        contentHash(normalizeWhitespace(candidate.content ?? "")),
+        normalizedContentHash(normalizeWhitespace(candidate.content ?? "")),
       ),
       candidate_count: response.candidates.length,
     }),
@@ -497,10 +497,10 @@ export async function runDistillUnit(
       namespace: unit.current.namespace,
       candidate_type: type,
       content,
-      // contentHash is the SAME function ingest applies to turns
-      // (src/tools/ingest-raw-turn.ts:125) and the one content_occurrences
+      // normalizedContentHash is the SAME function ingest applies to turns
+      // (server/capture/ingest-raw-turn.ts) and the one content_occurrences
       // keys on, so a candidate hash and a turn hash are directly comparable.
-      content_hash: contentHash(content),
+      content_hash: normalizedContentHash(content),
       // Forced, not trusted -- see the provenance guard note above.
       source_turn_ids: [unit.current.id],
       uncertain: Boolean(candidate.uncertain),

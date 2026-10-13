@@ -1,35 +1,13 @@
 /**
  * `tier_lane`: graduate substantive session-lane events into durable thoughts.
  *
- * Design authority: `docs/decisions/cognitive-tiering-dream-cycle.md` and
- * `docs/identity-boundary.md` (token-derived lane identity). `_plans/issues/
- * 433-brain-answer-cannot-see-session-events-and-nothing-promotes-.md` records
- * what happens when this path does not run: recall answered from months-old
- * data because session events accumulated and nothing graduated them.
+ * `dry_run` defaults to TRUE, so a caller that wants durable thoughts written
+ * must say `dry_run: false`. Classification, duplicate detection, and the write
+ * are reused from `server/domain/tiering.ts`, and graduated thoughts stay in
+ * the lane's own namespace.
  *
- * ## Dry-run is the default, and that is the point
- *
- * `dry_run` defaults to TRUE. A caller that wants durable thoughts written must
- * say `dry_run: false` explicitly. This matches `promote_shared` in
- * `promotion.ts` and the DreamEngine contract the repo standards name: a tool
- * that graduates content into long-term memory must not do so because someone
- * called it to look. The receipt shape is identical either way -- same counts,
- * same fields, with `dry_run` stating which it was -- so a caller can preview
- * and then commit without re-reading the response format.
- *
- * ## Namespace
- *
- * A lane is addressed by `(namespace, session_key)`, and the namespace is
- * checked for WRITE authority even though the lane read is a SELECT: the whole
- * purpose of the call is to write thoughts into that namespace, so read
- * authority over the lane is not the permission that matters. Graduated
- * thoughts land in the SAME namespace as the lane -- this tool never moves
- * content across the boundary, which is what `promote_entry` is for.
- *
- * Classification, duplicate detection, and the write itself are reused from
- * `src/tiering.ts`. What counts as a graduating event is one rule; a second
- * implementation here would let the two servers disagree about which events
- * become durable memory.
+ * See docs/decisions/tier-lane-dry-run-and-namespace.md
+ * See docs/decisions/cognitive-tiering-dream-cycle.md
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -38,6 +16,9 @@ import { canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import { canonicalNamespace, physicalNamespace } from "./shared-namespace.ts";
 import { newTierReceipt, tierLaneEvent, type LaneEventRow } from "../domain/tiering.ts";
+import { writeThoughtChunks } from "../capture/chunk-write.ts";
+import { createTieringRepository } from "../db/tiering-repository.ts";
+import { createContextPackRepository } from "../db/context-pack-repository.ts";
 import {
   authIdentity,
   errorResult,
@@ -171,18 +152,13 @@ async function readLaneEvents(
   sessionKey: string,
   scanLimit: number,
 ): Promise<LaneEventRow[]> {
-  const { rows } = await dependencies.pool.query(
-    `SELECT e.id, e.lane_id, l.namespace, l.agent, l.session_key,
-            e.event_type, e.content, e.importance, e.content_hash,
-            e.created_at, e.metadata
-       FROM ob_session_events e
-       JOIN ob_session_lanes l ON e.lane_id = l.id
-      WHERE l.namespace = $1 AND l.session_key = $2
-      ORDER BY e.created_at ASC, e.id ASC
-      LIMIT $3`,
-    [namespace, sessionKey, scanLimit],
-  );
-  return rows as LaneEventRow[];
+  const repository = createContextPackRepository(dependencies.pool);
+  const { rows } = await repository.selectLaneEvents({
+    namespace,
+    sessionKey,
+    scanLimit,
+  });
+  return rows as unknown as LaneEventRow[];
 }
 
 /** One graduation pass over a lane's events. */
@@ -204,13 +180,15 @@ async function tierLaneEvents(
   run: TierLaneRun,
 ): Promise<ReturnType<typeof newTierReceipt>> {
   const receipt = newTierReceipt(run.dryRun);
+  const repository = createTieringRepository(run.dependencies.pool);
   for (const row of run.rows) {
     await tierLaneEvent(row, receipt, {
-      pool: run.dependencies.pool,
+      repository,
       embedFn: run.dependencies.embedFn,
       namespace: run.namespace,
       createdBy: run.createdBy,
       dryRun: run.dryRun,
+      writeChunks: writeThoughtChunks,
     });
   }
   return receipt;

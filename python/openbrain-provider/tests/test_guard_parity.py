@@ -9,7 +9,8 @@ restatement of the port's own logic.
 The corpus reproduces every case named by ``guard.test.ts`` (27 block, 16
 allow) and adds live-hook shapes that suite does not name: the ``Shell`` tool,
 non-shell tools, malformed payload shapes, and raw byte payloads including the
-oversized fast path.
+oversized fast path. Rows 128-131 were recorded the same way from the guard
+after it learned to drop data heredoc bodies (Development dev#954 item 2).
 
 Two recorded ALLOW cases -- ``( cmd )`` and ``if ...; then cmd; fi`` -- look
 like gaps and are pinned deliberately. Byte-identical means identical including
@@ -86,8 +87,8 @@ def test_cli_matches_recorded_typescript_output(
 def test_the_corpus_covers_both_verdicts() -> None:
     blocked = [c for c in CASES if c[2]]
     allowed = [c for c in CASES if not c[2]]
-    assert len(blocked) == 60
-    assert len(allowed) == 68
+    assert len(blocked) == 61
+    assert len(allowed) == 71
 
 
 def test_every_block_is_the_same_single_payload() -> None:

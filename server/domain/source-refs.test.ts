@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { describe, expect, it } from "vitest";
+import { expectDefined } from "../testing/expect-defined.ts";
 import {
   appendSourceScopeParam,
   filterSourceRefsForScope,

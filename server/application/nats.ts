@@ -7,9 +7,9 @@
  * HTTP socket — so it must start after the pool and stop before it, exactly
  * like the maintenance runner. Wrapping it as a `BackgroundRuntime` is what
  * puts it in `closeInOrder`'s list rather than in a bespoke `if (bridge)` arm
- * of a shutdown function, which is how `src/index.ts:405-424` carries it today
- * and why that shutdown path has to re-implement the every-runtime-still-stops
- * rule per dependency.
+ * of a shutdown function, which is how the pre-transplant entrypoint carried
+ * it and why that shutdown path had to re-implement the
+ * every-runtime-still-stops rule per dependency.
  *
  * WHY THE BOUNDARY IS PROJECTED RATHER THAN RE-READ. `server/config/nats.ts`
  * already parsed the environment into `NatsConfig`, including the local-broker
@@ -29,7 +29,7 @@ import {
   type NatsBridgeRuntime,
 } from "./nats-bridge.ts";
 import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
-import type { ToolDeps } from "../../src/tools/index.ts";
+import type { ToolDeps } from "../tools/tool-deps.ts";
 import type { AuthInfo } from "../types.ts";
 import type { BackgroundTraceEmitter } from "./background-tracing.ts";
 import type { BackgroundRuntime } from "./index.ts";
@@ -50,7 +50,7 @@ export function natsRuntimeBoundaryFromConfig(config: NatsConfig): NatsRuntimeBo
   };
 }
 
-export interface NatsBridgeInput {
+interface NatsBridgeInput {
   readonly config: NatsConfig;
   readonly logger: Logger;
   readonly tokenMap: Map<string, AuthInfo>;
@@ -60,7 +60,7 @@ export interface NatsBridgeInput {
   readonly start?: typeof startNatsContextPackBridge;
 }
 
-export interface StartedNatsBridge {
+interface StartedNatsBridge {
   readonly runtime?: BackgroundRuntime;
   readonly health: NatsBridgeHealth;
 }
@@ -82,8 +82,9 @@ const CLOSE_TIMEOUT_MS = 5_000;
  * cases above: the operator asked for NATS, config said the broker was usable,
  * and the connection still failed — so the process's declared ingress is
  * missing and starting anyway would serve a deployment that silently answers on
- * only one of its two doors. `src/index.ts:328` reaches the same conclusion by
- * calling `process.exit(1)`; throwing keeps the decision with the entrypoint,
+ * only one of its two doors. The pre-transplant entrypoint reached the same
+ * conclusion by calling `process.exit(1)`; throwing keeps the decision with
+ * `server/main.ts`,
  * which is the only layer allowed to end a process.
  */
 export async function startNatsBridgeRuntime(

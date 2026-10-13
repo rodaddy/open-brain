@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+import {
+  parseBaseUrl,
+  parseNegativeToken,
+  parsePrimaryToken,
+  parseSearchMode,
+  parseTimeoutMs,
+} from "./config-parse.ts";
 
 // Env-gated configuration for the live recall gate.
 //
@@ -94,9 +101,7 @@ export function runNamespaces(runId: string): {
 } {
   const sanitized = runId.replace(/[^a-zA-Z0-9_-]/g, "-");
   if (sanitized.length === 0) {
-    throw new Error(
-      "live eval run id must contain at least one usable character",
-    );
+    throw new Error("live eval run id must contain at least one usable character");
   }
   const safe = boundRunId(sanitized);
   return {
@@ -104,8 +109,6 @@ export function runNamespaces(runId: string): {
     negative: `eval-live-recall-${safe}-negative`,
   };
 }
-
-const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
  * Build a per-run id that is unique across EVERY invocation, including repeated
@@ -160,70 +163,17 @@ export function loadLiveConfig(
     );
   }
 
-  const baseUrl = (env.OPEN_BRAIN_LIVE_EVAL_BASE_URL ?? "").trim();
-  if (!baseUrl) {
-    throw new Error(
-      "OPEN_BRAIN_LIVE_EVAL_BASE_URL is required for the live gate",
-    );
-  }
-  try {
-    // Reject a malformed URL up front rather than deep in the transport.
-    // eslint-disable-next-line no-new
-    new URL(baseUrl);
-  } catch {
-    throw new Error("OPEN_BRAIN_LIVE_EVAL_BASE_URL is not a valid URL");
-  }
-
-  const primaryToken = (env.OPEN_BRAIN_LIVE_EVAL_TOKEN ?? "").trim();
-  if (!primaryToken) {
-    throw new Error("OPEN_BRAIN_LIVE_EVAL_TOKEN is required for the live gate");
-  }
-
-  // A real negative control is mandatory. It is provided by binding a distinct
-  // X-Namespace on the negative session, so the SAME bearer token is a valid
-  // negative control -- the header binding is the isolation proof, not token
-  // inequality. An operator MAY supply a distinct token to also cover
-  // cross-token denial; when supplied it must differ from the primary token
-  // (an identical token would be a no-op that hides a misconfiguration).
-  const negativeTokenRaw = (
-    env.OPEN_BRAIN_LIVE_EVAL_NEGATIVE_TOKEN ?? ""
-  ).trim();
-  let negativeToken = primaryToken;
-  let negativeTokenIsDistinct = false;
-  if (negativeTokenRaw.length > 0) {
-    if (negativeTokenRaw === primaryToken) {
-      throw new Error(
-        "OPEN_BRAIN_LIVE_EVAL_NEGATIVE_TOKEN, when set, must differ from OPEN_BRAIN_LIVE_EVAL_TOKEN; leave it unset to use the same token with a distinct negative namespace",
-      );
-    }
-    negativeToken = negativeTokenRaw;
-    negativeTokenIsDistinct = true;
-  }
-
-  const searchModeRaw = (
-    env.OPEN_BRAIN_LIVE_EVAL_SEARCH_MODE ?? "hybrid"
-  ).trim();
-  if (
-    searchModeRaw !== "hybrid" &&
-    searchModeRaw !== "vector" &&
-    searchModeRaw !== "keyword"
-  ) {
-    throw new Error(
-      "OPEN_BRAIN_LIVE_EVAL_SEARCH_MODE must be one of hybrid, vector, keyword",
-    );
-  }
-
-  let timeoutMs = DEFAULT_TIMEOUT_MS;
-  const timeoutRaw = env.OPEN_BRAIN_LIVE_EVAL_TIMEOUT_MS;
-  if (timeoutRaw !== undefined && timeoutRaw.trim() !== "") {
-    const parsed = Number.parseInt(timeoutRaw, 10);
-    if (Number.isNaN(parsed) || parsed < 1) {
-      throw new Error(
-        "OPEN_BRAIN_LIVE_EVAL_TIMEOUT_MS must be a positive integer",
-      );
-    }
-    timeoutMs = parsed;
-  }
+  // Each field's validation lives in ./config-parse.ts (issue 752). The order
+  // is preserved verbatim, so the FIRST misconfigured variable is still the one
+  // named in the thrown error.
+  const baseUrl = parseBaseUrl(env);
+  const primaryToken = parsePrimaryToken(env);
+  const { negativeToken, negativeTokenIsDistinct } = parseNegativeToken(
+    env,
+    primaryToken,
+  );
+  const searchMode = parseSearchMode(env);
+  const timeoutMs = parseTimeoutMs(env);
 
   const { primary, negative } = runNamespaces(runId);
 
@@ -235,7 +185,7 @@ export function loadLiveConfig(
     primaryNamespace: primary,
     negativeNamespace: negative,
     project: "open-brain",
-    searchMode: searchModeRaw,
+    searchMode,
     timeoutMs,
   };
 }

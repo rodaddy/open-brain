@@ -13,11 +13,7 @@
 import type { ResourceTable } from "../auth/types.ts";
 
 /** Cognitive tiers a row may carry. */
-export const VALID_TIERS: ReadonlySet<string> = new Set([
-  "hot",
-  "warm",
-  "cold",
-]);
+export const VALID_TIERS: ReadonlySet<string> = new Set(["hot", "warm", "cold"]);
 
 export type Tier = "hot" | "warm" | "cold";
 
@@ -114,10 +110,8 @@ export const FTS_SOURCE_TEXT: Readonly<Record<ResourceTable, string>> = {
  * type-compatible. Naming a table here that lacks the column produces a runtime
  * SQL error; omitting one that has it silently drops the metadata from results.
  */
-export const HAS_EXTRACTED_METADATA: ReadonlySet<ResourceTable> = new Set<ResourceTable>([
-  "thoughts",
-  "decisions",
-]);
+export const HAS_EXTRACTED_METADATA: ReadonlySet<ResourceTable> =
+  new Set<ResourceTable>(["thoughts", "decisions"]);
 
 /**
  * Every valid edge relation in the entity link graph.
@@ -150,6 +144,12 @@ export type LinkRelation = (typeof LINK_RELATIONS)[number];
 
 /** Reciprocal-rank-fusion constant (Cormack et al. 2009). */
 export const RRF_K = 60;
+
+/** Hybrid fusion uses direct ordinal votes: 1 / (0 + rank). */
+export const HYBRID_RRF_K = 0;
+
+/** One fixed vote when the same identity is present in both hybrid arms. */
+export const HYBRID_CORROBORATION_BONUS = 0.25;
 
 /** Per-tier additive adjustment applied after fusion. */
 export const TIER_BOOST: Readonly<Record<Tier, number>> = {

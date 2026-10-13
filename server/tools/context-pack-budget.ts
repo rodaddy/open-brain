@@ -63,15 +63,12 @@ export function serializedLength(value: unknown): number {
  * reflect whether an earlier candidate was ACTUALLY admitted — a starved or
  * omitted candidate does not consume the first-member slot.
  */
-export function sectionFrameCost(
-  key: string,
-  isFirstAdmitted: boolean,
-): number {
+export function sectionFrameCost(key: string, isFirstAdmitted: boolean): number {
   // '"' + key + '"' + ':' = key.length + 3, plus one ',' for non-first members.
   return key.length + 3 + (isFirstAdmitted ? 0 : 1);
 }
 
-export type DurableLaneEvent = { content?: unknown; citation_id?: unknown };
+type DurableLaneEvent = { content?: unknown; citation_id?: unknown };
 export type DurableLaneSection = {
   lane?: { current_context_md?: unknown };
   events?: DurableLaneEvent[];
@@ -173,9 +170,7 @@ type DurableLaneCheckpointOptions = {
  * entirely. Linear shrinking here would be O(n) serializations of a potentially
  * very large checkpoint.
  */
-function shrinkDurableLaneCheckpoint(
-  options: DurableLaneCheckpointOptions,
-): unknown {
+function shrinkDurableLaneCheckpoint(options: DurableLaneCheckpointOptions): unknown {
   const { section, lane, contextMd, remainingChars } = options;
   if (typeof contextMd !== "string" || contextMd.length === 0) return contextMd;
   let low = 0;
@@ -271,7 +266,7 @@ export function fitDurableLaneSection(
  * Keep the lane citation and only the event citations whose events survived, so
  * citations never reference dropped evidence.
  */
-export function reconcileDurableCitations(
+function reconcileDurableCitations(
   citations: Array<Record<string, unknown>>,
   keptEvents: DurableLaneEvent[],
 ): Array<Record<string, unknown>> {
@@ -282,9 +277,7 @@ export function reconcileDurableCitations(
   );
   return citations.filter((citation) => {
     if (citation.kind === "session_event") {
-      return (
-        typeof citation.id === "string" && keptEventCitationIds.has(citation.id)
-      );
+      return typeof citation.id === "string" && keptEventCitationIds.has(citation.id);
     }
     return true;
   });
@@ -343,7 +336,7 @@ export function fitItemSection<T extends { items: Array<{ id: string }> }>(
   return { section: emptied, truncated: true, starved: true };
 }
 
-export type DurableMemoryItem = { citation_id?: unknown; content?: unknown };
+type DurableMemoryItem = { citation_id?: unknown; content?: unknown };
 export type DurableMemorySection = {
   items?: DurableMemoryItem[];
   item_count?: number;
@@ -353,9 +346,7 @@ export type DurableMemorySection = {
  * Sum of durable-memory content-body characters, for reconciling
  * `budget.durable_memory.content_chars_used` to what survives the re-fit.
  */
-export function durableMemoryContentChars(
-  section: DurableMemorySection,
-): number {
+export function durableMemoryContentChars(section: DurableMemorySection): number {
   let total = 0;
   for (const item of section.items ?? []) {
     if (typeof item.content === "string") total += item.content.length;
@@ -435,13 +426,12 @@ export function reconcileDurableMemoryCitations(
       .filter((id): id is string => typeof id === "string"),
   );
   return citations.filter(
-    (citation) =>
-      typeof citation.id === "string" && keptCitationIds.has(citation.id),
+    (citation) => typeof citation.id === "string" && keptCitationIds.has(citation.id),
   );
 }
 
 /** An item-bearing section whose items each carry a `citation_id`. */
-export type CitedItemSection = {
+type CitedItemSection = {
   items?: Array<{ citation_id?: unknown }>;
 };
 
@@ -465,7 +455,6 @@ export function reconcileCitedItemCitations(
       .filter((id): id is string => typeof id === "string"),
   );
   return citations.filter(
-    (citation) =>
-      typeof citation.id === "string" && keptCitationIds.has(citation.id),
+    (citation) => typeof citation.id === "string" && keptCitationIds.has(citation.id),
   );
 }

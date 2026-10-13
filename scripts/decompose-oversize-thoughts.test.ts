@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import {
   buildTargetPlan,
   isRawTranscriptDump,
@@ -27,9 +27,7 @@ describe("decompose-oversize-thoughts", () => {
   test("rejects prose, short JSONL, and malformed transcript rows", () => {
     expect(isRawTranscriptDump("ordinary thought prose").matched).toBe(false);
     expect(isRawTranscriptDump(transcript(10)).matched).toBe(false);
-    expect(
-      isRawTranscriptDump(`${transcript(120)}\nnot-json`).matched,
-    ).toBe(false);
+    expect(isRawTranscriptDump(`${transcript(120)}\nnot-json`).matched).toBe(false);
   });
 
   test("plans linked pieces through the existing decomposition chunker", () => {

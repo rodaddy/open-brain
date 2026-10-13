@@ -7,13 +7,13 @@
  * (repairOne / repairStaleBatch and the guarded UPDATE) lives in
  * ./embedding-repair.ts and consumes what this module selects.
  */
-import { EMBEDDING_MODEL } from "../../src/embedding.ts";
+import { embeddingModel } from "../embedding/provider.ts";
 import {
   getEmbeddingTarget,
   type EmbeddingTarget,
   type TargetRow,
 } from "./embedding-targets.ts";
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import { undecidableCanonicalFields } from "./embedding-canonical.ts";
 import type { Queryable } from "./embedding-repair-model.ts";
 
@@ -89,7 +89,7 @@ export interface SelectStaleOptions {
   reasons?: StalenessReason[];
   /** Max rows to return. Bounded; see MAX_BATCH. Default DEFAULT_BATCH. */
   limit?: number;
-  /** Model string treated as "current" for model-drift. Default EMBEDDING_MODEL. */
+  /** Model string treated as "current" for model-drift. Default embeddingModel. */
   currentModel?: string;
   /**
    * REQUIRED namespace scope. Either a non-empty auth-derived
@@ -100,6 +100,24 @@ export interface SelectStaleOptions {
   scope: RepairScope;
   /** Restrict to a single id (e.g. queue single-unit repair). */
   id?: string;
+  /**
+   * Keyset cursor (issue 1612). When given, the selection adds
+   * `<id> > $after` and `ORDER BY <id>`, so a caller that passes the previous
+   * batch's `lastSelectedId` advances through the table instead of
+   * re-selecting rows it could not repair. `null` starts the keyset (ordered,
+   * no lower bound). When absent (undefined) the SQL is unchanged.
+   */
+  afterId?: string | null;
+}
+
+/** A selection's candidates plus the id of the last row the query returned. */
+export interface StaleSelection {
+  candidates: RepairCandidate[];
+  /**
+   * Id of the last row the SELECT returned, before JS-side filtering, or null
+   * when it returned none. Pass it back as `afterId` to advance.
+   */
+  lastSelectedId: string | null;
 }
 
 /** Hard ceiling on a single selection batch -- protects the pool and provider. */
@@ -212,6 +230,26 @@ function stalenessOrClauses(
 }
 
 /**
+ * Keyset cursor (issue 1612). Returns the ORDER BY suffix and appends the
+ * `id > $after` filter. `undefined` returns "" and touches nothing, so the SQL
+ * is byte-identical to what it was before the cursor existed; `null` starts
+ * the keyset (ordered, with no lower bound yet).
+ */
+function keysetClause(
+  target: EmbeddingTarget,
+  afterId: string | null | undefined,
+  filters: string[],
+  params: unknown[],
+): string {
+  if (afterId === undefined) return "";
+  if (afterId !== null) {
+    params.push(afterId);
+    filters.push(`${target.idColumn} > $${params.length}`);
+  }
+  return `\n    ORDER BY ${target.idColumn}`;
+}
+
+/**
  * Build the parameterized SELECT that finds stale rows for one target. The
  * `missing` predicate is pure SQL; `model_drift` is pure SQL against the current
  * model. `source_drift` cannot be expressed in SQL alone (the hash formula lives
@@ -231,7 +269,7 @@ function buildSelection(
     return { sql: "", params: [], reasons: [] };
   }
 
-  const currentModel = options.currentModel ?? EMBEDDING_MODEL;
+  const currentModel = options.currentModel ?? embeddingModel();
   const params: unknown[] = [];
   const orClauses = stalenessOrClauses(reasons, currentModel, params);
 
@@ -242,6 +280,7 @@ function buildSelection(
     params.push(options.id);
     filters.push(`${target.idColumn} = $${params.length}`);
   }
+  const keysetOrder = keysetClause(target, options.afterId, filters, params);
   // Scope is mandatory and explicit (non-empty namespaces or { global: true });
   // normalizeScope throws on a missing/empty scope before any query is built.
   const scope = normalizeScope(options.scope);
@@ -263,7 +302,7 @@ function buildSelection(
 
   const sql = `SELECT ${projection}
     FROM ${target.table}
-    WHERE ${filters.join(" AND ")}
+    WHERE ${filters.join(" AND ")}${keysetOrder}
     LIMIT ${limitParam}`;
 
   return { sql, params, reasons };
@@ -333,12 +372,24 @@ export async function selectStale(
   table: string,
   options: SelectStaleOptions,
 ): Promise<RepairCandidate[]> {
+  return (await selectStaleWithCursor(db, table, options)).candidates;
+}
+
+/**
+ * `selectStale` plus the id of the last row the query returned, so a keyset
+ * caller can advance even when JS-side filtering dropped that row.
+ */
+export async function selectStaleWithCursor(
+  db: Queryable,
+  table: string,
+  options: SelectStaleOptions,
+): Promise<StaleSelection> {
   const target = getEmbeddingTarget(table);
   const plan = buildSelection(target, options);
-  if (!plan.sql) return [];
+  if (!plan.sql) return { candidates: [], lastSelectedId: null };
 
   const { rows } = await db.query(plan.sql, plan.params);
-  const currentModel = options.currentModel ?? EMBEDDING_MODEL;
+  const currentModel = options.currentModel ?? embeddingModel();
 
   const candidates: RepairCandidate[] = [];
   for (const row of rows as TargetRow[]) {
@@ -350,5 +401,9 @@ export async function selectStale(
     candidates.push({ table, id: String(row[target.idColumn]), reasons, row });
   }
 
-  return candidates;
+  const lastRow = (rows as TargetRow[]).at(-1);
+  return {
+    candidates,
+    lastSelectedId: lastRow ? String(lastRow[target.idColumn]) : null,
+  };
 }

@@ -102,7 +102,7 @@ Suggested initial streams:
 - `OB_PROMOTION_CANDIDATES`: explicit client/agent nominations, not automatic
   shared truth.
 
-Core01 should be the base NATS server because OB already runs there, and that
+The retired host should be the base NATS server because OB already runs there, and that
 keeps the hot memory path close to the DB and embedding/runtime services.
 
 ### 5. Do Not Copy Honcho Blindly
@@ -138,10 +138,10 @@ less auditable and more "confident idiot" prone.
 ## Source Pointers
 
 - gbrain clone inspected at
-  `/Volumes/ThunderBolt/_tmp/open-brain/research/gbrain`.
+  `/srv/_tmp/open-brain/research/gbrain`.
 - Honcho clone inspected at
-  `/Volumes/ThunderBolt/_tmp/open-brain/research/honcho`.
+  `/srv/_tmp/open-brain/research/honcho`.
 - Hermes source inspected at
-  `/Volumes/ThunderBolt/Development/ai-agents/platforms/rtech-hermes`.
-- Local Codex/Claude policy inspected under `/Users/rico/.codex` and
-  `/Users/rico/.claude`.
+  `/srv/dev/ai-agents/platforms/rtech-hermes`.
+- Local Codex/Claude policy inspected under `/home/user/.codex` and
+  `/home/user/.claude`.

@@ -1,15 +1,17 @@
+// Copies one entry from its own namespace into a target namespace: reads the
+// source row under the caller's read scope, strips the nomination/audit
+// metadata that would re-nominate the copy, and writes the promoted row with
+// provenance. Dry-run and kill-switch are decided by the caller, never here.
+
 import type pg from "pg";
 import type { AuthInfo, Table } from "../types.ts";
-import {
-  appendReadNamespacePredicate,
-  canReadNamespace,
-} from "../../src/read-policy.ts";
-import { canWriteNamespace } from "../../src/namespace-policy.ts";
+import { appendReadNamespacePredicate, canReadNamespace } from "./read-policy.ts";
+import { canWriteNamespace } from "../security/namespace-policy.ts";
 import {
   canonicalNamespace,
   isSharedNamespace,
   physicalNamespace,
-} from "../../src/shared-namespace.ts";
+} from "../security/shared-namespace-ambient.ts";
 
 export const PROMOTION_CONTENT_COLUMNS: Record<Table, string> = {
   thoughts:
@@ -121,8 +123,7 @@ function metadataValue(row: PromotionSourceRow, key: string): unknown {
  * `killSwitch` arrives here as a value rather than being read from the
  * environment inside the service: `server/` owns no environment reads, so the
  * composition root passes `config.promotion.killSwitch` down. That is the one
- * call-shape difference from the legacy positional form, and it is why
- * `src/promotion-service.ts` remains as an adapter for the legacy callers.
+ * call-shape difference from the older positional form this service replaced.
  */
 export interface PromotionOptions {
   /** Namespace the copy lands in, canonicalised inside the service. */
@@ -135,6 +136,8 @@ export interface PromotionOptions {
   now?: () => Date;
   /** True refuses every apply-mode promotion before any write. */
   killSwitch?: boolean;
+  /** Issue 1618 B3: the Jev share-screen confidence, recorded in provenance. */
+  promotionConfidence?: number;
 }
 
 function duplicatePredicates(
@@ -245,6 +248,7 @@ function buildProvenance(options: {
   reason: string | undefined;
   auth: AuthInfo;
   promotedAt: string;
+  promotionConfidence: number | undefined;
 }): Record<string, unknown> {
   const {
     source,
@@ -255,6 +259,7 @@ function buildProvenance(options: {
     reason,
     auth,
     promotedAt,
+    promotionConfidence,
   } = options;
   return {
     source_physical_namespace: source.namespace,
@@ -275,7 +280,7 @@ function buildProvenance(options: {
     target_namespace: targetCanonicalNamespace,
     target_kind: isSharedNamespace(targetNamespace) ? "shared-kb" : "namespace",
     promotion_reason: reason ?? null,
-    promotion_confidence: null,
+    promotion_confidence: promotionConfidence ?? null,
     promoted_at: promotedAt,
     promoted_by: auth.tokenClientId ?? auth.clientId,
   };
@@ -330,6 +335,7 @@ export async function promoteEntry(
     reason,
     auth,
     promotedAt,
+    promotionConfidence: options.promotionConfidence,
   });
 
   if (options.dryRun) {

@@ -15,7 +15,7 @@
  * The wrapper never swallows: it logs, then re-throws. Converting an error into
  * a fallback value is a decision the caller makes deliberately and documents.
  */
-import { logger, redactForLog } from "../../src/logger.ts";
+import { logger, redactForLog } from "../logging/legacy-logger.ts";
 
 /**
  * Reduce an unknown thrown value to safe, loggable fields.
@@ -88,7 +88,35 @@ function describeCause(cause: unknown): { error_cause?: string } {
   if (typeof cause === "object") {
     return { error_cause: Object.prototype.toString.call(cause) };
   }
-  return { error_cause: redactForLog(String(cause)) };
+  const scalar = scalarText(cause);
+  return scalar === null ? {} : { error_cause: redactForLog(scalar) };
+}
+
+/**
+ * Render a scalar for a log field, or `null` when the value has no scalar form.
+ *
+ * Every branch names the type it renders, so nothing can reach Object's default
+ * `[object Object]` stringification by falling through. `symbol` needs the
+ * explicit `.toString()` because implicit conversion throws, and `function`
+ * is reported by shape rather than by its source text -- a closure's body can
+ * carry captured secrets.
+ */
+function scalarText(value: unknown): string | null {
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "boolean":
+    case "bigint":
+      return value.toString();
+    case "symbol":
+      return value.toString();
+    case "function":
+      return "[function]";
+    case "object":
+    case "undefined":
+      return null;
+  }
 }
 
 /**
@@ -166,8 +194,9 @@ function describeDriverFields(error: Error): {
     // Scalars only. A driver internal that happens to share one of these names
     // is not a diagnostic, and serializing it could drag a live connection --
     // and its credentials -- into the log.
-    if (typeof value === "object" || typeof value === "function") continue;
-    driver[field] = redactForLog(String(value));
+    // `scalarText` returns null only for object/undefined, both already skipped
+    // above, so `?? ""` is a type-level floor rather than a reachable branch.
+    driver[field] = redactForLog(scalarText(value) ?? "");
   }
   return Object.keys(driver).length > 0 ? { driver } : {};
 }

@@ -1,0 +1,355 @@
+# Open Brain — base Deployments (issue 762).
+#
+# STATUS: WRITTEN. Not deployed anywhere; the prod overlay pins BOTH to 0.
+#
+# TWO Deployments, because this app is two processes with different failure
+# modes and different scaling shapes:
+#
+#   open-brain         the MCP/HTTP server. Serves 3100, sits behind the
+#                      Service, runs migrations on boot.
+#   open-brain-nats-worker
+#                      the NATS bridge worker (scripts/run-nats-worker.ts).
+#                      Serves no HTTP, is behind no Service, and must NOT run
+#                      migrations — two Deployments racing the same migration
+#                      is a defect, so it sets OPEN_BRAIN_RUN_MIGRATIONS=0.
+#
+# Every unusual field below carries the reason it is there, and most of those
+# reasons are a defect this fleet has already paid for. The ones that look like
+# boilerplate — imagePullSecrets, sizeLimit, runAsNonRoot — are the ones that
+# cost an hour each when missing, because they fail at POD START rather than at
+# apply or build time.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-brain
+  labels:
+    app.kubernetes.io/name: open-brain
+    app.kubernetes.io/component: server
+spec:
+  # The prod overlay pins this to 0 for issue 762: the manifests lane creates
+  # no pod. When this app is genuinely turned on, 2 is the fleet default
+  # ("2+ copies through the LB wherever architecture allows") and this app
+  # is built to run multi-worker, so it tolerates more than one copy.
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-brain
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-brain
+        app.kubernetes.io/component: server
+    spec:
+      # ---------------------------------------------------------------------
+      # THE REGISTRY DENIES ANONYMOUS PULLS. This is not optional.
+      #
+      # The Forgejo registry at git.example.internal gates every pull regardless of
+      # repo visibility. Without this Secret the pod sits in ImagePullBackOff —
+      # and note WHERE that lands: `kubectl apply` succeeds, Argo reports
+      # Synced, and only the kubelet knows. No apply-time check catches it.
+      #
+      # The Secret is type dockerconfigjson, created OUT OF BAND from
+      # your secret store into this namespace. Secrets do not cross namespaces, so
+      # the build namespace's copy does not help here.
+      # ---------------------------------------------------------------------
+      imagePullSecrets:
+        - name: open-brain-regcred
+
+      # ---------------------------------------------------------------------
+      # SPREAD ACROSS HOSTS. The stated test is "any single host is down, all
+      # pages still render"; two replicas on one node satisfy `replicas: 2` and
+      # fail that test.
+      #
+      # ScheduleAnyway, not DoNotSchedule: the cluster has 3 general nodes
+      # (node-04 is tainted dedicated=ai:NoSchedule and must NOT be tolerated
+      # for capacity). A hard constraint makes a rollout unschedulable during a
+      # node drain, turning maintenance into an outage.
+      # ---------------------------------------------------------------------
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-brain
+              app.kubernetes.io/component: server
+
+      securityContext:
+        # Must match the Dockerfile's `USER 5040:5040`. When they disagree THIS
+        # wins and the ownership baked into the image becomes wrong — the app
+        # runs as a uid that does not own the directories it needs to write.
+        runAsNonRoot: true
+        runAsUser: 5040
+        runAsGroup: 5040
+        fsGroup: 5040
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: server
+          # PINNED EXACT TAG, never `:latest` and never a branch name. This
+          # line IS the deploy: changing it and merging is how a version ships.
+          # The tag must already exist in the registry before this merges —
+          # Argo deploys whatever lands on main, and an unbuilt tag is an
+          # ImagePullBackOff that selfHeal retries forever. The overlay patches
+          # it via `images:`.
+          image: registry.example.internal/you/open-brain:v0.9.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              # NOT 3000 (hard fleet rule). Equals the Dockerfile's EXPOSE and
+              # the app's actual bind port.
+              containerPort: 3100
+
+          envFrom:
+            - configMapRef:
+                name: open-brain-config
+          env:
+            # A DSN carries a password, so it is a Secret applied out of band
+            # from your secret store. This cluster has no ESO and no sealed-secrets.
+            #
+            # WARNING: a secretKeyRef to a key that does NOT exist holds the
+            # pod in CreateContainerConfigError forever. Referencing a
+            # credential "ready for later" is strictly worse than omitting the
+            # block. That is tolerable here ONLY because replicas is 0 and no
+            # pod is created; before this app is turned on, confirm
+            # `open-brain-secrets` really carries every key named below.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: database-url
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: db-password
+            - name: AUTH_TOKEN_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: auth-token-admin
+            - name: AUTH_TOKEN_AGENT
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: auth-token-agent
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: embedding-api-key
+
+          # -------------------------------------------------------------------
+          # PROBES. /healthz answers "is this process alive" with no dependency
+          # I/O; /readyz answers "can it serve right now" with a cheap bounded
+          # dependency check. A liveness probe that dials the database turns a
+          # brief database blip into a restart storm across every replica.
+          #
+          # startupProbe carries the cold-boot cost and SUSPENDS liveness while
+          # it runs. Sized from the worst case — the FIRST deploy against an
+          # empty database, with this repo's full migration set — not from a
+          # warm restart. A tight probe killed a legitimately-migrating pod at
+          # minute five on this fleet.
+          # -------------------------------------------------------------------
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30 # 300s of migrate-on-boot headroom
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          resources:
+            requests:
+              # STEADY state. What the scheduler reserves forever.
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # BOOT PEAK, not steady state. A memory limit is enforced by
+              # SIGKILL — no grace, no stack trace, the pod is simply gone.
+              #
+              # 1Gi rather than the template's 512Mi, for this app
+              # specifically: it runs its migration set on boot under
+              # OPEN_BRAIN_RUN_MIGRATIONS=1 while a bun runtime holds the whole
+              # TypeScript server tree in memory, and it handles 768-dim
+              # embedding batches. Both spike well above idle, and both spike
+              # hardest on the first deploy against an empty database, which is
+              # exactly when a limit sized off idle kills the pod silently.
+              cpu: 1
+              memory: 1Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # readOnlyRootFilesystem is the goal. It stays off until every
+            # writable path this app touches is a mount below; shipping it on
+            # before then means an app that crashes on its first log write.
+            readOnlyRootFilesystem: false
+
+          volumeMounts:
+            - name: scratch
+              # A REAL, NAMED PATH — not /tmp. Matches the Dockerfile's mkdir
+              # and the ConfigMap's TMPDIR/OPENBRAIN_SCRATCH_DIR.
+              mountPath: /var/lib/app/scratch
+
+      volumes:
+        - name: scratch
+          emptyDir:
+            # sizeLimit IS THE POINT, not decoration. An unbounded emptyDir is
+            # backed by node ephemeral storage with no ceiling, so a runaway
+            # intermediate file fills the NODE and evicts unrelated pods. With
+            # a limit, the offending pod is evicted alone.
+            sizeLimit: 2Gi
+---
+# =============================================================================
+# The NATS bridge worker. Separate Deployment because it has a different job:
+# it consumes NATS subjects rather than serving HTTP, so it is behind no
+# Service, exposes no port, and its probes cannot be HTTP.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-brain-nats-worker
+  labels:
+    app.kubernetes.io/name: open-brain
+    app.kubernetes.io/component: nats-worker
+spec:
+  # Pinned to 0 by the prod overlay, same as the server. When turned on, this
+  # one is deliberately a SINGLE consumer unless the subjects are verified as
+  # safe to process concurrently — that is a decision to make with evidence,
+  # not a number to copy from the server.
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-brain
+      app.kubernetes.io/component: nats-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-brain
+        app.kubernetes.io/component: nats-worker
+    spec:
+      imagePullSecrets:
+        - name: open-brain-regcred
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-brain
+              app.kubernetes.io/component: nats-worker
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5040
+        runAsGroup: 5040
+        fsGroup: 5040
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: nats-worker
+          # The SAME image as the server, a different entrypoint. One image
+          # means one build and one tag to reason about; two images for one
+          # repo is two things to keep in step.
+          image: registry.example.internal/you/open-brain:v0.9.0
+          imagePullPolicy: IfNotPresent
+          command: ["node", "scripts/run-nats-worker.ts"]
+
+          envFrom:
+            - configMapRef:
+                name: open-brain-config
+          env:
+            # MIGRATIONS OFF. The server Deployment owns schema migration; two
+            # Deployments racing the same migration on boot is the defect this
+            # single line prevents. This overrides the ConfigMap's "1" because
+            # a container `env` entry wins over `envFrom`.
+            - name: OPEN_BRAIN_RUN_MIGRATIONS
+              value: "0"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: database-url
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: db-password
+            - name: OPENBRAIN_NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: nats-url
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-brain-secrets
+                  key: embedding-api-key
+
+          # NO httpGet PROBES HERE, and that is deliberate. This process serves
+          # no HTTP, so an httpGet probe would fail forever and restart a
+          # healthy worker on a loop. A liveness probe pointed at an endpoint
+          # that does not exist is worse than no probe at all. When this worker
+          # is genuinely turned on, the honest options are an exec probe
+          # against its own liveness signal or a small health listener added to
+          # the worker — a decision with its own evidence, not a copy of the
+          # server's block.
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # Same 1Gi as the server and for the same reason: the worker runs
+              # the same bun runtime over the same tree and handles the same
+              # 768-dim embedding batches. It skips migrations, but the
+              # embedding path is the larger of the two spikes.
+              cpu: 1
+              memory: 1Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: false
+
+          volumeMounts:
+            - name: scratch
+              mountPath: /var/lib/app/scratch
+
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 2Gi

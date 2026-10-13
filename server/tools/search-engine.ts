@@ -1,60 +1,21 @@
 /**
- * The retrieval engine behind every search and recall surface.
+ * The retrieval engine behind every search and recall surface: one stack, three
+ * arms (`keyword`, `vector`, `hybrid`), with the SQL fragments in
+ * `search-engine-sql.ts` and every caller value bound as a parameter.
  *
- * Design authority: #327 (durable-memory recall is one hybrid stack, not one per
- * consumer), #341 (FTS regconfig allowlist and the english/non-english split),
- * and `docs/decisions/shared-kb-canonical-namespace.md` (canonical vs physical
- * namespace translation on read).
- *
- * THERE IS EXACTLY ONE RETRIEVAL STACK. `search_brain`, `search_all`,
- * `brain_answer`, and the context pack's `durable_memory` section all enter
- * through {@link executeSearch}. That is a load-bearing property, not tidiness:
- * ranking, namespace isolation, archived filtering, and the graph arm are
- * defined once, so a fix to any of them lands everywhere at once and two
- * surfaces cannot answer the same question differently.
- *
- * Three arms, and the difference between them is what fails when input is bad:
- *
- *   - `keyword` — lexical only. Runs without an embedding, so it is the arm that
- *     still works when the embedding provider is down.
- *   - `vector` — semantic only. A null embedding is a HARD ERROR here: there is
- *     no lexical result to degrade to, and returning `[]` would report "nothing
- *     matched" for what was actually an outage.
- *   - `hybrid` (default) — both in parallel, fused by RRF. A null embedding
- *     degrades to keyword-only WITH a logged warning, because a usable lexical
- *     answer beats an error.
- *
- * SQL discipline. Query text, namespaces, tiers, and every caller value are
- * bound parameters. The only interpolated strings are compile-time literals
- * selected by a validated key — table names via the Zod-validated
- * `ResourceTable` union, and the FTS regconfig via the `SUPPORTED_FTS_CONFIGS`
- * allowlist re-asserted at the interpolation point by `ftsConfigLiteral`. The
- * fragments themselves live in `search-engine-sql.ts`; this file owns the arms,
- * the fusion, and the dispatch between them.
- *
- * WHY THE TWO PUBLIC ENTRIES STILL TAKE POSITIONAL ARGUMENTS. Everything
- * internal to the engine now threads one options object, but {@link executeSearch}
- * and {@link executeSearchWithSharedFallback} are called positionally from
- * `server/tools/` consumers and from tests that this change does not touch.
- * Their shapes are the compatibility surface; internally they immediately
- * collapse to {@link SearchRequest}.
+ * See docs/decisions/search-engine-one-retrieval-stack.md
+ * See docs/decisions/search-engine-positional-entries-are-the-compat-surface.md
  */
 import { toSql } from "pgvector/pg";
 import { canRead } from "../auth/permissions.ts";
-import {
-  ALL_TABLES,
-  RRF_K,
-  TABLE_WEIGHT,
-  TIER_BOOST,
-  type Tier,
-} from "./search-constants.ts";
+import { ALL_TABLES, type Tier } from "./search-constants.ts";
 import { DEFAULT_FTS_CONFIG, type FtsConfig } from "./fts-config.ts";
 import { sharedNamespaceConfig } from "./shared-namespace.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
-import type { NamespaceFilter } from "./read-scope.ts";
+import type { NamespaceFilter } from "../domain/read-scope.ts";
 import {
+  traceMcpGeneration,
   traceRetrievalSpan,
-  traceRetrievalSpanSync,
 } from "../observability/langfuse-tracing.ts";
 import {
   AGE_WEIGHT,
@@ -62,16 +23,17 @@ import {
   HYBRID_FETCH_MULTIPLIER,
   USEFULNESS_WEIGHT,
   VECTOR_WEIGHT,
-  rowEvidence,
-  rowIdsEvidence,
   rowsEvidence,
   type ExecuteSearchOptions,
+  type ExplicitLink,
   type SearchDependencies,
   type SearchMode,
   type SearchRow,
   type SearchSource,
   type SourceRef,
 } from "./search-engine-types.ts";
+import { runVectorSearchSql } from "../db/vector-search.ts";
+import { describeError } from "../observability/log-surface.ts";
 import {
   appendNamespaceParam,
   buildFtsCTE,
@@ -80,21 +42,29 @@ import {
   buildVectorCTE,
   type CteContext,
 } from "./search-engine-sql.ts";
-import {
-  withCanonicalNamespaces,
-  withSourceRefs,
-} from "./search-engine-rows.ts";
+import { withCanonicalNamespaces, withSourceRefs } from "./search-engine-rows.ts";
 import { mergeFallbackRows } from "./search-engine-fallback.ts";
+import { attachExplicitLinks } from "./search-engine-links.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
+import { rrfMerge } from "./search-engine-fusion.ts";
+import { observeJevFailureSafely, rerankWithJev } from "../integrations/jev.ts";
+// Re-exported so the engine module stays the one public name for retrieval;
+// the body lives apart because this file is at its 500-code-line bound.
+export {
+  executeSearchWithScopedSharedFallback,
+  type ScopedSharedFallbackRequest,
+} from "./search-engine-scoped-fallback.ts";
 
 export type {
   ExecuteSearchOptions,
+  ExplicitLink,
   SearchDependencies,
   SearchMode,
   SearchRow,
   SearchSource,
   SourceRef,
 };
-export { mergeFallbackRows };
+export { attachExplicitLinks, mergeFallbackRows };
 
 /**
  * One search, as the engine's internals carry it.
@@ -182,20 +152,6 @@ async function generateSearchEmbedding(
 }
 
 /**
- * Gentle recency decay applied after fusion: today 1.0, ~30d 0.97, ~365d 0.73.
- *
- * Deliberately shallow. Recency is a tiebreaker between comparably relevant
- * records, not a ranking signal in its own right — an old decision that answers
- * the question must still outrank a fresh note that does not.
- */
-function recencyFactor(createdAt: string): number {
-  const ms = new Date(createdAt).getTime();
-  if (Number.isNaN(ms)) return 1;
-  const ageDays = (Date.now() - ms) / 86_400_000;
-  return 1 / (1 + Math.max(0, ageDays) * 0.001);
-}
-
-/**
  * The recall sources a role may read, in one place.
  *
  * This exists because the selection was OPEN-CODED at each call site, and that
@@ -213,9 +169,7 @@ function recencyFactor(createdAt: string): number {
 export function readableSearchSources(
   role: Parameters<typeof canRead>[0],
 ): SearchSource[] {
-  const sources: SearchSource[] = ALL_TABLES.filter((table) =>
-    canRead(role, table),
-  );
+  const sources: SearchSource[] = ALL_TABLES.filter((table) => canRead(role, table));
   if (canRead(role, "sessions")) sources.push("session_events");
   return sources;
 }
@@ -231,6 +185,7 @@ function cteContextFor(
     tier: request.tier,
     namespaceParamIndex,
     namespaceIsArray: Array.isArray(request.namespace),
+    lexicalCandidateMode: request.mode === "hybrid" ? "partial_coverage" : "all_terms",
   };
 }
 
@@ -278,7 +233,17 @@ LIMIT $2 OFFSET $3`;
       filter_names: ["namespace", "tier", "archived_at"],
     },
     run: async () => {
-      const { rows } = await dependencies.pool.query(sql, params);
+      const rows = await runVectorSearchSql({
+        pool: dependencies.pool,
+        sql,
+        params,
+        onRollbackFailure: (rollbackError) => {
+          dependencies.logger.warn(
+            describeError(rollbackError),
+            "vector_search_rollback_failed",
+          );
+        },
+      });
       return withSourceRefs(rows as SearchRow[]);
     },
     output: rowsEvidence,
@@ -301,13 +266,17 @@ async function ftsSearch(
   );
   const ctes = tables.map((table) =>
     table === "session_events"
-      ? buildSessionEventsFtsCTE(context)
+      ? buildSessionEventsFtsCTE(context, ftsConfig)
       : buildFtsCTE(table, ftsConfig, context),
   );
   const unionAll = tables
     .map((table) => `SELECT * FROM ${table}_fts`)
     .join("\nUNION ALL\n");
 
+  const ordering =
+    request.mode === "hybrid"
+      ? "lexical_coverage DESC, fts_rank DESC, source_type ASC, id ASC"
+      : "fts_rank DESC";
   const sql = `WITH fts_query AS (
   SELECT $1::text AS q
 ),
@@ -315,7 +284,7 @@ ${ctes.join(",\n")}
 SELECT * FROM (
 ${unionAll}
 ) AS combined
-ORDER BY fts_rank DESC
+ORDER BY ${ordering}
 LIMIT $2 OFFSET $3`;
 
   return traceRetrievalSpan({
@@ -332,94 +301,25 @@ LIMIT $2 OFFSET $3`;
     metadata: {
       stage: "candidate_generation",
       filter_names: ["namespace", "tier", "archived_at"],
+      lexical_normalization:
+        request.mode === "hybrid"
+          ? "compound_components_and_english_digit_aliases"
+          : "canonical",
     },
     run: async () => {
-      const { rows } = await dependencies.pool.query(sql, params);
-      return withSourceRefs(rows as SearchRow[]);
+      const repository = createEntryReadRepository(dependencies.pool);
+      const rows = (await repository.runSearchSql({ sql, params })) as SearchRow[];
+      return withSourceRefs(rows);
     },
     output: rowsEvidence,
   });
 }
 
-/** Post-fusion score for one record: tier boost, table weight, recency decay. */
-function fusedScore(row: SearchRow, rrf: number): number {
-  return Math.max(
-    0,
-    (rrf + TIER_BOOST[(row.tier ?? "warm") as Tier]) *
-      (TABLE_WEIGHT[row.source_type] ?? 1) *
-      recencyFactor(row.created_at),
+/** Remove fusion-only metadata without mutating rows retained by observers. */
+function toPublicSearchRows(rows: readonly SearchRow[]): SearchRow[] {
+  return rows.map(
+    ({ lexical_coverage: _coverage, query_lexeme_count: _count, ...row }) => row,
   );
-}
-
-/** Sum reciprocal-rank contributions across both arms, keyed by record. */
-function accumulateRrf(
-  arms: ReadonlyArray<readonly SearchRow[]>,
-): Map<string, { row: SearchRow; rrf: number }> {
-  const scored = new Map<string, { row: SearchRow; rrf: number }>();
-  for (const rows of arms) {
-    rows.forEach((row, index) => {
-      const key = `${row.source_type}:${row.id}`;
-      const contribution = 1 / (RRF_K + index + 1);
-      const existing = scored.get(key);
-      if (existing) existing.rrf += contribution;
-      else scored.set(key, { row, rrf: contribution });
-    });
-  }
-  return scored;
-}
-
-/**
- * Reciprocal Rank Fusion (Cormack et al. 2009).
- *
- * Fusion is by POSITION, never by raw score, and that is the whole point: cosine
- * distance and `ts_rank_cd` are incomparable scales, so any attempt to blend the
- * numbers directly lets whichever arm happens to produce larger values dominate.
- * Rank is the one currency both arms share. A record found by both arms sums two
- * contributions and rises, which is exactly the signal hybrid search exists to
- * capture.
- *
- * Tier boost, per-table weight, and recency are applied AFTER fusion, and the
- * result is floored at zero so a cold-tier penalty can never produce a negative
- * score that sorts below an irrelevant row.
- */
-function rrfMerge(
-  vectorRows: readonly SearchRow[],
-  ftsRows: readonly SearchRow[],
-  limit: number,
-): SearchRow[] {
-  let ranked: Array<{ row: SearchRow; rrf: number }> = [];
-  return traceRetrievalSpanSync({
-    name: "retrieval.rank_rrf",
-    input: {
-      limit,
-      vector: rowIdsEvidence(vectorRows),
-      keyword: rowIdsEvidence(ftsRows),
-    },
-    metadata: { stage: "scoring_ranking", filter_names: ["rrf_limit"] },
-    run: () => {
-      ranked = Array.from(accumulateRrf([vectorRows, ftsRows]).values())
-        .map(({ row, rrf }) => ({ row, rrf: fusedScore(row, rrf) }))
-        .sort((a, b) => b.rrf - a.rrf);
-      return ranked.slice(0, limit).map(({ row }) => row);
-    },
-    output: (selected) => {
-      const selectedKeys = new Set(
-        selected.map((row) => `${row.source_type}:${row.id}`),
-      );
-      return {
-        candidate_count: ranked.length,
-        selected_count: selected.length,
-        candidates: ranked.map(({ row, rrf }) => ({
-          ...rowEvidence(row),
-          rrf_score: rrf,
-          chosen: selectedKeys.has(`${row.source_type}:${row.id}`),
-          filtered_by: selectedKeys.has(`${row.source_type}:${row.id}`)
-            ? null
-            : "rrf_limit",
-        })),
-      };
-    },
-  });
 }
 
 /**
@@ -428,10 +328,11 @@ function rrfMerge(
  * would page through each arm independently and produce an order no consumer
  * could reproduce.
  */
-async function hybridSearch(
+export async function hybridSearch(
   dependencies: SearchDependencies,
   request: SearchRequest,
   embedding: number[],
+  observe?: (arms: { vectorRows: SearchRow[]; ftsRows: SearchRow[] }) => void,
 ): Promise<SearchRow[]> {
   const totalNeeded = request.offset + request.limit;
   const window: ArmWindow = {
@@ -442,7 +343,69 @@ async function hybridSearch(
     vectorSearch(dependencies, request, embedding, window),
     ftsSearch(dependencies, request, window),
   ]);
-  return rrfMerge(vectorRows, ftsRows, totalNeeded).slice(request.offset);
+  observe?.({ vectorRows, ftsRows });
+  const jev = dependencies.jev;
+  const jevEnabled = jev?.config.enabled === true;
+  const fused = rrfMerge(
+    vectorRows,
+    ftsRows,
+    jevEnabled ? vectorRows.length + ftsRows.length : totalNeeded,
+  );
+  const rrfWindow = fused.slice(0, totalNeeded);
+  let ranked = rrfWindow;
+  if (jevEnabled && jev) {
+    const rerankInput = fused.map((row) => ({
+      row,
+      id: `${row.source_type}:${row.id}`,
+      content: row.content_preview ?? "",
+    }));
+    try {
+      ranked = (
+        await rerankWithJev(jev.config, request.query, rerankInput, {
+          fetchFn: jev.fetchFn,
+          observeBatch: (batch, work) =>
+            observeJevFailureSafely(
+              work,
+              {
+                candidate_count: batch.records.length,
+                candidate_ids: batch.records.map(({ key }) => key),
+              },
+              (safeWork, failureMetadata) =>
+                traceMcpGeneration({
+                  name: "retrieval.jev.batch",
+                  model: jev.config.model,
+                  input: {
+                    state: batch.state,
+                    model: jev.config.model,
+                    questions: batch.questions,
+                  },
+                  run: safeWork,
+                  output: (response) => response,
+                  servedModel: (response) => response.model,
+                  usageDetails: (response) => ({
+                    input: response.usage.input_tokens,
+                    output: response.usage.output_tokens,
+                  }),
+                  metadata: failureMetadata,
+                }),
+            ),
+          onFailure: ({ reason, status }) =>
+            dependencies.logger.warn(
+              { candidate_count: fused.length, reason, status },
+              "jev_rerank_failed_fallback_rrf",
+            ),
+        })
+      )
+        .map(({ row }) => row)
+        .slice(0, totalNeeded);
+    } catch (error) {
+      dependencies.logger.warn(
+        { candidate_count: fused.length, error: describeError(error) },
+        "jev_rerank_failed_fallback_rrf",
+      );
+    }
+  }
+  return toPublicSearchRows(ranked.slice(request.offset));
 }
 
 /**
@@ -479,7 +442,7 @@ async function executeSearchInternal(
       { query_chars: request.query.length },
       "embedding_failed_fallback_fts",
     );
-    return ftsSearch(dependencies, request, window);
+    return toPublicSearchRows(await ftsSearch(dependencies, request, window));
   }
 
   if (request.mode === "vector") {
@@ -492,13 +455,9 @@ async function executeSearchInternal(
 /**
  * The positional argument list {@link executeSearch} accepts.
  *
- * A LABELLED TUPLE, not a loose parameter list, and the distinction is the
- * whole reason this compiles clean. Every existing call site passes these
- * positionally and this change does not touch those files, so the order and the
- * optionality are the compatibility contract. Expressing that contract as a
- * named tuple keeps each position's type checked exactly as before — passing a
- * `Tier` where `mode` belongs is still a compile error — while letting the
- * engine carry one argument internally instead of nine.
+ * A labelled tuple, not a loose parameter list: the order and the optionality
+ * are the compatibility contract every existing call site depends on.
+ * See docs/decisions/search-engine-positional-entries-are-the-compat-surface.md
  *
  * @param dependencies Pool, embedder, and logger.
  * @param tables Tables the caller may read; the caller resolves this from the
@@ -540,9 +499,7 @@ type SharedFallbackArgs = [
 ];
 
 /** Collapse the positional compatibility surface into one request. */
-function toSearchRequest(
-  args: ExecuteSearchArgs | SharedFallbackArgs,
-): SearchRequest {
+function toSearchRequest(args: ExecuteSearchArgs | SharedFallbackArgs): SearchRequest {
   const [
     ,
     tables,
@@ -566,9 +523,7 @@ function toSearchRequest(
   };
 }
 
-export function executeSearch(
-  ...args: ExecuteSearchArgs
-): Promise<SearchRow[]> {
+export function executeSearch(...args: ExecuteSearchArgs): Promise<SearchRow[]> {
   const [dependencies, tables, query, limit] = args;
   const request = toSearchRequest(args);
   const { mode, tier, offset, namespace } = request;
@@ -579,13 +534,7 @@ export function executeSearch(
     metadata: {
       stage: "retrieval_pipeline",
       resolved_namespace: namespace ?? null,
-      filter_names: [
-        "permissions",
-        "namespace",
-        "tier",
-        "archived_at",
-        "pagination",
-      ],
+      filter_names: ["permissions", "namespace", "tier", "archived_at", "pagination"],
     },
     run: () => executeSearchInternal(dependencies, request),
     output: rowsEvidence,
@@ -649,36 +598,48 @@ async function searchWithLegacyTopUp(
  * call. It exists for the window in which an operator has explicitly configured
  * a migration source and shared results are still thin.
  *
+ * EXPLICIT LINKS. This entry is one of the two surfaces the legacy REST route
+ * used, and legacy attached `explicit_links` as the last shaping step of its
+ * core execute (issue 841 cut 2, D3). Both return paths therefore hydrate the
+ * rows they are about to return, with the caller-facing `namespace` the entry
+ * searched with, so the payload matches what those consumers always received.
+ * The modern core {@link executeSearch} deliberately does NOT attach: widening
+ * the direct-execute consumers is outside cut 2.
+ *
  * @param requestedShared Whether the caller explicitly asked for the shared
  *   namespace (as opposed to it merely appearing in their readable list).
  */
 export async function executeSearchWithSharedFallback(
   ...args: SharedFallbackArgs
 ): Promise<SearchRow[]> {
-  const [dependencies, tables, query, rows, mode, tier, offset, namespace] =
-    args;
+  const [dependencies, tables, query, rows, mode, tier, offset, namespace] = args;
   const request = toSearchRequest(args);
   const requestedShared = args[9] ?? false;
   const names = dependencies.sharedNamespaceNames;
   if (!sharedFallbackApplies(request, requestedShared, names)) {
-    return withCanonicalNamespaces(
-      await executeSearch(
-        dependencies,
-        tables,
-        query,
-        rows,
-        mode,
-        tier,
-        offset,
-        namespace,
-        args[8] ?? {},
+    return attachExplicitLinks(
+      dependencies,
+      withCanonicalNamespaces(
+        await executeSearch(
+          dependencies,
+          tables,
+          query,
+          rows,
+          mode,
+          tier,
+          offset,
+          namespace,
+          args[8] ?? {},
+        ),
+        names,
       ),
-      names,
+      namespace,
     );
   }
-  return withCanonicalNamespaces(
-    await searchWithLegacyTopUp(dependencies, request),
-    names,
+  return attachExplicitLinks(
+    dependencies,
+    withCanonicalNamespaces(await searchWithLegacyTopUp(dependencies, request), names),
+    namespace,
   );
 }
 

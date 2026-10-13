@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from conftest import Secret
 from openbrain.apps.bulk.formats import InputFormat
 from openbrain.apps.bulk.ingest import ingest, stage_file
 from openbrain.apps.bulk.staging import StagingStore
@@ -39,7 +40,7 @@ REQUIRED_ENV = (
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -51,7 +52,7 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
 def operator_line(turn_uuid: str, content: str, session: str) -> str:
@@ -82,14 +83,14 @@ def fetch_row(database_url: str, turn_uuid: str) -> tuple[str, object] | None:
     return None if row is None else (str(row[0]), row[1])
 
 
-def started_memory(live_env: dict[str, str], session: str) -> Any:
+def started_memory(live_env: dict[str, Secret], session: str) -> Any:
     """The real bulk lane: an ``AgentMemory`` with its session started."""
     from openbrain_memory.agent import AgentMemory
     from openbrain_memory.client import OpenBrainClient
 
     client = OpenBrainClient(
-        base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-        token=live_env["OPENBRAIN_TEST_TOKEN"],
+        base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+        token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
         namespace="bulk-live",
         agent_id="bulk-live-test",
         allow_insecure_http=True,
@@ -103,7 +104,7 @@ class TestBulkRoundTrip:
     """A staged Claude transcript, yielded whole into the real raw lane."""
 
     async def test_every_turn_reaches_ob_raw_turns_whole(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         session = f"bulk-live-{uuid.uuid4()}"
         # A small turn and a large one: 300,001 chars is past every shortening
@@ -127,7 +128,7 @@ class TestBulkRoundTrip:
         assert result.sent == 2
         assert result.quarantined == 0
 
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         small = fetch_row(database_url, small_id)
         assert small is not None
         assert small[0] == "yes"
@@ -140,7 +141,7 @@ class TestBulkRoundTrip:
         assert big[1] is not None
 
     async def test_a_resumed_run_re_sends_nothing_live(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # The operator resume, proven live: a second run over the same staging
         # store delivers nothing, because every turn is already marked sent.

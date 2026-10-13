@@ -249,7 +249,7 @@ function tameValue(value: unknown, ancestors: object[]): unknown {
  * instead of returning its fallback, and worst, at `debug` the entry line threw
  * before `fn` was ever called -- so **raising the log level silently stopped
  * work from running**. That is the exact scenario `setLogLevel` exists for.
- * `src/audit-log.ts` already defends itself against "a cycle, a BigInt
+ * The audit-log writer already defends itself against "a cycle, a BigInt
  * anywhere"; the shared envelope every emitter routes through did not.
  *
  * **It must redact the whole entry, not one contributor.** `redactForLog` was
@@ -305,8 +305,10 @@ function serializeEntry(entry: LogEntry, level: LogLevel, message: string): stri
         log_serialize_failed: true,
       });
     } catch {
-      // Envelope-only serialization cannot realistically fail; if it somehow
-      // does, a hand-built string still beats losing the line.
+      // Deliberate fail-open: envelope-only serialization cannot realistically
+      // fail; if it somehow does, a hand-built string still beats losing the
+      // line, and this runs inside the log path so it cannot report through
+      // the logger (see the recursion note at :177-180).
       return `{"level":"${level}","message":"log_serialize_failed","service":"${getServiceName()}","host":"${getHostName()}"}`;
     }
   }
@@ -346,8 +348,9 @@ function log(level: LogLevel, message: string, extra?: Record<string, unknown>):
   try {
     delivered = JSON.parse(output) as LogEntry;
   } catch {
-    // serializeEntry never returns invalid JSON, but a sink getting the raw
-    // entry is still better than no line at all.
+    // Deliberate fail-open: serializeEntry (:290-312) never returns invalid
+    // JSON, but a sink getting the raw entry is still better than no line at
+    // all, and reporting from inside the log path would recurse (:177-180).
   }
   // NOT wrapped in try/catch, deliberately. An earlier revision guarded this,
   // reasoning that a full disk must not take the line down with it. The

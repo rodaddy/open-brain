@@ -1,46 +1,22 @@
 /**
  * Production bootstrap for the server-owned maintenance queue (#343 substrate,
- * #345 handler). This is the piece that was missing: `buildEmbeddingRepairHandlers`
- * and `MaintenanceQueueRunner` both existed, but nothing in the running server
- * constructed the durable queue, registered the handler, or started polling — so
- * an enqueued `embedding.repair` job could never actually run in production.
+ * #345 handler): `startMaintenanceQueue` builds the durable queue over the real
+ * pool, registers the server-owned handlers, and starts bounded polling. The
+ * recurring producer loop lives in `maintenance-sweep.ts` and is started by both
+ * compositions.
  *
- * `startMaintenanceQueue` constructs the durable `MaintenanceQueue` over the real
- * pool, composes the server-owned handler map (embedding-repair #345 +
- * graph-derivation #346, the latter under an explicit global maintenance
- * identity) with the real embed provider and a content-free logger, and starts
- * the runner's bounded automatic polling. The returned handle exposes `stop()`,
- * which the server's shutdown path awaits before `pool.end()` so in-flight jobs
- * drain (their leases are honored) instead of being stranded mid-run.
+ * Registered kinds: embedding repair, graph.derive, memory.distill,
+ * dream.light, dream.rem, and dream.route (issue 1525) -- the last ONLY when
+ * the route config is enabled.
  *
- * The bootstrap also starts the missing recurring producer from #384. Each
- * producer tick selects lane-owned undistilled work for memory.distill and reuses
- * enqueueGraphDerivationJobs for changed source hashes. The producer is
- * single-flight, uses configured batch bounds, and stops before the runner drains
- * so shutdown cannot add work after polling has halted.
- *
- * THE PRODUCER LOOP ITSELF NOW LIVES IN `maintenance-sweep.ts`, not here. This
- * bootstrap is reached from the LEGACY `src/index.ts` through the L5 adapter at
- * `src/maintenance-bootstrap.ts`, which supplies the env-derived values; the serving
- * entrypoint since the Phase 6 cutover is `server/main.ts`, which composes
- * maintenance through `server/maintenance/index.ts`. While the loop was private
- * to this file, only one of those two compositions produced any work at all, so
- * the serving process polled a queue nothing filled — #384's symptom, surviving
- * the PR that added the producer. Both compositions now start the same loop.
- *
- * #343 invariants preserved verbatim — this only wires them, it changes none:
- *  - Bounded concurrency: the runner clamps to [1, MAX_CONCURRENCY].
- *  - No overlapping ticks: `runOnce` is single-flight; `start()` reuses it.
- *  - Persisted retries/backoff: owned by `MaintenanceQueue.fail`, durable-row-derived.
- *  - Content-free logs: handlers, runner, and producer log counts/kinds only.
- *  - No Dream/MCP mutation path: the producer writes only durable maintenance
- *    jobs. Distill jobs bind the selected lane and namespace; graph jobs retain
- *    the source snapshot and namespace checks owned by their existing producer.
+ * Why this module exists, the missing-producer defect behind #384, and the #343
+ * invariants this wiring preserves:
+ * See docs/decisions/maintenance-bootstrap-queue-wiring.md
  */
 import type pg from "pg";
-import type { BackgroundTraceEmitter } from "../application/background-tracing.ts";
-import { generateEmbeddingWithMetadata } from "../../src/embedding.ts";
-import type { EmbedWithMetaFn } from "../../src/embedding-repair.ts";
+import type { BackgroundTraceEmitter } from "../observability/background-tracing.ts";
+import { generateEmbeddingWithMetadata } from "../embedding/provider.ts";
+import type { EmbedWithMetaFn } from "../embedding/embedding-repair.ts";
 import type { AuthInfo } from "../types.ts";
 import { MaintenanceQueue } from "./maintenance-queue.ts";
 import {
@@ -55,6 +31,11 @@ import {
 } from "./graph-derivation-handler.ts";
 import { DREAM_LIGHT_JOB_KIND, makeDreamLightHandler } from "./dream-light.ts";
 import { DREAM_REM_JOB_KIND, makeDreamRemHandler } from "./dream-rem.ts";
+import { DREAM_ROUTE_JOB_KIND, makeDreamRouteHandler } from "./dream-route.ts";
+import type { RouteProducerConfig } from "../config/maintenance.ts";
+import { createScheduledJevRemGrader } from "./rem-jev-grader.ts";
+import type { JevConfig, JevFetch } from "../integrations/jev.ts";
+import type { JevRemConfig } from "../config/env-groups.ts";
 import {
   MEMORY_DISTILL_JOB_KIND,
   makeMemoryDistillHandler,
@@ -62,29 +43,12 @@ import {
 import { startRecurringMaintenanceSweep } from "./maintenance-sweep.ts";
 
 /**
- * The deliberate, server-owned identity the graph-derivation handler derives
- * under. It is a global maintenance identity (ob-admin, token-sourced) so the
- * handler can write into whatever namespace a claimed job carries — but it is
- * NOT the namespace authority: the persisted job payload's namespace remains the
- * exact authority, and the handler re-checks canWriteNamespace against it AND
- * re-validates it against the live source row before deriving. This identity
- * only grants the cross-namespace write capability a maintenance sweep needs; it
- * grants no bypass of the per-job namespace/source guards.
+ * The server-owned identity the graph-derivation handler derives under: a global
+ * maintenance identity that grants the cross-namespace write capability only —
+ * the persisted job payload's namespace stays the authority.
  *
- * `namespaceSource: "token"` is required: a "header"-sourced identity would pin
- * every write to a single clientId namespace and could not serve jobs across
- * namespaces.
- *
- * `tokenClientId: "openbrain-promoter"` satisfies the EXISTING shared-kb write
- * convention (namespace-policy.ts: canWriteNamespace gates shared-kb writes on
- * isPromoterIdentity, which recognizes an admin/ob-admin token whose
- * `tokenClientId ?? clientId` is in PROMOTER_CLIENT_IDS). Without it, a claimed
- * shared-kb graph.derive job fails canWriteNamespace and terminal-dead-letters,
- * even though ob-admin holds global maintenance capability everywhere else. The
- * `clientId` stays the fixed maintenance label used for logging/provenance; only
- * the promoter-convention check reads `tokenClientId`, so this narrowly grants
- * the shared-kb write capability without weakening canWriteNamespace or adding a
- * bypass — the per-job namespace and source-snapshot guards remain the authority.
+ * Why token-sourced, and why `tokenClientId` is the promoter id:
+ * See docs/decisions/maintenance-bootstrap-graph-identity.md
  */
 export const MAINTENANCE_GRAPH_AUTH: AuthInfo = {
   role: "ob-admin",
@@ -111,6 +75,9 @@ export interface StartMaintenanceQueueOptions {
   embedFn?: EmbedWithMetaFn;
   /** Process-owned background tracing emitter; omitted when tracing is disabled. */
   tracing?: BackgroundTraceEmitter;
+  jevRem?: { config: JevRemConfig; fetchFn?: JevFetch };
+  /** Issue 1618 B1: Jev candidate typing at distill; used only when enabled. */
+  jevDistillType?: { config: JevConfig; fetchFn?: JevFetch };
   /** Poll cadence, supplied by the caller from config; else the 5s default. */
   pollIntervalMs?: number;
   /** Concurrency, supplied by the caller from config; else the runner default. */
@@ -123,6 +90,12 @@ export interface StartMaintenanceQueueOptions {
   maxDistillBatchesPerTick?: number;
   /** Maximum graph.derive jobs produced by one recurring sweep. */
   graphDerivationLimit?: number;
+  rem?: import("../config/maintenance.ts").RemProducerConfig;
+  /** The scheduled DREAM route job; its handler registers only when enabled. */
+  route?: RouteProducerConfig;
+  readRemSignals?: () => Promise<
+    import("./maintenance-sweep.ts").RemEligibilitySignals
+  >;
   /** Start automatic polling and recurring production immediately (default true). */
   autoStart?: boolean;
   /**
@@ -132,6 +105,46 @@ export interface StartMaintenanceQueueOptions {
    * auth identity (see composeMaintenanceHandlers).
    */
   graphAuth?: AuthInfo;
+}
+
+/** The optional compose inputs `startMaintenanceQueue` forwards when set. */
+function optionalComposeInputs(options: StartMaintenanceQueueOptions) {
+  return {
+    ...(options.jevRem ? { jevRem: options.jevRem } : {}),
+    ...(options.jevDistillType ? { jevDistillType: options.jevDistillType } : {}),
+    ...(options.route ? { route: options.route } : {}),
+    ...(options.tracing ? { tracing: options.tracing } : {}),
+  };
+}
+
+/** Issue 1618 B1: the distill handler gets Jev typing only when the flag is on. */
+function enabledDistillJevType(
+  jevDistillType: { config: JevConfig; fetchFn?: JevFetch } | undefined,
+) {
+  return jevDistillType?.config.enabled ? { jevType: jevDistillType } : {};
+}
+
+/** Sets the dream.route handler ONLY when the route config is enabled. */
+function registerDreamRoute(
+  handlers: Map<string, MaintenanceJobHandler>,
+  input: {
+    pool: pg.Pool;
+    logger: MaintenanceQueueLogger;
+    jevRem?: { config: JevConfig; fetchFn?: JevFetch };
+    route?: RouteProducerConfig;
+  },
+): void {
+  if (input.route?.enabled) {
+    handlers.set(
+      DREAM_ROUTE_JOB_KIND,
+      makeDreamRouteHandler({
+        pool: input.pool,
+        logger: input.logger,
+        route: input.route,
+        ...(input.jevRem ? { jev: input.jevRem } : {}),
+      }),
+    );
+  }
 }
 
 /**
@@ -153,6 +166,9 @@ export function composeMaintenanceHandlers(input: {
   embedFn: EmbedWithMetaFn;
   graphAuth: AuthInfo;
   tracing?: BackgroundTraceEmitter;
+  jevRem?: { config: JevRemConfig; fetchFn?: JevFetch };
+  jevDistillType?: { config: JevConfig; fetchFn?: JevFetch };
+  route?: RouteProducerConfig;
 }): ReadonlyMap<string, MaintenanceJobHandler> {
   if (!input.graphAuth.role || !input.graphAuth.clientId) {
     throw new Error(
@@ -181,7 +197,7 @@ export function composeMaintenanceHandlers(input: {
   // claimed, however many jobs are enqueued under it.
   //
   // THIS CLOSES A LIVE WIRING GAP. DREAM_LIGHT_JOB_KIND and
-  // makeDreamLightHandler have existed since #390 (src/dream-light.ts:58, :374)
+  // makeDreamLightHandler have existed since #390 (./dream-light.ts)
   // and were referenced nowhere outside their own module and test -- so
   // `dream.light` jobs could be enqueued, would be claimed by no handler, and
   // would burn their retries into the dead-letter state. Light only ever ran
@@ -198,6 +214,7 @@ export function composeMaintenanceHandlers(input: {
       embedFn: input.embedFn,
       auth: input.graphAuth,
       ...(input.tracing ? { tracing: input.tracing } : {}),
+      ...enabledDistillJevType(input.jevDistillType),
     }),
   );
   handlers.set(
@@ -213,12 +230,31 @@ export function composeMaintenanceHandlers(input: {
     makeDreamRemHandler({
       pool: input.pool,
       logger: input.logger,
+      ...(input.jevRem?.config.enabled
+        ? {
+            graderFactory: (trace) => {
+              const jevRem = input.jevRem;
+              if (!jevRem) throw new Error("enabled REM Jev config is missing");
+              return createScheduledJevRemGrader({
+                config: jevRem.config,
+                ...(jevRem.fetchFn ? { fetchFn: jevRem.fetchFn } : {}),
+                logger: input.logger,
+                trace,
+              });
+            },
+          }
+        : {}),
       ...(input.tracing ? { tracing: input.tracing } : {}),
     }),
   );
 
+  // dream.route (issue 1525) is registered ONLY when its config is enabled:
+  // with no handler the kind can never be claimed, so a disabled route is
+  // inert even if a job were enqueued under it.
+  registerDreamRoute(handlers, input);
+
   // Deep (#394) is deliberately ABSENT. It is a read-only bundle builder whose
-  // output is a page an operator reads (src/dream-deep.ts), so there is nothing
+  // output is a page an operator reads (./dream-deep.ts), so there is nothing
   // for a background worker to dispatch -- registering it would create a job
   // kind whose only effect is to compute a result and discard it.
   return handlers;
@@ -240,14 +276,14 @@ export function startMaintenanceQueue(
   // Compose the server-owned handler map: embedding.repair (#345) +
   // graph.derive (#346), the latter under an explicit global maintenance
   // identity. currentModel / embeddingUrl are intentionally omitted from the
-  // embedding handler: it defaults to the configured EMBEDDING_MODEL and
+  // embedding handler: it defaults to the configured embeddingModel and
   // endpoint, matching the live write path.
   const handlers = composeMaintenanceHandlers({
     pool: options.pool,
     logger: options.logger,
     embedFn: options.embedFn ?? generateEmbeddingWithMetadata,
     graphAuth: options.graphAuth ?? MAINTENANCE_GRAPH_AUTH,
-    ...(options.tracing ? { tracing: options.tracing } : {}),
+    ...optionalComposeInputs(options),
   });
 
   const pollIntervalMs = options.pollIntervalMs ?? 5_000;
@@ -271,6 +307,8 @@ export function startMaintenanceQueue(
         distillBatchSize: options.distillBatchSize,
         maxDistillBatchesPerTick: options.maxDistillBatchesPerTick,
         graphDerivationLimit: options.graphDerivationLimit,
+        ...(options.rem ? { rem: options.rem } : {}),
+        ...(options.readRemSignals ? { readRemSignals: options.readRemSignals } : {}),
       })
     : null;
 

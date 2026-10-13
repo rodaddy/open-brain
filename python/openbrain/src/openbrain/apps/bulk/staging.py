@@ -88,7 +88,27 @@ CREATE TABLE IF NOT EXISTS quarantine (
     turn_json   TEXT NOT NULL,
     error       TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS staging_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+
+class ConflictingStagedTurnError(ValueError):
+    """A deterministic turn identity was reused for different turn data."""
+
+    def __init__(self) -> None:
+        """Build the content-free fixed diagnostic."""
+        super().__init__("staged turn UUID conflicts with different turn data")
+
+
+class StagingTargetMismatchError(ValueError):
+    """A resumable staging store is bound to another delivery target."""
+
+    def __init__(self) -> None:
+        """Build the content-free fixed diagnostic."""
+        super().__init__("staging store is bound to a different endpoint or namespace")
 
 
 class StagingCounts(BaseModel):
@@ -141,28 +161,87 @@ class StagingStore:
         Returns:
             The number of turns staged by this call.
 
-        Each turn is appended after the current highest ``stage_index``, so
-        staging is additive and ordered: a resumed or extended run keeps the
-        turns already staged and continues the sequence. ``content`` is written
-        whole -- the turn is serialised with ``model_dump`` and stored as TEXT,
-        never shortened.
+        Each previously unseen turn is appended after the current highest
+        ``stage_index``. Re-staging the same physical source is a no-op keyed by
+        the canonical parser's deterministic ``turn_uuid``; this preserves sent
+        state and prevents a resumed batch from re-delivering old turns.
         """
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             start = self._next_index(connection)
-            rows = [
-                (
-                    start + offset,
-                    turn.turn_uuid,
-                    turn.model_dump_json(),
+            staged = 0
+            for turn in turns:
+                staged += self._stage_turn(connection, start + staged, turn)
+        return staged
+
+    def _stage_turn(
+        self, connection: sqlite3.Connection, stage_index: int, turn: RawTurn
+    ) -> int:
+        """Insert one new turn, skip an exact replay, or refuse a conflict."""
+        turn_json = turn.model_dump_json()
+        existing = connection.execute(
+            "SELECT turn_json, sent FROM staged_turn WHERE turn_uuid = ? LIMIT 1",
+            (turn.turn_uuid,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing[0]) != turn_json:
+                raise ConflictingStagedTurnError
+            if int(existing[1]) == 1:
+                connection.execute(
+                    "DELETE FROM quarantine WHERE turn_uuid = ?", (turn.turn_uuid,)
                 )
-                for offset, turn in enumerate(turns)
-            ]
-            connection.executemany(
-                "INSERT INTO staged_turn (stage_index, turn_uuid, turn_json) "
-                "VALUES (?, ?, ?)",
-                rows,
+            return 0
+        cursor = connection.execute(
+            "INSERT INTO staged_turn (stage_index, turn_uuid, turn_json) "
+            "VALUES (?, ?, ?)",
+            (stage_index, turn.turn_uuid, turn_json),
+        )
+        return cursor.rowcount
+
+    def bind_target(self, endpoint: str, namespace: str) -> None:
+        """Bind resumable sent state to one endpoint and namespace.
+
+        The first batch run records its delivery identity. Later runs must match
+        it so a ``sent`` flag from one server or namespace cannot suppress a
+        required delivery to another.
+        """
+        self.bind_endpoint(endpoint)
+        self.bind_namespace(namespace)
+
+    def bind_selection(self, root: Path, from_date: str, to_date: str) -> None:
+        """Bind pending rows to one recursive source root and date selection."""
+        self._bind_metadata("source_root", str(root.resolve()))
+        self._bind_metadata("from_date", from_date)
+        self._bind_metadata("to_date", to_date)
+
+    def bind_endpoint(self, endpoint: str) -> None:
+        """Bind the store to an endpoint before any delivery is attempted."""
+        self._bind_metadata("endpoint", endpoint)
+
+    def bind_namespace(self, namespace: str) -> None:
+        """Bind the store to the authority-confirmed receipt namespace."""
+        self._bind_metadata("namespace", namespace)
+
+    def bound_namespace(self) -> str | None:
+        """Return the namespace established by an earlier durable receipt."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM staging_metadata WHERE key = 'namespace'"
+            ).fetchone()
+        return None if row is None else str(row[0])
+
+    def _bind_metadata(self, key: str, value: str) -> None:
+        """Set one immutable delivery coordinate or refuse a mismatch."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM staging_metadata WHERE key = ?", (key,)
+            ).fetchone()
+            if row is not None and str(row[0]) != value:
+                raise StagingTargetMismatchError
+            connection.execute(
+                "INSERT OR IGNORE INTO staging_metadata (key, value) VALUES (?, ?)",
+                (key, value),
             )
-        return len(rows)
 
     def pending(self) -> Iterator[RawTurn]:
         """Yield every staged turn not yet marked sent, in stage order.
@@ -178,8 +257,7 @@ class StagingStore:
         """
         with self._connect() as connection:
             cursor = connection.execute(
-                "SELECT turn_json FROM staged_turn WHERE sent = 0 "
-                "ORDER BY stage_index"
+                "SELECT turn_json FROM staged_turn WHERE sent = 0 ORDER BY stage_index"
             )
             for (turn_json,) in cursor:
                 yield RawTurn.model_validate_json(turn_json)
@@ -195,6 +273,9 @@ class StagingStore:
             connection.execute(
                 "UPDATE staged_turn SET sent = 1 WHERE turn_uuid = ?",
                 (turn_uuid,),
+            )
+            connection.execute(
+                "DELETE FROM quarantine WHERE turn_uuid = ?", (turn_uuid,)
             )
 
     def quarantine(self, turn: RawTurn, error: str) -> None:

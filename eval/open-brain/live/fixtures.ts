@@ -1,4 +1,10 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
+import {
+  assertForbiddenIdsResolve,
+  assertRelevantIdsResolve,
+  indexCorpusById,
+} from "./fixtures-parse.ts";
 import type { LiveFixture } from "./types.ts";
 
 // Zod validation for the live recall fixture. Loading is fail-closed: a
@@ -41,13 +47,10 @@ export const liveFixtureSchema: z.ZodType<LiveFixture> = z.object({
 export function parseLiveFixture(raw: unknown): LiveFixture {
   const fixture = liveFixtureSchema.parse(raw);
 
-  const byId = new Map<string, (typeof fixture.corpus)[number]>();
-  for (const entry of fixture.corpus) {
-    if (byId.has(entry.id)) {
-      throw new Error(`duplicate corpus id: ${entry.id}`);
-    }
-    byId.set(entry.id, entry);
-  }
+  // The individual checks live in ./fixtures-parse.ts (issue 752); the order
+  // here is unchanged, so the first gap in a malformed fixture is still the one
+  // reported.
+  const byId = indexCorpusById(fixture.corpus);
 
   const probeIds = new Set<string>();
   for (const probe of fixture.probes) {
@@ -56,32 +59,8 @@ export function parseLiveFixture(raw: unknown): LiveFixture {
     }
     probeIds.add(probe.id);
 
-    for (const rel of probe.relevant) {
-      const entry = byId.get(rel.id);
-      if (!entry) {
-        throw new Error(
-          `probe ${probe.id} references unknown relevant id ${rel.id}`,
-        );
-      }
-      if (entry.namespace_role !== "primary") {
-        throw new Error(
-          `probe ${probe.id} relevant id ${rel.id} must be a primary-role entry`,
-        );
-      }
-    }
-    for (const forbidden of probe.forbidden_ids) {
-      const entry = byId.get(forbidden);
-      if (!entry) {
-        throw new Error(
-          `probe ${probe.id} references unknown forbidden id ${forbidden}`,
-        );
-      }
-      if (entry.namespace_role !== "negative") {
-        throw new Error(
-          `probe ${probe.id} forbidden id ${forbidden} must be a negative-role entry`,
-        );
-      }
-    }
+    assertRelevantIdsResolve(probe, byId);
+    assertForbiddenIdsResolve(probe, byId);
   }
 
   return fixture;
@@ -91,7 +70,7 @@ export function parseLiveFixture(raw: unknown): LiveFixture {
 export async function loadLiveFixture(path: string): Promise<LiveFixture> {
   let raw: unknown;
   try {
-    raw = await Bun.file(path).json();
+    raw = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to read live recall fixture ${path}: ${message}`);

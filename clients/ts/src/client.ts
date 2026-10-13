@@ -3,349 +3,44 @@
  * `python/openbrain-memory/src/openbrain_memory/client.py` for the lifecycle
  * surface. Every MCP request declares the reviewed contract id + schema hash
  * in the `X-OB-Contract` header.
+ *
+ * The fetch transport, the error classes, and the wire-decoding helpers live in
+ * `./mcp-transport.ts` and are re-exported here, so this module's import path
+ * remains the one every caller uses.
  */
 
 import { CURRENT_CONTRACT_HEADER } from "./contract.ts";
-import { redactText } from "./policy.ts";
+import {
+  FetchTransport,
+  OpenBrainError,
+  OpenBrainHTTPError,
+  OpenBrainProtocolError,
+  OpenBrainToolError,
+  decodeToolPayload,
+  headerValue,
+  lastSseData,
+  toolText,
+  type Json,
+  type Transport,
+  type TransportResponse,
+} from "./mcp-transport.ts";
 
-export type Json = Record<string, unknown>;
+export {
+  DEFAULT_MAX_RESPONSE_BYTES,
+  FetchTransport,
+  OpenBrainError,
+  OpenBrainHTTPError,
+  OpenBrainProtocolError,
+  OpenBrainToolError,
+  type Json,
+  type OpenBrainErrorOptions,
+  type Transport,
+  type TransportResponse,
+} from "./mcp-transport.ts";
 
 export const MCP_PROTOCOL_VERSION = "2025-03-26";
-export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 export const CLIENT_NAME = "openbrain-memory-ts";
 export const CLIENT_VERSION = "0.1.0";
-
-export interface TransportResponse {
-  status: number;
-  headers: Record<string, string>;
-  text: string;
-}
-
-export interface Transport {
-  post(
-    url: string,
-    options: {
-      headers: Record<string, string>;
-      json: Json;
-      timeout: number;
-      /** Lets stream-capable transports stop after the matching SSE response. */
-      expectedId?: number;
-    },
-  ): Promise<TransportResponse>;
-  delete(
-    url: string,
-    options: { headers: Record<string, string>; timeout: number },
-  ): Promise<TransportResponse>;
-}
-
-export interface OpenBrainErrorOptions {
-  statusCode?: number;
-  context?: string;
-  body?: string;
-  token?: string;
-  sessionId?: string;
-}
-
-function redactBody(
-  body: string,
-  token: string | undefined,
-  sessionId: string | undefined,
-  maxLength = 1000,
-): string {
-  let redacted = body;
-  for (const secret of [token, sessionId]) {
-    if (secret) {
-      redacted = redacted.split(secret).join("[REDACTED]");
-    }
-  }
-  redacted = redactText(redacted);
-  if (redacted.length > maxLength) {
-    redacted = redacted.slice(0, maxLength) + "...[truncated]";
-  }
-  return redacted;
-}
-
-export class OpenBrainError extends Error {
-  readonly statusCode: number | undefined;
-  readonly context: string | undefined;
-  readonly body: string;
-
-  constructor(message: string, options: OpenBrainErrorOptions = {}) {
-    const body = redactBody(
-      options.body ?? "",
-      options.token,
-      options.sessionId,
-    );
-    const parts = [message];
-    if (options.statusCode !== undefined) {
-      parts.push(`status=${options.statusCode}`);
-    }
-    if (options.context) {
-      parts.push(`context=${options.context}`);
-    }
-    if (body) {
-      parts.push(`body=${body}`);
-    }
-    super(parts.join(" "));
-    this.name = new.target.name;
-    this.statusCode = options.statusCode;
-    this.context = options.context;
-    this.body = body;
-  }
-}
-
-export class OpenBrainHTTPError extends OpenBrainError {}
-export class OpenBrainProtocolError extends OpenBrainError {}
-export class OpenBrainToolError extends OpenBrainError {}
-
-export class FetchTransport implements Transport {
-  readonly maxResponseBytes: number;
-
-  constructor(options: { maxResponseBytes?: number } = {}) {
-    this.maxResponseBytes =
-      options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-    if (this.maxResponseBytes < 1) {
-      throw new Error("maxResponseBytes must be >= 1");
-    }
-  }
-
-  async post(
-    url: string,
-    options: {
-      headers: Record<string, string>;
-      json: Json;
-      timeout: number;
-      expectedId?: number;
-    },
-  ): Promise<TransportResponse> {
-    return this.send(
-      url,
-      "POST",
-      options.headers,
-      options.timeout,
-      options.json,
-      options.expectedId,
-    );
-  }
-
-  async delete(
-    url: string,
-    options: { headers: Record<string, string>; timeout: number },
-  ): Promise<TransportResponse> {
-    return this.send(url, "DELETE", options.headers, options.timeout);
-  }
-
-  private async send(
-    url: string,
-    method: "POST" | "DELETE",
-    headers: Record<string, string>,
-    timeoutSeconds: number,
-    json?: Json,
-    expectedId?: number,
-  ): Promise<TransportResponse> {
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers,
-        redirect: "manual",
-        signal: AbortSignal.timeout(
-          Math.max(1, Math.round(timeoutSeconds * 1000)),
-        ),
-        ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-      });
-    } catch (error) {
-      throw new OpenBrainHTTPError(
-        `Open Brain request failed: ${error instanceof Error ? error.name : "fetch error"}`,
-        { context: "transport" },
-      );
-    }
-    const text = await this.readBody(response, expectedId);
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key.toLowerCase()] = value;
-    });
-    return { status: response.status, headers: responseHeaders, text };
-  }
-
-  /** Read a bounded body and stop an SSE response at the requested JSON-RPC id. */
-  private async readBody(
-    response: Response,
-    expectedId?: number,
-  ): Promise<string> {
-    const reader = response.body?.getReader();
-    if (reader === undefined) return "";
-    const decoder = new TextDecoder();
-    const contentType = response.headers.get("content-type") ?? "";
-    const isSse = contentType.includes("text/event-stream");
-    let bytes = 0;
-    let text = "";
-    let pending = "";
-    let dataLines: string[] = [];
-    const matched = (): string | null => {
-      if (expectedId === undefined || dataLines.length === 0) return null;
-      const data = dataLines.join("\n");
-      try {
-        const message: unknown = JSON.parse(data);
-        if (
-          typeof message === "object" &&
-          message !== null &&
-          (message as Json)["id"] === expectedId
-        ) {
-          return data;
-        }
-      } catch {
-        // An unrelated malformed SSE event is handled by the protocol layer.
-      }
-      return null;
-    };
-    try {
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        bytes += next.value.byteLength;
-        if (bytes > this.maxResponseBytes) {
-          await reader.cancel();
-          throw new OpenBrainHTTPError(
-            "Open Brain response exceeded maxResponseBytes",
-            { context: "transport" },
-          );
-        }
-        const chunk = decoder.decode(next.value, { stream: true });
-        text += chunk;
-        if (!isSse || expectedId === undefined) continue;
-        pending += chunk;
-        while (true) {
-          const newline = pending.indexOf("\n");
-          if (newline < 0) break;
-          const rawLine = pending.slice(0, newline);
-          pending = pending.slice(newline + 1);
-          const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-          if (line === "") {
-            const data = matched();
-            dataLines = [];
-            if (data !== null) {
-              await reader.cancel();
-              return `data: ${data}\n\n`;
-            }
-          } else if (line.startsWith("data:")) {
-            dataLines.push(line.slice("data:".length).trim());
-          }
-        }
-      }
-      text += decoder.decode();
-      return text;
-    } catch (error) {
-      if (error instanceof OpenBrainHTTPError) throw error;
-      throw new OpenBrainHTTPError("Open Brain response stream failed", {
-        context: "transport",
-      });
-    }
-  }
-}
-
-function headerValue(
-  headers: Record<string, string>,
-  name: string,
-): string | undefined {
-  const wanted = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === wanted) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function lastSseData(text: string, expectedId?: number): string {
-  const dataBlocks: string[] = [];
-  let current: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line) {
-      if (current.length > 0) {
-        dataBlocks.push(current.join("\n"));
-        current = [];
-      }
-      continue;
-    }
-    if (line.startsWith("data:")) {
-      current.push(line.slice("data:".length).trim());
-    }
-  }
-  if (current.length > 0) {
-    dataBlocks.push(current.join("\n"));
-  }
-  if (dataBlocks.length === 0) {
-    throw new OpenBrainProtocolError("MCP SSE response did not contain data");
-  }
-  if (expectedId !== undefined) {
-    for (const block of dataBlocks) {
-      try {
-        const message: unknown = JSON.parse(block);
-        if (
-          typeof message === "object" &&
-          message !== null &&
-          (message as Json)["id"] === expectedId
-        ) {
-          return block;
-        }
-      } catch {
-        continue;
-      }
-    }
-  }
-  return dataBlocks.at(-1) as string;
-}
-
-function decodeToolPayload(result: Json): Json {
-  const content = result["content"];
-  if (!Array.isArray(content) || content.length !== 1) {
-    return { ...result };
-  }
-  const item: unknown = content[0];
-  if (
-    typeof item !== "object" ||
-    item === null ||
-    (item as Json)["type"] !== "text"
-  ) {
-    return { ...result };
-  }
-  const text = (item as Json)["text"];
-  if (typeof text !== "string") {
-    return { ...result };
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed)
-    ) {
-      return parsed as Json;
-    }
-  } catch {
-    // fall through
-  }
-  return { ...result };
-}
-
-function toolText(result: Json): string {
-  const content = result["content"];
-  if (!Array.isArray(content)) {
-    return JSON.stringify(result);
-  }
-  const parts: string[] = [];
-  for (const item of content) {
-    if (
-      typeof item === "object" &&
-      item !== null &&
-      (item as Json)["type"] === "text"
-    ) {
-      parts.push(String((item as Json)["text"] ?? ""));
-    }
-  }
-  return parts.join("\n");
-}
 
 function validateBaseUrl(baseUrl: string, allowInsecureHttp: boolean): void {
   let parsed: URL;
@@ -382,6 +77,29 @@ const EXPIRED_SESSION_MESSAGES = new Set([
   "bad request: missing session or not an initialize request",
   "invalid or missing session",
 ]);
+
+/** The `error` member of a 400 body, when it names an expired session. */
+function namesExpiredSession(error: unknown): boolean {
+  if (typeof error === "string") {
+    return EXPIRED_SESSION_MESSAGES.has(error.trim().toLowerCase());
+  }
+  if (typeof error === "object" && error !== null) {
+    const message = (error as Json)["message"];
+    return (
+      typeof message === "string" &&
+      EXPIRED_SESSION_MESSAGES.has(message.trim().toLowerCase())
+    );
+  }
+  return false;
+}
+
+/** A JSON object, or null when `value` is any other JSON shape. */
+function asJsonObject(value: unknown): Json | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Json;
+}
 
 export interface OpenBrainClientOptions {
   token: string;
@@ -461,41 +179,44 @@ export class OpenBrainClient {
       method: "tools/call",
       params: { name, arguments: { ...args } },
     };
+    const context = `call_tool:${name}`;
+    const response = await this.postToolCallWithRetry(payload, operationEpoch);
+    this.raiseForStatus(response, context);
+    const message = this.decodeJsonRpcResponse(response, requestId, context);
+    return this.toolResult(message, context);
+  }
+
+  /** Post the call, re-initializing once if the server rejects the session. */
+  private async postToolCallWithRetry(
+    payload: Json,
+    operationEpoch: number,
+  ): Promise<TransportResponse> {
     const requestSessionId = this.sessionId as string;
-    let response = await this.postToolCall(payload, requestSessionId);
-    if (this.isExpiredSessionResponse(response)) {
-      this.assertOperationEpoch(operationEpoch);
-      // A delayed response from an older session must not clear a newer session
-      // established by another concurrent caller.
-      if (this.sessionId === requestSessionId) {
-        this.sessionId = null;
-      }
-      await this.ensureSession(operationEpoch);
-      response = await this.postToolCall(payload, this.sessionId as string);
+    const response = await this.postToolCall(payload, requestSessionId);
+    if (!this.isExpiredSessionResponse(response)) {
+      return response;
     }
-    this.raiseForStatus(response, `call_tool:${name}`);
-    const message = this.decodeJsonRpcResponse(
-      response,
-      requestId,
-      `call_tool:${name}`,
-    );
-    const result = message["result"];
-    if (
-      typeof result !== "object" ||
-      result === null ||
-      Array.isArray(result)
-    ) {
-      throw new OpenBrainProtocolError(
-        "MCP tool result was not a JSON object",
-        {
-          context: `call_tool:${name}`,
-        },
-      );
+    this.assertOperationEpoch(operationEpoch);
+    // A delayed response from an older session must not clear a newer session
+    // established by another concurrent caller.
+    if (this.sessionId === requestSessionId) {
+      this.sessionId = null;
     }
-    const resultObject = result as Json;
+    await this.ensureSession(operationEpoch);
+    return this.postToolCall(payload, this.sessionId as string);
+  }
+
+  /** Unwrap a JSON-RPC `result` into the tool payload, raising on tool errors. */
+  private toolResult(message: Json, context: string): Json {
+    const resultObject = asJsonObject(message["result"]);
+    if (resultObject === null) {
+      throw new OpenBrainProtocolError("MCP tool result was not a JSON object", {
+        context,
+      });
+    }
     if (resultObject["isError"]) {
       throw new OpenBrainToolError("Open Brain tool returned an error", {
-        context: `call_tool:${name}`,
+        context,
         body: toolText(resultObject),
         token: this.token,
         sessionId: this.sessionId ?? undefined,
@@ -562,10 +283,8 @@ export class OpenBrainClient {
     this.assertOperationEpoch(expectedEpoch);
   }
 
-  private async initializeSessionWithRetry(
-    expectedEpoch: number,
-  ): Promise<void> {
-    // One bounded rate-limit retry, mirroring the Python initialize retry.
+  private async initializeSessionWithRetry(expectedEpoch: number): Promise<void> {
+    // One rate-limit retry, mirroring the Python initialize retry.
     try {
       await this.initializeSession(expectedEpoch);
     } catch (error) {
@@ -605,36 +324,12 @@ export class OpenBrainClient {
     this.raiseForStatus(response, "initialize");
     const pendingSessionId = headerValue(response.headers, "mcp-session-id");
     if (!pendingSessionId) {
-      throw new OpenBrainProtocolError(
-        "Initialize response missing mcp-session-id",
-        { context: "initialize" },
-      );
+      throw new OpenBrainProtocolError("Initialize response missing mcp-session-id", {
+        context: "initialize",
+      });
     }
     try {
-      const message = this.decodeJsonRpcResponse(
-        response,
-        requestId,
-        "initialize",
-      );
-      const result = message["result"];
-      if (
-        typeof result !== "object" ||
-        result === null ||
-        Array.isArray(result)
-      ) {
-        throw new OpenBrainProtocolError(
-          "Initialize response missing result object",
-          { context: "initialize", token: this.token },
-        );
-      }
-      const protocolVersion = (result as Json)["protocolVersion"];
-      if (typeof protocolVersion !== "string") {
-        throw new OpenBrainProtocolError(
-          "Initialize response missing protocolVersion",
-          { context: "initialize", token: this.token },
-        );
-      }
-      this.protocolVersion = protocolVersion;
+      this.protocolVersion = this.negotiatedProtocolVersion(response, requestId);
       await this.sendInitializedNotification(pendingSessionId);
       this.assertOperationEpoch(expectedEpoch);
       this.sessionId = pendingSessionId;
@@ -644,12 +339,34 @@ export class OpenBrainClient {
     }
   }
 
+  /** Read `result.protocolVersion` out of an initialize response. */
+  private negotiatedProtocolVersion(
+    response: TransportResponse,
+    requestId: number,
+  ): string {
+    const message = this.decodeJsonRpcResponse(response, requestId, "initialize");
+    const result = asJsonObject(message["result"]);
+    if (result === null) {
+      throw new OpenBrainProtocolError("Initialize response missing result object", {
+        context: "initialize",
+        token: this.token,
+      });
+    }
+    const protocolVersion = result["protocolVersion"];
+    if (typeof protocolVersion !== "string") {
+      throw new OpenBrainProtocolError("Initialize response missing protocolVersion", {
+        context: "initialize",
+        token: this.token,
+      });
+    }
+    return protocolVersion;
+  }
+
   private assertOperationEpoch(expectedEpoch: number): void {
     if (expectedEpoch !== this.lifecycleEpoch) {
-      throw new OpenBrainProtocolError(
-        "MCP operation was invalidated by close",
-        { context: "session_lifecycle" },
-      );
+      throw new OpenBrainProtocolError("MCP operation was invalidated by close", {
+        context: "session_lifecycle",
+      });
     }
   }
 
@@ -705,18 +422,7 @@ export class OpenBrainClient {
     if (typeof body !== "object" || body === null) {
       return false;
     }
-    const error = (body as Json)["error"];
-    if (typeof error === "string") {
-      return EXPIRED_SESSION_MESSAGES.has(error.trim().toLowerCase());
-    }
-    if (typeof error === "object" && error !== null) {
-      const message = (error as Json)["message"];
-      return (
-        typeof message === "string" &&
-        EXPIRED_SESSION_MESSAGES.has(message.trim().toLowerCase())
-      );
-    }
-    return false;
+    return namesExpiredSession((body as Json)["error"]);
   }
 
   private url(path: string): string {
@@ -745,12 +451,9 @@ export class OpenBrainClient {
     if (includeSession) {
       const activeSessionId = sessionId ?? this.sessionId;
       if (!activeSessionId) {
-        throw new OpenBrainProtocolError(
-          "MCP session has not been initialized",
-          {
-            context: "headers",
-          },
-        );
+        throw new OpenBrainProtocolError("MCP session has not been initialized", {
+          context: "headers",
+        });
       }
       headers["Mcp-Session-Id"] = activeSessionId;
       headers["MCP-Protocol-Version"] = this.protocolVersion;
@@ -772,6 +475,38 @@ export class OpenBrainClient {
   }
 
   private decodeJsonRpcResponse(
+    response: TransportResponse,
+    expectedId: number,
+    context: string,
+  ): Json {
+    const messageObject = this.parseJsonRpcBody(response, expectedId, context);
+    if (messageObject["jsonrpc"] !== "2.0") {
+      throw new OpenBrainProtocolError("MCP response missing jsonrpc=2.0", {
+        context,
+        token: this.token,
+        sessionId: this.sessionId ?? undefined,
+      });
+    }
+    if (messageObject["id"] !== expectedId) {
+      throw new OpenBrainProtocolError("MCP response id did not match request", {
+        context,
+        token: this.token,
+        sessionId: this.sessionId ?? undefined,
+      });
+    }
+    if ("error" in messageObject) {
+      throw new OpenBrainProtocolError("MCP JSON-RPC error", {
+        context,
+        body: JSON.stringify(messageObject["error"]),
+        token: this.token,
+        sessionId: this.sessionId ?? undefined,
+      });
+    }
+    return messageObject;
+  }
+
+  /** Unwrap any SSE framing and parse the response body into a JSON object. */
+  private parseJsonRpcBody(
     response: TransportResponse,
     expectedId: number,
     context: string,
@@ -800,39 +535,10 @@ export class OpenBrainClient {
         sessionId: this.sessionId ?? undefined,
       });
     }
-    if (
-      typeof message !== "object" ||
-      message === null ||
-      Array.isArray(message)
-    ) {
+    const messageObject = asJsonObject(message);
+    if (messageObject === null) {
       throw new OpenBrainProtocolError("MCP response was not a JSON object", {
         context,
-      });
-    }
-    const messageObject = message as Json;
-    if (messageObject["jsonrpc"] !== "2.0") {
-      throw new OpenBrainProtocolError("MCP response missing jsonrpc=2.0", {
-        context,
-        token: this.token,
-        sessionId: this.sessionId ?? undefined,
-      });
-    }
-    if (messageObject["id"] !== expectedId) {
-      throw new OpenBrainProtocolError(
-        "MCP response id did not match request",
-        {
-          context,
-          token: this.token,
-          sessionId: this.sessionId ?? undefined,
-        },
-      );
-    }
-    if ("error" in messageObject) {
-      throw new OpenBrainProtocolError("MCP JSON-RPC error", {
-        context,
-        body: JSON.stringify(messageObject["error"]),
-        token: this.token,
-        sessionId: this.sessionId ?? undefined,
       });
     }
     return messageObject;

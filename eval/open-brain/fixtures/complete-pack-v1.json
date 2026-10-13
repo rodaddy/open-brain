@@ -47,12 +47,6 @@
       "tags": ["marlin", "telemetry", "cache", "private"]
     }
   ],
-  "expected_recall_ids": [
-    "marlin-cache-eviction",
-    "beacon-rotation-decision"
-  ],
-  "forbidden_ids": [
-    "negative-marlin-secret-key",
-    "negative-telemetry-secret-cache"
-  ]
+  "expected_recall_ids": ["marlin-cache-eviction", "beacon-rotation-decision"],
+  "forbidden_ids": ["negative-marlin-secret-key", "negative-telemetry-secret-cache"]
 }

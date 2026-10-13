@@ -1,6 +1,8 @@
-import { resolve } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
-import { summarizeChildStderr } from "../../../src/child-stderr.ts";
+import { summarizeChildStderr } from "../../../server/logging/child-stderr.ts";
 import type { LiveEvalConfig } from "./config.ts";
 import { labelTeardownError, teardownRecords } from "./gate.ts";
 import { countNamespaceResidue, purgeNamespace } from "./namespace-purge.ts";
@@ -18,12 +20,82 @@ import {
   type OpenBrainToolCaller,
 } from "./transport.ts";
 
-const PROVIDER_CWD = resolve(import.meta.dir, "../../../python/openbrain-memory");
+const PROVIDER_CWD = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../python/openbrain-memory",
+);
+
+/** Read a child pipe to a string; an absent or failed pipe yields "". */
+function readAll(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return Promise.resolve("");
+  return new Promise((resolveText) => {
+    let text = "";
+    stream.setEncoding?.("utf8");
+    stream.on("data", (chunk: string | Buffer) => {
+      text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    });
+    stream.on("end", () => resolveText(text));
+    stream.on("error", () => resolveText(text));
+  });
+}
+
+/**
+ * The child's exit code, as a NUMBER.
+ *
+ * Node reports the code on a 'close' event, and reports NULL when the child was
+ * killed by a signal or failed to launch. Null is mapped to a non-zero failure
+ * rather than passed through: `parseProviderOutput` branches on `exitCode === 0`
+ * and a null would neither equal 0 nor read as the failure it actually is.
+ */
+function exitCodeOf(child: ChildProcess): Promise<number> {
+  return new Promise((resolveCode) => {
+    child.on("close", (code, signal) => {
+      resolveCode(typeof code === "number" ? code : signal ? 143 : 1);
+    });
+    child.on("error", () => resolveCode(1));
+  });
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Build the receipt an exit carries. Returns null when the record does not
+ * satisfy the required receipt shape, which the caller reports as
+ * `openbrain-memory:invalid-receipt`.
+ */
+function buildProviderReceipt(
+  receipt: Record<string, unknown>,
+): ProviderReceipt | null {
+  const operation = receipt.operation;
+  const status = receipt.status;
+  const durable = receipt.durable;
+  const directAttempted = receipt.direct_attempted;
+  const fallbackAttempted = receipt.fallback_attempted;
+  if (typeof operation !== "string" || typeof status !== "string") {
+    return null;
+  }
+  if (
+    typeof durable !== "boolean" ||
+    typeof directAttempted !== "boolean" ||
+    typeof fallbackAttempted !== "boolean"
+  ) {
+    return null;
+  }
+  const ignored = receipt.ignored_optional_request_keys;
+  return {
+    operation,
+    status,
+    durable,
+    direct_attempted: directAttempted,
+    fallback_attempted: fallbackAttempted,
+    ignored_optional_request_keys: Array.isArray(ignored)
+      ? ignored.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
 }
 
 export function parseProviderOutput(
@@ -43,71 +115,59 @@ export function parseProviderOutput(
   if (exitCode === 0 && text.trim() === "") {
     return { exitCode, result: {}, ...diagnostics };
   }
+  const output = parseProviderJson(text, fail);
+  const result = providerResult(output);
+  const receipt = asRecord(output?.receipt);
+  if (!receipt) {
+    if (exitCode === 0) {
+      return { exitCode, result, ...diagnostics };
+    }
+    throw fail("openbrain-memory:missing-receipt");
+  }
+  const providerReceipt = buildProviderReceipt(receipt);
+  if (providerReceipt === null) {
+    throw fail("openbrain-memory:invalid-receipt");
+  }
+  return { exitCode, receipt: providerReceipt, result };
+}
+
+/** Decode the provider's stdout, labelling a decode failure for the caller. */
+function parseProviderJson(
+  text: string,
+  fail: (label: string) => LiveTransportError,
+): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     throw fail("openbrain-memory:malformed-output");
   }
-  const output = asRecord(parsed);
-  const receipt = asRecord(output?.receipt);
-  if (!receipt && exitCode === 0) {
-    return { exitCode, result: asRecord(output?.result) ?? {}, ...diagnostics };
-  }
-  if (!receipt) {
-    throw fail("openbrain-memory:missing-receipt");
-  }
-  const required = {
-    operation: receipt.operation,
-    status: receipt.status,
-    durable: receipt.durable,
-    direct_attempted: receipt.direct_attempted,
-    fallback_attempted: receipt.fallback_attempted,
-  };
-  if (
-    typeof required.operation !== "string" ||
-    typeof required.status !== "string" ||
-    typeof required.durable !== "boolean" ||
-    typeof required.direct_attempted !== "boolean" ||
-    typeof required.fallback_attempted !== "boolean"
-  ) {
-    throw fail("openbrain-memory:invalid-receipt");
-  }
-  const ignored = receipt.ignored_optional_request_keys;
-  const providerReceipt: ProviderReceipt = {
-    operation: required.operation,
-    status: required.status,
-    durable: required.durable,
-    direct_attempted: required.direct_attempted,
-    fallback_attempted: required.fallback_attempted,
-    ignored_optional_request_keys: Array.isArray(ignored)
-      ? ignored.filter((item): item is string => typeof item === "string")
-      : undefined,
-  };
-  return {
-    exitCode,
-    receipt: providerReceipt,
-    result: asRecord(output?.result) ?? {},
-  };
+  return asRecord(parsed);
+}
+
+function providerResult(
+  output: Record<string, unknown> | null,
+): Record<string, unknown> {
+  return asRecord(output?.result) ?? {};
 }
 
 export class LiveScenarioTransport implements ScenarioTransport {
   private readonly client: OpenBrainLiveClient;
   private readonly pool: Pool;
+  private readonly config: LiveEvalConfig;
 
   constructor(
     caller: OpenBrainToolCaller,
-    private readonly config: LiveEvalConfig,
+    config: LiveEvalConfig,
     pool: Pool = new Pool(),
   ) {
     this.client = new OpenBrainLiveClient(caller);
+    this.config = config;
     this.pool = pool;
   }
 
-  async executeProvider(
-    request: Record<string, unknown>,
-  ): Promise<ProviderExecution> {
-    const proc = Bun.spawn(["uv", "run", "openbrain-memory"], {
+  async executeProvider(request: Record<string, unknown>): Promise<ProviderExecution> {
+    const proc = spawn("uv", ["run", "openbrain-memory"], {
       cwd: PROVIDER_CWD,
       env: {
         ...process.env,
@@ -128,15 +188,19 @@ export class LiveScenarioTransport implements ScenarioTransport {
         // the header regardless of this flag.
         OPENBRAIN_DELEGATE_NAMESPACE: "1",
       },
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
+      stdio: ["pipe", "pipe", "pipe"],
     });
     proc.stdin.write(JSON.stringify(request));
     proc.stdin.end();
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    return parseProviderOutput(stdout, await proc.exited, stderr);
+    // Both pipes are drained CONCURRENTLY with the exit wait. The previous
+    // serial reads happened to work only because Bun buffered them; a child
+    // that fills the pipe nobody is reading blocks mid-write and never exits.
+    const [stdout, stderr, exitCode] = await Promise.all([
+      readAll(proc.stdout),
+      readAll(proc.stderr),
+      exitCodeOf(proc),
+    ]);
+    return parseProviderOutput(stdout, exitCode, stderr);
   }
 
   async logMemory(opts: {
@@ -224,7 +288,9 @@ export class LiveScenarioTransport implements ScenarioTransport {
     namespace: string,
   ): Promise<{ tally: TeardownTally; residue: TeardownResidue }> {
     const unique = Array.from(
-      new Map(records.map((record) => [`${record.kind}:${record.id}`, record])).values(),
+      new Map(
+        records.map((record) => [`${record.kind}:${record.id}`, record]),
+      ).values(),
     );
     const order: Record<ScenarioRecord["kind"], number> = {
       event: 0,

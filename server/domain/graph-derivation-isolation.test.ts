@@ -5,14 +5,18 @@
  * relational-graph join relies on. The content-hash stamping and content-free
  * observability sentinels live in graph-derivation-content-free.test.ts.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   CrossNamespaceEndpointError,
   deriveGraphFromMetadata,
-  type GraphDerivationPool,
 } from "./graph-derivation.ts";
-import type { AuthInfo } from "../../src/types.ts";
-import { auth, baseInput, FakeGraph } from "./graph-derivation-test-helpers.ts";
+import type { AuthInfo } from "../types.ts";
+import {
+  auth,
+  baseInput,
+  asRepository,
+  FakeGraph,
+} from "./graph-derivation-test-helpers.ts";
 
 /** Assert one ob_entities write arbitrates on the index its shape implies. */
 function expectEntityConflictTarget(sql: string) {
@@ -31,7 +35,7 @@ function expectEntityConflictTarget(sql: string) {
 
 async function everyPersistedWriteBindsNamespaceAsAParameter() {
   const g = new FakeGraph();
-  await deriveGraphFromMetadata(g, auth, baseInput());
+  await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
 
   const writes = g.calls.filter((c) => c.sql.includes("INSERT INTO ob_"));
   expect(writes.length).toBeGreaterThan(0);
@@ -53,7 +57,11 @@ async function unwritableNamespaceIsRejectedBeforeAnyWrite() {
   const g = new FakeGraph();
   const readonly: AuthInfo = { role: "readonly", clientId: "viewer" };
   await expect(
-    deriveGraphFromMetadata(g, readonly, baseInput({ namespace: "team-kb" })),
+    deriveGraphFromMetadata(
+      asRepository(g),
+      readonly,
+      baseInput({ namespace: "team-kb" }),
+    ),
   ).rejects.toBeInstanceOf(CrossNamespaceEndpointError);
   // No SQL issued at all — fail-closed before touching the graph.
   expect(g.calls.length).toBe(0);
@@ -67,7 +75,11 @@ async function headerBoundIdentityCannotDeriveIntoAForeignNamespace() {
     namespaceSource: "header",
   };
   await expect(
-    deriveGraphFromMetadata(g, delegated, baseInput({ namespace: "tenant-b" })),
+    deriveGraphFromMetadata(
+      asRepository(g),
+      delegated,
+      baseInput({ namespace: "tenant-b" }),
+    ),
   ).rejects.toBeInstanceOf(CrossNamespaceEndpointError);
   expect(g.calls.length).toBe(0);
 }
@@ -82,11 +94,11 @@ async function aRowPersistedUnderAForeignNamespaceAborts() {
       return { rows: [{ ...res.rows[0], namespace: "evil-ns" }] };
     }
     return res;
-  }) as unknown as GraphDerivationPool["query"];
+  }) as unknown as typeof originalQuery;
 
-  await expect(deriveGraphFromMetadata(g, auth, baseInput())).rejects.toBeInstanceOf(
-    CrossNamespaceEndpointError,
-  );
+  await expect(
+    deriveGraphFromMetadata(asRepository(g), auth, baseInput()),
+  ).rejects.toBeInstanceOf(CrossNamespaceEndpointError);
 }
 
 async function derivedEdgesMatchTheRelationalGraphSearchJoinShape() {
@@ -98,7 +110,7 @@ async function derivedEdgesMatchTheRelationalGraphSearchJoinShape() {
   // edge we persist satisfies that join so derived edges stay retrievable and
   // never leak across the namespace boundary the join relies on.
   const g = new FakeGraph();
-  await deriveGraphFromMetadata(g, auth, baseInput());
+  await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
 
   const linkWrites = g.calls.filter((c) => c.sql.includes("INSERT INTO ob_links"));
   expect(linkWrites.length).toBe(3);
@@ -140,7 +152,11 @@ async function derivedEdgesMatchTheRelationalGraphSearchJoinShape() {
 
 async function emptyMetadataDerivesOnlyTheAnchorNode() {
   const g = new FakeGraph();
-  const receipt = await deriveGraphFromMetadata(g, auth, baseInput({ metadata: {} }));
+  const receipt = await deriveGraphFromMetadata(
+    asRepository(g),
+    auth,
+    baseInput({ metadata: {} }),
+  );
   expect(receipt.status).toBe("new");
   expect(receipt.entities_upserted).toBe(1);
   expect(receipt.links_upserted).toBe(0);

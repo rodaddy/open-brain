@@ -35,6 +35,8 @@ from typing import Final
 __all__ = [
     "APPROVED_TEMP_WORKTREE_ROOTS",
     "DEFAULT_DEVELOPMENT_ROOT",
+    "ORCA_WORKSPACES_ROOT_ENV_VAR",
+    "orca_workspaces_root",
     "development_root",
     "development_root_missing",
     "DevelopmentScope",
@@ -61,7 +63,7 @@ DEVELOPMENT_ROOT_ENV_VAR: Final[str] = "OPENBRAIN_DEVELOPMENT_ROOT"
 #: and still carries this value; changing only this side breaks the fixtures.
 #: Operators on another layout export `OPENBRAIN_DEVELOPMENT_ROOT`, which is the
 #: supported seam and takes precedence.
-DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path("/Volumes/ThunderBolt/Development")
+DEFAULT_DEVELOPMENT_ROOT: Final[Path] = Path("/srv/dev")
 
 
 def development_root() -> Path:
@@ -175,13 +177,65 @@ def render_scope_diagnosis(diagnosis: ScopeDiagnosis) -> str:
     )
 
 
-#: ob-memory-provider.ts:144-147. A worktree under one of these still counts as
+#: ob-memory-provider.ts:156-161. LEGACY worktree buckets,
+#: ``<root>/<area>/_worktrees/<name>``: still admitted while worktrees created
+#: before 2026-09-15 stand. A worktree under one of these still counts as
 #: Development work, but only when git agrees it is the same repository — see
 #: :func:`resolve_development_scope`.
 APPROVED_TEMP_WORKTREE_ROOTS: Final[tuple[Path, ...]] = (
-    Path("/Volumes/ThunderBolt/_tmp"),
+    Path("/srv/_tmp"),
     Path("/mnt/collab/tmp_space"),
 )
+
+#: ob-memory-provider.ts:162-165. The environment variable that relocates the
+#: one common worktree root, shared with the Development relocate gate so a
+#: test or a differently-rooted host moves both together.
+ORCA_WORKSPACES_ROOT_ENV_VAR: Final[str] = "ORCA_WORKSPACES_ROOT"
+
+
+def orca_workspaces_root() -> Path:
+    """Return the one common worktree place (Rico ruling 2026-09-15).
+
+    ``~/orca/workspaces/<project>/<name>`` is where ``orca worktree create``
+    and the Development ``WorktreeCreate`` hook both put every worktree. Read
+    per call, like :func:`development_root`, so an override set for a test is
+    seen without a re-import.
+
+    Returns:
+        The Orca workspaces root, overridden by ``ORCA_WORKSPACES_ROOT``.
+    """
+    override = os.environ.get(ORCA_WORKSPACES_ROOT_ENV_VAR, "").strip()
+    return Path(override) if override else Path.home() / "orca" / "workspaces"
+
+
+#: ob-memory-provider.ts:163-167. The variable naming one harness sibling of
+#: the common worktree root; every harness sibling is derived from its parent.
+WORKTREES_ROOT_ENV_VAR: Final[str] = "WORKTREES_ROOT"
+
+#: ob-memory-provider.ts:167. The TS default, verbatim.
+_DEFAULT_WORKTREES_ROOT: Final[Path] = Path(
+    "/srv/_tmp/_worktrees/native"
+)
+
+#: ob-memory-provider.ts:169. The harness subfolders admitted under the common
+#: root.
+WORKTREE_HARNESS_DIRS: Final[tuple[str, ...]] = ("native", "claude", "codex", "pi")
+
+
+def worktrees_root() -> Path:
+    """Return the harness worktree root (ob-memory-provider.ts:166-167).
+
+    Read per call, like :func:`orca_workspaces_root`, so an override set for a
+    test is seen without a re-import. Its PARENT is the common root holding
+    ``<harness>/<owner>/<repo>/<branch>``.
+
+    Returns:
+        ``WORKTREES_ROOT`` when set, else the TS default
+        ``/srv/_tmp/_worktrees/native``.
+    """
+    override = os.environ.get(WORKTREES_ROOT_ENV_VAR, "").strip()
+    return Path(override) if override else _DEFAULT_WORKTREES_ROOT
+
 
 #: ob-memory-provider.ts:1508 — anything outside this becomes a hyphen, so a
 #: project slug is always safe to embed in a state-file key or a shell string.
@@ -289,22 +343,34 @@ def _is_within(candidate: Path, root: Path) -> bool:
 
 
 def approved_temp_worktree_path(candidate: Path) -> bool:
-    """Report whether a path is an approved temp worktree location.
+    """Report whether a path is an approved worktree location.
 
-    The shape is fixed: ``<temp root>/<area>/_worktrees/<name>[/...]``. Requiring
-    the ``_worktrees`` bucket is what stops an arbitrary scratch directory from
-    inheriting Development enforcement just by sitting on the same volume.
+    Two shapes are admitted (ob-memory-provider.ts ``approvedTempWorktreePath``):
+
+    - ``<orca root>/<project>/<name>[/...]`` — the one common worktree place
+      (Rico ruling 2026-09-15). The project directory alone is not a worktree,
+      so at least two segments below the root are required.
+    - ``<common root>/<native|claude|codex|pi>/<owner>/<repo>/<branch>`` — the
+      harness worktree root (ob-memory-provider.ts:1561-1584); see
+      :func:`_approved_common_worktree_path`.
+    - ``<temp root>/<area>/_worktrees/<name>[/...]`` — legacy. Requiring the
+      ``_worktrees`` bucket is what stops an arbitrary scratch directory from
+      inheriting Development enforcement just by sitting on the same volume.
 
     Args:
         candidate: Directory to test.
 
     Returns:
-        True when the path matches that shape under an approved root.
+        True when the path matches either shape under its root.
     """
     try:
         absolute = candidate.resolve()
     except OSError:
         return False
+    if _approved_orca_worktree_path(absolute):
+        return True
+    if _approved_common_worktree_path(absolute):
+        return True
     for temp_root in APPROVED_TEMP_WORKTREE_ROOTS:
         try:
             relative = absolute.relative_to(temp_root.resolve())
@@ -319,6 +385,53 @@ def approved_temp_worktree_path(candidate: Path) -> bool:
             continue
         return True
     return False
+
+
+def _approved_orca_worktree_path(absolute: Path) -> bool:
+    """Report whether an already-resolved path is ``<orca root>/<project>/<name>``.
+
+    Args:
+        absolute: A resolved absolute directory.
+
+    Returns:
+        True for at least two clean segments below the Orca workspaces root.
+    """
+    try:
+        relative = absolute.relative_to(orca_workspaces_root().resolve())
+    except (OSError, ValueError):
+        return False
+    parts = relative.parts
+    if len(parts) < 2:
+        return False
+    return not any(part in ("", ".", "..") for part in parts)
+
+
+def _approved_common_worktree_path(absolute: Path) -> bool:
+    """Report whether a resolved path is ``<common>/<harness>/<owner>/<repo>/<branch>``.
+
+    Mirrors ``approvedCommonWorktreePath`` (ob-memory-provider.ts:1575-1584):
+    the common root is the parent of :func:`worktrees_root`, ``parts[0]`` must
+    be in :data:`WORKTREE_HARNESS_DIRS`, at least three parts are required, and
+    every part after the harness is a clean segment. The current 4-level
+    layout is ``<harness>/<owner>/<repo>/<branch>``.
+
+    Args:
+        absolute: A resolved absolute directory.
+
+    Returns:
+        True for a known harness directory followed by at least two clean
+        segments.
+    """
+    try:
+        relative = absolute.relative_to(worktrees_root().resolve().parent)
+    except (OSError, ValueError):
+        return False
+    parts = relative.parts
+    if len(parts) < 3:
+        return False
+    if parts[0] not in WORKTREE_HARNESS_DIRS:
+        return False
+    return not any(part in ("", ".", "..") for part in parts[1:])
 
 
 def _project_slug(cwd: Path) -> str:

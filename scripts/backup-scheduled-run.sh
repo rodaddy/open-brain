@@ -29,10 +29,10 @@
 
 set -uo pipefail
 
-REPO_DIR="${OPENBRAIN_BACKUP_REPO_DIR:-/Volumes/ThunderBolt/open-brain/app}"
-BACKUP_ROOT="${OPENBRAIN_BACKUP_ROOT:-/Volumes/ThunderBolt/open-brain/backups}"
-ENV_FILE="${OPENBRAIN_BACKUP_ENV_FILE:-/Users/rico/.config/open-brain/env}"
-BUN_BIN="${BUN_BIN:-}"
+REPO_DIR="${OPENBRAIN_BACKUP_REPO_DIR:-/srv/open-brain/app}"
+BACKUP_ROOT="${OPENBRAIN_BACKUP_ROOT:-/srv/open-brain/backups}"
+ENV_FILE="${OPENBRAIN_BACKUP_ENV_FILE:-/home/user/.config/open-brain/env}"
+NODE_BIN="${NODE_BIN:-/opt/homebrew/opt/node@24/bin/node}"
 
 log() {
   printf '%s openbrain-backup %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"
@@ -46,22 +46,17 @@ fatal() {
 [[ -d "$REPO_DIR" ]] || fatal "repo dir does not exist: $REPO_DIR"
 [[ -r "$ENV_FILE" ]] || fatal "env file is not readable: $ENV_FILE"
 
-# launchd gives a job a near-empty environment, so bun is resolved explicitly
-# rather than trusted to be on PATH. Same resolution order the deploy uses.
-if [[ -z "$BUN_BIN" ]]; then
-  if [[ -x "/Users/rico/Library/Application Support/reflex/bun/bin/bun" ]]; then
-    BUN_BIN="/Users/rico/Library/Application Support/reflex/bun/bin/bun"
-  elif command -v bun >/dev/null 2>&1; then
-    BUN_BIN="$(command -v bun)"
-  else
-    fatal "bun not found (launchd jobs inherit almost no PATH; set BUN_BIN)"
-  fi
-fi
-
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
+
+# The environment file may select a different pinned Node executable. Validate
+# the final value after sourcing it, then put its directory first so child tools
+# using `#!/usr/bin/env node` resolve the same runtime under launchd.
+[[ -x "$NODE_BIN" ]] || fatal "node is not executable: $NODE_BIN"
+export PATH="$(dirname "$NODE_BIN"):${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+log "runtime node=$NODE_BIN"
 
 # DB_NAME selects WHICH BRAIN gets backed up. #676 records that it silently
 # defaults to open_brain; a scheduled job that quietly backs up the wrong
@@ -82,7 +77,7 @@ log "starting backup of $DB_NAME on $DB_HOST -> $SET_DIR"
 
 cd "$REPO_DIR" || fatal "could not enter repo dir: $REPO_DIR"
 
-"$BUN_BIN" run "$REPO_DIR/scripts/backup.ts" --out "$SET_DIR"
+"$NODE_BIN" "$REPO_DIR/scripts/backup.ts" --out "$SET_DIR"
 backup_rc=$?
 
 if [[ "$backup_rc" -eq 4 ]]; then
@@ -99,7 +94,7 @@ log "backup written; verifying the set that was just created"
 # Verify the SET WE JUST WROTE, not the root. Verifying the root would pass on
 # the strength of some OTHER, older set while today's was corrupt — the exact
 # shape of misreading that let #677 sit undetected for 16 days.
-"$BUN_BIN" run "$REPO_DIR/scripts/backup-verify.ts" --dir "$SET_DIR"
+"$NODE_BIN" "$REPO_DIR/scripts/backup-verify.ts" --dir "$SET_DIR"
 verify_rc=$?
 
 if [[ "$verify_rc" -ne 0 ]]; then
@@ -110,7 +105,7 @@ fi
 # answers "is there a CURRENT restorable backup", which is a different question
 # from "did tonight's run succeed" — a job that has been failing silently for a
 # week passes the first and fails this.
-"$BUN_BIN" run "$REPO_DIR/scripts/backup-verify.ts" --dir "$BACKUP_ROOT" --max-age-hours 26
+"$NODE_BIN" "$REPO_DIR/scripts/backup-verify.ts" --dir "$BACKUP_ROOT" --max-age-hours 26
 stale_rc=$?
 
 if [[ "$stale_rc" -eq 3 ]]; then

@@ -13,7 +13,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -21,20 +21,28 @@ import pino from "pino";
 import { Pool } from "pg";
 import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { registerPromotionTools } from "./promotion.ts";
-import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import { sharedNamespaceConfig } from "./shared-namespace.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
+import type { JevConfig, JevFetch } from "../integrations/jev.ts";
 
 const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
 const NAMESPACE = `promotion-pg-${process.pid}`;
-const SHARED = sharedNamespaceConfig();
+const SHARED = sharedNamespaceConfig(DEFAULT_SHARED_NAMESPACE_NAMES);
 
 async function callTool(
   tool: string,
   namespace: string,
   args: Record<string, unknown>,
-  role = "promoter",
+  as:
+    | string
+    | {
+        role: string;
+        jevShareScreen: { config: JevConfig; fetchFn?: JevFetch };
+      } = "promoter",
 ): Promise<{ isError: boolean; body: Record<string, unknown> }> {
+  const role = typeof as === "string" ? as : as.role;
+  const jevShareScreen = typeof as === "string" ? undefined : as.jevShareScreen;
   const server = new McpServer({ name: "promotion-test", version: "1.0.0" });
   registerPromotionTools(server, {
     pool,
@@ -42,9 +50,9 @@ async function callTool(
     logger: pino({ level: "silent" }),
     embeddingModel: "promotion-test",
     sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
+    ...(jevShareScreen ? { jevShareScreen } : {}),
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -86,7 +94,7 @@ const SHAREABLE =
  *
  * Deliberately NOT a token-shaped literal. An earlier draft used a fake
  * `ghp_`-prefixed string, which is exactly what a credential scanner is built
- * to flag -- and GitGuardian duly failed the PR on it. A fake secret in a
+ * to flag -- and the secret scanner duly failed the PR on it. A fake secret in a
  * fixture still costs a real triage, so this uses the `url_userinfo_credential`
  * detector instead: it exercises the same `reject-secret` path with a shape no
  * scanner mistakes for a live key.
@@ -104,6 +112,38 @@ const SECRET_ISH =
  */
 let shareableId = "";
 let secretId = "";
+
+/** Issue 1618 B3: rows for the Jev share-screen case, in their own lane. */
+const SCREEN_NS = `${NAMESPACE}-b3`;
+const PASSES =
+  "The B3 screen fixture: promotion runs dry by default and writes provenance.";
+const HELD =
+  "The B3 screen fixture: a low-confidence shareable answer is held for review.";
+const jevConfig: JevConfig = {
+  enabled: true,
+  apiKey: "test-key",
+  baseUrl: "https://jev.test/v1",
+  model: "jev-test",
+  timeoutMs: 1_000,
+  maxRequestBytes: 192_000,
+  maxStateQuestionBytes: 96_000,
+};
+const answer = (confidence: number): JevFetch =>
+  (async () =>
+    new Response(
+      JSON.stringify({
+        model: "jev-test",
+        answers: {
+          share_screen: {
+            type: "choice",
+            choice: "shareable",
+            probabilities: { shareable: confidence },
+            confidence,
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+    )) as unknown as JevFetch;
 
 beforeAll(async () => {
   const shareable = await pool.query(
@@ -123,6 +163,11 @@ afterAll(async () => {
   await pool.query(
     `DELETE FROM thoughts WHERE namespace = $1 AND content = ANY($2::text[])`,
     [SHARED.physicalSharedNamespace, [SHAREABLE, SECRET_ISH]],
+  );
+  await pool.query(`DELETE FROM thoughts WHERE namespace = $1`, [SCREEN_NS]);
+  await pool.query(
+    `DELETE FROM thoughts WHERE namespace = $1 AND content = ANY($2::text[])`,
+    [SHARED.physicalSharedNamespace, [PASSES, HELD]],
   );
   await pool.end();
 });
@@ -184,6 +229,45 @@ describe("promote_shared promotion rules (live Postgres)", () => {
     expect(String(body.text)).toContain("Refused");
     expect(await sharedCount(SECRET_ISH)).toBe(before);
   });
+
+  test("shareable 0.95 promotes with promotion_confidence; 0.7 is held and writes nothing", async () => {
+    const seed = async (content: string): Promise<string> =>
+      (
+        await pool.query(
+          `INSERT INTO thoughts (content, namespace, created_by) VALUES ($1, $2, $2) RETURNING id`,
+          [content, SCREEN_NS],
+        )
+      ).rows[0].id;
+    const passId = await seed(PASSES);
+    const heldId = await seed(HELD);
+
+    const passed = await callTool(
+      "promote_shared",
+      SCREEN_NS,
+      { table: "thoughts", id: passId, dry_run: false },
+      {
+        role: "promoter",
+        jevShareScreen: { config: jevConfig, fetchFn: answer(0.95) },
+      },
+    );
+    expect(passed.isError).toBe(false);
+    const { rows } = await pool.query(
+      `SELECT promoted_from FROM thoughts WHERE namespace = $1 AND content = $2`,
+      [SHARED.physicalSharedNamespace, PASSES],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].promoted_from.promotion_confidence).toBe(0.95);
+
+    const held = await callTool(
+      "promote_shared",
+      SCREEN_NS,
+      { table: "thoughts", id: heldId, dry_run: false },
+      { role: "promoter", jevShareScreen: { config: jevConfig, fetchFn: answer(0.7) } },
+    );
+    expect(held.isError).toBe(true);
+    expect(String(held.body.text)).toContain("manual-review");
+    expect(await sharedCount(HELD)).toBe(0);
+  });
 });
 
 describe("promotion identity rules and list_namespaces (live Postgres)", () => {
@@ -205,11 +289,10 @@ describe("promotion identity rules and list_namespaces (live Postgres)", () => {
     // grants the promoter identity cross-namespace work, and
     // `namespacePredicate` returns an empty clause for it. Asserting a refusal
     // here would encode the opposite of the design and fail for the right code.
-    const asPromoter = await callTool(
-      "promote_shared",
-      `${NAMESPACE}-stranger`,
-      { table: "thoughts", id: shareableId },
-    );
+    const asPromoter = await callTool("promote_shared", `${NAMESPACE}-stranger`, {
+      table: "thoughts",
+      id: shareableId,
+    });
     expect(asPromoter.isError).toBe(false);
 
     // The lane-scoped identity is where the boundary actually binds. An agent
@@ -226,12 +309,7 @@ describe("promotion identity rules and list_namespaces (live Postgres)", () => {
   });
 
   test("list_namespaces reports per-table counts for the caller's lane", async () => {
-    const { isError, body } = await callTool(
-      "list_namespaces",
-      NAMESPACE,
-      {},
-      "admin",
-    );
+    const { isError, body } = await callTool("list_namespaces", NAMESPACE, {}, "admin");
     expect(isError).toBe(false);
     const namespaces = body.namespaces as Array<{
       namespace: string;

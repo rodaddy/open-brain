@@ -1,0 +1,12 @@
+# Test fixtures that deliberately carry fake secrets to prove redaction works.
+# Each was checked by hand: none is a real credential.
+contracts/server/server-conversation-ingest-gate.fixture.json:generic-api-key:24
+python/openbrain-memory/tests/test_agent.py:generic-api-key:718
+python/openbrain-memory/tests/test_client.py:generic-api-key:2080
+python/openbrain-memory/tests/test_client.py:generic-api-key:2100
+python/openbrain-memory/tests/test_client.py:generic-api-key:3051
+python/openbrain-memory/tests/test_client.py:generic-api-key:3062
+python/openbrain-memory/tests/test_client.py:generic-api-key:3085
+python/openbrain-memory/tests/test_client.py:generic-api-key:3089
+scripts/ob-backfill.test.ts:generic-api-key:18
+scripts/ob-backfill.test.ts:generic-api-key:257

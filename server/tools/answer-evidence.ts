@@ -49,14 +49,12 @@ function clampScore(value: number): number {
 }
 
 /** Relevance score for one row, from whichever arm ranked it. */
-export function scoreFor(row: SearchRow): number {
-  return clampScore(
-    row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
-  );
+function scoreFor(row: SearchRow): number {
+  return clampScore(row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5));
 }
 
 /** Collapse whitespace and shorten one row's quotable excerpt. */
-export function excerptFor(row: SearchRow): string | null {
+function excerptFor(row: SearchRow): string | null {
   const excerpt = (row.content_preview ?? "")
     .replace(/\s+/g, " ")
     .trim()
@@ -72,7 +70,7 @@ export function excerptFor(row: SearchRow): string | null {
  * silently presenting undateable evidence as current is the error this exists to
  * prevent.
  */
-export function isStale(row: SearchRow, maxAgeDays: number): boolean {
+function isStale(row: SearchRow, maxAgeDays: number): boolean {
   const raw = row.source_ref?.last_updated_at ?? row.source_ref?.created_at;
   if (!raw) return true;
   const parsed = new Date(raw);
@@ -108,9 +106,7 @@ function useTargets(text: string, pattern: RegExp): Set<string> {
  * still-current constraint. The tool surfaces the conflict and lets the caller
  * decide.
  */
-export function hasConflictingUseTargets(
-  evidence: readonly Evidence[],
-): boolean {
+function hasConflictingUseTargets(evidence: readonly Evidence[]): boolean {
   const negative = new Set<string>();
   const affirmative = new Set<string>();
   for (const item of evidence) {

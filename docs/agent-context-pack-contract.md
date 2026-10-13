@@ -15,7 +15,7 @@ Research receipt: PR #225, `docs/realtime-agent-memory-research.md`.
 ## Purpose
 
 `agent_context_pack` is the planned first-class realtime memory surface for
-Hermes and future agents. It returns one scoped, inspectable, prompt-ready
+future agents. It returns one scoped, inspectable, prompt-ready
 context bundle so a runtime does not have to stitch together lane reads, broad
 semantic search, repo facts, profile guidance, and stale-evidence warnings on
 every turn.
@@ -56,7 +56,7 @@ Clients own:
 - retry/spool behavior when Open Brain is unavailable.
 
 Open Brain remains durable operational memory. It is not raw transcript storage,
-not a behavior layer, and not the authority for Hermes profile policy.
+not a behavior layer and not the authority for client profile policy.
 
 ## Request Shape
 
@@ -494,18 +494,18 @@ Guarantees, all inherited from the shared pack path:
   `warnings.degraded_sources` with an empty pointer set; the reflex itself does
   not error. Only auth/namespace denial returns an error payload.
 
-## Hermes One-Call Example
+## One-Call Example
 
-Hermes should be able to request:
+A client can request:
 
 ```json
 {
   "agent": "nagatha",
   "platform": "discord",
-  "server_id": "rodaddy-live",
+  "server_id": "example-guild",
   "channel_id": "ob-dev",
   "thread_id": null,
-  "session_key": "discord:rodaddy-live:ob-dev:nagatha",
+  "session_key": "discord:example-guild:ob-dev:nagatha",
   "query": "what is the actual current state of OB?",
   "requested_sections": [
     "working_set",
@@ -647,7 +647,7 @@ not convert it into a future option.
   path of every tool call and inverts that guarantee.
 - Contract advertisement: `get_contract` advertises tools and the pack
   envelope. A side-channel `_meta` capability is invisible to schema-driven
-  clients (mcp2cli, generated skills, Hermes runtimes) and bypasses
+  clients (mcp2cli and generated skills) and bypasses
   `requested_sections`/budget negotiation.
 - Downstream client impact: every downstream runtime would need `_meta`
   parsing changes with no schema to validate against. The pack path keeps the
@@ -728,7 +728,7 @@ therefore applies: deploy through the current gated production-host workflow, ve
 hosted v22 manifest and changed operations, complete the authoritative rtech-mcps
 handoff, then refresh and verify mcp2cli through the documented local-direct and
 daemon-credential paths, regenerate skills when agent guidance changes, and
-complete applicable rtech-hermes and Hermes canaries. Daemon-routed `mcp2cli cache warm open-brain --force` remains a
+complete applicable client canaries. Daemon-routed `mcp2cli cache warm open-brain --force` remains a
 known-broken path under `rodaddy/mcp2cli#60` and is not a required command while
 that issue is open. Those live mutations are intentionally deferred from this
 local candidate.

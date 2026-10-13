@@ -1,3 +1,9 @@
+/**
+ * The maintenance queue's job contract: row/job shapes, the queue port, the
+ * non-retryable terminal marker, and the shared enqueue validation and
+ * retry/backoff rules. Pure — no database access and no SQL execution; the
+ * durable statements live in `./maintenance-queue.ts`.
+ */
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BACKOFF_MAX_MS = 300_000;
@@ -380,6 +386,28 @@ export function safeMaintenanceErrorCategory(error: unknown): MaintenanceErrorCa
   if (error instanceof RangeError) return "range_error";
   if (error instanceof Error) return "error";
   return "non_error";
+}
+
+const MAINTENANCE_ERROR_CODE_PATTERN = /^[A-Z0-9_]{1,16}$/;
+
+/**
+ * Content-free identity of a thrown value for the failed-job log: the Error
+ * subclass name and a short machine code (SQLSTATE like `23502`, errno like
+ * `ENOENT`). Never reads the error's text, so no payload can leak (issue 1529).
+ */
+export function safeMaintenanceErrorIdentity(error: unknown): {
+  error_name: string | null;
+  error_code: string | null;
+} {
+  if (!(error instanceof Error)) return { error_name: null, error_code: null };
+  const code: unknown = (error as { code?: unknown }).code;
+  return {
+    error_name: error.constructor.name,
+    error_code:
+      typeof code === "string" && MAINTENANCE_ERROR_CODE_PATTERN.test(code)
+        ? code
+        : null,
+  };
 }
 
 export function maintenanceBackoffMs(

@@ -79,7 +79,7 @@ def test_absent_root_logs_a_diagnosis_naming_the_measured_cwd(
     The cwd is the one the caller reported, never a path composed from the
     absent root -- that substitution is the Air symptom.
     """
-    measured = "/Users/rico/some-real-directory"
+    measured = "/home/user/some-real-directory"
 
     hook_receipts._warn_missing_development_root("stop", measured)
 

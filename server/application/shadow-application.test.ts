@@ -16,7 +16,8 @@
  * rather than being loosened -- it is the same pin, moved to the new reality,
  * so an accidental revert of `server/state.ts` still fails here.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "../testing/expect-defined.ts";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
@@ -98,7 +99,8 @@ async function listen(
 
 afterEach(async () => {
   if (live.server) {
-    await new Promise<void>((resolve) => live.server!.close(() => resolve()));
+    const server = expectDefined(live.server, "the live listener");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     live.server = undefined;
   }
   if (live.application) {
@@ -182,7 +184,12 @@ describe("shadow application composition", () => {
     expect(body.nats.requested_transport).toBe("nats");
     expect(body.nats.availability).toBe("not_runtime_available");
   });
+});
 
+// Second seam, same rule as the one below: everything above composes the app
+// and asserts what `/health` reports, everything here asserts the ORDER things
+// are stopped in. Names, bodies, and relative order are untouched.
+describe("shadow application shutdown ordering", () => {
   it("drains background runtimes on close, after the session boundary", async () => {
     // The application boundary DECLARES it owns "shutdown ordering", and until
     // this port existed `close()` closed sessions and nothing else -- so a
@@ -319,7 +326,14 @@ describe("shadow application composition", () => {
     await expect(application.close()).rejects.toThrow("stop failed");
     expect(stopped).toEqual(["broken", "maintenance"]);
   });
+});
 
+// Split from the block above at the seam the file already had: everything down
+// to here composes an application and drives its shutdown ordering without a
+// listener, and everything below binds an ephemeral port and drives HTTP. The
+// shared `listen`/`afterEach` fixture is unchanged and still serves both, and
+// no test name, body, or relative order moved.
+describe("shadow application over a live listener", () => {
   it("requires authentication on every /mcp method", async () => {
     const base = await listen();
     for (const method of ["POST", "GET", "DELETE"]) {

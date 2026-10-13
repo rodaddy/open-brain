@@ -1,5 +1,5 @@
 /**
- * Append-only migration runner for the existing `src/db/migrations` ledger.
+ * Append-only migration runner for the existing `server/db/migrations` ledger.
  *
  * Design authority: `docs/code-brain-design.md` section 7 preserves sequencing;
  * `docs/sme/correctness.md` requires exact-prefix history validation and
@@ -29,7 +29,8 @@ function normalizedHistory(
       normalized.add(file);
       continue;
     }
-    if (!repositorySet.has(replacement) || !appliedSet.has(replacement)) return undefined;
+    if (!repositorySet.has(replacement) || !appliedSet.has(replacement))
+      return undefined;
   }
   return [...normalized].sort();
 }
@@ -72,9 +73,16 @@ export async function runMigrations(
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
-    const files = (await readdir(migrationsDirectory)).filter((file) => file.endsWith(".sql"));
-    const appliedRows = await client.query<{ filename: string }>("SELECT filename FROM _migrations");
-    const pending = pendingMigrationFiles(appliedRows.rows.map((row) => row.filename), files);
+    const files = (await readdir(migrationsDirectory)).filter((file) =>
+      file.endsWith(".sql"),
+    );
+    const appliedRows = await client.query<{ filename: string }>(
+      "SELECT filename FROM _migrations",
+    );
+    const pending = pendingMigrationFiles(
+      appliedRows.rows.map((row) => row.filename),
+      files,
+    );
     const newlyApplied: string[] = [];
     for (const file of pending) {
       try {
@@ -96,7 +104,10 @@ export async function runMigrations(
     return newlyApplied;
   } finally {
     try {
-      if (lockHeld) await client.query("SELECT pg_advisory_unlock(hashtext(current_database() || ':' || current_schema() || ':openbrain-migrations'))");
+      if (lockHeld)
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtext(current_database() || ':' || current_schema() || ':openbrain-migrations'))",
+        );
     } finally {
       client.release();
     }

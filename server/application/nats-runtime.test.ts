@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   buildEnvelope,
   envelopeFromBytes,
@@ -11,17 +11,17 @@ import {
   resolveContextPackSubject,
   summarizeNatsUrlForLog,
 } from "./nats-runtime.ts";
-import { agentContextPackInputSchema } from "../../src/tools/agent-context-pack.ts";
+import { agentContextPackInputSchema } from "../tools/context-pack-args.ts";
 
 const requestPayload = {
   operation: "agent_context_pack",
   identity: {
     agent: "nagatha",
     platform: "discord",
-    server_id: "rodaddy-live",
+    server_id: "example-guild",
     channel_id: "open-brain",
     thread_id: null,
-    session_key: "discord:rodaddy-live:open-brain:nagatha",
+    session_key: "discord:example-guild:open-brain:nagatha",
   },
   body: {
     query: "what is the current task state?",
@@ -329,9 +329,9 @@ describe("planNatsContextPackBridge", () => {
         arguments: {
           agent: "nagatha",
           platform: "discord",
-          server_id: "rodaddy-live",
+          server_id: "example-guild",
           channel_id: "open-brain",
-          session_key: "discord:rodaddy-live:open-brain:nagatha",
+          session_key: "discord:example-guild:open-brain:nagatha",
           query: "what is the current task state?",
           requested_sections: ["working_set", "durable_memory"],
           include_unreviewed_recovery: true,

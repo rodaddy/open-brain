@@ -9,7 +9,7 @@
  * legacy name, and a write aimed somewhere else — and each is exercised so a
  * later edit cannot collapse them into one.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { AuthInfo } from "../types.ts";
 import type { SharedNamespaceGroup } from "../config/env-groups.ts";
 import {
@@ -53,15 +53,15 @@ describe("isLegacySharedNamespace", () => {
 
 describe("shouldRejectLegacySharedWrite", () => {
   it("refuses a non-admin write into the frozen legacy namespace", () => {
-    expect(
-      shouldRejectLegacySharedWrite(authAs("agent"), "collab", CONFIGURED),
-    ).toBe(true);
+    expect(shouldRejectLegacySharedWrite(authAs("agent"), "collab", CONFIGURED)).toBe(
+      true,
+    );
   });
 
   it("allows both admin roles through", () => {
-    expect(
-      shouldRejectLegacySharedWrite(authAs("admin"), "collab", CONFIGURED),
-    ).toBe(false);
+    expect(shouldRejectLegacySharedWrite(authAs("admin"), "collab", CONFIGURED)).toBe(
+      false,
+    );
     expect(
       shouldRejectLegacySharedWrite(authAs("ob-admin"), "collab", CONFIGURED),
     ).toBe(false);
@@ -83,8 +83,8 @@ describe("shouldRejectLegacySharedWrite", () => {
   });
 
   it("refuses nothing when no legacy name is configured", () => {
-    expect(
-      shouldRejectLegacySharedWrite(authAs("agent"), "", UNCONFIGURED),
-    ).toBe(false);
+    expect(shouldRejectLegacySharedWrite(authAs("agent"), "", UNCONFIGURED)).toBe(
+      false,
+    );
   });
 });

@@ -47,9 +47,17 @@ function requireEnvelopeString(field: string, value: unknown): string {
 }
 
 function optEnvelopeString(value: unknown): string | null {
-  // Mirror fleet's _opt_str: null stays null; anything else is stringified so a
-  // numeric "to": 123 does not masquerade as a string downstream.
-  return value === null || value === undefined ? null : String(value);
+  // Mirror fleet's _opt_str: null stays null; a scalar is stringified so a
+  // numeric "to": 123 does not masquerade as a string downstream. An object or
+  // array has no scalar rendering, so it is treated as absent rather than
+  // carried through as "[object Object]".
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value.toString();
+  }
+  if (typeof value === "bigint") return value.toString();
+  return null;
 }
 
 export interface BuildEnvelopeInput {

@@ -6,7 +6,7 @@
  * WRONG rather than absent: a hardcoded namespace list still returns rows, it
  * just returns the wrong set. Only the emitted predicate distinguishes the two.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -92,7 +92,10 @@ describe("session_load scopes reads from the auth-derived predicate", () => {
   test("the project filter and the namespace predicate get distinct placeholders", async () => {
     const { client, queries } = await clientCapturingQueries("agent", "rico");
 
-    await client.callTool({ name: "session_load", arguments: { project: "open-brain" } });
+    await client.callTool({
+      name: "session_load",
+      arguments: { project: "open-brain" },
+    });
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("project = $1");

@@ -6,13 +6,13 @@
  * being read from the environment here: `.oxlintrc.json` permits `process.env`
  * only at the composition root, and the doctor already receives its values
  * through `OperatorDoctorOptions`. The legacy zero-argument call form lives on
- * in the `src/db/pool.ts` L5 adapter.
+ * in the legacy pool adapter carried across in the L5 move (issue 864).
  */
 import pg from "pg";
 import pgvector from "pgvector/pg";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
-import type { PoolHealth } from "../../src/types.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
+import type { PoolHealth } from "../types.ts";
 
 /** The connection settings `createPool` used to read from the environment. */
 export interface PoolSettings {
@@ -30,8 +30,8 @@ export interface PoolSettings {
   readonly max: number;
 }
 
-function registerVectorTypes(client: pg.PoolClient): void {
-  void pgvector.registerTypes(client).catch((err: unknown) => {
+async function registerVectorTypes(client: pg.ClientBase): Promise<void> {
+  await pgvector.registerTypes(client).catch((err: unknown) => {
     // Stable event name, not a sentence: Loki filters on `message`, so the
     // remediation text moves into a field where it does not fragment the
     // query surface. The pg fields come along now -- an extension that is
@@ -44,11 +44,34 @@ function registerVectorTypes(client: pg.PoolClient): void {
   });
 }
 
+/** Behaviour switches for `createPool` that are not pg connection config. */
+export interface CreatePoolOptions {
+  /**
+   * Register pgvector types on every new client (default true). The migration
+   * runner passes false: DDL never reads vector values, and on a fresh
+   * database the extension does not exist until a migration creates it, so
+   * registration there could only fail and log noise (issue 1515).
+   */
+  readonly registerVectorTypes?: boolean;
+}
+
 export function createPool(
   settings: PoolSettings,
   overrides?: Partial<pg.PoolConfig>,
+  options: CreatePoolOptions = {},
 ): pg.Pool {
-  const pool = new pg.Pool({
+  // Registration runs from pg-pool's `onConnect` hook (pg-pool 3.13), which the
+  // pool awaits before it hands a new client to its first caller. The old
+  // `connect` event was not awaited, so registration overlapped the caller's
+  // first query on the same client and pg warned "already executing a query"
+  // (issue 1502). The hook is chosen over a pool-scoped type parser because it
+  // keeps pgvector's own registration unchanged. It never rejects: a failure
+  // is logged and the client is still handed out, as before, since a rejected
+  // hook would end the client and fail the checkout. @types/pg does not declare
+  // the option yet, hence the widened config type.
+  const config: pg.PoolConfig & {
+    onConnect?: (client: pg.ClientBase) => Promise<void>;
+  } = {
     host: settings.host,
     port: settings.port,
     database: settings.database,
@@ -60,9 +83,9 @@ export function createPool(
     maxUses: 7500,
     statement_timeout: 30000,
     ...overrides,
-  });
-
-  pool.on("connect", registerVectorTypes);
+  };
+  if (options.registerVectorTypes !== false) config.onConnect = registerVectorTypes;
+  const pool = new pg.Pool(config);
 
   pool.on("error", (err) => {
     logger.error("pool_error", describeError(err));

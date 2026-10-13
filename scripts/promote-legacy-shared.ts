@@ -1,15 +1,15 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { createPool } from "../src/db/pool.ts";
-import { logger } from "../src/logger.ts";
-import { promoteEntry } from "../src/promotion-service.ts";
 import {
+  ALL_TABLES,
   canonicalNamespace,
+  createPool,
+  logger,
+  promoteEntry,
   sharedNamespaceConfig,
-} from "../src/shared-namespace.ts";
-import { ALL_TABLES } from "../src/tools/table-constants.ts";
-import type { AuthInfo, Table } from "../src/types.ts";
+} from "./settings.ts";
+import type { AuthInfo, Table } from "./settings.ts";
 
 interface Cursor {
   created_at?: string;
@@ -66,7 +66,8 @@ interface Args {
 const TABLE_CONTENT_SQL: Record<Table, string> = {
   thoughts: "content",
   decisions: "title || ' ' || COALESCE(rationale, '')",
-  relationships: "person_name || ' ' || COALESCE(context, '') || ' ' || COALESCE(notes, '')",
+  relationships:
+    "person_name || ' ' || COALESCE(context, '') || ' ' || COALESCE(notes, '')",
   projects: "name || ' ' || COALESCE(description, '')",
   sessions: "COALESCE(project, '') || ' ' || COALESCE(summary, '')",
 };
@@ -74,7 +75,7 @@ const TABLE_CONTENT_SQL: Record<Table, string> = {
 function usage(exitCode = 2): never {
   console.error(
     [
-      "Usage: bun run scripts/promote-legacy-shared.ts [--apply] [--once]",
+      "Usage: node scripts/promote-legacy-shared.ts [--apply] [--once]",
       "       [--source-namespace collab] [--target-namespace shared-kb]",
       "       [--state-file <path>] [--tables thoughts,decisions]",
       "       [--batch-size 20] [--max-apply 5] [--delay-ms 250]",
@@ -88,9 +89,88 @@ function usage(exitCode = 2): never {
   process.exit(exitCode);
 }
 
-function parseArgs(argv: string[]): Args {
+/** The `--flag value` options, each keyed by the field it sets. */
+const STRING_OPTIONS: Record<
+  string,
+  "sourceNamespace" | "targetNamespace" | "stateFile"
+> = {
+  "--source-namespace": "sourceNamespace",
+  "--target-namespace": "targetNamespace",
+  "--state-file": "stateFile",
+};
+
+const NUMBER_OPTIONS: Record<
+  string,
+  "batchSize" | "maxApply" | "delayMs" | "intervalMs" | "minContentLength"
+> = {
+  "--batch-size": "batchSize",
+  "--max-apply": "maxApply",
+  "--delay-ms": "delayMs",
+  "--interval-ms": "intervalMs",
+  "--min-content-length": "minContentLength",
+};
+
+const BOOLEAN_OPTIONS: Record<string, { field: "apply" | "loop"; value: boolean }> = {
+  "--apply": { field: "apply", value: true },
+  "--once": { field: "loop", value: false },
+  "--loop": { field: "loop", value: true },
+};
+
+/** The valued options, applied by table lookup; null when `arg` names none. */
+function applyValuedArgument(args: Args, arg: string, value: string): boolean {
+  const stringField = STRING_OPTIONS[arg];
+  if (stringField) {
+    args[stringField] = value;
+    return true;
+  }
+  const numberField = NUMBER_OPTIONS[arg];
+  if (numberField) {
+    args[numberField] = Number(value);
+    return true;
+  }
+  if (arg === "--tables") {
+    args.tables = parseTables(value);
+    return true;
+  }
+  return false;
+}
+
+/** Apply one argv token to `args`; returns the index of the last token consumed. */
+function applyArgument(args: Args, argv: string[], index: number): number {
+  const arg = argv[index] ?? "";
+  const booleanOption = BOOLEAN_OPTIONS[arg];
+  if (booleanOption) {
+    args[booleanOption.field] = booleanOption.value;
+    return index;
+  }
+  if (applyValuedArgument(args, arg, argv[index + 1] ?? "")) return index + 1;
+  if (arg === "--help" || arg === "-h") usage(0);
+  console.error(`Unknown argument: ${arg}`);
+  usage();
+}
+
+function isInRange(value: number, min: number, max = Number.MAX_SAFE_INTEGER): boolean {
+  return Number.isInteger(value) && value >= min && value <= max;
+}
+
+/** True when every parsed field is within the shape the promoter accepts. */
+function argsAreValid(args: Args): boolean {
+  return (
+    Boolean(args.sourceNamespace) &&
+    Boolean(args.targetNamespace) &&
+    Boolean(args.stateFile) &&
+    args.tables.length > 0 &&
+    isInRange(args.batchSize, 1, 250) &&
+    isInRange(args.maxApply, 0, 100) &&
+    isInRange(args.delayMs, 0) &&
+    isInRange(args.intervalMs, 1000) &&
+    isInRange(args.minContentLength, 0)
+  );
+}
+
+function defaultArgs(): Args {
   const config = sharedNamespaceConfig();
-  const args: Args = {
+  return {
     apply: false,
     sourceNamespace: config.legacySharedNamespace,
     targetNamespace: config.canonicalSharedNamespace,
@@ -102,59 +182,20 @@ function parseArgs(argv: string[]): Args {
     maxApply: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_MAX_APPLY ?? 5),
     delayMs: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_DELAY_MS ?? 250),
     loop: false,
-    intervalMs: Number(
-      process.env.OPENBRAIN_LEGACY_PROMOTER_INTERVAL_MS ?? 60000,
-    ),
+    intervalMs: Number(process.env.OPENBRAIN_LEGACY_PROMOTER_INTERVAL_MS ?? 60000),
     minContentLength: Number(
       process.env.OPENBRAIN_LEGACY_PROMOTER_MIN_CONTENT_LENGTH ?? 24,
     ),
   };
+}
 
+function parseArgs(argv: string[]): Args {
+  const args = defaultArgs();
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--apply") args.apply = true;
-    else if (arg === "--once") args.loop = false;
-    else if (arg === "--loop") args.loop = true;
-    else if (arg === "--source-namespace") args.sourceNamespace = argv[++i] ?? "";
-    else if (arg === "--target-namespace") args.targetNamespace = argv[++i] ?? "";
-    else if (arg === "--state-file") args.stateFile = argv[++i] ?? "";
-    else if (arg === "--tables") args.tables = parseTables(argv[++i] ?? "");
-    else if (arg === "--batch-size") args.batchSize = Number(argv[++i] ?? 0);
-    else if (arg === "--max-apply") args.maxApply = Number(argv[++i] ?? 0);
-    else if (arg === "--delay-ms") args.delayMs = Number(argv[++i] ?? 0);
-    else if (arg === "--interval-ms") args.intervalMs = Number(argv[++i] ?? 0);
-    else if (arg === "--min-content-length") {
-      args.minContentLength = Number(argv[++i] ?? 0);
-    } else if (arg === "--help" || arg === "-h") {
-      usage(0);
-    } else {
-      console.error(`Unknown argument: ${arg}`);
-      usage();
-    }
+    i = applyArgument(args, argv, i);
   }
-
-  if (
-    !args.sourceNamespace ||
-    !args.targetNamespace ||
-    !args.stateFile ||
-    args.tables.length === 0 ||
-    !Number.isInteger(args.batchSize) ||
-    args.batchSize < 1 ||
-    args.batchSize > 250 ||
-    !Number.isInteger(args.maxApply) ||
-    args.maxApply < 0 ||
-    args.maxApply > 100 ||
-    !Number.isInteger(args.delayMs) ||
-    args.delayMs < 0 ||
-    !Number.isInteger(args.intervalMs) ||
-    args.intervalMs < 1000 ||
-    !Number.isInteger(args.minContentLength) ||
-    args.minContentLength < 0
-  ) {
-    usage();
-  }
+  if (!argsAreValid(args)) usage();
   validateLegacySharedRoute(args);
-
   return args;
 }
 
@@ -180,9 +221,7 @@ function parseTables(raw: string): Table[] {
     .map((part) => part.trim())
     .filter(Boolean);
   const valid = new Set<Table>(ALL_TABLES);
-  const tables = requested.filter((table): table is Table =>
-    valid.has(table as Table),
-  );
+  const tables = requested.filter((table): table is Table => valid.has(table as Table));
   if (tables.length !== requested.length) {
     throw new Error(`Invalid table list: ${raw}`);
   }
@@ -262,13 +301,18 @@ function sanitizeError(err: unknown): string {
   return String(err).slice(0, 240);
 }
 
+interface CandidateQuery {
+  table: Table;
+  namespace: string;
+  cursor: Cursor | undefined;
+  limit: number;
+}
+
 async function candidateRows(
   pool: ReturnType<typeof createPool>,
-  table: Table,
-  namespace: string,
-  cursor: Cursor | undefined,
-  limit: number,
+  query: CandidateQuery,
 ): Promise<Array<{ id: string; created_at: string; preview: string }>> {
+  const { table, namespace, cursor, limit } = query;
   const params: unknown[] = [namespace, limit];
   let cursorSql = "";
   if (cursor?.created_at && cursor.id) {
@@ -284,6 +328,96 @@ async function candidateRows(
     params,
   );
   return rows;
+}
+
+interface PromoterRun {
+  args: Args;
+  pool: ReturnType<typeof createPool>;
+  state: State;
+  receipt: Receipt;
+  auth: AuthInfo;
+  applied: number;
+}
+
+type RowOutcome = "continue" | "stop";
+
+/** Fold one promotion result into the receipt and, where it applies, the cursor. */
+function recordPromotion(
+  run: PromoterRun,
+  table: Table,
+  status: string,
+  nextCursor: Cursor,
+): void {
+  const { args, receipt, state } = run;
+  if (status === "duplicate") {
+    addCount(receipt, table, "duplicates");
+    if (args.apply) state.cursors[table] = nextCursor;
+    return;
+  }
+  if (status === "dry_run") {
+    addCount(receipt, table, "would_promote");
+    return;
+  }
+  if (status === "promoted") {
+    run.applied += 1;
+    addCount(receipt, table, "promoted");
+    state.cursors[table] = nextCursor;
+  }
+}
+
+/** Promote one row; returns "stop" when the run should end after this row. */
+async function promoteRow(
+  run: PromoterRun,
+  table: Table,
+  row: { id: string; created_at: string; preview: string },
+): Promise<RowOutcome> {
+  const { args, receipt, state } = run;
+  addCount(receipt, table, "scanned");
+  const nextCursor = {
+    created_at: new Date(row.created_at).toISOString(),
+    id: row.id,
+  };
+
+  if ((row.preview ?? "").trim().length < args.minContentLength) {
+    addCount(receipt, table, "skipped");
+    if (args.apply) state.cursors[table] = nextCursor;
+    return "continue";
+  }
+  if (args.apply && run.applied >= args.maxApply) return "stop";
+
+  try {
+    const result = await promoteEntry(
+      run.pool,
+      table,
+      row.id,
+      args.targetNamespace,
+      "legacy collab background promoter",
+      run.auth,
+      { dryRun: !args.apply },
+    );
+    recordPromotion(run, table, result.status, nextCursor);
+  } catch (err) {
+    addCount(receipt, table, "failed");
+    receipt.failures.push({ table, id: row.id, error: sanitizeError(err) });
+    return "stop";
+  }
+
+  if (args.delayMs > 0) await sleep(args.delayMs);
+  return "continue";
+}
+
+/** Scan and promote one table's batch; returns "stop" to end the whole run. */
+async function promoteTable(run: PromoterRun, table: Table): Promise<RowOutcome> {
+  const rows = await candidateRows(run.pool, {
+    table,
+    namespace: run.args.sourceNamespace,
+    cursor: run.state.cursors[table],
+    limit: run.args.batchSize,
+  });
+  for (const row of rows) {
+    if ((await promoteRow(run, table, row)) === "stop") return "stop";
+  }
+  return "continue";
 }
 
 export async function runLegacyPromoter(args: Args): Promise<Receipt> {
@@ -319,62 +453,11 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
     statement_timeout: 30000,
     application_name: "openbrain-legacy-promoter",
   });
-  let applied = 0;
+  const run: PromoterRun = { args, pool, state, receipt, auth, applied: 0 };
 
   try {
-    tables:
     for (const table of args.tables) {
-      const rows = await candidateRows(
-        pool,
-        table,
-        args.sourceNamespace,
-        state.cursors[table],
-        args.batchSize,
-      );
-      for (const row of rows) {
-        addCount(receipt, table, "scanned");
-        const nextCursor = {
-          created_at: new Date(row.created_at).toISOString(),
-          id: row.id,
-        };
-
-        if ((row.preview ?? "").trim().length < args.minContentLength) {
-          addCount(receipt, table, "skipped");
-          if (args.apply) state.cursors[table] = nextCursor;
-          continue;
-        }
-        if (args.apply && applied >= args.maxApply) {
-          break tables;
-        }
-
-        try {
-          const result = await promoteEntry(
-            pool,
-            table,
-            row.id,
-            args.targetNamespace,
-            "legacy collab background promoter",
-            auth,
-            { dryRun: !args.apply },
-          );
-          if (result.status === "duplicate") {
-            addCount(receipt, table, "duplicates");
-            if (args.apply) state.cursors[table] = nextCursor;
-          } else if (result.status === "dry_run") {
-            addCount(receipt, table, "would_promote");
-          } else if (result.status === "promoted") {
-            applied += 1;
-            addCount(receipt, table, "promoted");
-            state.cursors[table] = nextCursor;
-          }
-        } catch (err) {
-          addCount(receipt, table, "failed");
-          receipt.failures.push({ table, id: row.id, error: sanitizeError(err) });
-          break tables;
-        }
-
-        if (args.delayMs > 0) await sleep(args.delayMs);
-      }
+      if ((await promoteTable(run, table)) === "stop") break;
     }
   } finally {
     await pool.end();
@@ -389,7 +472,7 @@ export async function runLegacyPromoter(args: Args): Promise<Receipt> {
 }
 
 if (import.meta.main) {
-  const args = parseArgs(Bun.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
   const runOnce = async (): Promise<void> => {
     const receiptPath = resolve(
       dirname(args.stateFile),
@@ -416,9 +499,8 @@ if (import.meta.main) {
       if (args.loop) await sleep(args.intervalMs);
     } while (args.loop);
   };
-  run()
-    .catch((err) => {
-      logger.error("legacy_promoter_failed", { error: sanitizeError(err) });
-      process.exit(1);
-    });
+  run().catch((err) => {
+    logger.error("legacy_promoter_failed", { error: sanitizeError(err) });
+    process.exit(1);
+  });
 }

@@ -12,456 +12,62 @@
 
 import { validateFirstClassContract } from "./contract.ts";
 import type { Json } from "./client.ts";
-import { OpenBrainClient, OpenBrainError } from "./client.ts";
-import { idempotencyKey, redactText, ValidationError } from "./policy.ts";
+import { OpenBrainClient } from "./client.ts";
+import { idempotencyKey, ValidationError } from "./policy.ts";
+import { JsonlSpool } from "./spool.ts";
 import {
-  JsonlSpool,
-  SpoolUnitRetained,
-  errorClassName,
-  type SpoolAppendRecord,
-  type SpoolReplayReport,
-  type SpoolRecord,
-  type SpoolUnitOutcome,
-} from "./spool.ts";
-import {
-  boundedInt,
   distilledContent,
-  persistedText,
   requireText,
+  validateAdoptedLane,
   validateContextPackScope,
   validateStartedLane,
   wrapMetadata,
-  type RuntimeScopeCoordinates,
 } from "./validation.ts";
+import {
+  DrainReport,
+  EVENT_TYPES,
+  PARKED_NAMESPACE_KEY,
+  ReceiptStatus,
+  RuntimeCallError,
+  RuntimeReceipt,
+  RuntimeScope,
+  ScopeProofError,
+  adoptedScopeFromResult,
+  adoptedWrapFields,
+  isLaneScopeRefusal,
+  contextPackRequest,
+  ensureDirectContract,
+  invokeDirect,
+  isRecord,
+  mergeReceiptRefs,
+  withCallTimeout,
+  safeError,
+  unsupportedEventType,
+  validateConfig,
+  verifyAppendResult,
+  verifyWrapResult,
+  type AdoptedLaneScope,
+  type CallState,
+  type DirectClient,
+  type FirstClassMemoryRuntimeOptions,
+  type MemorySpoolLike,
+  type RecallOptions,
+  type ReceiptStatusValue,
+  type ReplayableOperation,
+  type RuntimeConfig,
+  type RuntimeOutput,
+} from "./runtime-support.ts";
 
-export const MAX_ERROR_CHARS = 500;
+export * from "./runtime-support.ts";
+export { UnavailableClient } from "./runtime-drain.ts";
 
-export const EVENT_TYPES: ReadonlySet<string> = new Set([
-  "fact",
-  "decision",
-  "blocker",
-  "action",
-  "artifact",
-  "receipt",
-  "question",
-  "correction",
-  "handoff",
-]);
-
-/**
- * The rejection reason for an event type outside {@link EVENT_TYPES}.
- *
- * Names the rejected value AND the accepted set, because a rejection that only
- * says what was wrong leaves the caller no way to be right (#431). The bare
- * `Unsupported event_type: finding` this replaces was true and useless to an
- * agent that reached for `finding` because it did not know the nine words it
- * was allowed to use.
- *
- * Sorted so the text is stable across runs -- `Set` iteration order follows
- * insertion, and an error string that reorders itself when the declaration is
- * reordered cannot be asserted on or diffed in a log.
- *
- * Kept byte-identical to `openbrain_memory.unsupported_event_type` so the two
- * clients answer the same caller error the same way; `test_ts_parity.py` is
- * what holds the two runtime surfaces together.
- */
-export function unsupportedEventType(value: string): string {
-  return (
-    `Unsupported event_type: ${value}; ` +
-    `accepted event types: ${[...EVENT_TYPES].sort().join(", ")}`
-  );
-}
-
-export const CONTEXT_PACK_SECTIONS: ReadonlySet<string> = new Set([
-  "candidate_memory",
-  "durable_lane_context",
-  "durable_memory",
-  "pointers",
-  "process_guidance",
-  "profile_guidance",
-  "recovery",
-  "repo_facts",
-  "working_set",
-]);
-
-export const REPLAYABLE_SPOOL_OPERATIONS = [
-  "session_start",
-  "lane_upsert",
-  "upsert_repo_fact",
-  "append_session_event",
-  "log_thought",
-  "log_decision",
-  "session_wrap",
-] as const;
-export type ReplayableOperation = (typeof REPLAYABLE_SPOOL_OPERATIONS)[number];
-const REPLAYABLE_SET: ReadonlySet<string> = new Set(
-  REPLAYABLE_SPOOL_OPERATIONS,
-);
-
-/**
- * Client-internal provenance key stamped on EVERY spooled record payload and
- * stripped before dispatch; it never reaches the server (#314, PR #317).
- */
-export const PARKED_NAMESPACE_KEY = "_parked_namespace";
-
-export const ReceiptStatus = {
-  DIRECT: "direct",
-  SAVED: "saved",
-  SPOOLED: "spooled",
-  FALLBACK: "fallback",
-  FAILED: "failed",
-  LOST: "lost",
-  REPLAYED: "replayed",
-  QUARANTINED: "quarantined",
-} as const;
-export type ReceiptStatusValue =
-  (typeof ReceiptStatus)[keyof typeof ReceiptStatus];
-
-export const RUNTIME_RECEIPT_SCHEMA = "openbrain.runtime_receipt.v1";
-
-/** Raised internally when no direct call succeeded. */
-export class RuntimeCallError extends Error {}
-
-/** Raised when a server response fails the exact-scope proof. */
-export class ScopeProofError extends RuntimeCallError {}
-
-export function safeText(value: string): string {
-  return redactText(value).slice(0, MAX_ERROR_CHARS);
-}
-
-export function safeError(error: unknown): string {
-  if (error instanceof OpenBrainError) {
-    const status =
-      error.statusCode === undefined ? "none" : String(error.statusCode);
-    const context = error.context ?? "none";
-    return `remote_error=${error.constructor.name} status=${status} context=${context}`;
-  }
-  if (error instanceof Error) {
-    // Local diagnostics may be useful, but never copy an arbitrary exception
-    // body into a durable receipt: callers and remote SDKs can include payloads.
-    return `local_error=${error.constructor.name || "Error"}`;
-  }
-  return `local_error=${typeof error}`;
-}
-
-export interface RuntimeReceiptInit {
-  operation: string;
-  status: ReceiptStatusValue;
-  durable: boolean;
-  directAttempted: boolean;
-  fallbackAttempted: boolean;
-  spoolKey?: string | null;
-  error?: string | null;
-}
-
-/** Truthful, JSON-ready evidence for a lifecycle operation. */
-export class RuntimeReceipt {
-  readonly operation: string;
-  readonly status: ReceiptStatusValue;
-  readonly durable: boolean;
-  readonly directAttempted: boolean;
-  readonly fallbackAttempted: boolean;
-  readonly spoolKey: string | null;
-  readonly error: string | null;
-
-  constructor(init: RuntimeReceiptInit) {
-    this.operation = init.operation;
-    this.status = init.status;
-    this.durable = init.durable;
-    this.directAttempted = init.directAttempted;
-    this.fallbackAttempted = init.fallbackAttempted;
-    this.spoolKey = init.spoolKey ?? null;
-    this.error = init.error ?? null;
-  }
-
-  asDict(): Json {
-    const value: Json = {
-      schema: RUNTIME_RECEIPT_SCHEMA,
-      operation: this.operation,
-      status: this.status,
-      durable: this.durable,
-      direct_attempted: this.directAttempted,
-      fallback_attempted: this.fallbackAttempted,
-    };
-    if (this.spoolKey !== null) {
-      value["spool_key"] = this.spoolKey;
-    }
-    if (this.error !== null) {
-      value["error"] = this.error;
-    }
-    return value;
-  }
-}
-
-/**
- * Content-free outcome of one automatic spool drain (#296): counts and linked
- * receipts only — spool keys, operations, statuses, error categories — never
- * payload content and never error message bodies. `retained_units` counts
- * units left parked without dispatch or failure accounting (#310/#314).
- */
-export class DrainReport {
-  readonly attemptedUnits: number;
-  readonly replayedUnits: number;
-  readonly replayedRecords: number;
-  readonly failedUnits: number;
-  readonly quarantinedUnits: number;
-  readonly retainedUnits: number;
-  readonly receipts: readonly RuntimeReceipt[];
-
-  constructor(init: {
-    attemptedUnits: number;
-    replayedUnits: number;
-    replayedRecords: number;
-    failedUnits: number;
-    quarantinedUnits: number;
-    retainedUnits: number;
-    receipts: readonly RuntimeReceipt[];
-  }) {
-    this.attemptedUnits = init.attemptedUnits;
-    this.replayedUnits = init.replayedUnits;
-    this.replayedRecords = init.replayedRecords;
-    this.failedUnits = init.failedUnits;
-    this.quarantinedUnits = init.quarantinedUnits;
-    this.retainedUnits = init.retainedUnits;
-    this.receipts = init.receipts;
-  }
-
-  asDict(): Json {
-    return {
-      attempted_units: this.attemptedUnits,
-      replayed_units: this.replayedUnits,
-      replayed_records: this.replayedRecords,
-      failed_units: this.failedUnits,
-      quarantined_units: this.quarantinedUnits,
-      retained_units: this.retainedUnits,
-      receipts: this.receipts.map((receipt) => receipt.asDict()),
-    };
-  }
-}
-
-/** One context or write result with its receipt. */
-export interface RuntimeOutput {
-  receipt: RuntimeReceipt;
-  context?: Json;
-  result?: Json;
-  drain?: DrainReport | null;
-}
-
-/** Exact runtime identity used for context-pack recall and lane writes. */
-export class RuntimeScope implements RuntimeScopeCoordinates {
-  readonly agent: string;
-  readonly platform: string;
-  readonly server_id: string;
-  readonly channel_id: string;
-  readonly session_key: string;
-  readonly thread_id: string | null;
-
-  constructor(init: {
-    agent: string;
-    platform: string;
-    serverId: string;
-    channelId: string;
-    sessionKey: string;
-    threadId?: string | null;
-  }) {
-    this.agent = persistedText(init.agent, "agent");
-    this.platform = persistedText(init.platform, "platform");
-    this.server_id = persistedText(init.serverId, "server_id");
-    this.channel_id = persistedText(init.channelId, "channel_id");
-    this.session_key = persistedText(init.sessionKey, "session_key");
-    this.thread_id =
-      init.threadId === undefined || init.threadId === null
-        ? null
-        : persistedText(init.threadId, "thread_id");
-  }
-
-  /** Return the server contract's exact-scope context-pack fields. */
-  contextPackArguments(query: string): Json {
-    const args: Json = {
-      agent: this.agent,
-      platform: this.platform,
-      server_id: this.server_id,
-      channel_id: this.channel_id,
-      session_key: this.session_key,
-      query: requireText(query, "query"),
-    };
-    if (this.thread_id !== null) {
-      args["thread_id"] = this.thread_id;
-    }
-    return args;
-  }
-
-  /** Return scope-owned lane coordinates supported by `session_start`. */
-  startMetadata(): Json {
-    const metadata: Json = {
-      platform: this.platform,
-      server_id: this.server_id,
-      channel_id: this.channel_id,
-    };
-    if (this.thread_id !== null) {
-      metadata["thread_id"] = this.thread_id;
-    }
-    return metadata;
-  }
-
-  /** Return exact scope coordinates supported by `session_wrap`. */
-  wrapMetadata(): Json {
-    return this.startMetadata();
-  }
-}
-
-/** Rebuild the exact scope a spooled session_start unit was parked under. */
-function spooledStartScope(payload: Json): RuntimeScope {
-  try {
-    return new RuntimeScope({
-      agent: payload["agent"] as string,
-      platform: payload["platform"] as string,
-      serverId: payload["server_id"] as string,
-      channelId: payload["channel_id"] as string,
-      sessionKey: payload["session_key"] as string,
-      threadId: (payload["thread_id"] as string | undefined) ?? null,
-    });
-  } catch {
-    throw new ValidationError(
-      "spooled session_start record does not carry a complete exact scope",
-    );
-  }
-}
-
-/** Direct-client configuration for the first-class runtime. */
-export interface RuntimeConfig {
-  baseUrl: string;
-  token: string;
-  namespace: string;
-  project?: string | null;
-  role?: string | null;
-  allowInsecureHttp?: boolean;
-  /** Seconds, mirroring the Python client's `timeout`. */
-  timeout?: number;
-  spoolPath?: string | null;
-}
-
-function validateConfig(config: RuntimeConfig): Required<
-  Pick<RuntimeConfig, "baseUrl" | "token" | "namespace">
-> & {
-  project: string | null;
-  role: string | null;
-  allowInsecureHttp: boolean;
-  timeout: number;
-  spoolPath: string | null;
-} {
-  const baseUrl = requireText(config.baseUrl, "baseUrl");
-  const token = requireText(config.token, "token");
-  const namespace = requireText(config.namespace, "namespace");
-  const timeout = config.timeout ?? 30.0;
-  if (!(timeout > 0)) {
-    throw new ValidationError("timeout must be > 0");
-  }
-  let hostname = "";
-  let port = "";
-  try {
-    const parsed = new URL(baseUrl);
-    hostname = parsed.hostname;
-    port = parsed.port;
-  } catch {
-    // OpenBrainClient rejects unparseable base URLs later.
-  }
-  if (
-    (hostname === "127.0.0.1" || hostname === "localhost") &&
-    port === "8317"
-  ) {
-    throw new ValidationError("127.0.0.1:8317 is not an Open Brain endpoint");
-  }
-  return {
-    baseUrl,
-    token,
-    namespace,
-    project:
-      config.project === undefined || config.project === null
-        ? null
-        : persistedText(config.project, "project"),
-    role:
-      config.role === undefined || config.role === null
-        ? null
-        : requireText(config.role, "role"),
-    allowInsecureHttp: config.allowInsecureHttp ?? false,
-    timeout,
-    spoolPath: config.spoolPath ?? null,
-  };
-}
-
-/** Direct Open Brain methods used by the first-class runtime. */
-export interface DirectClient {
-  timeout: number;
-  get_contract(args?: Json): Json | Promise<Json>;
-  session_start(args: Json): Json | Promise<Json>;
-  append_session_event(args: Json): Json | Promise<Json>;
-  lane_upsert(args: Json): Json | Promise<Json>;
-  upsert_repo_fact(args: Json): Json | Promise<Json>;
-  log_thought(args: Json): Json | Promise<Json>;
-  log_decision(args: Json): Json | Promise<Json>;
-  session_wrap(args: Json): Json | Promise<Json>;
-  agent_context_pack(args: Json): Json | Promise<Json>;
-  close(): void | Promise<void>;
-}
-
-/** Minimal spool surface a runtime accepts (JsonlSpool implements it). */
-export interface MemorySpoolLike {
-  append(operation: string, payload: Json, key?: string | null): string;
-  appendBatch?(records: readonly SpoolAppendRecord[]): string[];
-}
-
-interface CallState {
-  path: "direct" | null;
-  directAttempted: boolean;
-  fallbackAttempted: boolean;
-}
-
-function isRecord(value: unknown): value is Json {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyText(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function verifyAppendResult(result: Json): void {
-  if (result["duplicate"] === true) {
-    return;
-  }
-  if (!nonEmptyText(result["event_id"]) || !nonEmptyText(result["lane_id"])) {
-    throw new RuntimeCallError(
-      "append_session_event result did not prove a created or duplicate event",
-    );
-  }
-  if (typeof result["lane_created"] !== "boolean") {
-    throw new RuntimeCallError(
-      "append_session_event result missing lane_created boolean",
-    );
-  }
-}
-
-function verifyWrapResult(result: Json): void {
-  if (!nonEmptyText(result["lane_id"]) || result["context_updated"] !== true) {
-    throw new RuntimeCallError(
-      "session_wrap result did not prove durable lane context update",
-    );
-  }
-  if (result["duplicate"] === true) {
-    return;
-  }
-  if (!nonEmptyText(result["session_id"])) {
-    throw new RuntimeCallError(
-      "session_wrap result did not prove a created or duplicate checkpoint",
-    );
-  }
-}
-
-export interface FirstClassMemoryRuntimeOptions {
-  client?: DirectClient;
-  transport?: ConstructorParameters<typeof OpenBrainClient>[1]["transport"];
-  spool?: MemorySpoolLike;
-}
+import {
+  UnavailableClient,
+  drainSpool,
+  failedWrite,
+  spoolAfterFailedWrite,
+  type SpoolContext,
+} from "./runtime-drain.ts";
 
 /** Primary local memory path for thin runtime adapters. */
 export class FirstClassMemoryRuntime {
@@ -481,6 +87,12 @@ export class FirstClassMemoryRuntime {
     fallbackAttempted: false,
   };
   private conversationKey: string | null = null;
+  // The stored scope of a lane this runtime adopted rather than claimed;
+  // reset per write so no later operation inherits a stale adopted scope.
+  private adoptedScope: AdoptedLaneScope | null = null;
+  // True only while the claim-nothing session_start of an adopting write is
+  // in flight, so its result validates on session_key plus namespace.
+  private adoptingLane = false;
   // Set only while draining a spooled unit parked under another scope;
   // session_start replay results validate against this instead of `scope`.
   private replayScope: RuntimeScope | null = null;
@@ -495,32 +107,53 @@ export class FirstClassMemoryRuntime {
     this.config = validateConfig(config);
     this.scope = scope;
     this.ownsClient = options.client === undefined;
-    let client = options.client ?? null;
-    let setupError: unknown = null;
-    if (client === null) {
-      try {
-        client = new OpenBrainClient(this.config.baseUrl, {
-          token: this.config.token,
-          namespace: this.config.namespace,
-          agentId: scope.agent,
-          role: this.config.role ?? undefined,
-          timeout: this.config.timeout,
-          transport: options.transport,
-          allowInsecureHttp: this.config.allowInsecureHttp,
-          delegateNamespace: false,
-        });
-      } catch (error) {
-        setupError = error;
-      }
-    }
-    this.client = client ?? (new UnavailableClient() as DirectClient);
-    this.setupError = setupError;
-    let spool: MemorySpoolLike | null = options.spool ?? null;
-    if (spool === null && this.config.spoolPath !== null) {
-      spool = new JsonlSpool(this.config.spoolPath);
-    }
+    const built = this.buildClient(scope, options);
+    this.client = built.client;
+    this.setupError = built.setupError;
+    const spool = this.buildSpool(options);
     this.spool = spool;
     this.jsonlSpool = spool instanceof JsonlSpool ? spool : null;
+  }
+
+  /**
+   * Resolve the direct client, keeping a construction failure as state.
+   *
+   * A failed construction yields a client that refuses every call rather than
+   * throwing here, so the caller still gets a receipt instead of an exception
+   * from the constructor.
+   */
+  private buildClient(
+    scope: RuntimeScope,
+    options: FirstClassMemoryRuntimeOptions,
+  ): { client: DirectClient; setupError: unknown } {
+    if (options.client !== undefined) {
+      return { client: options.client, setupError: null };
+    }
+    try {
+      const client = new OpenBrainClient(this.config.baseUrl, {
+        token: this.config.token,
+        namespace: this.config.namespace,
+        agentId: scope.agent,
+        role: this.config.role ?? undefined,
+        timeout: this.config.timeout,
+        transport: options.transport,
+        allowInsecureHttp: this.config.allowInsecureHttp,
+        delegateNamespace: false,
+      });
+      return { client: client as DirectClient, setupError: null };
+    } catch (error) {
+      return { client: new UnavailableClient() as DirectClient, setupError: error };
+    }
+  }
+
+  /** Resolve the spool: an injected one, a configured path, or none. */
+  private buildSpool(options: FirstClassMemoryRuntimeOptions): MemorySpoolLike | null {
+    if (options.spool !== undefined) {
+      return options.spool;
+    }
+    return this.config.spoolPath === null
+      ? null
+      : new JsonlSpool(this.config.spoolPath);
   }
 
   /** Close only a direct MCP client constructed by this runtime. */
@@ -534,69 +167,21 @@ export class FirstClassMemoryRuntime {
   /** Fail open while recalling the exact-scope server context pack. */
   async recallContext(
     query: string,
-    options: {
-      maxTokens?: number;
-      maxLatencyMs?: number;
-      requestedSections?: readonly string[];
-    } = {},
+    options: RecallOptions = {},
   ): Promise<RuntimeOutput> {
     return this.serialized(() => this.recallContextLocked(query, options));
   }
 
   private async recallContextLocked(
     query: string,
-    options: {
-      maxTokens?: number;
-      maxLatencyMs?: number;
-      requestedSections?: readonly string[];
-    },
+    options: RecallOptions,
   ): Promise<RuntimeOutput> {
     this.resetState();
     try {
-      const args = this.scope.contextPackArguments(query);
-      const budget: Json = {};
-      if (options.maxTokens !== undefined) {
-        budget["max_tokens"] = boundedInt(
-          options.maxTokens,
-          "max_tokens",
-          100,
-          20_000,
-        );
-      }
-      if (options.maxLatencyMs !== undefined) {
-        budget["max_latency_ms"] = boundedInt(
-          options.maxLatencyMs,
-          "max_latency_ms",
-          1,
-          10_000,
-        );
-      }
-      if (Object.keys(budget).length > 0) {
-        args["budget"] = budget;
-      }
-      if (options.requestedSections !== undefined) {
-        const sections = options.requestedSections.map((section) =>
-          requireText(section, "requested_sections"),
-        );
-        const unsupported = sections
-          .filter((section) => !CONTEXT_PACK_SECTIONS.has(section))
-          .sort();
-        if (unsupported.length > 0) {
-          throw new ValidationError(
-            `requested_sections contains unsupported values: ${unsupported.join(", ")}`,
-          );
-        }
-        args["requested_sections"] = sections;
-      }
+      const args = contextPackRequest(this.scope, query, options);
       const localTimeout =
-        options.maxLatencyMs !== undefined
-          ? options.maxLatencyMs / 1000
-          : undefined;
-      const result = await this.directCall(
-        "agent_context_pack",
-        args,
-        localTimeout,
-      );
+        options.maxLatencyMs !== undefined ? options.maxLatencyMs / 1000 : undefined;
+      const result = await this.directCall("agent_context_pack", args, localTimeout);
       const receipt = this.receipt("recall", ReceiptStatus.DIRECT, false);
       const drain = await this.drainSpool();
       return { receipt, context: result, drain };
@@ -704,47 +289,37 @@ export class FirstClassMemoryRuntime {
       receiptRefs?: readonly string[];
     },
   ): Promise<RuntimeOutput> {
-    let payloadBase: Json;
+    let safeSummary: string;
+    let metadata: Json;
     try {
-      const safeSummary = distilledContent(summary, "summary");
-      const metadata = wrapMetadata(
+      safeSummary = distilledContent(summary, "summary");
+      metadata = wrapMetadata(
         options.keyDecisions ?? null,
         options.nextSteps ?? null,
         options.receiptRefs ?? null,
       );
-      payloadBase = this.sessionWrapPayload(safeSummary, metadata);
     } catch (error) {
       return failedWrite(operation, error);
     }
     return this.serialized(() =>
-      this.writeLocked(operation, "session_wrap", () => ({
-        payload: payloadBase,
-        key: idempotencyKey(),
-      })),
+      this.writeLocked(
+        operation,
+        "session_wrap",
+        () => ({
+          // Built after the lane is resolved so the scope written is the
+          // adopted lane's, not the caller's (issue 736).
+          payload: this.sessionWrapPayload(safeSummary, metadata),
+          key: idempotencyKey(),
+        }),
+        { adoptLaneScope: true },
+      ),
     );
   }
 
   private sessionWrapPayload(summary: string, metadata: Json): Json {
-    const payload: Json = { summary, ...metadata };
-    // receipt_refs merge into next_steps (never a separate wire field).
-    const receiptRefs = payload["receipt_refs"];
-    delete payload["receipt_refs"];
-    if (Array.isArray(receiptRefs)) {
-      const nextSteps = Array.isArray(payload["next_steps"])
-        ? [...(payload["next_steps"] as string[])]
-        : [];
-      for (const ref of receiptRefs as string[]) {
-        nextSteps.push(`Receipt ref: ${ref}`);
-      }
-      if (nextSteps.length > 20) {
-        throw new ValidationError(
-          "next_steps plus receipt_refs must contain at most 20 items",
-        );
-      }
-      payload["next_steps"] = nextSteps;
-    }
-    Object.assign(payload, this.scope.wrapMetadata());
-    payload["agent"] = this.scope.agent;
+    const payload = mergeReceiptRefs({ summary, ...metadata });
+    Object.assign(payload, this.adoptedWrapMetadata());
+    payload["agent"] = this.adoptedWrapAgent();
     payload["session_key"] = this.scope.session_key;
     if (this.config.project !== null) {
       payload["project"] = this.config.project;
@@ -756,16 +331,26 @@ export class FirstClassMemoryRuntime {
     operation: string,
     tool: ReplayableOperation,
     build: () => { payload: Json; key: string },
+    options: { adoptLaneScope?: boolean } = {},
   ): Promise<RuntimeOutput> {
     this.resetState();
-    let built: { payload: Json; key: string };
-    try {
-      built = build();
-    } catch (error) {
-      return failedWrite(operation, error);
+    // Reset per write so no later operation inherits a stale adopted scope;
+    // every adopting write re-derives it.
+    this.adoptedScope = null;
+    const adopt = options.adoptLaneScope ?? false;
+    let built: { payload: Json; key: string } | null = null;
+    if (!adopt) {
+      try {
+        built = build();
+      } catch (error) {
+        return failedWrite(operation, error);
+      }
     }
     try {
-      await this.ensureLane();
+      await this.ensureLane({ adoptLaneScope: adopt });
+      // An adopting write builds AFTER the lane is resolved, so the payload
+      // carries the scope adoption produced rather than the caller's own.
+      built ??= build();
       const result = await this.directCall(tool, built.payload);
       const receipt = this.receipt(operation, ReceiptStatus.SAVED, true);
       const drain = await this.drainSpool();
@@ -778,68 +363,19 @@ export class FirstClassMemoryRuntime {
           }),
         };
       }
-      return this.spoolAfterFailedWrite(operation, tool, built, error);
-    }
-  }
-
-  private spoolAfterFailedWrite(
-    operation: string,
-    tool: ReplayableOperation,
-    built: { payload: Json; key: string },
-    error: unknown,
-  ): RuntimeOutput {
-    if (this.spool === null) {
-      return {
-        receipt: this.receipt(operation, ReceiptStatus.LOST, false, {
-          error: safeError(error),
-        }),
-      };
-    }
-    try {
-      let spoolKey: string;
-      if (this.conversationKey === null) {
-        // Lane setup failed: atomically pair the exact-scope prerequisite
-        // with the requested write so replay order is preserved.
-        const appendBatch = this.spool.appendBatch?.bind(this.spool);
-        if (appendBatch === undefined) {
-          throw new Error(
-            "configured spool cannot atomically queue lane prerequisite",
-          );
-        }
-        const keys = appendBatch([
-          {
-            operation: "session_start",
-            payload: this.parked(this.startPayload()),
-            key: null,
-          },
-          {
-            operation: tool,
-            payload: this.parked(built.payload),
-            key: built.key,
-          },
-        ]);
-        spoolKey = keys.at(-1) as string;
-      } else {
-        spoolKey = this.spool.append(
-          tool,
-          this.parked(built.payload),
-          built.key,
-        );
+      // An adopting write can fail before its payload was built; spooling
+      // still needs one, under the caller's own scope.
+      let record: { payload: Json; key: string };
+      try {
+        record = built ?? build();
+      } catch (buildError) {
+        return failedWrite(operation, buildError);
       }
-      return {
-        receipt: this.receipt(operation, ReceiptStatus.SPOOLED, true, {
-          spoolKey,
-          error: safeError(error),
-        }),
-      };
-    } catch (spoolError) {
-      return {
-        receipt: this.receipt(operation, ReceiptStatus.LOST, false, {
-          error: safeText(
-            `${safeError(error)}; spool failed: ${safeError(spoolError)}`,
-          ),
-        }),
-      };
+      return spoolAfterFailedWrite(
+        this.spoolContext(),
+        { operation, tool, built: record },
+        error,
+      );
     }
   }
 
@@ -863,13 +399,106 @@ export class FirstClassMemoryRuntime {
     return payload;
   }
 
-  private async ensureLane(): Promise<Json | null> {
+  /**
+   * Open or adopt a lane WITHOUT claiming any exact-scope coordinate. Sending
+   * only `session_key` puts the server on its incomplete-exact-scope path,
+   * where an existing lane is returned verbatim. `project` is still sent
+   * because it is not an exact-scope coordinate.
+   */
+  private unscopedStartPayload(): Json {
+    const payload: Json = { session_key: this.scope.session_key };
+    if (this.config.project !== null) {
+      payload["project"] = this.config.project;
+    }
+    return payload;
+  }
+
+  private async ensureLane(
+    options: { adoptLaneScope?: boolean } = {},
+  ): Promise<Json | null> {
+    const adopt = options.adoptLaneScope ?? false;
     if (this.conversationKey !== null) {
+      if (adopt && this.adoptedScope === null) {
+        // The lane was opened earlier in this process and this wrap never saw
+        // its session_start result. Its stored scope is unknown, so fall back
+        // to the scope this runtime opened it with rather than sending nulls
+        // at a lane that has real coordinates.
+        this.adoptedScope = {
+          agent: this.scope.agent,
+          platform: this.scope.platform,
+          server_id: this.scope.server_id,
+          channel_id: this.scope.channel_id,
+          thread_id: this.scope.thread_id,
+        };
+      }
       return null;
+    }
+    if (adopt) {
+      // CLAIM FIRST, adopt only on the specific scope refusal, so the ordinary
+      // path stays one call with the same arguments and adoption costs nothing
+      // until it is actually needed.
+      try {
+        const claimed = await this.directCall("session_start", this.startPayload());
+        this.conversationKey = this.scope.session_key;
+        return claimed;
+      } catch (error) {
+        if (!isLaneScopeRefusal(error)) {
+          throw error;
+        }
+      }
+      // The lane exists and already holds a coordinate this session does not
+      // own. Re-issue claiming NOTHING but the session_key, which puts the
+      // server on its incomplete-exact-scope branch and returns the existing
+      // lane verbatim, then write under the scope that comes back.
+      this.adoptingLane = true;
+      let result: Json;
+      try {
+        result = await this.directCall("session_start", this.unscopedStartPayload());
+      } finally {
+        this.adoptingLane = false;
+      }
+      this.adoptedScope = adoptedScopeFromResult(result);
+      this.conversationKey = this.scope.session_key;
+      return result;
     }
     const result = await this.directCall("session_start", this.startPayload());
     this.conversationKey = this.scope.session_key;
     return result;
+  }
+
+  /**
+   * Return the scope a wrap or checkpoint write must carry: the adopted lane
+   * scope when there is one, and the requester's own scope otherwise.
+   */
+  private adoptedWrapMetadata(): Json {
+    if (this.adoptedScope !== null) {
+      return adoptedWrapFields(this.adoptedScope);
+    }
+    return this.scope.wrapMetadata();
+  }
+
+  /**
+   * Prove a `session_start` result against the binding that applies.
+   *
+   * A spooled replay is parked under its own exact scope and still proves it,
+   * so that branch is checked first: a drain running inside an adopting wrap
+   * must not borrow the weaker binding.
+   */
+  private validateStartResult(result: Json): void {
+    if (this.replayScope !== null) {
+      validateStartedLane(result, this.config.namespace, this.replayScope);
+      return;
+    }
+    if (this.adoptingLane) {
+      validateAdoptedLane(result, this.config.namespace, this.scope.session_key);
+      return;
+    }
+    validateStartedLane(result, this.config.namespace, this.scope);
+  }
+
+  /** The agent a wrap or checkpoint write must carry. */
+  private adoptedWrapAgent(): string {
+    return this.adoptedScope?.agent ?? this.scope.agent;
   }
 
   /**
@@ -878,67 +507,29 @@ export class FirstClassMemoryRuntime {
    * was nothing to drain or the drain machinery itself failed.
    */
   private async drainSpool(): Promise<DrainReport | null> {
-    try {
-      const spool = this.jsonlSpool;
-      if (spool === null) {
-        return null;
-      }
-      if (spool.status().pending_count <= 0) {
-        return null;
-      }
-      const dispatch = async (record: SpoolRecord): Promise<Json> => {
-        // Reset per record so no later record or unit can inherit a stale
-        // scope.
-        this.replayScope = null;
-        if (!REPLAYABLE_SET.has(record.operation)) {
-          throw new ValidationError(
-            `Unsupported spooled operation: ${record.operation}`,
-          );
-        }
-        const payload = { ...record.payload };
-        // A record parked by a runtime configured for another namespace must
-        // stay parked: draining it here would silently transplant content
-        // into this runtime's namespace (#314). Records without the marker
-        // (legacy carve-out) drain under the replaying runtime's namespace.
-        const parkedNamespace = payload[PARKED_NAMESPACE_KEY];
-        delete payload[PARKED_NAMESPACE_KEY];
-        if (
-          parkedNamespace !== undefined &&
-          parkedNamespace !== null &&
-          parkedNamespace !== this.config.namespace
-        ) {
-          throw new SpoolUnitRetained(
-            "spooled unit parked under a different namespace",
-          );
-        }
-        if (record.operation === "session_start") {
-          // Validate the replayed lane against the scope the unit was parked
-          // under, not the runtime's current scope (#310). The namespace
-          // stays bound to this runtime's auth config.
-          try {
-            this.replayScope = spooledStartScope(payload);
-          } catch (error) {
-            throw new SpoolUnitRetained(safeError(error));
-          }
-        }
-        return this.directCall(
-          record.operation as ReplayableOperation,
-          payload,
-        );
-      };
-      let report: SpoolReplayReport;
-      try {
-        report = await spool.replayWithReport(dispatch);
-      } finally {
-        this.replayScope = null;
-      }
-      const drain = buildDrainReport(report);
+    const drain = await drainSpool(this.spoolContext());
+    if (drain !== null) {
       this.lastDrainReport = drain;
-      return drain;
-    } catch {
-      // Auto-drain is best-effort; failures never break the triggering call.
-      return null;
     }
+    return drain;
+  }
+
+  /** The state the spool half of the runtime reads and writes. */
+  private spoolContext(): SpoolContext {
+    return {
+      spool: this.spool,
+      jsonlSpool: this.jsonlSpool,
+      namespace: this.config.namespace,
+      conversationKey: this.conversationKey,
+      startPayload: () => this.startPayload(),
+      parked: (payload) => this.parked(payload),
+      receipt: (operation, status, durable, extra) =>
+        this.receipt(operation, status as ReceiptStatusValue, durable, extra),
+      setReplayScope: (scope) => {
+        this.replayScope = scope;
+      },
+      directCall: (operation, payload) => this.directCall(operation, payload),
+    };
   }
 
   private async directCall(
@@ -950,20 +541,30 @@ export class FirstClassMemoryRuntime {
     if (this.setupError !== null) {
       throw new RuntimeCallError(safeError(this.setupError));
     }
-    await this.ensureDirectContract(timeout);
-    const originalTimeout = this.client.timeout;
-    if (timeout !== undefined) {
-      this.client.timeout = Math.min(originalTimeout, timeout);
-    }
-    let result: Json;
-    try {
-      result = await this.invoke(tool, args);
-    } finally {
-      this.client.timeout = originalTimeout;
-    }
+    await ensureDirectContract(this.client, timeout, validateFirstClassContract);
+    const result = await withCallTimeout(this.client, timeout, () =>
+      invokeDirect(this.client, tool, args),
+    );
     if (!isRecord(result)) {
       throw new RuntimeCallError(`direct ${tool} returned a non-object result`);
     }
+    this.verifyResult(tool, result);
+    if (this.state.path === null) {
+      this.state.path = "direct";
+    }
+    return result;
+  }
+
+  /**
+   * Prove the result did what it claims, and that its scope is ours.
+   *
+   * A scope mismatch is re-raised as `ScopeProofError` so a caller can tell it
+   * apart from an argument the client itself rejected.
+   */
+  private verifyResult(
+    tool: ReplayableOperation | "agent_context_pack",
+    result: Json,
+  ): void {
     if (tool === "append_session_event") {
       verifyAppendResult(result);
     } else if (tool === "session_wrap") {
@@ -971,11 +572,7 @@ export class FirstClassMemoryRuntime {
     }
     try {
       if (tool === "session_start") {
-        validateStartedLane(
-          result,
-          this.config.namespace,
-          this.replayScope ?? this.scope,
-        );
+        this.validateStartResult(result);
       } else if (tool === "agent_context_pack") {
         validateContextPackScope(result, this.config.namespace, this.scope);
       }
@@ -984,53 +581,6 @@ export class FirstClassMemoryRuntime {
         throw new ScopeProofError(error.message);
       }
       throw error;
-    }
-    if (this.state.path === null) {
-      this.state.path = "direct";
-    }
-    return result;
-  }
-
-  private async invoke(
-    tool: ReplayableOperation | "agent_context_pack",
-    args: Json,
-  ): Promise<Json> {
-    switch (tool) {
-      case "session_start":
-        return this.client.session_start(args);
-      case "append_session_event":
-        return this.client.append_session_event(args);
-      case "lane_upsert":
-        return this.client.lane_upsert(args);
-      case "upsert_repo_fact":
-        return this.client.upsert_repo_fact(args);
-      case "log_thought":
-        return this.client.log_thought(args);
-      case "log_decision":
-        return this.client.log_decision(args);
-      case "session_wrap":
-        return this.client.session_wrap(args);
-      case "agent_context_pack":
-        return this.client.agent_context_pack(args);
-    }
-  }
-
-  private async ensureDirectContract(timeout?: number): Promise<void> {
-    const originalTimeout = this.client.timeout;
-    if (timeout !== undefined) {
-      this.client.timeout = Math.min(originalTimeout, timeout);
-    }
-    try {
-      const manifest = await this.client.get_contract({});
-      const validation = validateFirstClassContract(manifest);
-      if (!validation.ok) {
-        throw new RuntimeCallError(
-          "direct get_contract did not prove the first-class runtime contract: " +
-            validation.reasons.join("; "),
-        );
-      }
-    } finally {
-      this.client.timeout = originalTimeout;
     }
   }
 
@@ -1064,108 +614,4 @@ export class FirstClassMemoryRuntime {
     this.operationChain = next.catch(() => undefined);
     return next;
   }
-}
-
-class UnavailableClient {
-  timeout = 0;
-  private fail(): never {
-    throw new RuntimeCallError("direct client unavailable");
-  }
-  get_contract(): Json {
-    this.fail();
-  }
-  session_start(): Json {
-    this.fail();
-  }
-  append_session_event(): Json {
-    this.fail();
-  }
-  lane_upsert(): Json {
-    this.fail();
-  }
-  upsert_repo_fact(): Json {
-    this.fail();
-  }
-  log_thought(): Json {
-    this.fail();
-  }
-  log_decision(): Json {
-    this.fail();
-  }
-  session_wrap(): Json {
-    this.fail();
-  }
-  agent_context_pack(): Json {
-    this.fail();
-  }
-  close(): void {}
-}
-
-function failedWrite(operation: string, error: unknown): RuntimeOutput {
-  return {
-    receipt: new RuntimeReceipt({
-      operation,
-      status: ReceiptStatus.FAILED,
-      durable: false,
-      directAttempted: false,
-      fallbackAttempted: false,
-      error: safeError(error),
-    }),
-  };
-}
-
-function buildDrainReport(report: SpoolReplayReport): DrainReport {
-  const counts: Record<string, number> = {
-    replayed: 0,
-    failed: 0,
-    quarantined: 0,
-    retained: 0,
-  };
-  let replayedRecords = 0;
-  const receipts: RuntimeReceipt[] = [];
-  for (const outcome of report.outcomes) {
-    counts[outcome.status] = (counts[outcome.status] ?? 0) + 1;
-    if (outcome.status === "replayed") {
-      replayedRecords += outcome.record_keys.length;
-      receipts.push(...replayedReceipts(outcome));
-    } else if (outcome.status === "quarantined") {
-      receipts.push(quarantinedReceipt(outcome));
-    }
-  }
-  return new DrainReport({
-    attemptedUnits: report.outcomes.length,
-    replayedUnits: counts["replayed"] ?? 0,
-    replayedRecords,
-    failedUnits: counts["failed"] ?? 0,
-    quarantinedUnits: counts["quarantined"] ?? 0,
-    retainedUnits: counts["retained"] ?? 0,
-    receipts,
-  });
-}
-
-function replayedReceipts(outcome: SpoolUnitOutcome): RuntimeReceipt[] {
-  return outcome.operations.map(
-    (operation, index) =>
-      new RuntimeReceipt({
-        operation,
-        status: ReceiptStatus.REPLAYED,
-        durable: true,
-        directAttempted: true,
-        fallbackAttempted: false,
-        spoolKey: outcome.record_keys[index] as string,
-      }),
-  );
-}
-
-function quarantinedReceipt(outcome: SpoolUnitOutcome): RuntimeReceipt {
-  return new RuntimeReceipt({
-    operation: outcome.operations[0] as string,
-    status: ReceiptStatus.QUARANTINED,
-    durable: true,
-    directAttempted: true,
-    fallbackAttempted: false,
-    spoolKey: outcome.record_keys[0] as string,
-    // Error CLASS/category only, never message bodies.
-    error: outcome.error_category ?? errorClassName(null),
-  });
 }

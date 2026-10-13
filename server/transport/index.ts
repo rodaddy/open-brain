@@ -48,12 +48,3 @@ export {
   parseAllowedOrigins,
 } from "./rest.ts";
 export type { RestSurfaceInput } from "./rest.ts";
-
-export { createWorkerProxyHandler } from "./worker-proxy.ts";
-export type {
-  AggregateHealth,
-  WorkerHealthResult,
-  WorkerProxyHandler,
-  WorkerProxyInput,
-  WorkerTarget,
-} from "./worker-proxy.ts";

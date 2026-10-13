@@ -1,7 +1,7 @@
 /**
  * Contract entries for session-event append and session wrap.
  */
-import { SOURCE_REFS_CONTRACT } from "../../src/source-refs.ts";
+import { SOURCE_REFS_CONTRACT } from "../domain/source-refs.ts";
 import type { ToolContract } from "./tool-contract.ts";
 
 export const EVENT_TOOL_CONTRACTS: Record<string, ToolContract> = {

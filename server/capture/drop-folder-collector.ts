@@ -1,9 +1,9 @@
 import { realpath, stat } from "node:fs/promises";
 import type pg from "pg";
-import type { AuthInfo } from "../../src/types.ts";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
-import { contentHash } from "../../src/embedding.ts";
+import type { AuthInfo } from "../types.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
+import { normalizedContentHash } from "../embedding/provider.ts";
 import { updateSource, type SourceRecord } from "../domain/source-registry.ts";
 import {
   DEFAULT_DROP_COLLECTOR_BOUNDS,
@@ -55,9 +55,9 @@ import {
  *    to stay under the real root; traversal (`..`) and symlink-escape are
  *    rejected before the file is read.
  *
- * Identity + dedupe (align with the durable normalized contentHash boundary):
+ * Identity + dedupe (align with the durable normalized normalizedContentHash boundary):
  *  - File identity is the SAME normalized content hash the durable log tools
- *    use (contentHash: lowercase + trim + whitespace-collapse). The receipt
+ *    use (normalizedContentHash: lowercase + trim + whitespace-collapse). The receipt
  *    hash, the in-batch dedupe key, and the durable (content_hash, namespace)
  *    upsert therefore all agree. Two files whose bodies differ only by case or
  *    whitespace collapse to one durable row and one "collected" receipt; the
@@ -111,7 +111,7 @@ async function stampManifest(
   target: StampTarget,
 ): Promise<void> {
   if (manifestParts.length === 0) return;
-  const manifestHash = contentHash(manifestParts.join("\n"));
+  const manifestHash = normalizedContentHash(manifestParts.join("\n"));
   const { source, targetNamespace } = target;
   if (manifestHash === source.content_hash) return;
   const stamp = await updateSource(deps.pool as pg.Pool, auth, {

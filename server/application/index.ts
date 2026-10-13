@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
 import type { Database } from "../db/pool.ts";
 import type { ServerModuleBoundary } from "../module.ts";
+import type { BackgroundRuntime } from "../domain/background-runtime.ts";
 import {
   createMaintenanceRuntime,
   type MaintenanceRuntime,
@@ -20,6 +21,7 @@ import {
   type SessionTransportHandlers,
   type TransportNatsHealth,
 } from "../transport/index.ts";
+import { createRemSignalSource } from "../maintenance/rem-signal-source.ts";
 
 export const APPLICATION_BOUNDARY: ServerModuleBoundary = {
   name: "application",
@@ -113,16 +115,12 @@ export interface ShadowApplicationInput {
 }
 
 /**
- * Anything the application starts and must stop before the database closes.
- *
- * Deliberately one method wide. The application orders shutdown; it does not
- * want to know whether the thing behind this is a queue runner, a NATS bridge,
- * or a sweeper.
+ * `BackgroundRuntime` moved down to the domain tier so the maintenance tier can
+ * implement it without importing upward (issue 1210). Re-exported here because
+ * application-tier consumers — `./nats.ts` among them — take it from this
+ * module, and the move must not break the tier it left.
  */
-export interface BackgroundRuntime {
-  readonly name: string;
-  stop(): Promise<void>;
-}
+export type { BackgroundRuntime } from "../domain/background-runtime.ts";
 
 export interface ShadowApplication {
   readonly app: Express;
@@ -193,7 +191,10 @@ function composeHealth(
   readProducerHealth: () => MaintenanceProducerHealth | undefined,
 ) {
   return {
-    databaseHealth: input.database.health,
+    // Called through `input.database` rather than passed as a bare reference:
+    // `Database.health` is an interface method, so detaching it would drop the
+    // receiver for any implementation that needs `this`.
+    databaseHealth: () => input.database.health(),
     hostname: input.config.transport.hostname,
     serverIp: input.config.transport.serverIp,
     serverIps: input.config.transport.serverIps,
@@ -220,7 +221,7 @@ function composeHealth(
     // No observer composes no block: `readCaptureLiveness(undefined)` returns
     // `undefined`, `getSingleWorkerHealth` omits the field, and the status is
     // untouched. Absence is not staleness, and it is the ordinary case for
-    // most workers rather than an edge (core01 runs several — `AGENTS.md`).
+    // most workers rather than an edge (a deployment can run several).
     captureHealth: () => readCaptureLiveness(input.captureObserver?.()),
   };
 }
@@ -259,6 +260,9 @@ function readMaintenanceProducerHealth(
  */
 function composeMaintenance(
   input: ShadowApplicationInput,
+  readRemSignals?: () => Promise<
+    import("../maintenance/maintenance-sweep.ts").RemEligibilitySignals
+  >,
 ): MaintenanceRuntime | undefined {
   if (!input.maintenanceHandlers) return undefined;
   return createMaintenanceRuntime({
@@ -266,6 +270,7 @@ function composeMaintenance(
     logger: input.logger.child({ component: "maintenance" }),
     pool: input.database.pool,
     handlers: input.maintenanceHandlers,
+    ...(readRemSignals ? { readRemSignals } : {}),
     ...(input.maintenanceAutoStart !== undefined
       ? { autoStart: input.maintenanceAutoStart }
       : {}),
@@ -277,14 +282,18 @@ function composeTransportApp(
   input: ShadowApplicationInput,
   transportLogger: Logger,
   sessions: SessionTransportHandlers,
-  health: ReturnType<typeof composeHealth>,
+  rem: {
+    health: ReturnType<typeof composeHealth>;
+    observeMcpRequest?: () => void;
+  },
 ): Express {
   return createSingleWorkerTransportApp({
     authenticate: input.authenticate,
     parseRequestBody: input.parseRequestBody,
     sessions,
-    health,
+    health: rem.health,
     logger: transportLogger,
+    ...(rem.observeMcpRequest ? { observeMcpRequest: rem.observeMcpRequest } : {}),
     ...(input.beforeRoutes ? { beforeRoutes: input.beforeRoutes } : {}),
     ...(input.routers ? { routers: input.routers } : {}),
   });
@@ -295,6 +304,9 @@ export function createShadowApplication(
   input: ShadowApplicationInput,
 ): ShadowApplication {
   const transportLogger = input.logger.child({ component: "transport" });
+  const remSignals = input.config.maintenance.rem?.enabled
+    ? createRemSignalSource(input.database.pool)
+    : undefined;
   const sessions = composeSessions(input, transportLogger);
   // #625. The producer reading is deliberately LATE-BOUND: `maintenance` is
   // composed below this object, because the health block is an input to the
@@ -307,14 +319,20 @@ export function createShadowApplication(
   const health = composeHealth(input, transportLogger, () =>
     readMaintenanceProducerHealth(maintenance),
   );
-  const app = composeTransportApp(input, transportLogger, sessions, health);
+  const app = composeTransportApp(input, transportLogger, sessions, {
+    health,
+    ...(remSignals ? { observeMcpRequest: () => remSignals.observeMcpRequest() } : {}),
+  });
   // Compose maintenance BEFORE returning, so the runner and its place in the
   // shutdown order are created together.
   //
   // Caller-supplied runtimes stop first, then maintenance. The queue runner is
   // the drain that needs the database longest -- it must finish jobs it has
   // already leased -- so it sits closest to the database in the ordering.
-  const maintenance = composeMaintenance(input);
+  const maintenance = composeMaintenance(
+    input,
+    remSignals ? () => remSignals.read() : undefined,
+  );
   const backgroundRuntimes: readonly BackgroundRuntime[] = [
     ...(input.backgroundRuntimes ?? []),
     ...(maintenance ? [maintenance] : []),

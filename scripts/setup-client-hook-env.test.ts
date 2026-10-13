@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -42,8 +42,7 @@ process.stderr.write(`setup-client-hook-env fixtures: ${suiteRoot}\n`);
 const normalizerPath = join(suiteRoot, "normalize-hook-env.py");
 writeFileSync(normalizerPath, extractNormalizer());
 
-const authorEnvFile =
-  "/Users/rico/.local/share/openbrain-memory/env/claudex-observation.env";
+const authorEnvFile = "/home/user/.local/share/openbrain-memory/env/openbrain.env";
 const managedBegin = "# >>> openbrain: hook env file (managed) >>>";
 
 function legacyWrapper(envFile = authorEnvFile): string {
@@ -126,13 +125,10 @@ describe("setup-client hook env-file normalization", () => {
 
   it("derives the sibling env file under a non-author HOME", () => {
     const home = fixtureDirectory("cc-user-home");
-    const envDirectory = join(
-      home,
-      ".local/share/openbrain-memory/env",
-    );
+    const envDirectory = join(home, ".local/share/openbrain-memory/env");
     const wrapperPath = createWrapper(envDirectory);
     writeFileSync(
-      join(envDirectory, "claudex-observation.env"),
+      join(envDirectory, "openbrain.env"),
       "OPENBRAIN_BASE_URL=http://example.invalid\n" +
         "OPENBRAIN_TOKEN=ob-test-placeholder\n",
     );
@@ -141,9 +137,7 @@ describe("setup-client hook env-file normalization", () => {
     const result = runWrapper(wrapperPath, home);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "OPENBRAIN_BASE_URL=http://example.invalid\n",
-    );
+    expect(result.stdout).toContain("OPENBRAIN_BASE_URL=http://example.invalid\n");
     expect(result.stdout).toContain("OPENBRAIN_TOKEN=ob-test-placeholder\n");
     expect(result.stderr).toBe("");
   });
@@ -156,15 +150,12 @@ describe("setup-client hook env-file normalization", () => {
     const wrapperPath = createWrapper(envDirectory);
     mkdirSync(binDirectory, { recursive: true });
     writeFileSync(
-      join(envDirectory, "claudex-observation.env"),
+      join(envDirectory, "openbrain.env"),
       "OPENBRAIN_BASE_URL=http://symlink.invalid\n" +
         "OPENBRAIN_TOKEN=ob-symlink-placeholder\n",
     );
     expect(normalize(wrapperPath).status).toBe(0);
-    symlinkSync(
-      "../env/openbrain-hook-env",
-      join(binDirectory, "openbrain-hook-env"),
-    );
+    symlinkSync("../env/openbrain-hook-env", join(binDirectory, "openbrain-hook-env"));
 
     const result = spawnSync("openbrain-hook-env", ["/usr/bin/env"], {
       encoding: "utf8",
@@ -172,9 +163,7 @@ describe("setup-client hook env-file normalization", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "OPENBRAIN_BASE_URL=http://symlink.invalid\n",
-    );
+    expect(result.stdout).toContain("OPENBRAIN_BASE_URL=http://symlink.invalid\n");
     expect(result.stderr).toBe("");
   });
 
@@ -183,7 +172,7 @@ describe("setup-client hook env-file normalization", () => {
     const envDirectory = fixtureDirectory("sourced-wrapper");
     const wrapperPath = createWrapper(envDirectory);
     writeFileSync(
-      join(envDirectory, "claudex-observation.env"),
+      join(envDirectory, "openbrain.env"),
       "OPENBRAIN_BASE_URL=http://sourced.invalid\n" +
         "OPENBRAIN_TOKEN=ob-sourced-placeholder\n",
     );
@@ -193,31 +182,25 @@ describe("setup-client hook env-file normalization", () => {
       const result = sourceWrapper(shell, wrapperPath, home);
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(
-        "OPENBRAIN_BASE_URL=http://sourced.invalid\n",
-      );
+      expect(result.stdout).toContain("OPENBRAIN_BASE_URL=http://sourced.invalid\n");
       expect(result.stderr).toBe("");
     }
   });
+});
 
+describe("setup-client hook env-file failure and reruns", () => {
   it("fails loudly when the wrapper directory cannot be resolved", () => {
     const home = fixtureDirectory("fallback-home");
-    const fallbackDirectory = join(
-      home,
-      ".local/share/openbrain-memory/env",
-    );
+    const fallbackDirectory = join(home, ".local/share/openbrain-memory/env");
     mkdirSync(fallbackDirectory, { recursive: true });
     writeFileSync(
-      join(fallbackDirectory, "claudex-observation.env"),
+      join(fallbackDirectory, "openbrain.env"),
       "OPENBRAIN_BASE_URL=http://fallback.invalid\n" +
         "OPENBRAIN_TOKEN=ob-fallback-placeholder\n",
     );
     const wrapperPath = createWrapper(fixtureDirectory("fallback-wrapper"));
     expect(normalize(wrapperPath).status).toBe(0);
-    const missingWrapperPath = join(
-      suiteRoot,
-      "missing-directory/openbrain-hook-env",
-    );
+    const missingWrapperPath = join(suiteRoot, "missing-directory/openbrain-hook-env");
 
     const result = spawnSync(
       "/bin/dash",
@@ -241,13 +224,10 @@ describe("setup-client hook env-file normalization", () => {
 
   it("converges to one managed block when run twice", () => {
     const home = fixtureDirectory("idempotent-home");
-    const envDirectory = join(
-      home,
-      ".local/share/openbrain-memory/env",
-    );
+    const envDirectory = join(home, ".local/share/openbrain-memory/env");
     const wrapperPath = createWrapper(envDirectory);
     writeFileSync(
-      join(envDirectory, "claudex-observation.env"),
+      join(envDirectory, "openbrain.env"),
       "OPENBRAIN_BASE_URL=http://idempotent.invalid\n" +
         "OPENBRAIN_TOKEN=ob-idempotent-placeholder\n",
     );
@@ -259,22 +239,17 @@ describe("setup-client hook env-file normalization", () => {
     expect(normalized.split(managedBegin)).toHaveLength(2);
     const result = runWrapper(wrapperPath, home);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "OPENBRAIN_TOKEN=ob-idempotent-placeholder\n",
-    );
+    expect(result.stdout).toContain("OPENBRAIN_TOKEN=ob-idempotent-placeholder\n");
   });
 
   it("fails loudly with no stdout when the derived env file is missing", () => {
     const home = fixtureDirectory("missing-home");
-    const envDirectory = join(
-      home,
-      ".local/share/openbrain-memory/env",
-    );
+    const envDirectory = join(home, ".local/share/openbrain-memory/env");
     const wrapperPath = createWrapper(envDirectory);
     expect(normalize(wrapperPath).status).toBe(0);
 
     const result = runWrapper(wrapperPath, home);
-    const expectedPath = join(envDirectory, "claudex-observation.env");
+    const expectedPath = join(envDirectory, "openbrain.env");
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
@@ -286,7 +261,7 @@ describe("setup-client hook env-file normalization", () => {
   it("refuses a wrapper shape with no recognized insertion point", () => {
     const wrapperPath = createWrapper(
       fixtureDirectory("unknown"),
-      "#!/bin/sh\nset -eu\nexec env -i \"$@\"\n",
+      '#!/bin/sh\nset -eu\nexec env -i "$@"\n',
     );
 
     const result = normalize(wrapperPath);

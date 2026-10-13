@@ -37,7 +37,11 @@ const REDACT_PATHS = [
 export function workerLogPath(file: string, workerName: string): string {
   const safeWorker = workerName.replace(/[^A-Za-z0-9._-]/g, "_");
   const parsed = parse(file);
-  return format({ dir: parsed.dir, name: `${parsed.name}.${safeWorker}`, ext: parsed.ext });
+  return format({
+    dir: parsed.dir,
+    name: `${parsed.name}.${safeWorker}`,
+    ext: parsed.ext,
+  });
 }
 
 /** Build the common Pino envelope independently of its destination. */
@@ -107,10 +111,9 @@ export function createLogTransport(config: ServerConfig["logging"]): Destination
       mkdir: true,
     },
   });
-  return pino.multistream(
-    [{ stream: process.stdout }, { stream: rotatingFile }],
-    { levels: pino.levels.values },
-  );
+  return pino.multistream([{ stream: process.stdout }, { stream: rotatingFile }], {
+    levels: pino.levels.values,
+  });
 }
 
 /** Create the service logger; tests may inject an in-memory destination. */

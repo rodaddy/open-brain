@@ -9,11 +9,8 @@ write.
 | Identity | Kind | Expected role | Purpose |
 | --- | --- | --- | --- |
 | `rico` | person | `admin` | Rico as a human operator across Codex, Claude, and local hosts. |
-| `kevin` | person | `readonly` or scoped user role | Kevin as a human collaborator, not an agent lane. |
-| `bilby` | agent | `agent` | Hermes agent lane identity. |
-| `skippy` | agent | `agent` | Hermes agent lane identity. |
+| `alex` | person | `readonly` or scoped user role | Alex as a human collaborator, not an agent lane. |
 | `openbrain-promoter` | service | `promoter` (or legacy `admin`/`ob-admin` clientId path) | Approved Open Brain promotion service for shared truth writes. |
-| `hermes-promoter` | service | `promoter` (or legacy `admin`/`ob-admin` clientId path) | Approved Hermes-side promotion service for shared truth writes. |
 
 Environment-safe per-user token names use underscores and are normalized to
 hyphenated identities. For example, `AUTH_TOKEN_USER_OPENBRAIN_PROMOTER` maps
@@ -26,7 +23,7 @@ write `bilby`; a `skippy` token can write `skippy`. They may not direct-write
 `shared-kb`, another agent lane, or a person namespace.
 
 `shared-kb` writes require an explicit promoter service identity:
-`openbrain-promoter` or `hermes-promoter`. The promoter path must include
+`openbrain-promoter`. The promoter path must include
 provenance describing the source namespace, source table/id, source identity
 when known, authenticated promoter identity, reason, confidence when available,
 and timestamp. The authoritative `promoted_by` value is derived from the bearer

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { setUpGateClients } from "../eval-open-brain-live.ts";
 import type { CallerFactory } from "../eval-open-brain-live.ts";
 import { LiveTransportError } from "../../eval/open-brain/live/transport.ts";

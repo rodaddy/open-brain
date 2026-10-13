@@ -1,9 +1,9 @@
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 import {
   physicalNamespace,
   sharedNamespaceConfig,
   shouldRejectLegacySharedWrite,
-} from "../../src/shared-namespace.ts";
+} from "./shared-namespace-ambient.ts";
 
 export const PROMOTER_CLIENT_IDS = new Set(["openbrain-promoter", "hermes-promoter"]);
 
@@ -17,7 +17,7 @@ export const PROMOTER_CLIENT_IDS = new Set(["openbrain-promoter", "hermes-promot
  * legacy (SHARED_NAMESPACE_LEGACY) with OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES=1
  * for a migration window.
  */
-export const FROZEN_NAMESPACES = new Set(["collab"]);
+const FROZEN_NAMESPACES = new Set(["collab"]);
 
 function isFrozenNamespaceWrite(targetNamespace: string): boolean {
   if (!FROZEN_NAMESPACES.has(targetNamespace)) return false;
@@ -33,7 +33,7 @@ function isFrozenNamespaceWrite(targetNamespace: string): boolean {
   return true;
 }
 
-export interface NamespaceCheck {
+interface NamespaceCheck {
   allowed: boolean;
   reason?: string;
 }

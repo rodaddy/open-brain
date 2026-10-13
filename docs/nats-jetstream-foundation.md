@@ -36,42 +36,42 @@ Primary references:
 - https://docs.nats.io/running-a-nats-service/configuration/resource_management
 - https://docs.nats.io/nats-concepts/subjects
 
-## Core01 Config Plan
+## The Retired Host's Config Plan
 
 Planned host:
-core01 Mac Mini, co-located with hosted Open Brain.
+the retired host, co-located with hosted Open Brain.
 
 Planned service:
 `com.rico.open-brain-nats` launchd service for the broker.
 
 Dedicated Open Brain worker service:
-`com.rico.open-brain-nats-worker`, documented in
-`docs/core01-nats-worker-runbook.md`. This worker is separate from the HTTP
+`com.rico.open-brain-local-nats-worker`, installed by
+`scripts/install-nats-worker-launchagent.sh`. This worker is separate from the HTTP
 launchd service and subscribes to NATS request/reply subjects without making
 HTTP `/health` depend on broker or subscription health.
 
 Planned config path:
-`/Volumes/ThunderBolt/open-brain/nats/nats-server.conf`.
+`/srv/open-brain/nats/nats-server.conf`.
 
 Planned JetStream store:
-`/Volumes/ThunderBolt/open-brain/nats/jetstream`.
+`/srv/open-brain/nats/jetstream`.
 
 Planned listeners:
 
-- Client listen: `127.0.0.1:4222` for local Open Brain/Hermes processes.
+- Client listen: `127.0.0.1:4222` for local Open Brain processes.
 - Monitoring listen: `127.0.0.1:8222`, reverse-proxied only if a later release
   explicitly approves it.
 
 Planned NATS config skeleton:
 
 ```conf
-server_name: open-brain-core01
+server_name: open-brain
 listen: "127.0.0.1:4222"
 http: "127.0.0.1:8222"
 max_payload: 1MB
 
 jetstream {
-  store_dir: "/Volumes/ThunderBolt/open-brain/nats/jetstream"
+  store_dir: "/srv/open-brain/nats/jetstream"
   max_memory_store: 512MB
   max_file_store: 10GB
   domain: open-brain
@@ -111,8 +111,8 @@ authorization {
 }
 ```
 
-Release implementation must use `vaultwarden-secrets` or another approved
-secret path for credentials and must show the final permissions in the release
+Release implementation must use an approved secret store
+path for credentials and must show the final permissions in the release
 PR. Do not put bearer tokens or NATS passwords in git, PR bodies, logs,
 JetStream payloads, or stream metadata.
 
@@ -171,10 +171,10 @@ payloads until a later release explicitly raises the NATS envelope limit.
     "namespace_source": "authorization",
     "agent": "nagatha",
     "platform": "discord",
-    "server_id": "rodaddy-live",
+    "server_id": "example-guild",
     "channel_id": "ob-dev",
     "thread_id": null,
-    "session_key": "discord:rodaddy-live:ob-dev:nagatha"
+    "session_key": "discord:example-guild:ob-dev:nagatha"
   },
   "body": {
     "query": "what is the current task state?",
@@ -291,9 +291,9 @@ availability only when explicitly enabled.
   `agent_context_pack` response envelopes. Python-native request/reply tests
   remain future work.
 
-## Hermes Opt-In Plan
+## Client Opt-In Plan
 
-Hermes may opt in only after the hosted bridge is deployed and canaried.
+Clients may opt in only after the hosted bridge is deployed and canaried.
 Initial config should be explicit:
 
 ```text
@@ -309,7 +309,7 @@ OPENBRAIN_NATS_FALLBACK_HTTP=true
 ```
 
 Until `OPENBRAIN_TRANSPORT=nats` is explicitly set and the contract advertises
-NATS availability, Hermes must use HTTP/MCP.
+NATS availability, clients must use HTTP/MCP.
 
 ## Local Validation Before Release
 
@@ -321,20 +321,18 @@ Local-only validation for #223:
 - server tests prove authorized NATS request/reply maps to the same
   `agent_context_pack` payload, rejects missing bearer auth before parsing,
   bounds request size, and hides raw parser/schema errors from callers;
-- docs make core01 deployment optional/deferred;
+- docs make deployment to the retired host optional/deferred;
 - Python tests prove package contract pins match the server contract version.
 
 Release validation, deferred until Rico approves deploy:
 
-- install NATS on core01 through the release SOP;
 - install or update `com.rico.open-brain-nats-worker` only after the runtime
   entrypoint exists and the worker tests pass;
-- prove `/health` and monitoring endpoint locally on core01;
 - prove HTTP `/health` remains healthy while the NATS worker is started,
   stopped, and restarted;
 - create streams with the documented limits;
 - run HTTP-vs-NATS parity tests for `agent_context_pack`;
-- run Hermes canary with HTTP fallback enabled;
+- run a client canary with HTTP fallback enabled;
 - only then consider making NATS the default path.
 
 ## Rollback Plan
@@ -343,7 +341,7 @@ Before NATS becomes the default path, rollback is to keep or restore
 `OPENBRAIN_TRANSPORT=http` and stop using the NATS bridge. If a release deploys
 the service and needs rollback:
 
-1. Set Hermes/Open Brain clients back to HTTP and confirm `/mcp` reads/writes.
+1. Set Open Brain clients back to HTTP and confirm `/mcp` reads/writes.
 2. Stop or unload `com.rico.open-brain-nats-worker`.
 3. Stop or unload `com.rico.open-brain-nats` if the broker itself is unsafe.
 4. Preserve the JetStream store for inspection unless an explicit cleanup

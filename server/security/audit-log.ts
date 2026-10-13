@@ -1,7 +1,7 @@
 import type pg from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { AuthInfo } from "../../src/types.ts";
-import { logger } from "../../src/logger.ts";
+import type { AuthInfo } from "../types.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -35,7 +35,7 @@ export interface McpAuditConfig {
  * than read from `process.env`: server/ owns no environment access, so the
  * composition root passes what it already parsed into `ServerConfig.mcpAudit`.
  */
-export interface McpAuditEnvironment {
+interface McpAuditEnvironment {
   readonly [key: string]: string | undefined;
   readonly OPENBRAIN_MCP_AUDIT_ENABLED?: string | undefined;
   readonly OPENBRAIN_MCP_AUDIT_RETENTION_DAYS?: string | undefined;
@@ -56,7 +56,7 @@ export interface McpAuditDeps {
   now?: () => Date;
 }
 
-export interface McpAuditSummary {
+interface McpAuditSummary {
   operation: string;
   status: "success" | "error" | "exception" | "validation_error";
   durationMs: number;
@@ -70,7 +70,7 @@ export interface McpAuditSummary {
   payloadSizeBucket: string;
 }
 
-export interface McpAuditState {
+interface McpAuditState {
   lastCleanupAt: number;
   cleanupInFlight?: boolean;
 }
@@ -82,7 +82,7 @@ interface SharedMcpAuditState extends McpAuditState {
 // Facts about the RAW (pre-Zod-validation) request arguments, captured before
 // the SDK strips undeclared keys. Held only in process memory (never
 // persisted); rawKeys is null when the request exceeds MAX_UNKNOWN_KEY_SCAN.
-export interface RawArgsAuditCapture {
+interface RawArgsAuditCapture {
   rawKeyCount: number;
   rawKeys: string[] | null;
   payloadSizeBucket: string;
@@ -116,7 +116,7 @@ const rawArgsCaptureByParsed = new WeakMap<object, RawArgsAuditCapture>();
 // installed for this process.
 let rawArgsCaptureEnabled = false;
 
-export function captureArgsFacts(args: unknown): RawArgsAuditCapture {
+function captureArgsFacts(args: unknown): RawArgsAuditCapture {
   const keys = ownKeys(args);
   return {
     rawKeyCount: keys.length,
@@ -187,7 +187,7 @@ function readBoundedInt(
   return parsed;
 }
 
-export function declaredParameterKeys(inputSchema: unknown): string[] {
+function declaredParameterKeys(inputSchema: unknown): string[] {
   if (!inputSchema || typeof inputSchema !== "object") return [];
   return Object.keys(inputSchema as Record<string, unknown>).sort();
 }
@@ -212,7 +212,7 @@ const PAYLOAD_SIZE_BUCKETS: ReadonlyArray<readonly [number, string]> = [
   [1024 * 1024, "le_1mb"],
 ];
 
-export function payloadSizeBucket(input: unknown): string {
+function payloadSizeBucket(input: unknown): string {
   const bytes = estimateJsonBytes(input);
   // Un-measurable payloads get a distinct sentinel so "couldn't measure"
   // is never conflated with "empty".
@@ -257,7 +257,7 @@ function estimateJsonBytes(input: unknown): number | null {
   return total;
 }
 
-export function summarizeMcpAudit(input: {
+function summarizeMcpAudit(input: {
   operation: string;
   status: McpAuditSummary["status"];
   durationMs: number;
@@ -458,16 +458,6 @@ async function writeMcpAuditWithTimeout(
   }
 }
 
-export async function recordMcpAudit(
-  deps: McpAuditDeps,
-  config: McpAuditConfig,
-  state: McpAuditState,
-  summary: McpAuditSummary,
-): Promise<void> {
-  const inserted = await insertMcpAudit(deps, summary);
-  if (inserted) await maybeCleanupAuditLog(deps, config, state);
-}
-
 async function insertMcpAudit(
   deps: McpAuditDeps,
   summary: McpAuditSummary,
@@ -585,18 +575,15 @@ function pushContainerMembers(value: object, stack: unknown[]): number {
 // Nested function/symbol contributes nothing: JSON omits the member (object)
 // or emits null (array), and either way the contribution is negligible.
 function estimateScalarBytes(value: unknown): number | null {
-  switch (typeof value) {
-    case "string":
-      return value.length + 2 + (value.length >> 4);
-    case "number":
-      return Number.isFinite(value) ? String(value).length : 4;
-    case "boolean":
-      return value ? 4 : 5;
-    case "bigint":
-      return null;
-    default:
-      return 0;
+  const kind: string = typeof value;
+  if (kind === "string") {
+    const text = value as string;
+    return text.length + 2 + (text.length >> 4);
   }
+  if (kind === "number") return Number.isFinite(value) ? String(value).length : 4;
+  if (kind === "boolean") return value === true ? 4 : 5;
+  if (kind === "bigint") return null;
+  return 0;
 }
 
 // Accounts for one container: its structural bytes, plus the key bytes of any

@@ -1,0 +1,64 @@
+{
+  "schema": "openbrain.live_recall_gate.v1",
+  "generated_at": "2026-09-19T00:57:26.983Z",
+  "commit": "4eb1810316c68b711df9b6cbeec68c50db73f2ee",
+  "fixture_id": "open-brain-live-recall-v1",
+  "thresholds_id": "open-brain-live-recall-thresholds-v1",
+  "top_k": 5,
+  "primary_namespace": "eval-live-recall-release1425-heldout-f848997ac1ce",
+  "negative_namespace": "eval-live-recall-release1425-heldout-f848997ac1ce-negative",
+  "seeded": {
+    "primary": 8,
+    "negative": 2
+  },
+  "metrics": {
+    "recall_at_k": 1,
+    "precision_at_k": 0.4,
+    "mrr": 1,
+    "namespace_leaks": 0
+  },
+  "thresholds": {
+    "min_recall_at_k": 0.9,
+    "min_precision_at_k": 0.3,
+    "min_mrr": 0.8,
+    "max_namespace_leaks": 0
+  },
+  "probes": [
+    {
+      "probe_id": "probe-grommet-torque",
+      "recall_at_k": 1,
+      "precision_at_k": 0.6,
+      "reciprocal_rank": 1,
+      "namespace_leaks": 0
+    },
+    {
+      "probe_id": "probe-quokka-migration",
+      "recall_at_k": 1,
+      "precision_at_k": 0.4,
+      "reciprocal_rank": 1,
+      "namespace_leaks": 0
+    },
+    {
+      "probe_id": "probe-solstice-cache",
+      "recall_at_k": 1,
+      "precision_at_k": 0.2,
+      "reciprocal_rank": 1,
+      "namespace_leaks": 0
+    }
+  ],
+  "negative_control": {
+    "ran": true,
+    "denied": true,
+    "observed_hit_count": 0,
+    "cross_token": false
+  },
+  "passed": true,
+  "failures": [],
+  "teardown": {
+    "attempted": 10,
+    "archived": 10,
+    "already_absent": 0,
+    "failed": 0,
+    "failure_labels": []
+  }
+}

@@ -9,7 +9,7 @@
  * The variables are saved and restored around each case so this file leaves the
  * environment as it found it for every other suite in the same bun process.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   requireLocalCloneTestDatabaseUrl,
@@ -51,7 +51,7 @@ describe("database-demand helpers", () => {
     it(`throws test_database_required when ${variable} is unset`, () => {
       delete process.env[variable];
       expect(() => read()).toThrow(
-        `test_database_required: ${variable} is unset; run bun run test:isolated`,
+        `test_database_required: ${variable} is unset; run npm run test:isolated`,
       );
     });
 

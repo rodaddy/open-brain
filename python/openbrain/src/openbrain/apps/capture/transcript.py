@@ -59,10 +59,18 @@ See Also:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from openbrain.apps.bulk.formats import (
+    CODEX_EVENT_RECORD,
+    CODEX_SESSION_RECORD,
+    MalformedCodexRecordError,
+    codex_raw_turn_from_line,
+    codex_session_ref_from_line,
+)
 from openbrain.apps.capture.records import raw_turn_from_line
 from openbrain.apps.capture.watermark import BEGINNING_OF_FILE, FileIdentity
 from openbrain.models.turn import RawTurn
@@ -86,8 +94,10 @@ class TranscriptRead(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     turns: tuple[RawTurn, ...]
+    turn_offsets: tuple[int, ...] = ()
     next_offset: int
     identity: FileIdentity | None = None
+    source_size: int | None = None
 
 
 async def read_since(
@@ -123,6 +133,7 @@ async def read_since(
 
     current = FileIdentity.of(path)
     start = _start_position(offset, size, identity, current)
+    session_ref = await asyncio.to_thread(_codex_session_ref, path)
 
     try:
         payload = await asyncio.to_thread(_read_from, path, start)
@@ -130,16 +141,65 @@ async def read_since(
         return TranscriptRead(turns=(), next_offset=offset)
 
     complete, consumed = _complete_records(payload)
-    turns = tuple(
-        turn
-        for line in complete.split(RECORD_TERMINATOR)
-        if (turn := raw_turn_from_line(line.decode("utf-8", errors="replace")))
-        is not None
-    )
+    turns_list: list[RawTurn] = []
+    offsets: list[int] = []
+    cursor = start
+    for line in complete.split(RECORD_TERMINATOR):
+        cursor += len(line) + len(RECORD_TERMINATOR)
+        turn = _supported_raw_turn_from_line(
+            line.decode("utf-8", errors="replace"), session_ref
+        )
+        if turn is not None:
+            turns_list.append(turn)
+            offsets.append(cursor)
 
     return TranscriptRead(
-        turns=turns, next_offset=start + consumed, identity=current
+        turns=tuple(turns_list), turn_offsets=tuple(offsets),
+        next_offset=start + consumed, identity=current, source_size=size,
     )
+
+
+def _supported_raw_turn_from_line(
+    line: str, codex_session_ref: str | None
+) -> RawTurn | None:
+    """Parse one Claude or Codex transcript record through its existing adapter.
+
+    Codex carries both conversational roles inside ``event_msg`` records. That
+    discriminator is absent from Claude transcripts, so it selects the Codex
+    adapter without guessing from a host-specific path or runtime setting.
+    Invalid JSON retains the Claude reader's existing ignore behavior; a valid
+    malformed Codex event reaches its strict adapter and fails loudly.
+    """
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return raw_turn_from_line(line)
+
+    is_codex_record = isinstance(record, dict) and record.get("type") in (
+        CODEX_EVENT_RECORD,
+        "response_item",
+    )
+    if not is_codex_record:
+        return raw_turn_from_line(line)
+    if codex_session_ref is None:
+        raise MalformedCodexRecordError(CODEX_SESSION_RECORD, "payload.id")
+
+    return codex_raw_turn_from_line(line, session_ref=codex_session_ref)
+
+
+def _codex_session_ref(path: Path) -> str | None:
+    """Read the Codex session identity from the rollout's first record."""
+    try:
+        with path.open("rb") as handle:
+            first_line = handle.readline().decode("utf-8", errors="replace")
+        record = json.loads(first_line)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    is_session_meta = (
+        isinstance(record, dict) and record.get("type") == CODEX_SESSION_RECORD
+    )
+    return codex_session_ref_from_line(first_line) if is_session_meta else None
 
 
 def _read_from(path: Path, start: int) -> bytes:

@@ -32,9 +32,9 @@ All Open Brain interactions MUST go through this skill. Direct `mcp2cli open-bra
 Before ANY write to OB, resolve the namespace. See [references/namespace-guide.md](references/namespace-guide.md) for full rules.
 
 **Quick version:**
-1. **Explicit intent** -- user says "personal"/"my brain" -> `<caller_identity>`; says "shared"/"team"/"king" -> `shared-kb`
+1. **Explicit intent** -- user says "personal"/"my brain" -> `<caller_identity>`; says "shared"/"team"/"acme" -> `shared-kb`
 2. **Host type** -- `cc-*` LXC -> `shared-kb`; `*.local` -> `<caller_identity>`
-3. **Directory** -- personal machines only: `king*` dirs -> `shared-kb`
+3. **Directory** -- personal machines only: `acme*` dirs -> `shared-kb`
 4. **Fallback** -- `<caller_identity>` from auth token
 
 ## Tools Available

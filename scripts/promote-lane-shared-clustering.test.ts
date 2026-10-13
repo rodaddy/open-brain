@@ -1,7 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { testScratchDir } from "./test-support/scratch-dir.ts";
 import { Pool } from "pg";
 import { runSharedPromoter } from "./promote-lane-shared.ts";
 import { requireTestDatabaseUrl } from "./test-support/require-test-database.ts";
@@ -124,7 +124,7 @@ describe("runSharedPromoter clustering and cursor loops (live Postgres)", () => 
   beforeEach(async () => {
     h.applyDbEnv();
     await h.cleanupNs();
-    tmpDir = mkdtempSync(join(process.env.DEV_TMP ?? tmpdir(), "promote-lane-shared-"));
+    tmpDir = testScratchDir("promote-lane-shared-");
     stateFile = join(tmpDir, "state.json");
   });
 

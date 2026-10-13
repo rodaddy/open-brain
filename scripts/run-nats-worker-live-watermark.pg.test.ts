@@ -55,7 +55,7 @@
  * embedding-bearing table (`EMBEDDING_TARGETS`, `:179`). Its first entry is
  * `thoughts` (`:181`) and it declares `FULL_PROVENANCE` (`:191`), meaning
  * `content_hash`, `embedded_at`, and `embedding_model` all physically exist —
- * `src/db/migrations/001_init.sql:7-19`. That gives the watermark both halves
+ * `server/db/migrations/001_init.sql:7-19`. That gives the watermark both halves
  * it needs from ONE table, with no invention:
  *
  *   - RAW arrival     -> `thoughts.created_at`  (row exists, embedding pending)
@@ -82,17 +82,24 @@
  *
  *   bun run test:isolated scripts/run-nats-worker-live-watermark.pg.test.ts
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import { Pool } from "pg";
 import { requireTestDatabaseUrl } from "./test-support/require-test-database.ts";
-import { runMigrations } from "../src/db/migrate.ts";
-import { createNatsBridgeHealth } from "../src/nats-bridge.ts";
+import { runMigrations } from "../server/db/migrate.ts";
+import { createNatsBridgeHealth } from "../server/application/nats-bridge.ts";
 import {
   readNatsWorkerBoundary,
   type NatsWorkerRuntime,
-} from "../src/nats-worker.ts";
+} from "../server/application/nats-worker.ts";
 import { startNatsWorkerProcess } from "./run-nats-worker.ts";
-
 
 /** Namespace/author marker so this file's rows are identifiable and removable. */
 const CREATED_BY = "wm-live-observer-pg-test";
@@ -124,7 +131,7 @@ interface EmbedWatermarkBlock {
  * `createdAgoSeconds` is the raw arrival; `embeddedAgoSeconds` null means the
  * row is still sitting in the embed queue — which is what a stalled lane looks
  * like in the corpus. Columns are exactly those in
- * `src/db/migrations/001_init.sql:7-19`; `embedding` is left NULL because the
+ * `server/db/migrations/001_init.sql:7-19`; `embedding` is left NULL because the
  * watermark is a TIMESTAMP comparison and never reads the halfvec.
  */
 async function seedThought(input: {
@@ -176,8 +183,7 @@ async function startDefaultWorker(): Promise<{
     OPENBRAIN_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS: String(THRESHOLD_SECONDS),
   };
 
-  let handler: ((request: Request) => Response | Promise<Response>) | null =
-    null;
+  let handler: ((request: Request) => Response | Promise<Response>) | null = null;
   let summary: Record<string, unknown> = {};
 
   const runtime: NatsWorkerRuntime = {
@@ -253,136 +259,139 @@ function requireBlock(body: Record<string, unknown>): EmbedWatermarkBlock {
   return block as EmbedWatermarkBlock;
 }
 
-describe(
-  "nats worker composes a LIVE embed watermark observer by default (#724 item 3)",
-  () => {
-    beforeAll(async () => {
-      pool = new Pool({ connectionString: requireTestDatabaseUrl() });
-      await runMigrations(pool);
+describe("nats worker composes a LIVE embed watermark observer by default (#724 item 3)", () => {
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: requireTestDatabaseUrl() });
+    await runMigrations(pool);
+  });
+
+  beforeEach(async () => {
+    // The observer aggregates every embedding target. Vitest shares one
+    // isolated database across serial files, so earlier suites' newer rows
+    // would otherwise dominate these deliberately aged fixtures.
+    await pool.query(
+      `TRUNCATE thoughts, decisions, relationships, projects, sessions,
+                ob_session_events, ob_session_lanes CASCADE`,
+    );
+  });
+
+  afterEach(async () => {
+    await pool.query("DELETE FROM thoughts WHERE created_by = $1", [CREATED_BY]);
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("the startup summary reports an observer WAS composed with no option passed", async () => {
+    // This is the whole gap in one assertion. `embed_watermark_observed` is
+    // computed as `Boolean(options.embedWatermarkHealth)`
+    // (`scripts/run-nats-worker.ts:345`), and the live entrypoint passes no
+    // such option — so today the deployed worker announces `false` and that
+    // is the visible signature of the missing wiring.
+    await seedThought({
+      content: "raw arrival, not yet embedded",
+      createdAgoSeconds: 30,
+      embeddedAgoSeconds: null,
     });
 
-    afterEach(async () => {
-      await pool.query(`DELETE FROM thoughts WHERE created_by = $1`, [
-        CREATED_BY,
-      ]);
+    const { summary } = await startDefaultWorker();
+
+    expect(
+      summary.embed_watermark_observed,
+      "startNatsWorkerProcess must construct a real observer when the caller supplies none; the live entrypoint supplies none",
+    ).toBe(true);
+    expect(summary.embed_watermark_lag_threshold_seconds).toBe(THRESHOLD_SECONDS);
+  });
+
+  it("STALE — raw newer than embedded past the threshold degrades the worker", async () => {
+    // The three-day outage, in rows: raw thoughts keep arriving while the
+    // newest embedded row is over three days old. `embedded_at IS NULL` on
+    // the recent arrivals is what a drained-by-nobody queue looks like.
+    await seedThought({
+      content: "old row, embedded three days ago",
+      createdAgoSeconds: 259_260,
+      embeddedAgoSeconds: 259_200,
+    });
+    await seedThought({
+      content: "fresh raw row, queue never drained",
+      createdAgoSeconds: 60,
+      embeddedAgoSeconds: null,
+    });
+    await seedThought({
+      content: "another fresh raw row",
+      createdAgoSeconds: 20,
+      embeddedAgoSeconds: null,
     });
 
-    afterAll(async () => {
-      await pool.end();
+    const { status, body } = await startDefaultWorker();
+    const block = requireBlock(body);
+
+    expect(block.stale).toBe(true);
+    expect(body.status).toBe("degraded");
+    expect(status).toBe(503);
+
+    // Numbers must come from the SEEDED ROWS, not from a constant. The newest
+    // raw row was inserted 20s ago and the newest embedded mark 259_200s ago;
+    // tolerances absorb runner latency without letting a hard-coded block pass.
+    expect(block.newest_raw_age_seconds).toBeGreaterThanOrEqual(19);
+    expect(block.newest_raw_age_seconds).toBeLessThan(120);
+    expect(block.newest_embedded_age_seconds).toBeGreaterThan(259_000);
+    expect(block.lag_seconds).toBeGreaterThan(block.lag_threshold_seconds);
+    expect(block.lag_threshold_seconds).toBe(THRESHOLD_SECONDS);
+    expect(block.raw_rows_recent).toBeGreaterThan(0);
+    expect(block.reason).toBeTruthy();
+  });
+
+  it("HEALTHY — an embed lane keeping up within the threshold stays green", async () => {
+    // CONTROL. Without it the stale case proves nothing: a surface that
+    // reported `degraded` unconditionally would pass that test.
+    await seedThought({
+      content: "raw row promptly embedded",
+      createdAgoSeconds: 120,
+      embeddedAgoSeconds: 100,
+    });
+    await seedThought({
+      content: "newer raw row, also embedded",
+      createdAgoSeconds: 40,
+      embeddedAgoSeconds: 30,
     });
 
-    it("the startup summary reports an observer WAS composed with no option passed", async () => {
-      // This is the whole gap in one assertion. `embed_watermark_observed` is
-      // computed as `Boolean(options.embedWatermarkHealth)`
-      // (`scripts/run-nats-worker.ts:345`), and the live entrypoint passes no
-      // such option — so today the deployed worker announces `false` and that
-      // is the visible signature of the missing wiring.
-      await seedThought({
-        content: "raw arrival, not yet embedded",
-        createdAgoSeconds: 30,
-        embeddedAgoSeconds: null,
-      });
+    const { status, body } = await startDefaultWorker();
+    const block = requireBlock(body);
 
-      const { summary } = await startDefaultWorker();
+    expect(block.stale).toBe(false);
+    expect(body.status).toBe("healthy");
+    expect(status).toBe(200);
+    expect(block.lag_seconds).toBeLessThan(block.lag_threshold_seconds);
+    expect(block.newest_embedded_age_seconds).toBeGreaterThanOrEqual(29);
+    expect(block.newest_embedded_age_seconds).toBeLessThan(150);
+    expect(block.raw_rows_recent).toBeGreaterThan(0);
+  });
 
-      expect(
-        summary.embed_watermark_observed,
-        "startNatsWorkerProcess must construct a real observer when the caller supplies none; the live entrypoint supplies none",
-      ).toBe(true);
-      expect(summary.embed_watermark_lag_threshold_seconds).toBe(
-        THRESHOLD_SECONDS,
-      );
+  it("IDLE CORPUS — no recent raw rows is healthy, with real numbers, not an alarm", async () => {
+    // A quiet week produces an old embedded row too, and alarming on that is
+    // how a check stops being read (`server/capture/liveness-observer.ts`
+    // MIN_SESSIONS_FOR_SILENCE carries the same argument for capture, and
+    // #728's `raw_rows_recent` field exists to carry it here). Both rows are
+    // ancient and the lag is small — nothing is stalled, nothing is arriving.
+    await seedThought({
+      content: "ancient row, embedded shortly after it arrived",
+      createdAgoSeconds: 604_800,
+      embeddedAgoSeconds: 604_740,
     });
 
-    it("STALE — raw newer than embedded past the threshold degrades the worker", async () => {
-      // The three-day outage, in rows: raw thoughts keep arriving while the
-      // newest embedded row is over three days old. `embedded_at IS NULL` on
-      // the recent arrivals is what a drained-by-nobody queue looks like.
-      await seedThought({
-        content: "old row, embedded three days ago",
-        createdAgoSeconds: 259_260,
-        embeddedAgoSeconds: 259_200,
-      });
-      await seedThought({
-        content: "fresh raw row, queue never drained",
-        createdAgoSeconds: 60,
-        embeddedAgoSeconds: null,
-      });
-      await seedThought({
-        content: "another fresh raw row",
-        createdAgoSeconds: 20,
-        embeddedAgoSeconds: null,
-      });
+    const { status, body } = await startDefaultWorker();
+    const block = requireBlock(body);
 
-      const { status, body } = await startDefaultWorker();
-      const block = requireBlock(body);
-
-      expect(block.stale).toBe(true);
-      expect(body.status).toBe("degraded");
-      expect(status).toBe(503);
-
-      // Numbers must come from the SEEDED ROWS, not from a constant. The newest
-      // raw row was inserted 20s ago and the newest embedded mark 259_200s ago;
-      // tolerances absorb runner latency without letting a hard-coded block pass.
-      expect(block.newest_raw_age_seconds).toBeGreaterThanOrEqual(19);
-      expect(block.newest_raw_age_seconds).toBeLessThan(120);
-      expect(block.newest_embedded_age_seconds).toBeGreaterThan(259_000);
-      expect(block.lag_seconds).toBeGreaterThan(block.lag_threshold_seconds);
-      expect(block.lag_threshold_seconds).toBe(THRESHOLD_SECONDS);
-      expect(block.raw_rows_recent).toBeGreaterThan(0);
-      expect(block.reason).toBeTruthy();
-    });
-
-    it("HEALTHY — an embed lane keeping up within the threshold stays green", async () => {
-      // CONTROL. Without it the stale case proves nothing: a surface that
-      // reported `degraded` unconditionally would pass that test.
-      await seedThought({
-        content: "raw row promptly embedded",
-        createdAgoSeconds: 120,
-        embeddedAgoSeconds: 100,
-      });
-      await seedThought({
-        content: "newer raw row, also embedded",
-        createdAgoSeconds: 40,
-        embeddedAgoSeconds: 30,
-      });
-
-      const { status, body } = await startDefaultWorker();
-      const block = requireBlock(body);
-
-      expect(block.stale).toBe(false);
-      expect(body.status).toBe("healthy");
-      expect(status).toBe(200);
-      expect(block.lag_seconds).toBeLessThan(block.lag_threshold_seconds);
-      expect(block.newest_embedded_age_seconds).toBeGreaterThanOrEqual(29);
-      expect(block.newest_embedded_age_seconds).toBeLessThan(150);
-      expect(block.raw_rows_recent).toBeGreaterThan(0);
-    });
-
-    it("IDLE CORPUS — no recent raw rows is healthy, with real numbers, not an alarm", async () => {
-      // A quiet week produces an old embedded row too, and alarming on that is
-      // how a check stops being read (`server/capture/liveness-observer.ts`
-      // MIN_SESSIONS_FOR_SILENCE carries the same argument for capture, and
-      // #728's `raw_rows_recent` field exists to carry it here). Both rows are
-      // ancient and the lag is small — nothing is stalled, nothing is arriving.
-      await seedThought({
-        content: "ancient row, embedded shortly after it arrived",
-        createdAgoSeconds: 604_800,
-        embeddedAgoSeconds: 604_740,
-      });
-
-      const { status, body } = await startDefaultWorker();
-      const block = requireBlock(body);
-
-      expect(block.stale).toBe(false);
-      expect(body.status).toBe("healthy");
-      expect(status).toBe(200);
-      // "Healthy with numbers", not healthy by absence: the block is still
-      // published and still reports what it measured.
-      expect(block.newest_raw_age_seconds).toBeGreaterThan(600_000);
-      expect(block.newest_embedded_age_seconds).toBeGreaterThan(600_000);
-      expect(block.raw_rows_recent).toBe(0);
-      expect(block.reason).toBeTruthy();
-    });
-  },
-);
+    expect(block.stale).toBe(false);
+    expect(body.status).toBe("healthy");
+    expect(status).toBe(200);
+    // "Healthy with numbers", not healthy by absence: the block is still
+    // published and still reports what it measured.
+    expect(block.newest_raw_age_seconds).toBeGreaterThan(600_000);
+    expect(block.newest_embedded_age_seconds).toBeGreaterThan(600_000);
+    expect(block.raw_rows_recent).toBe(0);
+    expect(block.reason).toBeTruthy();
+  });
+});

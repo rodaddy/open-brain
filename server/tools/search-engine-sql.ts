@@ -28,12 +28,8 @@ import {
   VALID_TIERS,
   type Tier,
 } from "./search-constants.ts";
-import {
-  DEFAULT_FTS_CONFIG,
-  ftsConfigLiteral,
-  type FtsConfig,
-} from "./fts-config.ts";
-import type { NamespaceFilter } from "./read-scope.ts";
+import { DEFAULT_FTS_CONFIG, ftsConfigLiteral, type FtsConfig } from "./fts-config.ts";
+import type { NamespaceFilter } from "../domain/read-scope.ts";
 
 /**
  * The scope one arm applies to every CTE it builds.
@@ -47,6 +43,7 @@ export interface CteContext {
   readonly tier: Tier | undefined;
   readonly namespaceParamIndex: number | undefined;
   readonly namespaceIsArray: boolean;
+  readonly lexicalCandidateMode: "all_terms" | "partial_coverage";
 }
 
 /** Render a bound-parameter reference, rejecting an out-of-range index. */
@@ -108,7 +105,12 @@ export function assertTier(tier: Tier | undefined): void {
 }
 
 /** Per-table SELECT list shared by the vector and lexical CTEs. */
-function selectColumns(table: ResourceTable, rankExpression: string): string {
+function selectColumns(
+  table: ResourceTable,
+  rankExpression: string,
+  coverageExpression?: string,
+  queryLexemeCountExpression?: string,
+): string {
   const alias = TABLE_ALIAS[table];
   const metadata = HAS_EXTRACTED_METADATA.has(table)
     ? `${alias}.extracted_metadata`
@@ -125,35 +127,24 @@ function selectColumns(table: ResourceTable, rankExpression: string): string {
     ${rankExpression},
     COALESCE(${alias}.usefulness_score, 0.5) AS usefulness,
     COALESCE(${alias}.access_count, 0) AS access_count,
-    ${metadata}`;
+    ${metadata}${coverageExpression ? `,\n    ${coverageExpression} AS lexical_coverage` : ""}${queryLexemeCountExpression ? `,\n    ${queryLexemeCountExpression} AS query_lexeme_count` : ""}`;
 }
 
 /**
- * Session events are namespaced INDIRECTLY.
+ * Session events are namespaced INDIRECTLY: scope lives on `ob_session_lanes`,
+ * so both builders below JOIN that table and apply the namespace predicate to
+ * `sl.namespace`. Columns the corpus lacks are filled with typed literals.
  *
- * `ob_session_events` has no `namespace` column at all (verified against
- * information_schema on the dogfood DB, 2026-08-07); scope lives on
- * `ob_session_lanes` and is reachable only through
- * `ob_session_events.lane_id`. Both builders below therefore JOIN the lane
- * table and apply the auth-derived namespace predicate to `sl.namespace`.
- * Omitting that join would not merely widen results -- it would expose every
- * agent's session history to every other namespace.
- *
- * The corpus also lacks `archived_at`, `tier`, `tags`, `usefulness_score`,
- * `access_count`, and `search_vector`. Those slots are filled with typed
- * literals so the UNION arms stay type-compatible, and two consequences are
- * deliberate:
- *   - no stored `search_vector` -> the lexical arm matches `content` with
- *     ILIKE, so it is substring matching, not stemming. That is the honest
- *     capability of a column that does not exist, and it is why `ftsConfig`
- *     has nothing to configure for this source.
- *   - no `tier` -> `importance` carries the same hot/warm/cold vocabulary
- *     under the same CHECK constraint, so it fills the tier slot.
+ * See docs/decisions/search-engine-sql-session-events-indirect-namespace.md
  */
 const SESSION_EVENTS_LABEL = "session_event";
 
 /** Shared SELECT list for the session-event arms; `rank` differs per arm. */
-function sessionEventColumns(rankExpression: string): string {
+function sessionEventColumns(
+  rankExpression: string,
+  coverageExpression?: string,
+  queryLexemeCountExpression?: string,
+): string {
   return `'${SESSION_EVENTS_LABEL}' AS source_type,
     se.id,
     sl.namespace,
@@ -166,15 +157,43 @@ function sessionEventColumns(rankExpression: string): string {
     ${rankExpression},
     0.5 AS usefulness,
     0 AS access_count,
-    se.metadata AS extracted_metadata`;
+    se.metadata AS extracted_metadata${coverageExpression ? `,\n    ${coverageExpression} AS lexical_coverage` : ""}${queryLexemeCountExpression ? `,\n    ${queryLexemeCountExpression} AS query_lexeme_count` : ""}`;
+}
+
+/** Analyze the hybrid query with the same allowlisted config as its corpus. */
+function normalizedQuerySql(config: FtsConfig): string {
+  const literal = ftsConfigLiteral(config);
+  return `hybrid_search_tsvector('${literal}'::regconfig, (SELECT q FROM fts_query), true)`;
+}
+
+/** Hybrid-only OR query built from distinct normalized query lexemes. */
+function partialQuerySql(config: FtsConfig): string {
+  return `(SELECT array_to_string(
+      ARRAY(
+        SELECT quote_literal(query_terms.lexeme)
+        FROM unnest(tsvector_to_array(${normalizedQuerySql(config)}))
+          AS query_terms(lexeme)
+      ),
+      ' | '
+    )::tsquery)`;
+}
+
+/** Count query lexemes present in one candidate without expanding its vector. */
+function lexicalCoverageSql(vectorSql: string, queryVectorSql: string): string {
+  return `(SELECT COUNT(*)::int
+      FROM unnest(tsvector_to_array(${queryVectorSql})) AS query_terms(lexeme)
+      WHERE ${vectorSql} @@ (quote_literal(query_terms.lexeme)::tsquery))`;
+}
+
+/** Count the distinct normalized lexemes whose coverage denominator is shared. */
+function queryLexemeCountSql(queryVectorSql: string): string {
+  return `cardinality(tsvector_to_array(${queryVectorSql}))`;
 }
 
 /** Build the session-event vector-similarity CTE. */
 export function buildSessionEventsVectorCTE(context: CteContext): string {
   assertTier(context.tier);
-  const tierFilter = context.tier
-    ? ` AND se.importance = '${context.tier}'`
-    : "";
+  const tierFilter = context.tier ? ` AND se.importance = '${context.tier}'` : "";
   const nsFilter = scopedNamespaceSql("sl", context);
   const distance = `se.embedding <=> (SELECT emb FROM query_embedding)`;
   return `session_events_results AS (
@@ -188,12 +207,43 @@ export function buildSessionEventsVectorCTE(context: CteContext): string {
 }
 
 /** Build the session-event lexical CTE. */
-export function buildSessionEventsFtsCTE(context: CteContext): string {
+export function buildSessionEventsFtsCTE(
+  context: CteContext,
+  ftsConfig: FtsConfig,
+): string {
   assertTier(context.tier);
-  const tierFilter = context.tier
-    ? ` AND se.importance = '${context.tier}'`
-    : "";
+  const tierFilter = context.tier ? ` AND se.importance = '${context.tier}'` : "";
   const nsFilter = scopedNamespaceSql("sl", context);
+  if (context.lexicalCandidateMode === "partial_coverage") {
+    const literal = ftsConfigLiteral(ftsConfig);
+    const computesVector = ftsConfig !== DEFAULT_FTS_CONFIG;
+    const vectorSql = computesVector
+      ? `hybrid_search_tsvector('${literal}'::regconfig, se.content, false)`
+      : "se.hybrid_search_vector";
+    const vectorReference = computesVector ? "lexical_vector.vector" : vectorSql;
+    const lateralJoin = computesVector
+      ? `
+  -- OFFSET 0 fences this per-row expression so PostgreSQL cannot inline and
+  -- recompute it independently for the predicate and coverage projection.
+  CROSS JOIN LATERAL (SELECT ${vectorSql} AS vector OFFSET 0) AS lexical_vector`
+      : "";
+    const querySql = partialQuerySql(ftsConfig);
+    const queryVectorSql = normalizedQuerySql(ftsConfig);
+    const coverageSql = lexicalCoverageSql(vectorReference, queryVectorSql);
+    const queryLexemeCount = queryLexemeCountSql(queryVectorSql);
+    return `session_events_fts AS (
+  SELECT ${sessionEventColumns(
+    `ts_rank_cd(${vectorReference}, ${querySql}, 2) AS fts_rank`,
+    coverageSql,
+    queryLexemeCount,
+  )}
+  FROM ob_session_events se
+  JOIN ob_session_lanes sl ON sl.id = se.lane_id${lateralJoin}
+  WHERE ${vectorReference} @@ ${querySql}${tierFilter}${nsFilter}
+  ORDER BY lexical_coverage DESC, fts_rank DESC, se.id ASC
+  LIMIT ${context.perTableLimit}
+)`;
+  }
   return `session_events_fts AS (
   SELECT ${sessionEventColumns("1.0 AS fts_rank")}
   FROM ob_session_events se
@@ -205,15 +255,10 @@ export function buildSessionEventsFtsCTE(context: CteContext): string {
 }
 
 /** Build one table's vector-similarity CTE. */
-export function buildVectorCTE(
-  table: ResourceTable,
-  context: CteContext,
-): string {
+export function buildVectorCTE(table: ResourceTable, context: CteContext): string {
   assertTier(context.tier);
   const alias = TABLE_ALIAS[table];
-  const tierFilter = context.tier
-    ? ` AND ${alias}.tier = '${context.tier}'`
-    : "";
+  const tierFilter = context.tier ? ` AND ${alias}.tier = '${context.tier}'` : "";
   const nsFilter = scopedNamespaceSql(alias, context);
   const distance = `${alias}.embedding <=> (SELECT emb FROM query_embedding)`;
   return `${table}_results AS (
@@ -263,11 +308,39 @@ export function buildFtsCTE(
 ): string {
   assertTier(context.tier);
   const alias = TABLE_ALIAS[table];
-  const tierFilter = context.tier
-    ? ` AND ${alias}.tier = '${context.tier}'`
-    : "";
+  const tierFilter = context.tier ? ` AND ${alias}.tier = '${context.tier}'` : "";
   const nsFilter = scopedNamespaceSql(alias, context);
   const { vectorSql, querySql } = ftsMatchExpressions(table, ftsConfig);
+  if (context.lexicalCandidateMode === "partial_coverage") {
+    const partialSql = partialQuerySql(ftsConfig);
+    const queryVectorSql = normalizedQuerySql(ftsConfig);
+    const computesVector = ftsConfig !== DEFAULT_FTS_CONFIG;
+    const hybridVectorSql = computesVector
+      ? `hybrid_search_tsvector('${ftsConfigLiteral(ftsConfig)}'::regconfig, ${FTS_SOURCE_TEXT[table]}, false)`
+      : `${alias}.hybrid_search_vector`;
+    const vectorReference = computesVector ? "lexical_vector.vector" : hybridVectorSql;
+    const lateralJoin = computesVector
+      ? `
+  -- OFFSET 0 fences this per-row expression so PostgreSQL cannot inline and
+  -- recompute it independently for matching, coverage, and ranking.
+  CROSS JOIN LATERAL (SELECT ${hybridVectorSql} AS vector OFFSET 0) AS lexical_vector`
+      : "";
+    const coverageSql = lexicalCoverageSql(vectorReference, queryVectorSql);
+    const queryLexemeCount = queryLexemeCountSql(queryVectorSql);
+    return `${table}_fts AS (
+  SELECT ${selectColumns(
+    table,
+    `ts_rank_cd(${vectorReference}, ${partialSql}, 2) AS fts_rank`,
+    coverageSql,
+    queryLexemeCount,
+  )}
+  FROM ${table} ${alias}${lateralJoin}
+  WHERE ${vectorReference} @@ ${partialSql}
+    AND ${alias}.archived_at IS NULL${tierFilter}${nsFilter}
+  ORDER BY lexical_coverage DESC, fts_rank DESC, ${alias}.id ASC
+  LIMIT ${context.perTableLimit}
+)`;
+  }
   return `${table}_fts AS (
   SELECT ${selectColumns(table, `ts_rank_cd(${vectorSql}, ${querySql}) AS fts_rank`)}
   FROM ${table} ${alias}

@@ -1,7 +1,8 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { testScratchDir } from "../../../scripts/test-support/scratch-dir.ts";
 
 import {
   FirstClassMemoryRuntime,
@@ -23,7 +24,7 @@ const SENTINEL = "secret-value";
 function tempSpool(
   options: ConstructorParameters<typeof JsonlSpool>[1] = {},
 ): JsonlSpool {
-  const dir = mkdtempSync(join(tmpdir(), "obmem-ts-runtime-"));
+  const dir = testScratchDir("obmem-ts-runtime-");
   return new JsonlSpool(join(dir, "spool.jsonl"), options);
 }
 
@@ -31,14 +32,10 @@ describe("runtime write degradation", () => {
   it("spools a failed write after a started lane and stamps provenance", async () => {
     const spool = tempSpool();
     const client = new StartThenFailClient();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        client,
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client,
+      spool,
+    });
     const output = await runtime.captureDistilled("A distilled fact");
     expect(output.receipt.status).toBe(ReceiptStatus.SPOOLED);
     expect(output.receipt.durable).toBe(true);
@@ -47,9 +44,7 @@ describe("runtime write degradation", () => {
     expect(output.receipt.error ?? "").not.toContain(SENTINEL);
     expect(output.receipt.error).toBe("local_error=Error");
     const records = spool.records();
-    expect(records.map((record) => record.operation)).toEqual([
-      "append_session_event",
-    ]);
+    expect(records.map((record) => record.operation)).toEqual(["append_session_event"]);
     expect(records[0]?.payload[PARKED_NAMESPACE_KEY]).toBe("bilby");
     expect(readFileSync(spool.path, "utf-8")).not.toContain(SENTINEL);
   });
@@ -65,11 +60,10 @@ describe("runtime write degradation", () => {
         });
       }
     }
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      { client: new RemoteFailureClient(), spool: tempSpool() },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client: new RemoteFailureClient(),
+      spool: tempSpool(),
+    });
     const output = await runtime.captureDistilled("A distilled fact");
     expect(output.receipt.status).toBe(ReceiptStatus.SPOOLED);
     expect(output.receipt.error).toBe(
@@ -81,14 +75,10 @@ describe("runtime write degradation", () => {
   it("pairs the lane prerequisite with the write when session start fails", async () => {
     const spool = tempSpool();
     const client = new StartThenFailClient({ failStart: true });
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        client,
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client,
+      spool,
+    });
     const output = await runtime.wrap("Wrap summary for a downed brain");
     expect(output.receipt.status).toBe(ReceiptStatus.SPOOLED);
     expect(output.receipt.durable).toBe(true);
@@ -108,13 +98,9 @@ describe("runtime write degradation", () => {
   });
 
   it("reports LOST when no spool is configured", async () => {
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        client: new StartThenFailClient(),
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client: new StartThenFailClient(),
+    });
     const output = await runtime.captureDistilled("A distilled fact");
     expect(output.receipt.status).toBe(ReceiptStatus.LOST);
     expect(output.receipt.durable).toBe(false);
@@ -122,14 +108,10 @@ describe("runtime write degradation", () => {
   });
 
   it("fails closed on invalid or secret-bearing content", async () => {
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        client: new StartThenFailClient(),
-        spool: tempSpool(),
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client: new StartThenFailClient(),
+      spool: tempSpool(),
+    });
     const empty = await runtime.captureDistilled("   ");
     expect(empty.receipt.status).toBe(ReceiptStatus.FAILED);
     const badType = await runtime.captureDistilled("fine", {
@@ -145,13 +127,9 @@ describe("runtime write degradation", () => {
 
   it("rejects oversized distilled content before any transport call", async () => {
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+    });
     const output = await runtime.captureDistilled("x".repeat(17 * 1024));
     expect(output.receipt.status).toBe(ReceiptStatus.FAILED);
     expect(toolCalls(transport).length).toBe(0);
@@ -172,14 +150,10 @@ describe("runtime scope-aware auto-drain", () => {
       "local-key",
     );
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+      spool,
+    });
     const output = await runtime.recallContext("drain now");
     expect(output.receipt.status).toBe(ReceiptStatus.DIRECT);
     expect(output.drain?.retainedUnits).toBe(1);
@@ -205,14 +179,10 @@ describe("runtime scope-aware auto-drain", () => {
       "local-key",
     );
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+      spool,
+    });
     await runtime.recallContext("drain now");
     const dispatchedThought = toolCalls(transport)
       .map((call) => call["params"] as Record<string, unknown>)
@@ -227,14 +197,10 @@ describe("runtime scope-aware auto-drain", () => {
     // Not on the replay allowlist: dispatch fails every pass.
     spool.append("archive_entry", { entry_id: "x" }, "poison-key");
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+      spool,
+    });
     let lastDrain = null;
     for (let pass = 0; pass < 5; pass += 1) {
       const output = await runtime.recallContext(`drain pass ${pass}`);
@@ -253,14 +219,10 @@ describe("runtime scope-aware auto-drain", () => {
   it("does not drain on failed recalls", async () => {
     const spool = tempSpool();
     spool.append("log_thought", { content: "waiting" }, "wait-key");
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        client: new StartThenFailClient(),
-        spool,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      client: new StartThenFailClient(),
+      spool,
+    });
     const output = await runtime.recallContext("this recall fails");
     expect(output.receipt.status).toBe(ReceiptStatus.FAILED);
     expect(output.drain ?? null).toBeNull();
@@ -271,13 +233,9 @@ describe("runtime scope-aware auto-drain", () => {
 describe("runtime lifecycle surface", () => {
   it("starts the exact lane once and reuses it across writes", async () => {
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+    });
     const started = await runtime.sessionStart();
     expect(started.receipt.status).toBe(ReceiptStatus.DIRECT);
     const first = await runtime.captureDistilled("first fact");
@@ -292,13 +250,9 @@ describe("runtime lifecycle surface", () => {
 
   it("checkpoint and wrap write durable session_wrap checkpoints", async () => {
     const transport = new LaneAwareTransport();
-    const runtime = new FirstClassMemoryRuntime(
-      runtimeConfig(),
-      runtimeScope(),
-      {
-        transport,
-      },
-    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), runtimeScope(), {
+      transport,
+    });
     const checkpointed = await runtime.checkpoint("Mid-session checkpoint", {
       keyDecisions: ["Use the spool"],
       receiptRefs: ["receipt-1"],
@@ -311,11 +265,74 @@ describe("runtime lifecycle surface", () => {
       .map((call) => call["params"] as Record<string, unknown>)
       .filter((params) => params["name"] === "session_wrap");
     expect(wrapCalls.length).toBe(2);
-    const firstWrapArgs = wrapCalls[0]?.["arguments"] as Record<
-      string,
-      unknown
-    >;
+    const firstWrapArgs = wrapCalls[0]?.["arguments"] as Record<string, unknown>;
     expect(firstWrapArgs["next_steps"]).toEqual(["Receipt ref: receipt-1"]);
     expect("receipt_refs" in firstWrapArgs).toBe(false);
+  });
+});
+
+describe("wrap lane scope adoption", () => {
+  /**
+   * The lane shape the capture hook actually creates: `agent` set, every
+   * other exact-scope coordinate NULL.
+   */
+  function captureHookLane(sessionKey: string): Json {
+    return {
+      namespace: "bilby",
+      session_key: sessionKey,
+      agent: "openbrain-capture",
+      source: null,
+      channel_id: null,
+      thread_id: null,
+      project: null,
+      current_context_md: null,
+      metadata: { server_id: null },
+    };
+  }
+
+  it("adopts an existing capture lane's stored scope on a manual wrap", async () => {
+    const scope = runtimeScope();
+    const transport = new LaneAwareTransport();
+    transport.startedSessions.set(
+      scope.session_key,
+      captureHookLane(scope.session_key),
+    );
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), scope, {
+      transport,
+    });
+    const wrapped = await runtime.wrap("Lane-owned wrap through adoption");
+    expect(wrapped.receipt.status).toBe(ReceiptStatus.SAVED);
+    const wrapArgs = toolCalls(transport)
+      .map((call) => call["params"] as Record<string, unknown>)
+      .filter((params) => params["name"] === "session_wrap")
+      .map((params) => params["arguments"] as Record<string, unknown>);
+    expect(wrapArgs.length).toBe(1);
+    // The write carries the LANE's stored coordinates, not the caller's.
+    expect(wrapArgs[0]?.["agent"]).toBe("openbrain-capture");
+    expect(wrapArgs[0]?.["platform"]).toBeNull();
+    expect(wrapArgs[0]?.["server_id"]).toBeNull();
+    expect(wrapArgs[0]?.["channel_id"]).toBeNull();
+    expect(wrapArgs[0]?.["thread_id"]).toBeNull();
+  });
+
+  it("keeps claiming its own scope when the lane is the caller's", async () => {
+    const scope = runtimeScope();
+    const transport = new LaneAwareTransport();
+    const runtime = new FirstClassMemoryRuntime(runtimeConfig(), scope, {
+      transport,
+    });
+    const wrapped = await runtime.wrap("Ordinary wrap on an owned lane");
+    expect(wrapped.receipt.status).toBe(ReceiptStatus.SAVED);
+    const starts = toolCalls(transport)
+      .map((call) => call["params"] as Record<string, unknown>)
+      .filter((params) => params["name"] === "session_start");
+    // Unchanged ordinary path: one claiming session_start, no discovery call.
+    expect(starts.length).toBe(1);
+    const wrapArgs = toolCalls(transport)
+      .map((call) => call["params"] as Record<string, unknown>)
+      .filter((params) => params["name"] === "session_wrap")
+      .map((params) => params["arguments"] as Record<string, unknown>);
+    expect(wrapArgs[0]?.["agent"]).toBe(scope.agent);
+    expect(wrapArgs[0]?.["channel_id"]).toBe(scope.channel_id);
   });
 });

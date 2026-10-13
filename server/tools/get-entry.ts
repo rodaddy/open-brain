@@ -36,6 +36,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { SOURCE_LABELS, tableEnum } from "./curation-helpers.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
 
 /** Observed current-src default preview width for the compact envelope. */
 const DEFAULT_COMPACT_MAX_CHARS = 500;
@@ -81,10 +82,7 @@ const COMPACT_CONTENT: Readonly<Record<ResourceTable, string>> = {
 };
 
 /** Tables whose rows carry no `updated_at`, observed from the live schema. */
-const WITHOUT_UPDATED_AT = new Set<ResourceTable>([
-  "relationships",
-  "projects",
-]);
+const WITHOUT_UPDATED_AT = new Set<ResourceTable>(["relationships", "projects"]);
 
 /** Frozen `get_entry` argument contract: the names and rule values are the API. */
 const getEntryInputSchema = {
@@ -190,25 +188,18 @@ async function fetchCompact(
   const parameters: unknown[] = [id, ...predicate.values];
   parameters.push(maxChars);
   const maxCharsParameter = `$${parameters.length}`;
-  const updatedAt = WITHOUT_UPDATED_AT.has(table)
-    ? "NULL::timestamptz"
-    : "updated_at";
+  const updatedAt = WITHOUT_UPDATED_AT.has(table) ? "NULL::timestamptz" : "updated_at";
   const contentExpression = `regexp_replace(COALESCE((${COMPACT_CONTENT[table]})::text, ''), '[[:space:]]+', ' ', 'g')`;
 
-  const { rows } = await dependencies.pool.query(
-    `SELECT entry.id, entry.namespace, entry.created_by, entry.created_at,
-            entry.updated_at, entry.tier, entry.tags,
-            LEFT(entry.content_text, ${maxCharsParameter}) AS content_preview,
-            length(entry.content_text) AS content_length,
-            length(entry.content_text) > ${maxCharsParameter} AS content_truncated
-       FROM (
-         SELECT id, namespace, created_by, created_at, ${updatedAt} AS updated_at,
-                tier, tags, ${contentExpression} AS content_text
-           FROM ${table}
-          WHERE id = $1 AND archived_at IS NULL${predicate.clause}
-       ) entry`,
-    parameters,
-  );
+  const repository = createEntryReadRepository(dependencies.pool);
+  const rows = await repository.selectCompactEntry({
+    table,
+    updatedAtExpression: updatedAt,
+    contentExpression,
+    maxCharsParameter,
+    predicateClause: predicate.clause,
+    params: parameters,
+  });
   if (rows.length === 0) return null;
   return compactEnvelope(rows[0] as Record<string, unknown>, request);
 }
@@ -217,13 +208,15 @@ async function fetchCompact(
 async function fetchFull(
   dependencies: MemoryToolDependencies,
   request: EntryRead,
-): Promise<unknown | null> {
+): Promise<unknown> {
   const { table, id, predicate } = request;
-  const { rows } = await dependencies.pool.query(
-    `SELECT ${TABLE_COLUMNS[table]} FROM ${table}
-      WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-    [id, ...predicate.values],
-  );
+  const repository = createEntryReadRepository(dependencies.pool);
+  const rows = await repository.selectFullEntry({
+    table,
+    columnsSql: TABLE_COLUMNS[table],
+    predicateClause: predicate.clause,
+    params: [id, ...predicate.values],
+  });
   if (rows.length === 0) return null;
   return rows[0];
 }
@@ -267,10 +260,7 @@ export function registerGetEntryTool(
 
       const row = await fetchFull(dependencies, read);
       if (row === null) return errorResult(NOT_FOUND);
-      dependencies.logger.info(
-        { tool: "get_entry", render: "full" },
-        "tool_result",
-      );
+      dependencies.logger.info({ tool: "get_entry", render: "full" }, "tool_result");
       return textResult(row);
     },
   );

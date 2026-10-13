@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { logger } from "../../src/logger.ts";
-import { SECTION_NAMES } from "../../src/tools/agent-context-pack.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { SECTION_NAMES } from "../tools/context-pack-args.ts";
 import type { FleetEnvelope, NamespaceSource } from "./nats-runtime.ts";
 import {
   buildEnvelope,
@@ -111,7 +111,7 @@ export function undeliverableReplyEnvelope(
  * Only known section names are echoed, so arbitrary caller text cannot be
  * reflected back into the error message.
  */
-export function requestedSectionsFromRequest(data: Uint8Array): string[] {
+function requestedSectionsFromRequest(data: Uint8Array): string[] {
   try {
     const envelope = envelopeFromBytes(data);
     const payload = envelope.payload as { body?: unknown } | undefined;
@@ -122,14 +122,17 @@ export function requestedSectionsFromRequest(data: Uint8Array): string[] {
     return requested.filter(
       (name): name is string => typeof name === "string" && known.has(name),
     );
-  } catch {
+  } catch (err) {
+    // "default" is a fine answer for the error envelope, but it reads the same
+    // whether the request asked for nothing or its bytes could not be read.
+    logger.debug("nats_requested_sections_unreadable", {
+      error_type: safeErrorType(err),
+    });
     return [];
   }
 }
 
-export function namespaceSourceFromResponse(
-  response: FleetEnvelope,
-): NamespaceSource | null {
+function namespaceSourceFromResponse(response: FleetEnvelope): NamespaceSource | null {
   const source = (response.payload as { namespace_source?: unknown }).namespace_source;
   return typeof source === "string" ? (source as NamespaceSource) : null;
 }

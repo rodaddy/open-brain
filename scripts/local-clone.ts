@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Fail-closed launcher for an explicitly configured local Open Brain clone.
  *
@@ -9,7 +9,11 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import pg from "pg";
-import { validateLocalCloneMode } from "../src/local-clone-mode.ts";
+import { validateLocalCloneMode } from "../server/config/local-clone-mode.ts";
+import {
+  LOCAL_CLONE_LOG_DIR_KEY,
+  pipeChildOutputToRotatingLogs,
+} from "./local-clone-log-rotation.ts";
 
 export const LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA =
   "openbrain.local_clone_verify_receipt.v1";
@@ -29,6 +33,10 @@ export const LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA =
  * module is retired only after the candidate is proven RUNNING.
  */
 export const SERVING_ENTRYPOINT = "server/main.ts";
+
+export function servingProcessSpec(): { executable: string; arguments: string[] } {
+  return { executable: process.execPath, arguments: [SERVING_ENTRYPOINT] };
+}
 
 const CHILD_ENV_KEYS = [
   "ALLOWED_ORIGINS",
@@ -81,7 +89,28 @@ const CHILD_ENV_KEYS = [
   // #757: the fleet-embedding opt-in read by `validateLocalCloneMode`; without
   // it here the key is dropped before the child sees it (the #755 trap).
   "OPEN_BRAIN_EMBEDDING_HOST_ALLOW",
+  // Issue 1488, fifth instance of the deploy-coupling class: only ENABLED was
+  // listed, so the REM producer and runner tuning keys never reached the
+  // server. scripts/local-clone.maintenance-env.test.ts now fails the suite
+  // when server/config/maintenance.ts reads a key this list does not carry.
+  "OPEN_BRAIN_MAINTENANCE_CONCURRENCY",
+  "OPEN_BRAIN_MAINTENANCE_DISTILL_BATCH_SIZE",
   "OPEN_BRAIN_MAINTENANCE_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_GRAPH_LIMIT",
+  "OPEN_BRAIN_MAINTENANCE_LEASE_MS",
+  "OPEN_BRAIN_MAINTENANCE_MAX_DISTILL_BATCHES",
+  "OPEN_BRAIN_MAINTENANCE_POLL_MS",
+  "OPEN_BRAIN_MAINTENANCE_REM_BACKLOG_HIGH_WATER",
+  "OPEN_BRAIN_MAINTENANCE_REM_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_REM_FORCED_SLICE_SIZE",
+  "OPEN_BRAIN_MAINTENANCE_REM_MAX_REQUESTS_PER_MINUTE",
+  "OPEN_BRAIN_MAINTENANCE_REM_MIN_GAP_MS",
+  "OPEN_BRAIN_MAINTENANCE_REM_MIN_HEADROOM_BYTES",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_BACKEND",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_MAX_USD_PER_RUN",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_MIN_GAP_MS",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_SLICE_SIZE",
   "OPEN_BRAIN_RUN_MIGRATIONS",
   "OPENBRAIN_TRANSPORT",
   "PORT",
@@ -145,10 +174,7 @@ interface DatabaseProbeRow {
   pgvector_installed: boolean;
 }
 
-function required(
-  env: Record<string, string | undefined>,
-  key: string,
-): string {
+function required(env: Record<string, string | undefined>, key: string): string {
   const configured = env[key]?.trim();
   if (!configured) throw new Error(`Local clone launcher requires ${key}`);
   return configured;
@@ -193,6 +219,14 @@ const SERVER_CONFIG_PREFIXES = [
   "OPEN_BRAIN_",
   "SERVICE_",
 ] as const;
+
+/**
+ * Keys that configure the LAUNCHER process itself, not the server child. They
+ * are consumed before the child exists (OPENBRAIN_LOCAL_CLONE_LOG_DIR selects
+ * the launcher's own rotating log sink, exported by
+ * scripts/local-clone-autostart.sh), so the drop report skips them (issue 755).
+ */
+export const LAUNCHER_OWN_ENV_KEYS = ["OPENBRAIN_LOCAL_CLONE_LOG_DIR"] as const;
 
 /** One configured key the child environment does not carry. */
 export interface DroppedChildEnvEntry {
@@ -255,6 +289,7 @@ export function describeDroppedChildEnvironment(
     // it silently is the bug this whole function exists to prevent.
     if (configured === "") continue;
     if (delivered[key] !== undefined) continue;
+    if ((LAUNCHER_OWN_ENV_KEYS as readonly string[]).includes(key)) continue;
     if (!SERVER_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))) {
       continue;
     }
@@ -314,14 +349,10 @@ function assertDatabaseProof(
   }
 }
 
-function expectedEmbedding(
-  env: Record<string, string | undefined>,
-): EmbeddingProof {
+function expectedEmbedding(env: Record<string, string | undefined>): EmbeddingProof {
   const dimensions = Number.parseInt(env.EMBEDDING_DIMENSIONS ?? "768", 10);
   if (!Number.isInteger(dimensions) || dimensions <= 0) {
-    throw new Error(
-      "Local clone launcher requires a valid EMBEDDING_DIMENSIONS",
-    );
+    throw new Error("Local clone launcher requires a valid EMBEDDING_DIMENSIONS");
   }
   return {
     model: env.EMBEDDING_MODEL?.trim() || "gemini-embedding-001",
@@ -335,9 +366,7 @@ function assertEmbeddingProof(
 ): void {
   const expected = expectedEmbedding(env);
   if (proof.model !== expected.model) {
-    throw new Error(
-      "Local clone embedding provider does not expose EMBEDDING_MODEL",
-    );
+    throw new Error("Local clone embedding provider does not expose EMBEDDING_MODEL");
   }
   if (proof.dimensions !== expected.dimensions) {
     throw new Error(
@@ -520,8 +549,7 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
       };
       if (
         !models.data?.some(
-          (model) =>
-            typeof model.id === "string" && model.id === expected.model,
+          (model) => typeof model.id === "string" && model.id === expected.model,
         )
       ) {
         throw new Error(
@@ -556,11 +584,28 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
   },
   child: {
     spawn(env): ChildProcess {
-      return spawn(process.execPath, ["run", SERVING_ENTRYPOINT], {
+      const command = servingProcessSpec();
+      const logDir = process.env[LOCAL_CLONE_LOG_DIR_KEY]?.trim();
+      if (!logDir) {
+        return spawn(command.executable, command.arguments, {
+          cwd: process.cwd(),
+          env,
+          stdio: "inherit",
+        });
+      }
+      // Announced, not silent: the child's output leaves this process's
+      // stdio for the rotating files (issue 1526).
+      process.stderr.write(
+        `local-clone launcher: server child output -> ${logDir}/autostart.{out,err}.log ` +
+          `(rotating, 1 MB per file, 3 rolled files)\n`,
+      );
+      const child = spawn(command.executable, command.arguments, {
         cwd: process.cwd(),
         env,
-        stdio: "inherit",
+        stdio: ["inherit", "pipe", "pipe"],
       });
+      void pipeChildOutputToRotatingLogs(child, logDir);
+      return child;
     },
   },
   writeReceipt(receipt): void {
@@ -581,7 +626,7 @@ export const productionDependencies: LocalCloneLauncherDependencies = {
 
 if (import.meta.main) {
   try {
-    const mode = parseLocalCloneArgs(Bun.argv.slice(2));
+    const mode = parseLocalCloneArgs(process.argv.slice(2));
     process.exitCode = await runLocalCloneLauncher(
       mode,
       process.env,

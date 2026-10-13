@@ -28,7 +28,7 @@ know?* If the answer is "an empty result set" or "exit 0", that is the bug.
 On 2026-07-30 an agent got seven separate calls wrong in one session and every
 single one was a fact that was already checkable — the chunking design
 (`aqmd search "chunking"`), the lane scope (one psql query), the promotion cap
-(a 30-second test that overturned its own claim), core01's worker topology
+(a 30-second test that overturned its own claim), the hosted worker topology
 (`curl .../health`), the deploy host (`AGENTS.md:104`, already written down).
 None were judgment calls. Each was a lookup skipped in favour of a plausible
 answer, and the plausible answer disagreed with reality every time.
@@ -146,7 +146,7 @@ points somewhere wrong is exactly this trap again.
 ### The service reads a different env file than you do
 
 `local-clone-autostart.sh` sources
-`/Volumes/ThunderBolt/open-brain-local/local-clone.env` (mode 600, enforced),
+`/srv/open-brain-local/local-clone.env` (mode 600, enforced),
 **not** the repo's `.env`. Editing `.env` does not affect the running service,
 and vice versa. Two files, two lifetimes — check which one you are looking at
 before concluding a value is set.
@@ -170,7 +170,7 @@ used, or the query returns anything.
 **Run them:**
 
 ```bash
-OPENBRAIN_TEST_DATABASE_URL="postgres://rico@127.0.0.1:5432/open_brain_local_20260724" \
+OPENBRAIN_TEST_DATABASE_URL="postgres://user@127.0.0.1:5432/open_brain_local_20260724" \
   bun test src/tools/__tests__/decompose-entry.pg.test.ts
 ```
 
@@ -191,7 +191,7 @@ in `.env` (gitignored), and a fresh shell has not loaded them.
 **Always source `.env` first, in the same command:**
 
 ```bash
-set -a && . ./.env && set +a && psql -t -A -c "select count(*) from ob_session_events;"
+set -a && source ./.env && set +a && psql -t -A -c "select count(*) from ob_session_events;"
 ```
 
 `set -a` exports every variable the file defines, so `PGHOST`/`PGPORT`/
@@ -319,7 +319,7 @@ session that read many design docs was permanently unlocked.
 
 ### `_DOCS/STANDARDS-*.md` are adjustable copies, not authority
 
-They are seeded from `/Volumes/ThunderBolt/Development/_DOCS/` and then adjusted
+They are seeded from `/srv/dev/_DOCS/` and then adjusted
 per repo — that is why they are copies rather than symlinks. Do not cite one to
 override a live instruction or a repo-local rule, and do not treat reading one
 as having consulted authority.
@@ -722,7 +722,7 @@ Measured 2026-07-31, two real processes, same database:
 
 `LOCK_WAIT_SECONDS = 30.0` was set, verified as `PRAGMA busy_timeout = 30000`,
 and **doing nothing on the one path it existed to protect** -- the two-worker
-contention on core01 it was added for.
+contention it was added for.
 
 **Setting a timeout is not the same as being protected by one.** The constant
 looked right, the pragma read back right, and the behaviour was wrong. Only a
@@ -933,20 +933,19 @@ not a size proposal. Memory content stays unbounded, and prose proposing a *new*
 cap is still walled. The exemption is for literals that are already fixed
 somewhere else.
 
-### Swapping back to core01 is one env var — and a missing token looks exactly like a dead host
+### Repointing the brain is one env var — and a missing token looks exactly like a dead host
 
 **The single switch.** While this machine is in dev/dogfood mode its brain is
 the local service, and the *only* thing that says so is `OPENBRAIN_BASE_URL` in
-`~/.local/share/openbrain-memory/env/claudex-observation.env` — verified
-2026-08-02 pointing at `http://127.0.0.1:3100`. When dev mode ends and this
-machine goes back to core01 as its brain, repoint that one variable at core01
-(`10.71.1.21:3100`) and refresh `OPENBRAIN_TOKEN` to the matching consumer
+`~/.local/share/openbrain-memory/env/openbrain.env` — verified
+2026-08-02 pointing at `http://127.0.0.1:3100`. When the brain moves (the
+k3s move, epic 762), repoint that one variable at the new endpoint and refresh `OPENBRAIN_TOKEN` to the matching consumer
 token. There is no second place to edit and no code change to make.
 
 **Why this is now safe to forget.** `_ob/scripts/ob-memory-provider.ts` used to
-carry `OPENBRAIN_BASE_URL: "http://10.71.1.21:3100"` as a silent built-in
+carry a hard-coded remote `OPENBRAIN_BASE_URL` as a silent built-in
 default (observed 2026-08-02 at line 221), so an unset or unsourced env file did
-not fail — it quietly hydrated the session from **core01** while every other
+not fail — it quietly hydrated the session from **a remote host** while every other
 part of the session believed it was on the local dogfood brain. The provider is
 being changed to source the env file and fail loud when either
 `OPENBRAIN_BASE_URL` or `OPENBRAIN_TOKEN` is missing, naming the variable. After
@@ -965,7 +964,7 @@ message as an unreachable host. Order of checks:
    you are on?
 3. *Only then* probe host availability.
 
-Two sessions diagnosed a missing token as a core01 outage, and core01 was probed
+Two sessions diagnosed a missing token as a host outage, and the host was probed
 healthy mid-incident — the healthy probe was read as noise instead of as the
 answer. A healthy `/health` next to a failing gate is positive evidence the
 problem is credentials or environment, not the network.
@@ -1103,7 +1102,7 @@ does not exist for these packages.
 
 **The paved road.** Build wheels on the Mini and stage them —
 `scripts/client-bundle.sh` does this, into
-`/Volumes/ThunderBolt/open-brain-local/air-bundle/`, and the bundle's
+`/srv/open-brain-local/air-bundle/`, and the bundle's
 `setup-client.sh` installs from `--find-links` against the bundle's own
 `wheels/`. That reuses the wheelhouse convention the Mini already runs on
 (`OPENBRAIN_MEMORY_FIND_LINKS`, default
@@ -1124,13 +1123,13 @@ is given, so a base URL with a path produces `…/mcp/health`.
 **The correct spellings**, and only these two shapes:
 
 ```
-https://ob.rodaddy.live        # preferred — TLS, no opt-in needed
-http://10.71.1.20:3100         # LAN plain http — needs OPENBRAIN_ALLOW_INSECURE_HTTP=1
+https://openbrain.example.internal        # preferred — TLS, no opt-in needed
+http://10.0.1.20:3100         # LAN plain http — needs OPENBRAIN_ALLOW_INSECURE_HTTP=1
 ```
 
 `openbrain_memory.client._validate_base_url` permits plain `http` only for
 loopback, so the LAN spelling is refused outright without the opt-in declared by
-#525 / PR #544. Prefer `https://ob.rodaddy.live`: no opt-in, no plain-text
+#525 / PR #544. Prefer `https://openbrain.example.internal`: no opt-in, no plain-text
 bearer token on the wire, and one fewer silent-failure mode.
 
 `127.0.0.1` is correct **on the Mini only** and needs no opt-in there. The bundle
@@ -1182,7 +1181,7 @@ reported in a single receipt.
 ### A fresh box blocks EVERY tool call, and the escape hatch names a path it does not have
 
 **Symptom.** On a newly installed client whose Development tree is not on
-`/Volumes/ThunderBolt`, every tool call is blocked by the context-budget gate,
+`/srv`, every tool call is blocked by the context-budget gate,
 and the remediation the banner prints names a directory that does not exist on
 that machine. Pasting it fails, so the block never clears and the session cannot
 be recovered from inside itself. On the operator-invoked path the same
@@ -1202,8 +1201,8 @@ wrapper's `exec env -i` allowlist did not pass it, so even hand-setting it in th
 env file was stripped before any hook child saw it. Both halves are required —
 the value AND the pass-through.
 
-**Reproducing this on the Mini takes care.** `/Users/rico/Development` here is a
-**symlink** to `/Volumes/ThunderBolt/Development`, and `_canonical_directory`
+**Reproducing this on the Mini takes care.** `/home/user/Development` here is a
+**symlink** to `/srv/dev`, and `_canonical_directory`
 calls `.resolve()`. Probe with that path and both the broken and fixed cases
 return a healthy scope, hiding the defect entirely. Use a root that is a real
 directory with no symlink back to the volume:
@@ -1333,3 +1332,36 @@ Rebasing cleared all six on #551. **Failures that the diff cannot plausibly
 explain are evidence about the base, not about the change** — spending the first
 half hour hunting a causal path through the diff is the expensive way to find
 that out.
+
+## 2026-09-27 release traps
+
+### A pushed `v*` tag is a production deploy, not a label
+
+**Symptom.** A handover says "tag the release" for the local dogfood clone.
+The obvious tag is `v1.0.0-rc.1`.
+
+**Cause.** At the time, `.forgejo/workflows/deploy.yml` fired on
+`push: tags: ["v*"]` and deployed to the production host, since retired. `ci.yml` also runs on `v*` tags.
+
+**Do this instead.** Tag local dogfood releases `dogfood-v<version>`
+(`dogfood-v1.0.0-rc.1` and `dogfood-v1.0.0-rc.2`, 2026-09-27). Neither
+workflow matches that prefix. Separately, origin carries stray `v1.0.0` and
+`v9.9.9` tags from 2026-08-01 that point at test-fixture commits, so do not read
+`v1.0.0` as a real release.
+
+### A launcher `ADJUSTED` key can come from the global launchd environment
+
+**Symptom.** The local-clone launcher reports dropped `OPENBRAIN_*` keys that
+are not in `local-clone.env`, and editing the env file changes nothing.
+
+**Cause.** A launchd job inherits the user's global launchd environment.
+`launchctl getenv OPENBRAIN_TEMP_WORKSPACE` answered `/srv/_tmp`
+on 2026-09-27, set by Development agent tooling. A key can also come from the
+wrapper's own `export` (`OPENBRAIN_LOCAL_CLONE_LOG_DIR`,
+`scripts/local-clone-autostart.sh`).
+
+**Check where each key is SET before prescribing a fix**: the env file, the
+plist's `EnvironmentVariables`, `launchctl getenv <key>`, or the wrapper.
+Issue 755 prescribed an env-file edit for keys the file never held. PR 1614
+unsets the ambient pair in the wrapper and exempts launcher-own keys in
+`scripts/local-clone.ts`.

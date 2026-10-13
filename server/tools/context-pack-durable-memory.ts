@@ -17,12 +17,15 @@
  * and could return a DIFFERENT ranking, so pointers would dedupe against rows
  * durable_memory never saw.
  */
-import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
-import { canRead } from "../auth/permissions.ts";
+import type { AuthIdentity } from "../auth/types.ts";
 import type { AgentContextPackArgs } from "./context-pack-args.ts";
-import { namespaceFilterFor } from "./read-scope.ts";
-import { ALL_TABLES } from "./search-constants.ts";
-import { executeSearch, type SearchRow } from "./search-engine.ts";
+import { namespaceFilterFor } from "../domain/read-scope.ts";
+import {
+  executeSearch,
+  readableSearchSources,
+  type SearchRow,
+  type SearchSource,
+} from "./search-engine.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import {
   type DurableFailureLogger,
@@ -68,7 +71,7 @@ const DURABLE_MEMORY_MAX_ITEM_CHARS = Number.MAX_SAFE_INTEGER;
  * unproducible: "I don't see any reason why this whole thing would ship in a
  * single shot to anywhere. It defeats the whole purpose of this."
  */
-export const DURABLE_MEMORY_BURST_ITEMS = 10;
+const DURABLE_MEMORY_BURST_ITEMS = 10;
 
 /**
  * Extra rows fetched beyond the item cap so `pointers` has a net-new pool
@@ -83,7 +86,7 @@ export const DURABLE_MEMORY_BURST_ITEMS = 10;
  */
 const DURABLE_MEMORY_POINTER_OVERFETCH = 20;
 
-export type DurableMemoryContextFragment = {
+type DurableMemoryContextFragment = {
   section?: Record<string, unknown>;
   scopeDenials: Array<Record<string, unknown>>;
   truncation: Array<Record<string, unknown>>;
@@ -127,7 +130,7 @@ export function recordCitationId(row: SearchRow): string {
  * and its citation. The `pointers` section must NOT emit those display fields —
  * it uses {@link recordStructuralSourceRef} instead.
  */
-export function recordSourceRef(row: SearchRow) {
+function recordSourceRef(row: SearchRow) {
   return (
     row.source_ref ?? {
       source: "brain",
@@ -163,8 +166,12 @@ export function recordStructuralSourceRef(row: SearchRow): {
     type: String(full.type),
     id: String(full.id),
   };
-  if (full.namespace !== undefined && full.namespace !== null) {
-    structural.namespace = String(full.namespace);
+  // `namespace` is `string | undefined` on both SearchRow and SourceRef; the
+  // `unknown` here is only an artifact of the Record cast above, so a typeof
+  // guard recovers the real type without stringifying an object.
+  const namespaceValue: unknown = full.namespace;
+  if (typeof namespaceValue === "string") {
+    structural.namespace = namespaceValue;
   }
   return structural;
 }
@@ -180,7 +187,7 @@ export function recordStructuralSourceRef(row: SearchRow): {
  * independently resolvable back to its record.
  */
 /** Everything the durable-memory recall path needs, in one object. */
-export type DurableMemoryContextRequest = {
+type DurableMemoryContextRequest = {
   args: AgentContextPackArgs;
   auth: AuthIdentity;
   namespace: string;
@@ -246,7 +253,7 @@ function emptySection(
 async function recallRows(options: {
   request: DurableMemoryContextRequest;
   query: string;
-  accessibleTables: ResourceTable[];
+  accessibleTables: SearchSource[];
   namespaceFilter: string | string[] | undefined;
   maxContentChars: number;
 }): Promise<{ rows: SearchRow[] } | { failure: DurableMemoryContextFragment }> {
@@ -262,9 +269,7 @@ async function recallRows(options: {
       // carries, never how many the query is allowed to find. Guard the
       // addition: MAX_SAFE_INTEGER + 20 is no longer an exact integer and
       // Postgres rejects it, so an unbounded ask is passed through as-is.
-      Number.isSafeInteger(
-        Number.MAX_SAFE_INTEGER + DURABLE_MEMORY_POINTER_OVERFETCH,
-      )
+      Number.isSafeInteger(Number.MAX_SAFE_INTEGER + DURABLE_MEMORY_POINTER_OVERFETCH)
         ? Number.MAX_SAFE_INTEGER + DURABLE_MEMORY_POINTER_OVERFETCH
         : Number.MAX_SAFE_INTEGER,
       "hybrid",
@@ -288,9 +293,7 @@ async function recallRows(options: {
         section: emptySection(query, "recall_failed"),
         maxContentChars,
         extra: {
-          degradedSources: [
-            { source: "durable_memory", reason: "recall_failed" },
-          ],
+          degradedSources: [{ source: "durable_memory", reason: "recall_failed" }],
         },
       }),
     };
@@ -323,10 +326,7 @@ function buildBurstItems(
       // A non-empty body the char allocation could not admit IS a genuine
       // durable drop. The row keeps a valid identity and stays
       // pointer-eligible.
-      if (
-        typeof row.content_preview === "string" &&
-        row.content_preview.length > 0
-      ) {
+      if (typeof row.content_preview === "string" && row.content_preview.length > 0) {
         itemsTruncated = true;
       }
       continue;
@@ -410,8 +410,7 @@ function memoryTruncationEntries(options: {
   maxContentChars: number;
 }): Array<Record<string, unknown>> {
   const { burst, burstRowCount, netNew, maxContentChars } = options;
-  const unemittableNetNew =
-    burst.items.length === 0 && burstRowCount > 0 && netNew > 0;
+  const unemittableNetNew = burst.items.length === 0 && burstRowCount > 0 && netNew > 0;
   if (!burst.itemsTruncated && !unemittableNetNew) return [];
   return [
     {
@@ -475,7 +474,7 @@ function prepareRecall(
   maxContentChars: number,
 ):
   | {
-      accessibleTables: ResourceTable[];
+      accessibleTables: SearchSource[];
       namespaceFilter: string | string[] | undefined;
     }
   | { fragment: DurableMemoryContextFragment } {
@@ -490,18 +489,14 @@ function prepareRecall(
     };
   }
 
-  const accessibleTables: ResourceTable[] = ALL_TABLES.filter((table) =>
-    canRead(request.auth.role, table),
-  );
+  const accessibleTables = readableSearchSources(request.auth.role);
   if (accessibleTables.length === 0) {
     return {
       fragment: emptyFragment({
         section: emptySection(query, "no_readable_tables"),
         maxContentChars,
         extra: {
-          scopeDenials: [
-            { source: "durable_memory", reasons: ["no_readable_tables"] },
-          ],
+          scopeDenials: [{ source: "durable_memory", reasons: ["no_readable_tables"] }],
         },
       }),
     };
@@ -651,19 +646,12 @@ function logRecallFailure(options: {
   auth: AuthIdentity;
   args: AgentContextPackArgs;
   query: string;
-  accessibleTables: readonly ResourceTable[];
+  accessibleTables: readonly SearchSource[];
   namespaceFilter: string | string[] | undefined;
   error: unknown;
 }): void {
-  const {
-    logger,
-    auth,
-    args,
-    query,
-    accessibleTables,
-    namespaceFilter,
-    error,
-  } = options;
+  const { logger, auth, args, query, accessibleTables, namespaceFilter, error } =
+    options;
   logDurableFailure({
     logger,
     event: "durable_memory_recall_failed",

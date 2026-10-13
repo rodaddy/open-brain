@@ -21,8 +21,7 @@ const AWS_SECRET_LIKE_RE =
   "[A-Za-z0-9/+=]{40}" +
   "(?![A-Za-z0-9/+=])";
 const AWS_SECRET_CONTEXT_RE =
-  "(aws[_ -]?(secret|secret[_ -]?access[_ -]?key))\\s*[:=]\\s*" +
-  "[A-Za-z0-9/+=]{40}";
+  "(aws[_ -]?(secret|secret[_ -]?access[_ -]?key))\\s*[:=]\\s*" + "[A-Za-z0-9/+=]{40}";
 const SLACK_TOKEN_RE = "xox[baprs]-[A-Za-z0-9-]{10,}";
 const GOOGLE_API_KEY_PREFIX = "AIza";
 const JWT_LIKE_RE =
@@ -173,9 +172,7 @@ export function rejectSecretPayload(value: unknown, path: string): void {
   if (isPlainObject(value)) {
     for (const [key, item] of Object.entries(value)) {
       if (SENSITIVE_KEY_RE.test(key)) {
-        throw new ValidationError(
-          `${path}.${key} contains secret-like material`,
-        );
+        throw new ValidationError(`${path}.${key} contains secret-like material`);
       }
       rejectSecretPayload(item, `${path}.${key}`);
     }

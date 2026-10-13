@@ -4,10 +4,15 @@
  * anchor's obsolete anchor->term EDGE is soft-deleted. Split out of
  * graph-derivation.test.ts so each suite stays a readable size.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
-import { auth, baseInput, FakeGraph } from "./graph-derivation-test-helpers.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
+import {
+  auth,
+  baseInput,
+  asRepository,
+  FakeGraph,
+} from "./graph-derivation-test-helpers.ts";
 
 const ANCHOR_CANONICAL = "thought:11111111-1111-4111-8111-111111111111";
 
@@ -42,7 +47,7 @@ async function droppedTermEdgeIsArchivedAndStaysGoneOnRerun() {
 
   // Initial: topics [migrations, indexing] -> 2 live anchor->term edges.
   const first = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       metadata: { topics: ["migrations", "indexing"], people: [] },
@@ -61,7 +66,7 @@ async function droppedTermEdgeIsArchivedAndStaysGoneOnRerun() {
 
   // Changed: topics [migrations] -> the indexing edge is now stale.
   const changed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ metadata: { topics: ["migrations"], people: [] } }),
   );
@@ -78,7 +83,7 @@ async function droppedTermEdgeIsArchivedAndStaysGoneOnRerun() {
 
   // Rerun the SAME shrunk set: unchanged content => no re-prune, no re-derive.
   const again = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ metadata: { topics: ["migrations"], people: [] } }),
   );
@@ -99,14 +104,14 @@ async function onlyThisAnchorsEdgesAreTouched() {
 
   // Anchor A and Anchor B both mention "indexing".
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       metadata: { topics: ["migrations", "indexing"], people: [] },
     }),
   );
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorId: otherAnchorId,
@@ -124,7 +129,7 @@ async function onlyThisAnchorsEdgesAreTouched() {
   const indexingRow = topicRow(g, "indexing");
 
   const changed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({ metadata: { topics: ["migrations"], people: [] } }),
   );

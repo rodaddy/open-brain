@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * ob-backfill: Extract sessions from Claude Code JSONL transcripts and push to OB.
  *
@@ -10,34 +10,20 @@
  * Pushes to OB with deterministic session_ids (idempotent — safe to re-run).
  */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { parseArgs } from "util";
 import { readdir, readFile, stat, writeFile, mkdir } from "fs/promises";
 import { join, basename, dirname } from "path";
 import { createHash } from "crypto";
 import { existsSync } from "fs";
-import { containsSecret, redactText } from "../src/sharing.ts";
+import { extractSession, type SessionExtract } from "./ob-backfill-extract.ts";
+import { extractConversation, type JsonlEvent } from "./ob-backfill-transcript.ts";
 
 const CLAUDE_PROJECTS_DIR =
-  process.env.CLAUDE_PROJECTS_DIR ??
-  join(process.env.HOME ?? "", ".claude/projects");
+  process.env.CLAUDE_PROJECTS_DIR ?? join(process.env.HOME ?? "", ".claude/projects");
 
 const HISTORY_FILE = join(process.env.HOME ?? "", ".claude/history.jsonl");
-
-// No local default -- see scripts/curate.ts for the same rule. A localhost
-// fallback silently works on a developer Mac and silently fails in a
-// container. Resolved at the CALL site, not at import: a module-level exit
-// would take down every test that merely imports this file.
-function requireLlmBaseUrl(): string {
-  const url = process.env.LLM_BASE_URL;
-  if (!url) {
-    throw new Error(
-      "LLM_BASE_URL is required: point it at the fleet inference endpoint. " +
-        "There is no local default.",
-    );
-  }
-  return url;
-}
-const EXTRACTION_MODEL = process.env.EXTRACTION_MODEL ?? "sonnet";
 
 /** Failed sessions queue -- persisted locally for retry on next session-start/wrap */
 const FAILED_QUEUE_PATH =
@@ -89,28 +75,6 @@ async function removeFromFailedQueue(filePath: string): Promise<void> {
   if (filtered.length !== queue.length) await saveFailedQueue(filtered);
 }
 
-interface SessionExtract {
-  summary: string;
-  key_decisions: string[];
-  learnings: string[];
-  next_steps: string[];
-  blockers: string[];
-  project: string;
-  date?: string;
-}
-
-interface JsonlEvent {
-  type: string;
-  message?: {
-    role?: string;
-    content?: string | Array<{ type: string; text?: string }>;
-  };
-  sessionId?: string;
-  cwd?: string;
-  gitBranch?: string;
-  timestamp?: string;
-}
-
 interface HistoryEntry {
   display: string;
   project: string;
@@ -136,7 +100,7 @@ async function loadHistoryIndex(): Promise<
       const entry = JSON.parse(line) as HistoryEntry;
       if (!entry.sessionId) continue;
       if (!index.has(entry.sessionId)) {
-        const date = new Date(entry.timestamp).toISOString().split("T")[0]!;
+        const [date = ""] = new Date(entry.timestamp).toISOString().split("T");
         index.set(entry.sessionId, { date, firstPrompt: entry.display });
       }
     }
@@ -149,8 +113,8 @@ async function loadHistoryIndex(): Promise<
 // --- Project name parsing ---
 
 function parseProjectName(dirName: string): string {
-  const match = dirName.match(/-Volumes-ThunderBolt-Development-(.+)/);
-  if (match) return match[1]!;
+  const match = dirName.match(/-srv-dev-(.+)/);
+  if (match?.[1]) return match[1];
   return dirName.replace(/^-/, "");
 }
 
@@ -177,470 +141,112 @@ async function loadSubagentMetas(sessionDir: string): Promise<string[]> {
   }
 }
 
-// --- Conversation extraction ---
+// --- Sanitization (see scripts/ob-backfill-sanitize.ts) ---
 
-function extractTextContent(
-  content: string | Array<{ type: string; text?: string }>,
-): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((c) => c.type === "text" && c.text)
-      .map((c) => c.text!)
-      .join("\n");
-  }
-  return "";
-}
+export { buildDecisionLogParams, sanitize } from "./ob-backfill-sanitize.ts";
 
-function extractConversation(lines: JsonlEvent[]): {
-  text: string;
-  filesChanged: string[];
-  branch?: string;
-} {
-  const parts: string[] = [];
-  const filesChanged = new Set<string>();
-  let branch: string | undefined;
-
-  for (const event of lines) {
-    if (event.gitBranch && !branch) branch = event.gitBranch;
-
-    if (event.type === "human" || event.type === "user") {
-      const content = event.message?.content;
-      if (content) {
-        const text = extractTextContent(content).slice(0, 2000);
-        if (text) parts.push(`USER: ${text}`);
-      }
-    } else if (event.type === "assistant") {
-      const content = event.message?.content;
-      if (content) {
-        const text = extractTextContent(content).slice(0, 2000);
-        if (text) parts.push(`ASSISTANT: ${text}`);
-      }
-    } else if (event.type === "file-history-snapshot") {
-      // Extract file paths from snapshots
-      const msg = event.message;
-      if (msg && typeof msg === "object") {
-        const content = (msg as Record<string, unknown>).content;
-        if (typeof content === "string" && content.includes("/")) {
-          // File paths often appear in content
-          const pathMatch = content.match(
-            /(?:\/[\w.-]+)+(?:\.(?:ts|js|sql|md|json|py|sh|yml|yaml))/g,
-          );
-          if (pathMatch) pathMatch.forEach((p) => filesChanged.add(p));
-        }
-      }
-    }
-  }
-
-  // Smart sampling: first 3 turns for context, last 30% for outcomes, sample middle
-  const total = parts.length;
-  if (total <= 30) {
-    // Short session — include everything
-    return {
-      text: parts.join("\n\n").slice(0, 12000),
-      filesChanged: Array.from(filesChanged).slice(0, 20),
-      branch,
-    };
-  }
-
-  const head = parts.slice(0, 6); // first 3 exchanges for context
-  const tailStart = Math.floor(total * 0.7);
-  const tail = parts.slice(tailStart); // last 30% for outcomes
-  const midStart = Math.floor(total * 0.3);
-  const midEnd = Math.floor(total * 0.5);
-  const mid = parts.slice(midStart, midEnd); // middle 20% for core work
-
-  const sampled = [
-    "--- SESSION START ---",
-    ...head,
-    `--- MIDDLE (turns ${midStart}-${midEnd} of ${total}) ---`,
-    ...mid,
-    `--- FINAL SECTION (turns ${tailStart}-${total} of ${total}) ---`,
-    ...tail,
-  ];
-
-  return {
-    text: sampled.join("\n\n").slice(0, 14000),
-    filesChanged: Array.from(filesChanged).slice(0, 20),
-    branch,
-  };
-}
-
-// --- LLM extraction ---
-
-async function extractSession(
-  conversation: string,
-  project: string,
-  subagents: string[],
-  filesChanged: string[],
-  date?: string,
-): Promise<SessionExtract | null> {
-  const uniqueHash = createHash("sha256")
-    .update(conversation.slice(0, 200))
-    .digest("hex")
-    .slice(0, 8);
-
-  const contextParts = [
-    `Project: ${project} [ref:${uniqueHash}]`,
-    date ? `Date: ${date}` : "",
-    subagents.length > 0
-      ? `Subagent work delegated:\n${subagents.map((s) => `- ${s}`).join("\n")}`
-      : "",
-    filesChanged.length > 0
-      ? `Files modified:\n${filesChanged.map((f) => `- ${f}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const prompt = `You are extracting a structured session summary from a Claude Code transcript.
-
-${contextParts}
-
-Extract:
-1. summary: 2-3 paragraph narrative of what was accomplished, why it matters, and what state things ended in. Include specific file names, tool names, and technical details. A future AI agent should understand the session from this summary alone.
-2. key_decisions: array of decisions WITH rationale ("Chose X over Y because Z"). Every session has at least one decision — if you can't find explicit ones, infer from the implementation choices.
-3. learnings: array of gotchas, patterns, bugs found, or solutions discovered. Include enough context to be useful without the transcript.
-4. next_steps: array of specific actionable items mentioned or implied
-5. blockers: array of things that stalled progress (empty array if none)
-
-Return JSON only, no markdown fences.
-
-TRANSCRIPT:
-${conversation}`;
-
-  try {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    const apiKey = process.env.LLM_API_KEY;
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-
-    const response = await fetch(`${requireLlmBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: EXTRACTION_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        max_tokens: 2048,
-        temperature: 0.1,
-        caching: false,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(`  LLM extraction failed: ${response.status}`);
-      return null;
-    }
-
-    const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const raw = json.choices?.[0]?.message?.content;
-    if (!raw) return null;
-
-    const cleaned = raw
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```\s*$/, "")
-      .trim();
-    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
-    return {
-      summary: (parsed.summary as string) ?? "",
-      key_decisions: Array.isArray(parsed.key_decisions)
-        ? (parsed.key_decisions as string[])
-        : [],
-      learnings: Array.isArray(parsed.learnings)
-        ? (parsed.learnings as string[])
-        : [],
-      next_steps: Array.isArray(parsed.next_steps)
-        ? (parsed.next_steps as string[])
-        : [],
-      blockers: Array.isArray(parsed.blockers)
-        ? (parsed.blockers as string[])
-        : [],
-      project,
-      date,
-    };
-  } catch (err) {
-    console.error(
-      `  Extraction error: ${err instanceof Error ? err.message : err}`,
-    );
-    return null;
-  }
-}
-
-// --- Sanitization ---
-
-const TOKEN_FRAGMENT_RE = /[A-Za-z0-9._~+/=:@-]+/g;
-const MAX_REFORMED_FRAGMENT_COUNT = 16;
-const MAX_REFORMED_LABELED_FRAGMENT_COUNT = 4;
-const MAX_REFORMED_SECRET_LENGTH = 512;
-const AWS_SECRET_WIDTH = 40;
-const BOUNDARYLESS_SCAN_INTERVAL = 128;
-const WRAPPED_SECRET_SEPARATOR_RE = /[\s,;"'()[\]<>?!&%#|`*{}^$\\]/;
-const BOUNDARYLESS_SECRET_PATTERNS = [
-  /authorization[:=]?bearer[A-Za-z0-9._~+/=-]{8,}/i,
-  /bearer[A-Za-z0-9._~+/=-]{8,}/i,
-  /mcp-session-id[:=]?[A-Za-z0-9._:-]{6,}/i,
-  /sk-[A-Za-z0-9_-]{20,}/i,
-  /github_pat_[A-Za-z0-9_]{20,}/i,
-  /gh[pousr]_[A-Za-z0-9_]{20,}/i,
-  /A[KS]IA[A-Z0-9]{16}/,
-  /xox[baprs]-[A-Za-z0-9-]{10,}/i,
-  /AIza[0-9A-Za-z_-]{35}/,
-  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
-  /[sprk]k_(?:live|test)_[A-Za-z0-9]{16,}/i,
-];
-
-function startsLikeStandaloneSecret(fragment: string): boolean {
-  return /^(authorization|bearer|mcp-session-id|sk-|github_pat_|gh[pousr]_|A[KS]IA|xox[baprs]-|AIza|eyJ|[sprk]k_(live|test)_|https?:\/\/|ftp:\/\/|postgres(?:ql)?:\/\/|mysql:\/\/|mariadb:\/\/|mongodb:\/\/|redis:\/\/|amqps?:\/\/|ssh:\/\/|sftp?:\/\/|smtps?:\/\/|imaps?:\/\/|ldaps?:\/\/)/i.test(
-    fragment,
-  );
-}
-
-function startsLikeUrl(fragment: string): boolean {
-  return /^(?:https?|ftp|postgres(?:ql)?|mysql|mariadb|mongodb|redis|amqps?|ssh|sftp|smtps?|imaps?|ldaps?):\/\//i.test(
-    fragment,
-  );
-}
-
-function isPlainWordFragment(fragment: string): boolean {
-  return /^[A-Za-z]+$/.test(fragment);
-}
-
-function startsLikeLabeledSecret(fragment: string): boolean {
-  return /^(mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]/i.test(
-    fragment,
-  );
-}
-
-function hasPlausibleLabeledSecretValue(fragment: string): boolean {
-  const match =
-    /^(?:mcp-session-id|api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*[:=]\s*(.+)$/i.exec(
-      fragment,
-    );
-  const value = match?.[1] ?? "";
-  const characterClassCount = [/[a-z]/, /[A-Z]/, /[0-9]/, /[_~+/=.-]/].filter(
-    (pattern) => pattern.test(value),
-  ).length;
-  return (
-    (value.length >= 12 && characterClassCount >= 2) ||
-    (value.length >= 6 && /[A-Za-z]/.test(value) && /[0-9]/.test(value))
-  );
-}
-
-function containsBoundarylessSecretAcrossSeparator(
-  text: string,
-  separatorBefore: boolean[],
-): boolean {
-  return BOUNDARYLESS_SECRET_PATTERNS.some((pattern) => {
-    const match = pattern.exec(text);
-    if (!match?.[0]) return false;
-    const start = match.index;
-    const end = start + match[0].length;
-    return separatorBefore.slice(start, end).some(Boolean);
-  });
-}
-
-function hasAwsSecretWindow(compacted: string): boolean {
-  for (
-    let start = 0;
-    start <= compacted.length - AWS_SECRET_WIDTH;
-    start += 1
-  ) {
-    const window = compacted.slice(start, start + AWS_SECRET_WIDTH);
-    if (
-      /[A-Z]/.test(window) &&
-      /[a-z]/.test(window) &&
-      /[0-9]/.test(window) &&
-      /[/+=]/.test(window)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function containsWrappedBoundarylessSecret(text: string): boolean {
-  let compacted = "";
-  let separatorBefore: boolean[] = [];
-  let pendingSeparator = false;
-  let sawSeparator = false;
-
-  const maybeMatch = (): boolean =>
-    sawSeparator &&
-    containsBoundarylessSecretAcrossSeparator(compacted, separatorBefore);
-
-  const append = (char: string): boolean => {
-    compacted += char;
-    separatorBefore.push(pendingSeparator);
-    pendingSeparator = false;
-    if (compacted.length > MAX_REFORMED_SECRET_LENGTH) {
-      compacted = compacted.slice(-MAX_REFORMED_SECRET_LENGTH);
-      separatorBefore = separatorBefore.slice(-MAX_REFORMED_SECRET_LENGTH);
-    }
-    return compacted.length % BOUNDARYLESS_SCAN_INTERVAL === 0 && maybeMatch();
-  };
-
-  const flush = (): boolean => {
-    const matched = maybeMatch();
-    compacted = "";
-    separatorBefore = [];
-    pendingSeparator = false;
-    sawSeparator = false;
-    return matched;
-  };
-
-  for (const char of text) {
-    if (/[A-Za-z0-9._~+/=:@-]/.test(char)) {
-      if (append(char)) return true;
-      continue;
-    }
-    if (WRAPPED_SECRET_SEPARATOR_RE.test(char) && compacted) {
-      sawSeparator = true;
-      pendingSeparator = true;
-      continue;
-    }
-    if (compacted && flush()) return true;
-  }
-
-  return compacted ? flush() : false;
-}
-
-function containsWrappedAwsSecret(text: string): boolean {
-  let run = "";
-  let sawSeparator = false;
-
-  const flush = (): boolean => {
-    const compacted = run.replace(
-      new RegExp(WRAPPED_SECRET_SEPARATOR_RE, "g"),
-      "",
-    );
-    const matched =
-      sawSeparator &&
-      compacted.length >= AWS_SECRET_WIDTH &&
-      hasAwsSecretWindow(compacted);
-    run = "";
-    sawSeparator = false;
-    return matched;
-  };
-
-  for (const char of text) {
-    if (/[A-Za-z0-9/+=]/.test(char)) {
-      run += char;
-      continue;
-    }
-    if (WRAPPED_SECRET_SEPARATOR_RE.test(char) && run) {
-      run += char;
-      sawSeparator = true;
-      continue;
-    }
-    if (run && flush()) return true;
-  }
-
-  return run ? flush() : false;
-}
-
-function containsWhitespaceReformedSecret(text: string): boolean {
-  const fragments = Array.from(
-    text.matchAll(TOKEN_FRAGMENT_RE),
-    (match) => match[0],
-  );
-  for (let start = 0; start < fragments.length; start += 1) {
-    const first = fragments[start] ?? "";
-    const startsLabeled = startsLikeLabeledSecret(first);
-    const startsUrl = startsLikeUrl(first);
-    if (!startsLikeStandaloneSecret(first) && !startsLabeled) continue;
-    if (
-      !startsLabeled &&
-      (containsSecret(first) || containsSecret(` ${first} `))
-    ) {
-      continue;
-    }
-
-    let joined = first;
-    const maxEnd = Math.min(
-      fragments.length,
-      start +
-        (startsLabeled
-          ? MAX_REFORMED_LABELED_FRAGMENT_COUNT
-          : MAX_REFORMED_FRAGMENT_COUNT),
-    );
-    for (let end = start + 1; end < maxEnd; end += 1) {
-      const next = fragments[end] ?? "";
-      if (startsUrl && (isPlainWordFragment(next) || startsLikeUrl(next)))
-        break;
-      joined += next;
-      if (joined.length > MAX_REFORMED_SECRET_LENGTH) break;
-      const secretMatch =
-        containsSecret(joined) || containsSecret(` ${joined} `);
-      if (!secretMatch) continue;
-      if (!startsLabeled || hasPlausibleLabeledSecretValue(joined)) {
-        return true;
-      }
-    }
-  }
-  return (
-    containsWrappedAwsSecret(text) || containsWrappedBoundarylessSecret(text)
-  );
-}
-
-export function sanitize(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  const normalized = text
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-    .replace(/\n/g, " ");
-  // Reformed or wrapped candidates fall back to whole-field redaction. Once a
-  // secret has been split across tokens, surgical replacement can leave tails.
-  if (containsWhitespaceReformedSecret(normalized)) return "[REDACTED]";
-
-  const redacted = redactText(normalized).trim();
-  const spaceCompacted = redacted.replace(/\s+/g, " ");
-  if (
-    containsSecret(redacted) ||
-    containsSecret(spaceCompacted) ||
-    containsWhitespaceReformedSecret(redacted) ||
-    containsWrappedBoundarylessSecret(redacted)
-  ) {
-    return "[REDACTED]";
-  }
-  return redacted;
-}
-
-function sanitizeDecisionBeforeSplit(decision: string): string {
-  const withoutStructuralBecause = decision.replace(/\s+because\s+/gi, " ");
-  if (
-    withoutStructuralBecause !== decision &&
-    sanitize(withoutStructuralBecause) === "[REDACTED]"
-  ) {
-    return "[REDACTED]";
-  }
-  return sanitize(decision);
-}
-
-function sanitizeStructuralField(text: string): string {
-  return sanitize(text).slice(0, 200);
-}
-
-export function buildDecisionLogParams(
-  decision: string,
-  project: string,
-): {
-  title: string;
-  rationale: string;
-  tags: string[];
-} {
-  const cleanDecision = sanitizeDecisionBeforeSplit(decision);
-  const [title = "", ...rationaleParts] = cleanDecision.split(" because ");
-  return {
-    title: title.slice(0, 200),
-    rationale: rationaleParts.join(" because ").slice(0, 200),
-    tags: ["backfill", sanitizeStructuralField(project)],
-  };
-}
+import {
+  buildDecisionLogParams,
+  sanitize,
+  sanitizeStructuralField,
+} from "./ob-backfill-sanitize.ts";
 
 // --- OB push ---
+
+/**
+ * Promisified execFile: node's callback spawn has no `.exited` promise, and
+ * this is the shape that replaces it for the two bounded mcp2cli calls below.
+ * Note it REJECTS on a non-zero exit rather than resolving with a code, so
+ * every call site here handles that explicitly.
+ */
+const execFileAsync = promisify(execFile);
+
+/**
+ * Fire-and-forget mcp2cli call for the per-item logging tools. Extracted from
+ * pushToOB, where the two loops were byte-identical apart from the tool name
+ * and the params shape; the spawn options and awaited exit are unchanged.
+ */
+async function runObTool(tool: string, params: Record<string, unknown>): Promise<void> {
+  // execFileAsync REJECTS on a non-zero exit where the previous `await
+  // proc.exited` resolved with the code and ignored it. This call site is
+  // deliberately fire-and-forget, so the catch preserves that: a failing
+  // per-item log must not abort the backfill.
+  try {
+    await execFileAsync(
+      "mcp2cli",
+      ["open-brain", tool, "--params", JSON.stringify(params)],
+      { encoding: "utf8" },
+    );
+  } catch {
+    // Intentionally ignored -- matches the pre-migration behavior.
+  }
+}
+
+/** Console display width for dry-run previews. Affects printing only. */
+const PREVIEW_DISPLAY_WIDTH = 120;
+
+/**
+ * Prints the dry-run preview of one session. Hoisted out of pushToOB so that
+ * function stays within the repo complexity rule; the printed lines are
+ * unchanged apart from using a shared display width for the field previews.
+ */
+function logDryRun(
+  extract: SessionExtract,
+  sessionId: string,
+  project: string,
+  date: string | undefined,
+): void {
+  console.log(`  [DRY RUN] session_id: ${sessionId}`);
+  console.log(`    project: ${project}`);
+  if (date) console.log(`    date: ${date}`);
+  console.log(`    summary: ${sanitize(extract.summary).slice(0, 150)}...`);
+  console.log(
+    `    decisions: ${extract.key_decisions.length}, learnings: ${extract.learnings.length}, next_steps: ${extract.next_steps.length}, blockers: ${extract.blockers.length}`,
+  );
+  const previews: Array<[string, string[]]> = [
+    ["decision", extract.key_decisions],
+    ["learning", extract.learnings],
+    ["next_step", extract.next_steps],
+    ["blocker", extract.blockers],
+  ];
+  for (const [label, values] of previews) {
+    const [first] = values;
+    if (first === undefined) continue;
+    const preview = sanitize(first).slice(0, PREVIEW_DISPLAY_WIDTH);
+    console.log(`    ${label}[0]: ${preview}`);
+  }
+}
+
+/**
+ * Runs session_save and reports whether it succeeded. Hoisted out of pushToOB
+ * so that function stays within the repo complexity rule; the spawn, the
+ * failure print, and the saved-line print are unchanged.
+ */
+async function saveSession(params: string): Promise<boolean> {
+  // The failure branch below prints the child's STDOUT, so the rejection has
+  // to be caught rather than propagated: execFile attaches the captured
+  // stdout/stderr to the thrown error, and that is the only place it survives
+  // on a non-zero exit.
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      "mcp2cli",
+      ["open-brain", "session_save", "--params", params],
+      { encoding: "utf8" },
+    ));
+  } catch (error) {
+    const failed = error as { stdout?: string; message?: string };
+    const detail = failed.stdout ?? failed.message ?? "";
+    console.error(`  session_save failed: ${detail.slice(0, 200)}`);
+    return false;
+  }
+
+  const result = JSON.parse(stdout);
+  const id = result.result?.id ?? "?";
+  const merged = result.result?.merged ?? false;
+  console.log(`  session: saved (id: ${id}, merged: ${merged})`);
+  return true;
+}
 
 async function pushToOB(
   extract: SessionExtract,
@@ -651,29 +257,7 @@ async function pushToOB(
   const date = extract.date ? sanitizeStructuralField(extract.date) : undefined;
 
   if (dryRun) {
-    console.log(`  [DRY RUN] session_id: ${sessionId}`);
-    console.log(`    project: ${project}`);
-    if (date) console.log(`    date: ${date}`);
-    console.log(`    summary: ${sanitize(extract.summary).slice(0, 150)}...`);
-    console.log(
-      `    decisions: ${extract.key_decisions.length}, learnings: ${extract.learnings.length}, next_steps: ${extract.next_steps.length}, blockers: ${extract.blockers.length}`,
-    );
-    if (extract.key_decisions.length > 0)
-      console.log(
-        `    decision[0]: ${sanitize(extract.key_decisions[0]!).slice(0, 120)}`,
-      );
-    if (extract.learnings.length > 0)
-      console.log(
-        `    learning[0]: ${sanitize(extract.learnings[0]!).slice(0, 120)}`,
-      );
-    if (extract.next_steps.length > 0)
-      console.log(
-        `    next_step[0]: ${sanitize(extract.next_steps[0]!).slice(0, 120)}`,
-      );
-    if (extract.blockers.length > 0)
-      console.log(
-        `    blocker[0]: ${sanitize(extract.blockers[0]!).slice(0, 120)}`,
-      );
+    logDryRun(extract, sessionId, project, date);
     return true;
   }
 
@@ -687,50 +271,21 @@ async function pushToOB(
     blockers: extract.blockers.map(sanitize),
   });
 
-  const proc = Bun.spawn(
-    ["mcp2cli", "open-brain", "session_save", "--params", params],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
+  if (!(await saveSession(params))) return false;
 
-  if (exitCode !== 0) {
-    console.error(`  session_save failed: ${stdout.slice(0, 200)}`);
-    return false;
-  }
-
-  const result = JSON.parse(stdout);
-  const id = result.result?.id ?? "?";
-  const merged = result.result?.merged ?? false;
-  console.log(`  session: saved (id: ${id}, merged: ${merged})`);
-
-  // Log learnings
   for (const learning of extract.learnings) {
-    const lParams = JSON.stringify({
+    await runObTool("log_thought", {
       content: sanitize(learning),
       tags: ["backfill", project],
     });
-    const lProc = Bun.spawn(
-      ["mcp2cli", "open-brain", "log_thought", "--params", lParams],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    await lProc.exited;
   }
 
-  // Log decisions
   for (const decision of extract.key_decisions) {
-    const dParams = JSON.stringify(buildDecisionLogParams(decision, project));
-    const dProc = Bun.spawn(
-      ["mcp2cli", "open-brain", "log_decision", "--params", dParams],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    await dProc.exited;
+    await runObTool("log_decision", buildDecisionLogParams(decision, project));
   }
 
   const counts = [
-    extract.learnings.length > 0
-      ? `${extract.learnings.length} learnings`
-      : null,
+    extract.learnings.length > 0 ? `${extract.learnings.length} learnings` : null,
     extract.key_decisions.length > 0
       ? `${extract.key_decisions.length} decisions`
       : null,
@@ -744,13 +299,15 @@ async function pushToOB(
 
 // --- Process a single JSONL file ---
 
-async function processSession(
-  jsonlPath: string,
-  sessionDir: string | null,
-  project: string,
-  historyInfo: { date: string; firstPrompt: string } | undefined,
-  dryRun: boolean,
-): Promise<boolean> {
+interface WorkItem {
+  filePath: string;
+  sessionDir: string | null;
+  project: string;
+  historyInfo: { date: string; firstPrompt: string } | undefined;
+}
+
+/** Parses a JSONL transcript, skipping lines that do not parse. */
+async function readJsonlEvents(jsonlPath: string): Promise<JsonlEvent[]> {
   const content = await readFile(jsonlPath, "utf-8");
   const lines: JsonlEvent[] = [];
   for (const l of content.split("\n")) {
@@ -761,6 +318,12 @@ async function processSession(
       // skip malformed JSONL lines
     }
   }
+  return lines;
+}
+
+async function processSession(item: WorkItem, dryRun: boolean): Promise<boolean> {
+  const { filePath: jsonlPath, sessionDir, project, historyInfo } = item;
+  const lines = await readJsonlEvents(jsonlPath);
 
   const humanCount = lines.filter(
     (l) => l.type === "human" || l.type === "user",
@@ -780,13 +343,12 @@ async function processSession(
     `\n  ${basename(jsonlPath, ".jsonl")}${date ? ` (${date})` : ""} — ${humanCount} turns, ${subagents.length} subagents, ${filesChanged.length} files${branch ? `, branch: ${branch}` : ""}`,
   );
 
-  const extract = await extractSession(
-    text,
+  const extract = await extractSession(text, {
     project,
     subagents,
     filesChanged,
     date,
-  );
+  });
   if (!extract || !extract.summary) {
     console.log(`  Skipped: extraction returned empty`);
     await appendToFailedQueue(
@@ -809,9 +371,188 @@ async function processSession(
 
 // --- Main ---
 
+type HistoryIndex = Map<string, { date: string; firstPrompt: string }>;
+
+/**
+ * Re-processes the sessions in the failed queue. Hoisted out of main so that
+ * function stays within the repo function-size rule; the sequence of reads,
+ * prints, and queue updates is unchanged.
+ */
+async function runRetryMode(dryRun: boolean): Promise<void> {
+  const queue = await loadFailedQueue();
+  if (queue.length === 0) {
+    console.log("ob-backfill: no failed sessions to retry.");
+    return;
+  }
+  console.log(`ob-backfill: retrying ${queue.length} failed session(s)...\n`);
+  const historyIndex = await loadHistoryIndex();
+  let retryPushed = 0;
+  for (const entry of queue) {
+    if (!existsSync(entry.path)) {
+      console.log(
+        `  ${basename(entry.path)} -- file no longer exists, removing from queue`,
+      );
+      await removeFromFailedQueue(entry.path);
+      continue;
+    }
+    const sessionUuid = basename(entry.path, ".jsonl");
+    const parentDir = dirname(entry.path);
+    const sessionDir = existsSync(join(parentDir, sessionUuid))
+      ? join(parentDir, sessionUuid)
+      : null;
+    console.log(`  Retrying: ${basename(entry.path)} (${entry.project})`);
+    const success = await processSession(
+      {
+        filePath: entry.path,
+        sessionDir,
+        project: entry.project,
+        historyInfo: historyIndex.get(sessionUuid),
+      },
+      dryRun,
+    );
+    if (success) retryPushed++;
+  }
+  const remaining = await loadFailedQueue();
+  console.log(`\n--- Retry Summary ---`);
+  console.log(`Retried: ${queue.length}`);
+  console.log(`Pushed: ${retryPushed}`);
+  console.log(`Still failing: ${remaining.length}`);
+}
+
+/** Transcript files under one project directory, paired with their session dir. */
+async function collectProjectWorkItems(
+  dirPath: string,
+  project: string,
+  perProject: number,
+  historyIndex: HistoryIndex,
+): Promise<WorkItem[]> {
+  const entries = await readdir(dirPath);
+  const jsonlFiles = entries.filter((f) => f.endsWith(".jsonl")).slice(0, perProject);
+  if (jsonlFiles.length === 0) return [];
+
+  const sessionDirs = new Set(
+    entries.filter((f) => !f.endsWith(".jsonl") && !f.startsWith(".")),
+  );
+
+  return jsonlFiles.map((file) => {
+    const sessionUuid = basename(file, ".jsonl");
+    return {
+      filePath: join(dirPath, file),
+      sessionDir: sessionDirs.has(sessionUuid) ? join(dirPath, sessionUuid) : null,
+      project,
+      historyInfo: historyIndex.get(sessionUuid),
+    };
+  });
+}
+
+/** Walks the projects directory and builds the full work list. */
+async function collectWorkItems(options: {
+  projectsDir: string;
+  filterProject: string | undefined;
+  perProject: number;
+  historyIndex: HistoryIndex;
+}): Promise<WorkItem[]> {
+  const { projectsDir, filterProject, perProject, historyIndex } = options;
+  const workItems: WorkItem[] = [];
+  const projectDirs = await readdir(projectsDir);
+
+  for (const dirName of projectDirs.sort()) {
+    const project = parseProjectName(dirName);
+    if (filterProject && project !== filterProject) continue;
+
+    const dirPath = join(projectsDir, dirName);
+    const dirStat = await stat(dirPath);
+    if (!dirStat.isDirectory()) continue;
+
+    workItems.push(
+      ...(await collectProjectWorkItems(dirPath, project, perProject, historyIndex)),
+    );
+  }
+  return workItems;
+}
+
+/** Prints the `=== project ===` header when a batch enters a new project. */
+function announceProjects(
+  batch: WorkItem[],
+  workItems: WorkItem[],
+  currentProject: string,
+): string {
+  let seen = currentProject;
+  for (const item of batch) {
+    if (item.project === seen) continue;
+    seen = item.project;
+    const count = workItems.filter((w) => w.project === item.project).length;
+    console.log(`\n=== ${item.project} (${count} sessions) ===`);
+  }
+  return seen;
+}
+
+/** Runs the work list in batches of `concurrency` and tallies the outcomes. */
+async function runBatches(
+  workItems: WorkItem[],
+  concurrency: number,
+  dryRun: boolean,
+): Promise<{
+  totalProcessed: number;
+  totalPushed: number;
+  totalSkipped: number;
+}> {
+  let totalProcessed = 0;
+  let totalPushed = 0;
+  let totalSkipped = 0;
+  let currentProject = "";
+
+  for (let i = 0; i < workItems.length; i += concurrency) {
+    const batch = workItems.slice(i, i + concurrency);
+    currentProject = announceProjects(batch, workItems, currentProject);
+
+    const results = await Promise.allSettled(
+      batch.map((item) => processSession(item, dryRun)),
+    );
+
+    for (const result of results) {
+      totalProcessed++;
+      if (result.status === "fulfilled" && result.value) totalPushed++;
+      else totalSkipped++;
+    }
+  }
+
+  return { totalProcessed, totalPushed, totalSkipped };
+}
+
+/**
+ * Prints the run summary and the failed-queue status. Hoisted out of main so
+ * that function stays within the repo complexity rule; the printed lines and
+ * the queue read are unchanged.
+ */
+async function reportSummary(
+  totals: { totalProcessed: number; totalPushed: number; totalSkipped: number },
+  dryRun: boolean,
+): Promise<void> {
+  const failedQueue = await loadFailedQueue();
+
+  console.log(`\n--- Summary ---`);
+  console.log(`Processed: ${totals.totalProcessed}`);
+  console.log(`Pushed to OB: ${totals.totalPushed}`);
+  console.log(`Skipped (too short or extraction failed): ${totals.totalSkipped}`);
+  if (failedQueue.length > 0) {
+    console.log(
+      `\n⚠️  ${failedQueue.length} session(s) in failed queue (${FAILED_QUEUE_PATH})`,
+    );
+    console.log(`   Run with --retry to re-process them.`);
+    for (const entry of failedQueue.slice(0, 5)) {
+      console.log(`   - ${basename(entry.path)} (${entry.project}): ${entry.reason}`);
+    }
+    if (failedQueue.length > 5) {
+      console.log(`   ... and ${failedQueue.length - 5} more`);
+    }
+  }
+  if (dryRun) console.log("(dry-run mode — nothing was written)");
+}
+
 async function main() {
   const { values } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: process.argv.slice(2),
     options: {
       dir: { type: "string", default: CLAUDE_PROJECTS_DIR },
       project: { type: "string" },
@@ -822,52 +563,15 @@ async function main() {
     },
   });
 
-  const projectsDir = values.dir!;
+  const projectsDir = values.dir ?? CLAUDE_PROJECTS_DIR;
   const filterProject = values.project;
-  const dryRun = values["dry-run"]!;
-  const retryMode = values.retry!;
-  const limit = parseInt(values.limit!, 10);
-  const concurrency = parseInt(values.concurrency!, 10);
+  const dryRun = values["dry-run"] ?? false;
+  const retryMode = values.retry ?? false;
+  const limit = parseInt(values.limit ?? "10", 10);
+  const concurrency = parseInt(values.concurrency ?? "1", 10);
 
-  // Retry mode: re-process only previously failed sessions
   if (retryMode) {
-    const queue = await loadFailedQueue();
-    if (queue.length === 0) {
-      console.log("ob-backfill: no failed sessions to retry.");
-      return;
-    }
-    console.log(`ob-backfill: retrying ${queue.length} failed session(s)...\n`);
-    const historyIndex = await loadHistoryIndex();
-    let retryPushed = 0;
-    for (const entry of queue) {
-      if (!existsSync(entry.path)) {
-        console.log(
-          `  ${basename(entry.path)} -- file no longer exists, removing from queue`,
-        );
-        await removeFromFailedQueue(entry.path);
-        continue;
-      }
-      const sessionUuid = basename(entry.path, ".jsonl");
-      const parentDir = dirname(entry.path);
-      const sessionDir = existsSync(join(parentDir, sessionUuid))
-        ? join(parentDir, sessionUuid)
-        : null;
-      const historyInfo = historyIndex.get(sessionUuid);
-      console.log(`  Retrying: ${basename(entry.path)} (${entry.project})`);
-      const success = await processSession(
-        entry.path,
-        sessionDir,
-        entry.project,
-        historyInfo,
-        dryRun,
-      );
-      if (success) retryPushed++;
-    }
-    const remaining = await loadFailedQueue();
-    console.log(`\n--- Retry Summary ---`);
-    console.log(`Retried: ${queue.length}`);
-    console.log(`Pushed: ${retryPushed}`);
-    console.log(`Still failing: ${remaining.length}`);
+    await runRetryMode(dryRun);
     return;
   }
 
@@ -881,111 +585,22 @@ async function main() {
   const historyIndex = await loadHistoryIndex();
   console.log(`  ${historyIndex.size} sessions indexed from history.jsonl\n`);
 
-  // Collect all work items first
-  interface WorkItem {
-    filePath: string;
-    sessionDir: string | null;
-    project: string;
-    historyInfo: { date: string; firstPrompt: string } | undefined;
-  }
-
-  const workItems: WorkItem[] = [];
-  const projectDirs = await readdir(projectsDir);
-
-  for (const dirName of projectDirs.sort()) {
-    const project = parseProjectName(dirName);
-    if (filterProject && project !== filterProject) continue;
-
-    const dirPath = join(projectsDir, dirName);
-    const dirStat = await stat(dirPath);
-    if (!dirStat.isDirectory()) continue;
-
-    const entries = await readdir(dirPath);
-    const jsonlFiles = entries
-      .filter((f) => f.endsWith(".jsonl"))
-      .slice(0, limit);
-    if (jsonlFiles.length === 0) continue;
-
-    const sessionDirs = new Set(
-      entries.filter((f) => !f.endsWith(".jsonl") && !f.startsWith(".")),
-    );
-
-    for (const file of jsonlFiles) {
-      const filePath = join(dirPath, file);
-      const sessionUuid = basename(file, ".jsonl");
-      const sessionDir = sessionDirs.has(sessionUuid)
-        ? join(dirPath, sessionUuid)
-        : null;
-      const historyInfo = historyIndex.get(sessionUuid);
-      workItems.push({ filePath, sessionDir, project, historyInfo });
-    }
-  }
+  const workItems = await collectWorkItems({
+    projectsDir,
+    filterProject,
+    perProject: limit,
+    historyIndex,
+  });
 
   console.log(`Total sessions to process: ${workItems.length}\n`);
 
-  let totalProcessed = 0;
-  let totalPushed = 0;
-  let totalSkipped = 0;
-  let currentProject = "";
+  const { totalProcessed, totalPushed, totalSkipped } = await runBatches(
+    workItems,
+    concurrency,
+    dryRun,
+  );
 
-  // Process in batches of `concurrency`
-  for (let i = 0; i < workItems.length; i += concurrency) {
-    const batch = workItems.slice(i, i + concurrency);
-
-    // Print project headers for new projects in this batch
-    for (const item of batch) {
-      if (item.project !== currentProject) {
-        currentProject = item.project;
-        const count = workItems.filter(
-          (w) => w.project === item.project,
-        ).length;
-        console.log(`\n=== ${item.project} (${count} sessions) ===`);
-      }
-    }
-
-    const results = await Promise.allSettled(
-      batch.map((item) =>
-        processSession(
-          item.filePath,
-          item.sessionDir,
-          item.project,
-          item.historyInfo,
-          dryRun,
-        ),
-      ),
-    );
-
-    for (const result of results) {
-      totalProcessed++;
-      if (result.status === "fulfilled" && result.value) {
-        totalPushed++;
-      } else {
-        totalSkipped++;
-      }
-    }
-  }
-
-  // Report failed queue status
-  const failedQueue = await loadFailedQueue();
-
-  console.log(`\n--- Summary ---`);
-  console.log(`Processed: ${totalProcessed}`);
-  console.log(`Pushed to OB: ${totalPushed}`);
-  console.log(`Skipped (too short or extraction failed): ${totalSkipped}`);
-  if (failedQueue.length > 0) {
-    console.log(
-      `\n⚠️  ${failedQueue.length} session(s) in failed queue (${FAILED_QUEUE_PATH})`,
-    );
-    console.log(`   Run with --retry to re-process them.`);
-    for (const entry of failedQueue.slice(0, 5)) {
-      console.log(
-        `   - ${basename(entry.path)} (${entry.project}): ${entry.reason}`,
-      );
-    }
-    if (failedQueue.length > 5)
-      console.log(`   ... and ${failedQueue.length - 5} more`);
-  }
-  if (dryRun) console.log("(dry-run mode — nothing was written)");
+  await reportSummary({ totalProcessed, totalPushed, totalSkipped }, dryRun);
 }
 
 if (import.meta.main) {

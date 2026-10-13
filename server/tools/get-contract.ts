@@ -1,21 +1,22 @@
 /**
  * `get_contract`: return the canonical Open Brain public contract manifest.
  *
- * The manifest is built by `src/contract.ts` rather than rebuilt here, and that
+ * The manifest is built by `server/contracts/contract.ts` rather than rebuilt
+ * here, and that
  * is the whole design decision. The contract is what downstream clients
  * (`openbrain-memory`, `rtech-hermes-runtime`, `mcp2cli`) negotiate against, and
  * its `schema_hash` is a sha256 over the payload; a second hand-maintained copy
- * in the rewrite would be a second answer to "what does this server promise",
+ * here would be a second answer to "what does this server promise",
  * and the two would diverge silently on the first schema edit. Reusing the
- * builder means the rewrite cannot drift from the contract it serves.
+ * builder means this tool cannot drift from the contract it serves.
  *
  * `server/contracts/declaration.ts` used to hold that identity as two string
  * literals, and the warning below compared `buildContract()` against them. That
  * comparison is gone because the declaration is now DERIVED from the same
  * builder: deriving both sides would make the condition `x !== x`, a branch that
  * can never fire while still reading like a guard. The frozen identity is
- * anchored where an anchor actually holds -- the pinned expectation in
- * `src/contract.test.ts` and `contracts/memory/contract-declaration-v24.fixture.json`
+ * anchored where an anchor actually holds -- the pinned expectation against
+ * `contracts/memory/contract-declaration-v24.fixture.json`
  * -- so a hash move still has to be deliberate.
  *
  * What IS worth checking at call time is the question the old string comparison
@@ -24,11 +25,11 @@
  * its tools, so serving a contract naming a tool this registry does not answer
  * is the failure that matters, and it is invisible to any version-string match.
  *
- * `natsAvailability` is not threaded through. The rewrite has not ported
- * `nats-runtime.ts`/`nats-bridge.ts` on any wave, so there is no runtime
+ * `natsAvailability` is not threaded through. `server/` carries no
+ * `nats-runtime.ts`/`nats-bridge.ts`, so there is no runtime
  * boundary to report from; `buildContract` defaults it to
- * `not_runtime_available`, which is the accurate answer for this server and the
- * value current-src emits when its own bridge is absent. Realtime transport is
+ * `not_runtime_available`, which is the accurate answer for this server
+ * whenever a bridge is absent. Realtime transport is
  * excluded from `schema_hash` by design, so this does not change the hash.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

@@ -1,7 +1,7 @@
 /**
  * Report open issues whose referenced issues/PRs are all CLOSED.
  *
- * WHY. GitHub auto-closes issue<-PR (a closing keyword in a merged PR) but
+ * WHY. The forge auto-closes issue<-PR (a closing keyword in a merged PR) but
  * NEVER issue<-issue: "blocked on #419" is prose to the forge, so when #419
  * closes, every issue citing it sits open until something looks. Operator,
  * 2026-08-05: "419 is closed and done, but the two things that are looking at
@@ -13,46 +13,74 @@
  * against live state before anyone closes it. This script only makes the
  * candidates impossible to miss.
  *
+ * READING THE FORGE. This repo moved off GitHub on 2026-08-30; `origin` is
+ * git.example.internal and `gh` does not reach it, so the three `gh issue list` /
+ * `gh pr list` shell-outs this used to make returned nothing at all. Every read
+ * now goes through scripts/forge-api.ts, which owns the base URL, the auth
+ * header and the error shape in one place.
+ *
+ * ONE LIST, NOT THREE. Forgejo's `/issues?state=all` returns issues AND pull
+ * requests in the same collection — a row carrying a `pull_request` object is a
+ * PR. That is why the old script's separate `gh pr list` call has no Forgejo
+ * counterpart here: one paged walk supplies both halves of the state map.
+ *
  * Run it at close-run start and end, alongside scripts/sync-issues.ts:
  *   bun run scripts/stale-blockers.ts
  */
 
+import { forgeListPaged } from "./forge-api.ts";
+
 const repoIssueRef = /#(\d{2,4})\b/g;
 
-type IssueRow = { number: number; title: string; body: string | null };
-type StateRow = { number: number; state: string };
+/** One row of Forgejo's `/issues?state=all` list, issues and PRs alike. */
+type ForgeRow = {
+  id: number;
+  number: number;
+  title: string;
+  body?: string | null;
+  state: string;
+  pull_request?: { merged?: boolean } | null;
+};
 
-async function gh(args: string[]): Promise<string> {
-  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) throw new Error(`gh ${args[0]} failed: ${err.trim()}`);
-  return out;
+/**
+ * The state word this script compares against.
+ *
+ * Forgejo says "open"/"closed" and records merge separately, so a merged pull
+ * request is reported as MERGED rather than CLOSED — the same two words the
+ * reference check below already understood.
+ */
+function stateOf(row: ForgeRow): string {
+  if (row.pull_request?.merged) return "MERGED";
+  return row.state.toUpperCase();
 }
 
-const open: IssueRow[] = JSON.parse(
-  await gh(["issue", "list", "--state", "open", "-L", "500", "--json", "number,title,body"]),
-);
-const allIssues: StateRow[] = JSON.parse(
-  await gh(["issue", "list", "--state", "all", "-L", "1000", "--json", "number,state"]),
-);
-const allPrs: StateRow[] = JSON.parse(
-  await gh(["pr", "list", "--state", "all", "-L", "1000", "--json", "number,state"]),
-);
+/** Every distinct number referenced by an issue's body, excluding itself. */
+function referencesOf(row: ForgeRow): number[] {
+  return [...(row.body ?? "").matchAll(repoIssueRef)]
+    .map((m) => Number(m[1]))
+    .filter((n, i, arr) => n !== row.number && arr.indexOf(n) === i)
+    .sort((a, b) => a - b);
+}
+
+const rows = await forgeListPaged<ForgeRow>("/issues?state=all", (row) => row.id);
 
 const state = new Map<number, string>();
-for (const row of allIssues) state.set(row.number, row.state);
-for (const row of allPrs) if (!state.has(row.number)) state.set(row.number, row.state);
+for (const row of rows) state.set(row.number, stateOf(row));
+
+const open = rows
+  .filter((row) => !row.pull_request && row.state.toUpperCase() === "OPEN")
+  .sort((a, b) => a.number - b.number);
+
+// Announced, never silent: the reader is told what the one list actually held
+// rather than left to infer it from the flagged count.
+console.log(
+  `read ${rows.length} rows from the forge (${open.length} open issues); ` +
+    `pull requests are in the same collection and supply their own state`,
+);
 
 let flagged = 0;
-for (const issue of open.sort((a, b) => a.number - b.number)) {
-  const refs = [...(issue.body ?? "").matchAll(repoIssueRef)]
-    .map((m) => Number(m[1]))
-    .filter((n, i, arr) => n !== issue.number && arr.indexOf(n) === i)
-    .sort((a, b) => a - b);
+for (const issue of open) {
+  const refs = referencesOf(issue);
   if (refs.length === 0) continue;
   const openRefs = refs.filter((n) => state.get(n) === "OPEN");
   const closedRefs = refs.filter(

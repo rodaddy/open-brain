@@ -52,7 +52,7 @@ from pydantic import BaseModel, ConfigDict
 #: None. This side reads the SAME variable, deliberately: a configurable value
 #: on one side only would put the writer and the reader in different scopes,
 #: which is what the previous literal-only comment was protecting against.
-DEVELOPMENT_ROOT = Path("/Volumes/ThunderBolt/Development")
+DEVELOPMENT_ROOT = Path("/srv/dev")
 
 #: The override both sides honour. Spelled identically to the gate's.
 DEVELOPMENT_ROOT_ENV_VAR = "OPENBRAIN_DEVELOPMENT_ROOT"
@@ -102,7 +102,7 @@ def development_root_origin() -> str:
 #: ``APPROVED_TEMP_WORKTREE_ROOTS``. The first is Rico's Mac, the second the
 #: cc-* boxes.
 APPROVED_TEMP_WORKTREE_ROOTS = (
-    Path("/Volumes/ThunderBolt/_tmp"),
+    Path("/srv/_tmp"),
     Path("/mnt/collab/tmp_space"),
 )
 

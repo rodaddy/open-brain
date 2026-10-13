@@ -13,18 +13,12 @@ does not move the Open Brain service or database onto that host.
 | Component | Runs where | Responsibility |
 | --- | --- | --- |
 | Open Brain service | Remote service, for example `https://open-brain.example.com` or trusted lab `http://192.0.2.21:3100` | Owns direct HTTP `/mcp`, auth, namespace policy, storage, search, curation tools. |
-| `openbrain-memory` | Bilby, Skippy, Nagatha, automation hosts, or any Python agent runtime | Reusable Python client, memory facade, safety/retry/spool helpers, and dry-run dream planning. |
-| Hermes provider | `rtech-hermes` | Thin adapter from Hermes lifecycle/events into this package. |
+| `openbrain-memory` | Automation hosts or any Python agent runtime | Reusable Python client, memory facade, safety/retry/spool helpers, and dry-run dream planning. |
 
 Dependency direction is one-way:
 
 - `open-brain` owns the reusable client and memory brain package.
-- `rtech-hermes` owns the Hermes adapter and lifecycle integration.
-- The Python package should not import Hermes runtime code.
-- Hermes migration should move lifecycle/event wiring toward this package
-  rather than growing a long-lived fork of Open Brain client behavior. Until
-  that wiring lands in the deployed Hermes adapter, treat this package as the
-  migration target, not proof of current Hermes runtime state.
+- The Python package stays independent of consuming runtime code.
 
 ## Install
 
@@ -82,12 +76,6 @@ uv tool install --upgrade "openbrain-memory>=0.1.17"
 
 The exact-version or reviewed-wheel guidance above remains preferred for host
 rollouts that require artifact pinning.
-
-Hermes deployments usually do not call `uv pip install` by hand. In
-`rtech-hermes`, set `openbrain_memory.package_spec` in the target agent manifest
-or set `OPENBRAIN_MEMORY_PACKAGE_SPEC` for an emergency override. Both paths
-must use a reviewed wheel, exact package version, or full commit-pinned
-git-subdirectory URL.
 
 ## Runtime Config
 
@@ -312,7 +300,7 @@ responses are reported as lost rather than durable success. The local LLM
 endpoint on `127.0.0.1:8317` is not an Open Brain endpoint or fallback.
 
 For the shared host install, use a Python 3.13 environment at
-`/Users/rico/.local/share/openbrain-memory/.venv`; do not bind the package to a
+`/home/user/.local/share/openbrain-memory/.venv`; do not bind the package to a
 runtime-specific home directory.
 
 ## Current Open Brain Tools
@@ -320,7 +308,7 @@ runtime-specific home directory.
 `OpenBrainClient` exposes first-class methods for the Open Brain memory
 contract. Agent runtimes should call these package methods and confirm the live
 endpoint contract with `client.get_contract()` instead of carrying local copies
-of tool schemas, stale mcp2cli paths, or Hermes-specific Open Brain adapters.
+of tool schemas or stale mcp2cli paths.
 
 Required memory contract methods:
 
@@ -351,7 +339,7 @@ Additional current read helpers:
 Required qmd-derived repo knowledge should already be curated into Open Brain
 and read through `list_repo_facts()` or normal memory retrieval. Future remote
 qmd deep lookup is an optional escape hatch only; qmd failures must not block
-Hermes startup, recall, writes, current memory, or repo facts.
+client startup, recall, writes, current memory, or repo facts.
 
 The generic `call_tool(name, arguments)` method remains available for forward
 compatibility, but missing first-class wrappers for required contract tools are
@@ -412,8 +400,7 @@ a zero-network, deterministic tokenizer/normalizer over the caller-supplied turn
 text; it drives recall for the current turn only and is never persisted as
 durable memory. A standalone TypeScript counterpart is **deferred** to the later
 client phase -- no TypeScript module implements this pass today, so there is no
-existing counterpart to mirror. It carries **no Hermes dependency or Hermes
-rollout requirement**.
+existing counterpart to mirror.
 
 ### Versioning and Contract Pinning
 
@@ -486,8 +473,8 @@ behavior. Read them with three boundaries in mind:
 Schema-shaped input definitions for downstream validators and tool registries.
 The live `get_contract()` manifest remains the source of truth; these helpers
 only translate a manifest the caller already obtained or a package test fixture.
-They do not prove that a deployed Open Brain endpoint, Hermes adapter, or agent
-runtime is wired correctly.
+They do not prove that a deployed Open Brain endpoint or agent runtime is wired
+correctly.
 
 Use `contract_field_to_json_schema()` for one field node and
 `contract_input_to_json_schema()` for one tool's `input_schema` mapping. Use
@@ -503,8 +490,8 @@ second converter in the consuming repo.
 Malformed contract DSL raises `ContractSchemaError` with the failing path rather
 than emitting invalid JSON Schema. Open Brain-specific constraints that do not
 map cleanly to standard JSON Schema are preserved with `x-openbrain-*` vendor
-extensions. Hermes policy, readiness checks, and runtime enforcement remain
-downstream integration responsibilities.
+extensions. Readiness checks and runtime enforcement remain downstream
+integration responsibilities.
 
 ### Transport
 
@@ -516,7 +503,7 @@ confused with mcp2cli daemon routing or other MCP transports.
 
 The server can expose an opt-in NATS request/reply bridge for
 `agent_context_pack` when the connected Open Brain endpoint advertises
-`realtime_transport.nats_jetstream.availability == "available"`. Hermes agents
+`realtime_transport.nats_jetstream.availability == "available"`. Clients
 should still configure `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, and namespace
 identity for direct HTTP access unless their runtime has an approved Python NATS
 transport implementation and fallback plan.
@@ -537,7 +524,7 @@ that need to surface sanitized NATS transport failures directly. Oversized NATS
 request envelopes over 64 KiB are not sent to the request/reply driver; they
 fall back to HTTP when fallback is configured. This package does not vendor a
 Python NATS client yet. Runtime adapters that opt in own the concrete driver
-wrapper and must keep HTTP fallback configured until live parity and Hermes
+wrapper and must keep HTTP fallback configured until live parity and client
 canary evidence exists.
 
 ## Safety and Spooling
@@ -706,7 +693,7 @@ the repo-fact metadata.
 
 ### Canary Coverage Expectations
 
-Before claiming a Hermes agent or other host runtime is ready on this package,
+Before claiming a host runtime is ready on this package,
 run a live canary that covers the required memory contract, not only package
 import or `/health`.
 

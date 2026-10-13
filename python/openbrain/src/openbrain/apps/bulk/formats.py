@@ -55,6 +55,8 @@ from openbrain.models.turn import RawTurn, TurnRole
 LineAdapter = Callable[[str], RawTurn | None]
 
 CODEX_EVENT_RECORD = "event_msg"
+CODEX_RESPONSE_RECORD = "response_item"
+CODEX_SESSION_RECORD = "session_meta"
 HERMES_BLANK_LINE_FIELD = "line (blank)"
 
 
@@ -128,6 +130,15 @@ class CodexEnvelope(BaseModel):
     timestamp: str
     record_type: str = Field(alias="type")
     payload: dict[str, Any]
+
+
+class CodexSessionMetaPayload(BaseModel):
+    """Observed Codex session identity carried by the first rollout record."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    session_id: str
 
 
 class CodexUserMessagePayload(BaseModel):
@@ -211,15 +222,22 @@ class CodexTaskCompletePayload(BaseModel):
 CodexEventAdapter = Callable[[CodexEnvelope, str], RawTurn | None]
 
 
-def codex_raw_turn_from_line(line: str) -> RawTurn | None:
+def codex_raw_turn_from_line(
+    line: str, *, session_ref: str | None = None
+) -> RawTurn | None:
     """Build a normalized turn from one observed Codex rollout JSONL line.
 
     Args:
         line: One complete JSONL record.
+        session_ref: Validated rollout identity when the caller has the complete
+            transcript. It scopes derived user-turn identity across sessions;
+            bulk import without rollout context retains its existing identity.
 
     Returns:
-        A user turn for ``event_msg/user_message``, an assistant turn for
-        ``event_msg/task_complete``, or ``None`` for a valid non-turn record.
+        A user turn for ``event_msg/user_message`` or marked
+        ``response_item/message:user``; an assistant turn for
+        ``event_msg/task_complete`` or final ``response_item/message:assistant``;
+        or ``None`` for a valid non-turn record.
 
     Raises:
         MalformedCodexRecordError: When JSON or a known observed shape is invalid.
@@ -232,6 +250,8 @@ def codex_raw_turn_from_line(line: str) -> RawTurn | None:
     except ValidationError as error:
         raise _malformed("envelope", error) from error
 
+    if envelope.record_type == CODEX_RESPONSE_RECORD:
+        return _codex_tui_response_turn(envelope, line, session_ref)
     if envelope.record_type != CODEX_EVENT_RECORD:
         return None
 
@@ -240,7 +260,107 @@ def codex_raw_turn_from_line(line: str) -> RawTurn | None:
         raise MalformedCodexRecordError("event_msg", "payload.type")
 
     adapter = _CODEX_EVENT_ADAPTERS.get(event_type)
-    return None if adapter is None else adapter(envelope, line)
+    turn = None if adapter is None else adapter(envelope, line)
+    if turn is None or session_ref is None:
+        return turn
+
+    update = {"session_ref": session_ref}
+    if event_type == "user_message":
+        scoped_record = f"{session_ref}\n{line.strip()}"
+        update["turn_uuid"] = f"codex-user:{uuid5(NAMESPACE_URL, scoped_record)}"
+    return turn.model_copy(update=update)
+
+
+def _codex_tui_response_turn(
+    envelope: CodexEnvelope, line: str, session_ref: str | None
+) -> RawTurn | None:
+    """Accept only a TUI operator prompt or completed final response.
+
+    Injected AGENTS/environment messages also use the user role; only the
+    observed ``user.text`` kind denotes an operator prompt.
+    """
+    payload = envelope.payload
+    if payload.get("type") != "message":
+        return None
+    metadata = payload.get("internal_chat_message_metadata_passthrough")
+    if not isinstance(metadata, dict):
+        return None
+    role = payload.get("role")
+    is_user = role == "user" and metadata.get("content_item_kinds") == ["user.text"]
+    is_final = role == "assistant" and payload.get("phase") == "final_answer"
+    if not (is_user or is_final):
+        return None
+    if session_ref is None:
+        raise MalformedCodexRecordError(CODEX_RESPONSE_RECORD, "session_meta.payload.id")
+    turn_id = metadata.get("turn_id")
+    content = payload.get("content")
+    expected_type = "input_text" if is_user else "output_text"
+    if not isinstance(turn_id, str) or not turn_id:
+        raise MalformedCodexRecordError(CODEX_RESPONSE_RECORD, "payload.metadata.turn_id")
+    if (
+        not isinstance(content, list)
+        or len(content) != 1
+        or not isinstance(content[0], dict)
+        or content[0].get("type") != expected_type
+        or not isinstance(content[0].get("text"), str)
+    ):
+        raise MalformedCodexRecordError(CODEX_RESPONSE_RECORD, "payload.content")
+    text = content[0]["text"]
+    turn_uuid = (
+        f"codex-user:{uuid5(NAMESPACE_URL, f'{session_ref}\n{turn_id}\n{line.strip()}')}"
+        if is_user
+        else turn_id
+    )
+    return RawTurn(
+        turn_uuid=turn_uuid,
+        content=text,
+        role=TurnRole.USER if is_user else TurnRole.ASSISTANT,
+        is_human_prompt=is_user,
+        occurred_at=envelope.timestamp,
+        session_ref=session_ref,
+    )
+
+
+def codex_session_ref_from_line(line: str) -> str:
+    """Return the validated identity from an observed Codex session record.
+
+    Raises:
+        MalformedCodexRecordError: When the record or its two identity fields
+            are invalid or disagree.
+    """
+    session_ref = codex_session_ref_if_present(line)
+    if session_ref is None:
+        raise MalformedCodexRecordError(CODEX_SESSION_RECORD, "type")
+
+    return session_ref
+
+
+def codex_session_ref_if_present(line: str) -> str | None:
+    """Return validated rollout identity when a line is session metadata.
+
+    A valid record of another type returns ``None`` so legacy context-free
+    Codex inputs retain their existing fallback identity behavior.
+    """
+    try:
+        envelope = CodexEnvelope.model_validate_json(line)
+    except ValidationError as error:
+        raise _malformed(CODEX_SESSION_RECORD, error) from error
+
+    if envelope.record_type != CODEX_SESSION_RECORD:
+        return None
+
+    try:
+        payload = CodexSessionMetaPayload.model_validate(envelope.payload)
+    except ValidationError as error:
+        raise _malformed(CODEX_SESSION_RECORD, error) from error
+
+    if payload.id != payload.session_id:
+        raise MalformedCodexRecordError(
+            CODEX_SESSION_RECORD,
+            "payload.id and payload.session_id disagree",
+        )
+
+    return payload.id
 
 
 def hermes_raw_turn_from_line(line: str) -> RawTurn | None:

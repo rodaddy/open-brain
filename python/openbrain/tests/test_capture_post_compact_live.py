@@ -38,6 +38,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import Secret
 from openbrain.apps.hooks.session import PostCompactHook, run_post_compact
 from openbrain.config import CaptureSettings
 
@@ -59,7 +60,7 @@ PAST_OLD_CEILING = 200_001
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -72,13 +73,13 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
-def settings_for(live_env: dict[str, str], tmp_path: Path) -> CaptureSettings:
+def settings_for(live_env: dict[str, Secret], tmp_path: Path) -> CaptureSettings:
     return CaptureSettings(
-        base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-        token=live_env["OPENBRAIN_TEST_TOKEN"],
+        base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+        token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
         watermark_path=tmp_path / "wm.sqlite",
     )
 
@@ -116,7 +117,7 @@ class TestPostCompactRecordsTheSummaryWholeLive:
     """The whole summary reaches ob_raw_turns byte-for-byte through the real client."""
 
     async def test_a_large_summary_lands_whole_under_its_prompt_id(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # The real fixture summary, PADDED past the old server ceiling. The pad is
         # an input size, not a bound; the assertion is len-equal AND byte-equal.
@@ -136,7 +137,7 @@ class TestPostCompactRecordsTheSummaryWholeLive:
         recorded = await run_post_compact(payload, settings_for(live_env, tmp_path))
 
         assert recorded is True
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         # Exactly one row, keyed by prompt_id, content whole in both senses.
         assert count_for(database_url, prompt_id) == 1
         stored = fetch_one(database_url, prompt_id)
@@ -149,7 +150,7 @@ class TestPostCompactDedupStabilityLive:
     """prompt_id is the dedup key; a re-fire with the same one is a server no-op."""
 
     async def test_re_firing_the_same_prompt_id_stays_one_row(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         session = f"postcompact-dedup-{uuid.uuid4()}"
         prompt_id = f"pc-{uuid.uuid4()}"
@@ -158,7 +159,7 @@ class TestPostCompactDedupStabilityLive:
             compact_summary=summary, session_id=session, prompt_id=prompt_id
         )
         settings = settings_for(live_env, tmp_path)
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
 
         first = await run_post_compact(payload, settings)
         assert first is True
@@ -171,7 +172,7 @@ class TestPostCompactDedupStabilityLive:
         assert count_for(database_url, prompt_id) == 1
 
     async def test_a_changed_prompt_id_stores_again(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # The documented dedup BOUNDARY: dedup keys on prompt_id, not content. The
         # SAME summary text under a NEW prompt_id is a NEW row. This is honest
@@ -184,7 +185,7 @@ class TestPostCompactDedupStabilityLive:
         first_id = f"pc-{uuid.uuid4()}"
         second_id = f"pc-{uuid.uuid4()}"
         settings = settings_for(live_env, tmp_path)
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
 
         await run_post_compact(
             PostCompactHook(

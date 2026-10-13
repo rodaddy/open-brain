@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chunkText } from "./chunking.ts";
-import { logger } from "../../src/logger.ts";
-import type { EmbeddingConfigGroup } from "../config/src-readers.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import type { EmbeddingConfigGroup } from "../config/consumer-env-fields.ts";
 import {
   classifyError,
   classifyHttpFailure,
@@ -14,7 +13,7 @@ import {
  * Every environment-derived value this module used to read from `process.env`.
  *
  * The four watchdog and provider fields reuse `EmbeddingConfigGroup`
- * (`server/config/src-readers.ts`) unchanged — `timeoutMs`, `dimensions`,
+ * (`server/config/consumer-env-fields.ts`) unchanged — `timeoutMs`, `dimensions`,
  * `model`, and the nested `watchdog` group carrying `failureThreshold`,
  * `cooldownMs`, and the optional `restartScript`. The two transport fields
  * mirror `config.transport.embeddingBaseUrl` and `config.transport.embeddingApiKey`
@@ -56,7 +55,7 @@ let readSettings: () => EmbeddingProviderSettings = () => DEFAULT_SETTINGS;
  * source between two calls changes the answer, exactly as flipping
  * `process.env` between two calls did. Returns the reader it replaced so a
  * caller can restore it. Replacement is announced and never refused — the
- * `src/` adapter registers at import and `server/main.ts` registers afterwards,
+ * legacy adapter registers at import and `server/main.ts` registers afterwards,
  * so in the server runtime main's reader is the one that answers.
  */
 export function setEmbeddingSettingsReader(
@@ -317,7 +316,7 @@ const EMBEDDING_SEGMENT_CHARS = 6000;
  * 20% of a segment. A claim that straddles a seam appears whole in both
  * neighbours, so it is embedded in context at least once rather than split
  * across two vectors that each hold half of it. Matches the ratio
- * src/chunking.ts already uses for its own defaults (200 of 2000).
+ * `./chunking.ts` already uses for its own defaults (200 of 2000).
  */
 const EMBEDDING_SEGMENT_OVERLAP = 1200;
 
@@ -634,7 +633,10 @@ export async function generateEmbedding(
   return result.embedding;
 }
 
-export function contentHash(text: string): string {
-  const normalized = text.toLowerCase().trim().replace(/\s+/g, " ");
-  return createHash("sha256").update(normalized).digest("hex");
-}
+/**
+ * Re-exported under its behavior-naming identity. This module used to define a
+ * second hash function sharing a name with the raw one in
+ * `server/tools/memory-helpers.ts`; the single definition now lives in
+ * `server/db/content-hash.ts`, which also records why its output is frozen.
+ */
+export { normalizedContentHash } from "../db/content-hash.ts";

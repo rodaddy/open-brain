@@ -1,10 +1,9 @@
-import type pg from "pg";
-import { toSql } from "pgvector/pg";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
-import type { generateEmbedding } from "../../src/embedding.ts";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
-import { writeThoughtChunks, type ChunkWriteResult } from "../../src/chunk-write.ts";
+import type { ChunkRepository } from "../db/chunk-repository.ts";
+import type { TieringRepository } from "../db/tiering-repository.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
+import type { generateEmbedding } from "../embedding/provider.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
 
 /**
  * Lane → own-durable memory tiering (Issue #160).
@@ -14,7 +13,55 @@ import { writeThoughtChunks, type ChunkWriteResult } from "../../src/chunk-write
  * promotion (#161): no cross-namespace move, no promoter role required.
  */
 
-export type EventType =
+/**
+ * The per-section write this module needs, as a SHAPE rather than an import.
+ *
+ * Graduation writes a thought, so a long one is followed by chunk rows through
+ * the shared thought-write boundary (#605). That boundary lives in the capture
+ * tier, and a domain module reaching up into it inverts the direction (#1210):
+ * capture writes, domain decides. So the writer ARRIVES -- `server/tools/
+ * tier-lane.ts` imports the capture-tier writer and passes it in, and this
+ * module declares only what it calls and what it reads back. The function on
+ * the other end is the same one it always was; nothing about what is written,
+ * or when, is decided here.
+ */
+interface ChunkWriterOptions {
+  parentId: string;
+  namespace: string;
+  createdBy: string;
+  content: string;
+  tags?: string[];
+  embedFn: (text: string) => Promise<number[] | null>;
+  source?: string;
+  /** False for a merge onto an existing parent; chunking is skipped. */
+  isNew: boolean;
+  /** Names the calling writer in the failure log. */
+  caller: string;
+}
+
+/** The counts a chunk write reports back. Passed through, never read here. */
+interface ChunkWriteReceipt {
+  written: number;
+  duplicates: number;
+  unembedded: number;
+}
+
+/**
+ * What the writer returns. `result` null with `failed` false means there was
+ * nothing to chunk; `failed` true means the parent committed with the complete
+ * text and per-section writing threw.
+ */
+interface ChunkWriteAttempt {
+  result: ChunkWriteReceipt | null;
+  failed: boolean;
+}
+
+type ChunkWriter = (
+  repository: ChunkRepository,
+  options: ChunkWriterOptions,
+) => Promise<ChunkWriteAttempt>;
+
+type EventType =
   | "fact"
   | "decision"
   | "blocker"
@@ -25,12 +72,12 @@ export type EventType =
   | "correction"
   | "handoff";
 
-export type Importance = "hot" | "warm" | "cold";
+type Importance = "hot" | "warm" | "cold";
 
-export type Classification = "graduate" | "keep" | "archive" | "manual-review";
+type Classification = "graduate" | "keep" | "archive" | "manual-review";
 
 /** Default minimum content length for a graduate-eligible event. */
-export const DEFAULT_MIN_CONTENT_LENGTH = 24;
+const DEFAULT_MIN_CONTENT_LENGTH = 24;
 
 /** Default cosine-distance threshold for near-duplicate detection. */
 export const DEFAULT_DUP_THRESHOLD = 0.08;
@@ -57,7 +104,7 @@ const OWN_DURABLE_KEEP_LIFECYCLE_ACTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /** Minimal shape the classifier needs from a lane event. */
-export interface ClassifiableEvent {
+interface ClassifiableEvent {
   event_type: EventType;
   content: string;
   importance: Importance;
@@ -122,9 +169,9 @@ export interface LaneEventRow {
   metadata: Record<string, unknown> | null;
 }
 
-export type DuplicateKind = "exact" | "near";
+type DuplicateKind = "exact" | "near";
 
-export interface DuplicateMatch {
+interface DuplicateMatch {
   kind: DuplicateKind;
   thought_id: string;
   distance?: number;
@@ -139,48 +186,37 @@ export interface DuplicateMatch {
  *
  * Returns the first match found, or null. SQL is fully parameterized.
  */
-export interface DuplicateLookup {
+interface DuplicateLookup {
   hash: string | null;
   embedding: number[] | null;
   threshold?: number;
 }
 
 export async function findDurableDuplicate(
-  pool: pg.Pool,
+  repository: TieringRepository,
   namespace: string,
   lookup: DuplicateLookup,
 ): Promise<DuplicateMatch | null> {
   const { hash, embedding } = lookup;
   const threshold = lookup.threshold ?? DEFAULT_DUP_THRESHOLD;
   if (hash) {
-    const { rows } = await pool.query(
-      `SELECT id FROM thoughts
-       WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
-       LIMIT 1`,
-      [hash, namespace],
-    );
-    if (rows.length > 0) {
-      return { kind: "exact", thought_id: rows[0].id as string };
+    const [row] = await repository.findExactDuplicate({ hash, namespace });
+    if (row) {
+      return { kind: "exact", thought_id: row.id };
     }
   }
 
   if (embedding) {
-    const { rows } = await pool.query(
-      `SELECT id, embedding <=> $1 AS distance
-       FROM thoughts
-       WHERE namespace = $2
-         AND archived_at IS NULL
-         AND embedding IS NOT NULL
-         AND embedding <=> $1 < $3
-       ORDER BY distance ASC
-       LIMIT 1`,
-      [toSql(embedding), namespace, threshold],
-    );
-    if (rows.length > 0) {
+    const [row] = await repository.findNearDuplicate({
+      embedding,
+      namespace,
+      threshold,
+    });
+    if (row) {
       return {
         kind: "near",
-        thought_id: rows[0].id as string,
-        distance: Number(rows[0].distance),
+        thought_id: row.id,
+        distance: Number(row.distance),
       };
     }
   }
@@ -189,7 +225,7 @@ export async function findDurableDuplicate(
 }
 
 /** Provenance payload recorded on graduated thoughts. */
-export interface LaneGraduationProvenance {
+interface LaneGraduationProvenance {
   source: "session-lane";
   lane_id: string;
   session_key: string;
@@ -202,11 +238,11 @@ export interface LaneGraduationProvenance {
   graduated_at: string;
 }
 
-export interface GraduateResult {
+interface GraduateResult {
   thought_id: string;
   is_new: boolean;
   /** Chunk receipt for a long graduated event; null when chunking did not run. */
-  chunks?: ChunkWriteResult | null;
+  chunks?: ChunkWriteReceipt | null;
   /** True when the parent committed but per-section writing threw. */
   chunking_failed?: boolean;
 }
@@ -224,20 +260,22 @@ export interface GraduateResult {
  * graduates — it simply does not chunk, which is the pre-#605 behavior rather
  * than a new failure.
  */
-export interface GraduateLaneEventOptions {
+interface GraduateLaneEventOptions {
   createdBy: string;
+  /** Injected per-section writer; see ChunkWriter. */
+  writeChunks: ChunkWriter;
   embedding: number[] | null;
   reason: string;
   embedFn?: (text: string) => Promise<number[] | null>;
 }
 
 export async function graduateLaneEvent(
-  pool: pg.Pool,
+  repository: TieringRepository,
   event: LaneEventRow,
   namespace: string,
   opts: GraduateLaneEventOptions,
 ): Promise<GraduateResult> {
-  const { createdBy, embedding, reason, embedFn } = opts;
+  const { createdBy, embedding, reason, embedFn, writeChunks } = opts;
   // Defense-in-depth: a lane event must only graduate into ITS OWN namespace.
   // Callers already scope the source read by namespace, but assert here so a
   // future caller that constructs rows differently cannot write cross-namespace.
@@ -246,7 +284,7 @@ export async function graduateLaneEvent(
       `lane event namespace '${event.namespace}' does not match graduation target '${namespace}'`,
     );
   }
-  const hash = event.content_hash ?? contentHash(event.content);
+  const hash = event.content_hash ?? normalizedContentHash(event.content);
   const tags = [
     "tiered-from-lane",
     `lane:${event.session_key}`,
@@ -265,39 +303,32 @@ export async function graduateLaneEvent(
     graduated_at: new Date().toISOString(),
   };
 
-  const { rows } = await pool.query(
-    `INSERT INTO thoughts
-       (content, tags, source, created_by, namespace, embedding, content_hash,
-        embedded_at, embedding_model, promoted_from)
-     VALUES ($1, $2, 'lane-tiering', $3, $4, $5, $6, $7, $8, $9)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-     DO UPDATE SET
-       tags = (
-         SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-         FROM unnest(thoughts.tags || EXCLUDED.tags) AS tag
-         WHERE tag IS NOT NULL
-       ),
-       updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new`,
-    [
-      event.content,
-      tags,
-      createdBy,
-      namespace,
-      embedding ? toSql(embedding) : null,
-      hash,
-      embedding ? new Date().toISOString() : null,
-      embedding ? EMBEDDING_MODEL : null,
-      JSON.stringify(provenance),
-    ],
-  );
+  const rows = await repository.upsertGraduatedThought({
+    content: event.content,
+    tags,
+    createdBy,
+    namespace,
+    embedding,
+    contentHash: hash,
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    embeddingModel: embedding ? embeddingModel() : null,
+    promotedFrom: JSON.stringify(provenance),
+  });
 
-  const thoughtId = rows[0].id as string;
-  const isNew = rows[0].is_new as boolean;
+  // The statement is an upsert whose DO UPDATE branch always returns, so a
+  // zero-row result is not a case the old code had either -- it indexed [0]
+  // unguarded. Saying so out loud beats a non-null assertion that reads as an
+  // oversight.
+  const [row] = rows;
+  if (!row) {
+    throw new Error("graduation upsert returned no row");
+  }
+  const thoughtId = row.id;
+  const isNew = row.is_new;
 
   if (!embedFn) return { thought_id: thoughtId, is_new: isNew };
 
-  const chunks = await writeThoughtChunks(pool, {
+  const chunks = await writeChunks(repository.chunks, {
     parentId: thoughtId,
     namespace,
     createdBy,
@@ -317,7 +348,7 @@ export async function graduateLaneEvent(
   };
 }
 
-export interface TierReceipt {
+interface TierReceipt {
   scanned: number;
   graduated: number;
   kept: number;
@@ -339,8 +370,10 @@ export function newTierReceipt(dryRun: boolean): TierReceipt {
   };
 }
 
-export interface TierEventOptions {
-  pool: pg.Pool;
+interface TierEventOptions {
+  repository: TieringRepository;
+  /** Injected per-section writer, handed down to graduateLaneEvent. */
+  writeChunks: ChunkWriter;
   embedFn: typeof generateEmbedding;
   namespace: string;
   createdBy: string;
@@ -397,8 +430,8 @@ export async function tierLaneEvent(
     });
   }
 
-  const hash = event.content_hash ?? contentHash(event.content);
-  const duplicate = await findDurableDuplicate(opts.pool, opts.namespace, {
+  const hash = event.content_hash ?? normalizedContentHash(event.content);
+  const duplicate = await findDurableDuplicate(opts.repository, opts.namespace, {
     hash,
     embedding,
     threshold: opts.dupThreshold ?? DEFAULT_DUP_THRESHOLD,
@@ -413,11 +446,12 @@ export async function tierLaneEvent(
     return;
   }
 
-  await graduateLaneEvent(opts.pool, event, opts.namespace, {
+  await graduateLaneEvent(opts.repository, event, opts.namespace, {
     createdBy: opts.createdBy,
     embedding,
     reason: `lane tiering: ${event.event_type}/${event.importance}`,
     embedFn: opts.embedFn,
+    writeChunks: opts.writeChunks,
   });
   receipt.graduated += 1;
 }

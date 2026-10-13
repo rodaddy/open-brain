@@ -36,6 +36,7 @@ import {
   PREVIEW_WIDTH,
   qualifyNamespacePredicate,
 } from "./curation-helpers.ts";
+import { createEntityReportRepository } from "../db/entity-report-repository.ts";
 
 /** Query alias per table, matching observed current-src SQL. */
 const TABLE_ALIAS: Readonly<Record<ResourceTable, string>> = {
@@ -81,9 +82,7 @@ const getStatsInputSchema = {
   raw: z
     .boolean()
     .optional()
-    .describe(
-      "Return physical namespace names instead of canonical public names",
-    ),
+    .describe("Return physical namespace names instead of canonical public names"),
 };
 
 export function registerReportingTools(
@@ -177,25 +176,8 @@ async function accessAggregate(
   sourceTable: ResourceTable,
   days: number,
 ): Promise<AccessAggregate> {
-  const { rows } = await dependencies.pool.query(
-    `SELECT
-       COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3) AS total,
-       COUNT(DISTINCT query_text) FILTER (
-         WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND query_text IS NOT NULL
-       ) AS unique_queries,
-       COUNT(DISTINCT accessed_by) FILTER (
-         WHERE accessed_at >= NOW() - INTERVAL '1 day' * $3 AND accessed_by IS NOT NULL
-       ) AS unique_agents,
-       COUNT(*) FILTER (WHERE accessed_at >= NOW() - INTERVAL '7 days') AS recent_7d,
-       COUNT(*) FILTER (
-         WHERE accessed_at >= NOW() - INTERVAL '14 days'
-           AND accessed_at < NOW() - INTERVAL '7 days'
-       ) AS previous_7d,
-       MAX(accessed_at) AS last_accessed
-     FROM entry_access_log
-     WHERE entry_id = $1 AND source_table = $2`,
-    [entryId, sourceTable, days],
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.accessAggregate({ entryId, sourceTable, days });
 
   const row = rows[0] ?? {};
   return {
@@ -303,9 +285,7 @@ function foldTableStats(
         table: stats.table,
         // Legacy `collab` is folded into the canonical shared name unless
         // the caller explicitly asked for physical names.
-        namespace: raw
-          ? entry.namespace
-          : canonicalNamespace(entry.namespace, names),
+        namespace: raw ? entry.namespace : canonicalNamespace(entry.namespace, names),
         count: entry.count,
       });
     }
@@ -319,9 +299,7 @@ function foldTableStats(
  * Folding can collide two physical names onto one canonical name, so this sums
  * before ranking rather than ranking the pre-fold rows.
  */
-function rankNamespaces(
-  namespaceRows: readonly NamespaceRow[],
-): NamespaceRow[] {
+function rankNamespaces(namespaceRows: readonly NamespaceRow[]): NamespaceRow[] {
   const merged = new Map<string, NamespaceRow>();
   for (const entry of namespaceRows) {
     const key = `${entry.table}${NAMESPACE_KEY_SEPARATOR}${entry.namespace}`;
@@ -386,14 +364,14 @@ async function findReadableEntryTable(
   accessible: readonly ResourceTable[],
   entryId: string,
 ): Promise<ResourceTable | undefined> {
+  const repository = createEntityReportRepository(dependencies.pool);
   for (const table of accessible) {
     const predicate = namespacePredicate(identity, "read", 2);
-    const { rows } = await dependencies.pool.query(
-      `SELECT id FROM ${table}
-        WHERE id = $1 AND archived_at IS NULL${predicate.clause}
-        FETCH FIRST 1 ROWS ONLY`,
-      [entryId, ...predicate.values],
-    );
+    const rows = await repository.findEntryInTable({
+      table,
+      predicateClause: predicate.clause,
+      parameters: [entryId, ...predicate.values],
+    });
     if (rows.length > 0) return table;
   }
   return undefined;
@@ -430,35 +408,25 @@ async function tableStats(
     : "";
   const activeScoped = ` WHERE archived_at IS NULL${predicate.clause}`;
 
+  const repository = createEntityReportRepository(dependencies.pool);
   const [totals, tierRows, namespaces] = await Promise.all([
-    dependencies.pool.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE archived_at IS NULL) AS active,
-         COUNT(*) FILTER (WHERE archived_at IS NOT NULL) AS archived,
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND COALESCE(access_count, 0) = 0) AS zero_access,
-         AVG(COALESCE(access_count, 0)) FILTER (WHERE archived_at IS NULL) AS avg_access
-       FROM ${table}${scoped}`,
-      [...predicate.values],
-    ),
-    dependencies.pool.query(
-      `SELECT COALESCE(tier, 'warm') AS tier, COUNT(*) AS count
-         FROM ${table}${activeScoped}
-        GROUP BY COALESCE(tier, 'warm')`,
-      [...predicate.values],
-    ),
-    dependencies.pool.query(
-      `SELECT namespace, COUNT(*) AS count
-         FROM ${table}${activeScoped}
-        GROUP BY namespace
-        ORDER BY count DESC
-        FETCH FIRST ${TOP_NAMESPACES} ROWS ONLY`,
-      [...predicate.values],
-    ),
+    repository.tableTotals({ table, scoped, parameters: [...predicate.values] }),
+    repository.tableTierCounts({
+      table,
+      activeScoped,
+      parameters: [...predicate.values],
+    }),
+    repository.tableNamespaceCounts({
+      table,
+      activeScoped,
+      parameters: [...predicate.values],
+      topNamespaces: TOP_NAMESPACES,
+    }),
   ]);
 
-  const row = totals.rows[0] ?? {};
+  const row = totals[0] ?? {};
   const tiers: Record<string, number> = {};
-  for (const tierRow of tierRows.rows) {
+  for (const tierRow of tierRows) {
     tiers[String(tierRow.tier)] = Number(tierRow.count);
   }
   return {
@@ -468,7 +436,7 @@ async function tableStats(
     tiers,
     zeroAccess: Number(row.zero_access ?? 0),
     avgAccess: Number(row.avg_access ?? 0),
-    namespaces: namespaces.rows.map((entry) => ({
+    namespaces: namespaces.map((entry) => ({
       namespace: String(entry.namespace),
       count: Number(entry.count),
     })),
@@ -503,12 +471,8 @@ async function accessLogStats(
     )`;
   });
   const where = clauses.length > 0 ? ` WHERE ${clauses.join(" OR ")}` : "";
-  const { rows } = await dependencies.pool.query(
-    `SELECT COUNT(*) AS total_log_entries,
-            COUNT(DISTINCT entry_id) AS unique_entries_accessed
-       FROM entry_access_log eal${where}`,
-    values,
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.accessLogTotals({ where, parameters: values });
   return {
     totalLogEntries: Number(rows[0]?.total_log_entries ?? 0),
     uniqueEntriesAccessed: Number(rows[0]?.unique_entries_accessed ?? 0),
@@ -528,27 +492,20 @@ async function graphCounts(
   const where = predicate.clause
     ? ` WHERE ${predicate.clause.slice(" AND ".length)}`
     : "";
+  const repository = createEntityReportRepository(dependencies.pool);
   const [entities, links, types] = await Promise.all([
-    dependencies.pool.query(
-      `SELECT COUNT(*) AS total FROM ob_entities${where}`,
-      [...predicate.values],
-    ),
-    dependencies.pool.query(`SELECT COUNT(*) AS total FROM ob_links${where}`, [
-      ...predicate.values,
-    ]),
-    dependencies.pool.query(
-      `SELECT entity_type, COUNT(*) AS count
-         FROM ob_entities${where}
-        GROUP BY entity_type
-        ORDER BY count DESC, entity_type ASC
-        FETCH FIRST ${TOP_ENTITY_TYPES} ROWS ONLY`,
-      [...predicate.values],
-    ),
+    repository.entityCount({ where, parameters: [...predicate.values] }),
+    repository.linkCount({ where, parameters: [...predicate.values] }),
+    repository.entityTypeCounts({
+      where,
+      parameters: [...predicate.values],
+      topEntityTypes: TOP_ENTITY_TYPES,
+    }),
   ]);
   return {
-    entities: Number(entities.rows[0]?.total ?? 0),
-    links: Number(links.rows[0]?.total ?? 0),
-    entity_types: types.rows.map((row) => ({
+    entities: Number(entities[0]?.total ?? 0),
+    links: Number(links[0]?.total ?? 0),
+    entity_types: types.map((row) => ({
       entity_type: String(row.entity_type),
       count: Number(row.count),
     })),
@@ -584,17 +541,17 @@ async function topAccessedEntries(
               FROM ${table} ${alias}
              WHERE ${alias}.archived_at IS NULL${scoped}`;
   });
-  const { rows } = await dependencies.pool.query(
-    `SELECT id, table_name, LEFT(content_preview, ${PREVIEW_WIDTH}) AS content_preview, access_count
-       FROM (${arms.join(" UNION ALL ")}) AS combined
-      ORDER BY access_count DESC
-      FETCH FIRST ${TOP_ACCESSED} ROWS ONLY`,
-    values,
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.topAccessedEntries({
+    arms: arms.join(" UNION ALL "),
+    parameters: values,
+    previewWidth: PREVIEW_WIDTH,
+    topAccessed: TOP_ACCESSED,
+  });
   return rows.map((row) => ({
     id: String(row.id),
     table: String(row.table_name),
-    content_preview: row.content_preview,
+    content_preview: row.content_preview as string,
     access_count: Number(row.access_count),
   }));
 }

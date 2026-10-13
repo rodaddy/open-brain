@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
+  MaintenanceConfigError,
   parseMaintenanceConfig,
   type MaintenanceConfig,
 } from "./config/maintenance.ts";
@@ -36,15 +37,18 @@ import {
   doctorGroup,
   dropCollectorGroup,
   embeddingGroup,
+  loggerIdentityGroup,
   mcpAuditGroup,
   promotionGroup,
-  srcReaderEnvironmentFields,
+  consumerEnvironmentFields,
   type DoctorConfigGroup,
   type DropCollectorBounds,
   type EmbeddingConfigGroup,
+  type LoggerIdentityGroup,
   type McpAuditConfigGroup,
   type PromotionConfigGroup,
-} from "./config/src-readers.ts";
+} from "./config/consumer-env-fields.ts";
+import type { SharedNamespaceEnv } from "./security/shared-namespace.ts";
 import {
   readDeployedRevision,
   resolveServerIdentity,
@@ -70,7 +74,7 @@ export type {
   EmbeddingWatchdogGroup,
   McpAuditConfigGroup,
   PromotionConfigGroup,
-} from "./config/src-readers.ts";
+} from "./config/consumer-env-fields.ts";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 const ROLE_NAMES = [
@@ -111,17 +115,16 @@ export const OPTIONAL_SECRET_KEYS = [
  * The `z.preprocess` is the whole point and is not decoration. Without it,
  * `z.string().min(1).optional()` accepts an unset variable but REJECTS
  * `FOO=`, and those are the same thing to every consumer of these fields:
- * `src/auth.ts` skips a role token with `if (!token)`, `src/db/pool.ts` hands
- * `process.env.DB_PASSWORD` straight to pg, and `src/embedding.ts`'s
- * `embeddingApiKey()` returns the raw value. An empty string behaves as unset
- * in all three.
+ * auth skips a role token with `if (!token)`, the pool hands `DB_PASSWORD`
+ * straight to pg, and the embedding provider's `embeddingApiKey()` returns the
+ * raw value. An empty string behaves as unset in all three.
  *
  * Shell environments produce empty rather than absent as a matter of course, so
  * this is the normal case and not a malformed one. The local dogfood clone env
  * sets `EMBEDDING_API_KEY=` because the local MLX embedding server needs no
  * key; on 2026-08-02 that alone made the rewritten entrypoint throw
  * `server_configuration_invalid` at startup and launchd throttle-looped it,
- * while `src/index.ts` had always started fine on the identical environment.
+ * while the previous entrypoint had always started fine on the same environment.
  *
  * WHY WHITESPACE IS ALSO ABSENT (#548). `EMBEDDING_API_KEY=" "` used to survive
  * this schema and arrive downstream as a real value, because `min(1)` counts a
@@ -168,7 +171,7 @@ const environmentSchema = z
     DB_POOL_MAX: positiveInteger.default(10),
     DB_CONNECTION_TIMEOUT_MS: positiveInteger.default(5_000),
     DB_STATEMENT_TIMEOUT_MS: positiveInteger.default(30_000),
-    OPENBRAIN_MIGRATIONS_DIR: nonEmpty.default("src/db/migrations"),
+    OPENBRAIN_MIGRATIONS_DIR: nonEmpty.default("server/db/migrations"),
     LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     LOG_FILE: nonEmpty,
     SERVICE_NAME: nonEmpty.default("open-brain-server"),
@@ -197,8 +200,8 @@ const environmentSchema = z
     ...extendedEnvironmentFields,
     // The keys the remaining non-`server/` modules read. Declared so an L5
     // move lane can hand the module a value instead of leaving it reaching for
-    // `process.env` behind the door. See `./config/src-readers.ts`.
-    ...srcReaderEnvironmentFields,
+    // `process.env` behind the door. See `./config/consumer-env-fields.ts`.
+    ...consumerEnvironmentFields,
   })
   .catchall(z.string().optional());
 
@@ -275,6 +278,12 @@ export interface ServerConfig {
   readonly doctor: DoctorConfigGroup;
   /** Scan bounds for the drop-folder collector — `server/capture/`. */
   readonly dropCollector: DropCollectorBounds;
+  /**
+   * The `HOSTNAME`/`HOST` identity the legacy logger stamps.
+   * Absent here does NOT mean unidentified: `server/main.ts` falls back to the
+   * transport identity, which is the `/health` name.
+   */
+  readonly loggerIdentity: LoggerIdentityGroup;
 }
 
 export interface ConfigIssue {
@@ -399,12 +408,16 @@ function buildConfig(
     ),
     tracing: tracingGroup(parsed),
     captureHealth: captureHealthGroup(parsed),
-    http: httpGroup(parsed),
+    http: {
+      ...httpGroup(parsed),
+      bindHost: parsed.OPEN_BRAIN_BIND_HOST,
+    },
     embedding: embeddingGroup(parsed),
     promotion: promotionGroup(parsed),
     mcpAudit: mcpAuditGroup(parsed),
     doctor: doctorGroup(parsed),
     dropCollector: dropCollectorGroup(parsed),
+    loggerIdentity: loggerIdentityGroup(parsed),
   };
 }
 
@@ -431,10 +444,17 @@ export function parseServerConfig(
   }
   const userTokens = parseUserTokens(environment);
   if (!Array.isArray(userTokens)) return userTokens;
-  return {
-    ok: true,
-    config: buildConfig(parsed.data, environment, userTokens, deployedRevision),
-  };
+  try {
+    return {
+      ok: true,
+      config: buildConfig(parsed.data, environment, userTokens, deployedRevision),
+    };
+  } catch (error: unknown) {
+    if (error instanceof MaintenanceConfigError) {
+      return { ok: false, issues: [{ path: error.path, message: error.message }] };
+    }
+    throw error;
+  }
 }
 
 /**
@@ -448,6 +468,121 @@ function readDeployStamp(): string | undefined {
     return readFileSync(stamp, "utf8");
   });
 }
+
+/**
+ * The raw shared-namespace values, owned by this module (Rico ruling
+ * 2026-08-30: the env reads the retired adapters were doing belong in
+ * `server/config.ts`, "much like we use config.py in Python applications").
+ *
+ * These are the RAW strings rather than a resolved name set, because
+ * `server/security/shared-namespace.ts` owns the resolution and the precedence
+ * between `SHARED_NAMESPACE_*` and `OPENBRAIN_*` is a security-relevant detail
+ * that must keep exactly one implementation. Handing that module the same eight
+ * strings the retired adapter handed it makes the relocation byte-identical:
+ * the parsing moves house, the derivation does not move at all.
+ *
+ * Read per call, not memoized, because the adapter this replaces read
+ * `process.env` per call and the existing tests set these variables per case.
+ */
+export function sharedNamespaceEnvironment(): SharedNamespaceEnv {
+  return {
+    sharedNamespaceCanonical: process.env["SHARED_NAMESPACE_CANONICAL"],
+    sharedNamespacePhysical: process.env["SHARED_NAMESPACE_PHYSICAL"],
+    openbrainSharedNamespace: process.env["OPENBRAIN_SHARED_NAMESPACE"],
+    sharedNamespaceLegacy: process.env["SHARED_NAMESPACE_LEGACY"],
+    openbrainLegacySharedNamespace: process.env["OPENBRAIN_LEGACY_SHARED_NAMESPACE"],
+    legacySharedFallback: process.env["OPENBRAIN_LEGACY_SHARED_FALLBACK"],
+    sharedFallbackMinResults: process.env["OPENBRAIN_SHARED_FALLBACK_MIN_RESULTS"],
+    allowLegacySharedWrites: process.env["OPENBRAIN_ALLOW_LEGACY_SHARED_WRITES"],
+  };
+}
+
+/**
+ * The promotion kill switch, read at call time — `=== "1"` exactly, as the
+ * retired promotion-service adapter read it before the L5 move (issue 864).
+ */
+export function promotionKillSwitch(): boolean {
+  return process.env["OPENBRAIN_PROMOTION_KILL_SWITCH"] === "1";
+}
+
+/**
+ * The container role selector, read by server/entry.ts before either process
+ * is loaded (issue 1594). Raw on purpose: entry.ts owns the allowed set and
+ * refuses anything outside it, so nothing here defaults or coerces.
+ */
+export function openBrainRoleEnvironment(): { OPEN_BRAIN_ROLE: string | undefined } {
+  return { OPEN_BRAIN_ROLE: process.env["OPEN_BRAIN_ROLE"] };
+}
+
+/**
+ * The MCP audit environment, handed to `readMcpAuditConfig` unchanged.
+ *
+ * The audit reader owns its own bounds and defaults; this only supplies the
+ * variables, so the retired adapter's `env = process.env` default becomes an
+ * explicit read owned by the config module.
+ */
+export function mcpAuditEnvironment(): Record<string, string | undefined> {
+  return process.env;
+}
+
+/**
+ * The doctor's ambient coordinates, in the shape
+ * `server/application/operator-doctor.ts` takes them as options.
+ *
+ * Reproduces the retired operator-doctor adapter's `ambientOptions()` value for
+ * value, including the three-way `NODE_ENV` narrowing, the `!== undefined`
+ * (not truthiness) tests on the two QMD paths, and the `qmdIndexPathSource`
+ * marker that distinguishes an env-sourced index path from a caller-supplied
+ * one. Read per call, because the doctor's tests flip these variables per case.
+ *
+ * `rawTurnTtlSeconds` is NOT recomputed here: the same derivation already lives
+ * in `./config/consumer-env-fields.ts` and is applied by `doctorGroup`, so the caller
+ * threads that one in rather than this module growing a second opinion.
+ */
+export function doctorAmbientEnvironment(): {
+  serviceVersionFallback: string;
+  nodeEnvironment: "production" | "development" | "test" | "unknown";
+  fileLogConfigured: boolean;
+  rotationConfigured: boolean;
+  qmdPath?: string;
+  qmdIndexPath?: string;
+  qmdIndexPathSource?: "env";
+} {
+  const nodeEnv = process.env["NODE_ENV"];
+  const qmdPath = process.env["QMD_PATH"];
+  const qmdIndexPath = process.env["QMD_INDEX_PATH"];
+  return {
+    serviceVersionFallback: process.env["npm_package_version"] ?? "unknown",
+    nodeEnvironment:
+      nodeEnv === "production" || nodeEnv === "development" || nodeEnv === "test"
+        ? nodeEnv
+        : "unknown",
+    fileLogConfigured: Boolean(process.env["LOG_FILE"]?.trim()),
+    rotationConfigured:
+      Boolean(process.env["LOG_MAX_BYTES"]) || Boolean(process.env["LOG_MAX_FILES"]),
+    ...(qmdPath !== undefined ? { qmdPath } : {}),
+    ...(qmdIndexPath !== undefined
+      ? { qmdIndexPath, qmdIndexPathSource: "env" as const }
+      : {}),
+  };
+}
+
+/**
+ * The raw-turn retention seconds the distillation-lag alarm divides by.
+ *
+ * `Number(...)` rather than `parseInt`, so a trailing suffix is `NaN` and falls
+ * back and only a positive integer wins — the same test
+ * `readDistillationLagTtlSeconds` applied in the retired adapter.
+ */
+export function rawTurnTtlSecondsFromEnvironment(): number {
+  const configured = Number(process.env["OPENBRAIN_RAW_TURN_TTL_SECONDS"]);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_RAW_TURN_TTL_SECONDS;
+}
+
+/** The documented one-week raw-turn retention window. */
+const DEFAULT_RAW_TURN_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** Composition-root environment read. No other `server/` module reads it. */
 export function loadServerConfig(): ServerConfig {

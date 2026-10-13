@@ -22,11 +22,25 @@ docs/sme/*.md
 # sha256 manifest and make the pilot receipts uncomparable across repos.
 scripts/done-means/beta/
 
+# Parked custody files are pinned by SHA-256 in their own MANIFEST.md, so
+# reformatting one breaks the pin and the custody record stops verifying.
+_DOCS/_handover/parked/
+
 # Contract fixtures are wire-shape artifacts on a parity path
 # (contracts/parity-paths.txt). Reformatting them is churn with parity
 # ceremony attached and no behavior value. The .ts files in contracts/ ARE
 # formatted.
 contracts/**/*.json
+
+# Golden fixtures are the same class as the contracts ones and were missed by
+# that pattern because they live next to the test that reads them. These hold
+# a byte-faithful capture of a response taken from a PREVIOUS tree; the
+# assertion IS the bytes. Formatting one makes the comparison fail against a
+# capture that can never be re-taken from the current code, and
+# server/transport/rest-search-parity.test.ts says so in its own header: a
+# mismatch is a finding, never a prompt to refresh the fixture. Observed on the
+# 1269 sweep — reformatting rest-search-golden.json turned that suite red.
+server/**/__fixtures__/*.json
 
 # The Python packages have their own formatter (ruff format, CI job
 # "Check formatting"). Prettier stays out of that tree entirely.
@@ -44,3 +58,6 @@ specs/*.html
 # Reopening prose scope is the operator decision recorded in #753; delete
 # this line when it is made.
 *.md
+
+# Eval evidence is sealed by sha256 custody manifests and must stay byte-identical.
+eval/recall/evidence/

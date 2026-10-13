@@ -8,9 +8,14 @@
  * on state that no longer holds.
  */
 import { z } from "zod";
-import type { PoolClient } from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { toSql } from "pgvector/pg";
+
+import {
+  createEntryWriteRepository,
+  encodeEmbedding,
+  type EntryWriteRepository,
+} from "../db/entry-write-repository.ts";
+import { withTransaction, type TransactionControl } from "../db/transaction.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import {
@@ -44,14 +49,7 @@ const VALID_FIELDS: Readonly<Record<ResourceTable, readonly string[]>> = {
     "metadata",
   ],
   projects: ["name", "description", "tags"],
-  sessions: [
-    "summary",
-    "project",
-    "key_decisions",
-    "next_steps",
-    "blockers",
-    "tags",
-  ],
+  sessions: ["summary", "project", "key_decisions", "next_steps", "blockers", "tags"],
 };
 
 /**
@@ -108,6 +106,20 @@ const updateEntryAnnotations = {
 const UPDATE_ENTRY_DESCRIPTION =
   "Update a brain entry's mutable fields. Re-embeds content when semantic fields change.";
 
+/**
+ * Read one merged field as the text it is declared to be.
+ *
+ * Every `CONTENT_FIELDS` entry names a text column, so the value is a string or
+ * NULL in practice; this says so at the boundary rather than letting an
+ * unexpected object reach `String()` and stringify as `[object Object]`. It
+ * became necessary when the locked row narrowed from the driver's `any` to
+ * `Record<string, unknown>` (issue 1209) — the coercion was always here, the
+ * type just stopped hiding it.
+ */
+function mergedText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 /** Build the embeddable text for a merged post-update row. */
 function buildEmbeddableText(
   table: ResourceTable,
@@ -115,7 +127,7 @@ function buildEmbeddableText(
 ): string {
   switch (table) {
     case "thoughts":
-      return String(merged.content ?? "");
+      return mergedText(merged.content);
     case "decisions":
       return decisionCanonicalText(merged);
     case "relationships":
@@ -123,17 +135,14 @@ function buildEmbeddableText(
         .filter(Boolean)
         .join("\n");
     case "projects":
-      return `${merged.name}: ${merged.description ?? ""}`;
+      return `${mergedText(merged.name)}: ${mergedText(merged.description)}`;
     case "sessions":
       return sessionCanonicalEmbedText(merged);
   }
 }
 
 /** Build the source-hash input, which sessions compute differently. */
-function buildHashInput(
-  table: ResourceTable,
-  merged: Record<string, unknown>,
-): string {
+function buildHashInput(table: ResourceTable, merged: Record<string, unknown>): string {
   if (table === "sessions") return sessionSourceHashInput(merged);
   return buildEmbeddableText(table, merged);
 }
@@ -162,25 +171,25 @@ type LockedRow =
  * holds the row against a concurrent archive between this SELECT and the UPDATE.
  */
 async function lockExistingRow(
-  client: PoolClient,
+  repository: EntryWriteRepository,
   identity: AuthIdentity,
   request: { table: ResourceTable; id: string },
 ): Promise<LockedRow> {
   const { table, id } = request;
   const selectColumns = [...VALID_FIELDS[table], "archived_at"].join(", ");
   const selectPredicate = namespacePredicate(identity, "write", 2);
-  const { rows: existingRows } = await client.query(
-    `SELECT id, namespace, ${selectColumns} FROM ${table}
-            WHERE id = $1${selectPredicate.clause} FOR UPDATE`,
-    [id, ...selectPredicate.values],
-  );
-  if (existingRows.length === 0) {
-    await client.query("ROLLBACK");
+  const existingRows = await repository.lockExistingRow({
+    table,
+    selectColumns,
+    predicateClause: selectPredicate.clause,
+    id,
+    predicateValues: selectPredicate.values,
+  });
+  const existingRow = existingRows[0];
+  if (existingRow === undefined) {
     return { ok: false, response: errorResult("Not found") };
   }
-  const existingRow = existingRows[0];
   if (existingRow.archived_at != null) {
-    await client.query("ROLLBACK");
     return {
       ok: false,
       response: errorResult("Entry is archived -- restore it first"),
@@ -198,9 +207,7 @@ function mergeContentFields(
   const merged: Record<string, unknown> = {};
   for (const field of CONTENT_FIELDS[table]) {
     merged[field] =
-      providedFields[field] !== undefined
-        ? providedFields[field]
-        : existingRow[field];
+      providedFields[field] !== undefined ? providedFields[field] : existingRow[field];
   }
   return merged;
 }
@@ -218,7 +225,7 @@ type Reembedding =
  * UPDATE and leave two rows sharing a content hash in one namespace.
  */
 async function computeReembedding(
-  client: PoolClient,
+  repository: EntryWriteRepository,
   dependencies: MemoryToolDependencies,
   request: {
     table: ResourceTable;
@@ -230,20 +237,19 @@ async function computeReembedding(
   const { table, id, providedFields, existingRow } = request;
   const merged = mergeContentFields(table, providedFields, existingRow);
   const hash = contentHash(buildHashInput(table, merged));
-  const { rows: collisions } = await client.query(
-    `SELECT id FROM ${table} WHERE content_hash = $1 AND id != $2 AND namespace = $3`,
-    [hash, id, existingRow.namespace],
-  );
+  const collisions = await repository.selectForCollision({
+    table,
+    contentHash: hash,
+    id,
+    namespace: existingRow.namespace,
+  });
   if (collisions.length > 0) {
-    await client.query("ROLLBACK");
     return {
       ok: false,
       response: errorResult("Duplicate content exists in another entry"),
     };
   }
-  const embedding = await dependencies.embedFn(
-    buildEmbeddableText(table, merged),
-  );
+  const embedding = await dependencies.embedFn(buildEmbeddableText(table, merged));
   return { ok: true, embedding, hash };
 }
 
@@ -281,7 +287,7 @@ function appendEmbeddingAssignments(
 ): void {
   const { setClauses, params } = assignments;
   const { embedding, hash } = computed;
-  params.push(embedding ? toSql(embedding) : null);
+  params.push(encodeEmbedding(embedding));
   setClauses.push(`embedding = $${params.length}`);
   params.push(hash);
   setClauses.push(`content_hash = $${params.length}`);
@@ -309,9 +315,9 @@ function buildAssignments(
   return assignments;
 }
 
-/** Run the UPDATE under the caller's write predicate and commit. Returns the new id. */
+/** Run the UPDATE under the caller's write predicate. Returns the new id. */
 async function applyUpdate(
-  client: PoolClient,
+  repository: EntryWriteRepository,
   identity: AuthIdentity,
   request: { table: ResourceTable; id: string; assignments: UpdateAssignments },
 ): Promise<string | null> {
@@ -319,19 +325,20 @@ async function applyUpdate(
   const params = [...assignments.params, id];
   const idParam = params.length;
   const updatePredicate = namespacePredicate(identity, "write", idParam + 1);
-  const { rows: updatedRows } = await client.query(
-    `UPDATE ${table} SET ${assignments.setClauses.join(", ")}
-            WHERE id = $${idParam}${updatePredicate.clause} RETURNING id`,
-    [...params, ...updatePredicate.values],
-  );
-  await client.query("COMMIT");
-  if (updatedRows.length === 0) return null;
-  return updatedRows[0].id as string;
+  const updatedRows = await repository.updateEntryRow({
+    table,
+    setClauses: assignments.setClauses,
+    idParam,
+    predicateClause: updatePredicate.clause,
+    params: [...params, ...updatePredicate.values],
+  });
+  const updatedRow = updatedRows[0];
+  if (updatedRow === undefined) return null;
+  return updatedRow.id as string;
 }
 
 /** The tool result envelope every branch of the handler returns. */
-type ToolResponse =
-  ReturnType<typeof textResult> | ReturnType<typeof errorResult>;
+type ToolResponse = ReturnType<typeof textResult> | ReturnType<typeof errorResult>;
 
 /**
  * Run one authorized update inside the caller's open transaction.
@@ -340,7 +347,8 @@ type ToolResponse =
  * leaves the row locked for the rest of the pool's lifetime.
  */
 async function runUpdate(
-  client: PoolClient,
+  repository: EntryWriteRepository,
+  control: TransactionControl<ToolResponse>,
   dependencies: MemoryToolDependencies,
   request: {
     identity: AuthIdentity;
@@ -350,22 +358,21 @@ async function runUpdate(
   },
 ): Promise<ToolResponse> {
   const { identity, table, id, providedFields } = request;
-  const locked = await lockExistingRow(client, identity, { table, id });
-  if (!locked.ok) return locked.response;
+  const locked = await lockExistingRow(repository, identity, { table, id });
+  if (!locked.ok) control.abort(locked.response);
 
   const needsReembed = CONTENT_FIELDS[table].some(
     (field) => providedFields[field] !== undefined,
   );
-  let reembedding: { embedding: number[] | null; hash: string | null } | null =
-    null;
+  let reembedding: { embedding: number[] | null; hash: string | null } | null = null;
   if (needsReembed) {
-    const computed = await computeReembedding(client, dependencies, {
+    const computed = await computeReembedding(repository, dependencies, {
       table,
       id,
       providedFields,
       existingRow: locked.row,
     });
-    if (!computed.ok) return computed.response;
+    if (!computed.ok) control.abort(computed.response);
     reembedding = { embedding: computed.embedding, hash: computed.hash };
   }
 
@@ -374,7 +381,7 @@ async function runUpdate(
     providedFields,
     reembedding,
   });
-  const updatedId = await applyUpdate(client, identity, {
+  const updatedId = await applyUpdate(repository, identity, {
     table,
     id,
     assignments,
@@ -427,21 +434,26 @@ export function registerUpdateEntryTool(
         return errorResult(`No valid fields to update for table ${table}`);
       }
 
-      const client = await dependencies.pool.connect();
-      try {
-        await client.query("BEGIN");
-        return await runUpdate(client, dependencies, {
-          identity: auth.identity,
-          table,
-          id: args.id,
-          providedFields,
-        });
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
+      return await withTransaction({
+        pool: dependencies.pool,
+        run: async (tx, control) =>
+          runUpdate(createEntryWriteRepository(tx), control, dependencies, {
+            identity: auth.identity,
+            table,
+            id: args.id,
+            providedFields,
+          }),
+        onRollbackFailure: (rollbackError: unknown) => {
+          dependencies.logger.warn(
+            {
+              tool: "update_entry",
+              errorName:
+                rollbackError instanceof Error ? rollbackError.name : "unknown",
+            },
+            "update_entry_rollback_failed",
+          );
+        },
+      });
     },
   );
 }

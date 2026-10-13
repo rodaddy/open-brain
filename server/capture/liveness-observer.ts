@@ -2,77 +2,19 @@
  * Gather the counts `/health` needs to judge the raw-capture lane, from the
  * only vantage point a SERVER actually has: arrivals in `ob_raw_turns`.
  *
- * WHY THIS MODULE EXISTS (#652, closing the gap #648 left open by name).
- * PR #648 merged the verdict half of capture liveness — the reader
- * (`python/openbrain/src/openbrain/apps/capture/liveness.py`) and the endpoint
- * plumbing (`server/transport/health.ts:138`, `:194`) — and its own report
- * recorded that no process composes it, so `/health` never reported capture.
- * An optional input that no composition root supplies is dead code with a
- * docstring. This is the gatherer that makes it live.
+ * Why arrivals rather than the watermark or the spool, and how the counts this
+ * vantage point cannot observe are reported without fabricating a fault:
+ * See docs/decisions/liveness-observer-arrivals-are-the-vantage-point.md
  *
- * WHY ARRIVALS, AND NOT THE WATERMARK OR THE SPOOL. #648's residual-risk field
- * named the blocker precisely: `WatermarkStore` and `OutageLatch` are strictly
- * single-key with no enumeration method (`watermark.py:196-245`,
- * `outage.py:375-440`), so nothing can ask them "which sessions exist?". They
- * are also per-hook CLIENT-side files living on whatever machine ran the
- * session; a server process cannot read them at all, and inventing an
- * enumeration for them is its own decision rather than a detail to settle here.
+ * Why a quiet window is not a verdict, and why `silence_seconds` is computed
+ * for an operator to read but never compared against a threshold:
+ * See docs/decisions/liveness-observer-absence-is-not-staleness.md
  *
- * What the server CAN see is the thing those mechanisms exist to protect:
- * turns landing in `ob_raw_turns`. `docs/decisions/capture-never-drops-a-turn.md:182-200`
- * publishes exactly this as the correct health check, PER ROLE, and explains
- * why with the measurement that forced it — #447 hid for six days behind a
- * healthy lane total while the assistant side sat at zero.
- *
- * HONEST ABOUT WHAT IT CANNOT SEE. The two counts this vantage point cannot
- * observe are reported as "no evidence of fault", never as zero-meaning-broken:
- *
- *   - `watermark_bytes_advanced` is reported as delivered turns, not as 0. The
- *     reader treats 0 bytes while sessions ran as the WEDGED-WATERMARK fault
- *     (`liveness.py`), so a gatherer that passed a literal 0 because it cannot
- *     measure bytes would degrade every healthy deployment on earth. Turns
- *     arriving IS the watermark advancing — that is what a turn is evidence of
- *     — so the substitution preserves the property the field is about rather
- *     than the units, which is the round-10 lesson about picking a neutral
- *     value that keeps the property under test intact.
- *   - `spool_pending` is 0 and `outage_announcements` is 0. The reader's
- *     silent-spool fault requires `spool_pending > 0`, so this pair is
- *     structurally incapable of manufacturing that fault. A server-side spool
- *     reading would need the client-side enumeration that does not exist; the
- *     fault stays unobservable from here, and reporting it as absent is honest
- *     where reporting it as present would be a fabrication.
- *
- * WHY QUARANTINE IS DIFFERENT FROM SPOOL DEPTH (#680, cutover blocker B2). The
- * paragraph above is right about `spool_pending` and does NOT extend to
- * abandoned units, which is the distinction that let a real data loss stay
- * invisible. `spoolQuarantined` is an OPTIONAL REPORTED input, not something
- * this gatherer discovers: a client already computes the count
- * (`SpoolStatus.quarantined_count`) and can hand it over, so no enumeration
- * has to be invented. This gatherer does not report it — the arrivals query
- * genuinely cannot see it — so it leaves the field UNDEFINED and the judge
- * publishes no count, rather than the hardcoded 0 that used to stand in for an
- * unmeasured quantity. That hardcoded 0 is exactly what `/health` was showing
- * on 2026-07-30 while fifteen turns sat abandoned in a sidecar, permanently.
- *
- * This is announced rather than silent (AGENTS.md, "Nothing is adjusted
- * silently"): `observableFaults` names which of the reader's three faults this
- * vantage point can actually raise, and it travels into the health block.
- *
- * ABSENCE IS NOT STALENESS. A deployment that runs no capture lane composes no
- * observer and publishes no block (`docs/lane-contract.md` Tightenings rounds 8
- * and 13). A composed observer that has seen nothing at all returns `undefined`
- * rather than a verdict — a fresh process and a quiet window are not evidence
- * of a dead lane, and `MIN_SESSIONS_FOR_SILENCE` in the reader guards the same
- * boundary from the other side.
- *
- * NO WALL-CLOCK VERDICT. `silence_seconds` is computed for an operator to read
- * and is never compared against a threshold here or downstream
- * (`docs/lane-contract.md` Tightenings round 5 — wall-clock assertions are
- * flake generators, #632/#634).
+ * `observableFaults` names which of the reader's three faults this vantage
+ * point can actually raise, and it travels into the health block.
  */
 import type { Logger } from "pino";
 import type { Pool } from "pg";
-import type { TransportCaptureHealth } from "../transport/index.ts";
 import { EXPECTED_LIVE_ROLES } from "../domain/raw-turn-roles.ts";
 
 /**
@@ -166,6 +108,14 @@ export interface CaptureObservation {
    * the whole lesson of the field that sits above it.
    */
   readonly spoolQuarantined?: number;
+  /**
+   * The configured namespace, set ONLY when it has never had a single row
+   * (issue 682). A typo in `OPENBRAIN_CAPTURE_HEALTH_NAMESPACE` otherwise reads
+   * exactly like a quiet night: an empty window publishes nothing and
+   * `/health` stays green forever. A namespace with rows outside the window
+   * is a quiet lane and leaves this undefined.
+   */
+  readonly unknownNamespace?: string;
 }
 
 interface RoleCountRow {
@@ -189,6 +139,7 @@ interface CaptureFaultSignals {
   readonly spoolUnannounced: boolean;
   readonly silentRoles: readonly string[];
   readonly quarantined: number | undefined;
+  readonly unknownNamespace: string | undefined;
 }
 
 /**
@@ -220,9 +171,7 @@ function classifySilentRoles(
  * exactly the deployment that stopped capturing BECAUSE its records were being
  * abandoned.
  */
-function classifyCaptureFaults(
-  observation: CaptureObservation,
-): CaptureFaultSignals {
+function classifyCaptureFaults(observation: CaptureObservation): CaptureFaultSignals {
   const active = observation.sessionsObserved >= MIN_SESSIONS_FOR_SILENCE;
   return {
     watermarkWedged: active && observation.watermarkBytesAdvanced === 0,
@@ -230,6 +179,7 @@ function classifyCaptureFaults(
       observation.spoolPending > 0 && observation.outageAnnouncements === 0,
     silentRoles: classifySilentRoles(observation, active),
     quarantined: observation.spoolQuarantined,
+    unknownNamespace: observation.unknownNamespace,
   };
 }
 
@@ -243,6 +193,11 @@ function describeCaptureFaults(
   signals: CaptureFaultSignals,
 ): string[] {
   const faults: string[] = [];
+  if (signals.unknownNamespace !== undefined) {
+    faults.push(
+      `${CAPTURE_HEALTH_NAMESPACE_ENV}="${signals.unknownNamespace}" names a namespace with no capture rows ever — check the value for a typo`,
+    );
+  }
   if (signals.watermarkWedged) {
     faults.push(
       `watermark advanced 0 bytes across ${observation.sessionsObserved} session(s)`,
@@ -266,6 +221,65 @@ function describeCaptureFaults(
 }
 
 /**
+ * The raw-capture lane's liveness, as `/health` reports it.
+ *
+ * WHY THIS IS A HEALTH INPUT AT ALL (#647, ledger item 25). Raw capture is
+ * AUTOMATIC — a `Stop` hook reads since the watermark and delivers — and
+ * automatic is what makes it dangerous: nothing was ever asked to notice it
+ * stopping. `ob_raw_turns` records ARRIVALS; nothing anywhere read ABSENCE, so
+ * a silently-dead capture lane was server-side indistinguishable from an idle
+ * one. This is the #625 producer argument applied to the second background
+ * lane, and it replaces an enforcement tier rather than adding a test: ledger
+ * item 25 retired the capture merge-gate on the reasoning that gating a
+ * human's PR is the wrong instrument for a background pipeline.
+ *
+ * Every field is derived from EVENT COUNTS by
+ * `openbrain.apps.capture.liveness`. `silence_seconds` is reported, never
+ * compared — a wall-clock verdict cannot tell a wedged pipeline from a quiet
+ * afternoon (`docs/lane-contract.md`, Tightenings round 5).
+ */
+export interface TransportCaptureHealth {
+  /** True once any capture fault below fired. */
+  readonly stale: boolean;
+  /** Sessions ran and the watermark advanced zero bytes. */
+  readonly watermark_wedged: boolean;
+  /** The spool holds records and the outage latch announced nothing. */
+  readonly spool_unannounced: boolean;
+  /**
+   * Speakers that delivered nothing while the lane was active.
+   *
+   * PER ROLE, not per lane, and this field is the reason the block exists in
+   * this shape: `docs/decisions/capture-never-drops-a-turn.md:188-200` records
+   * that the operator's numbers stayed healthy for six days while the
+   * assistant side sat at zero (#447). A lane total reads as busy traffic;
+   * only the per-role view sees a dead speaker.
+   */
+  readonly silent_roles: readonly string[];
+  readonly sessions_observed: number;
+  readonly turns_delivered: number;
+  readonly spool_pending: number;
+  /**
+   * Units the capture lane ABANDONED after exhausting its replay attempts.
+   *
+   * ABSENT, never 0, when no vantage point reported the count (#680). The two
+   * states are genuinely different — "nothing was abandoned" and "nobody
+   * looked" — and collapsing them into a confident zero is the exact defect
+   * this field exists to end: on 2026-07-30 a hardcoded 0 stood in for an
+   * unmeasured quantity while fifteen turns were gone for good, and `/health`
+   * read `spool_pending:0, reason:"capture lane delivering"` over the top of
+   * it.
+   *
+   * A monitor alerts on this crossing 0 -> 1, so a reporting vantage point
+   * publishes a real 0 rather than omitting the field.
+   */
+  readonly quarantined_count?: number;
+  /** Reported for an operator; no verdict is derived from it. */
+  readonly silence_seconds: number;
+  /** Content-free sentence naming which fault fired. */
+  readonly reason: string;
+}
+
+/**
  * Judge one observation. The TypeScript twin of `read_capture_liveness`.
  *
  * Kept as a pure function over counts for the reason the Python module's
@@ -285,8 +299,7 @@ export function readCaptureLiveness(
   );
 
   const signals = classifyCaptureFaults(observation);
-  const { watermarkWedged, spoolUnannounced, silentRoles, quarantined } =
-    signals;
+  const { watermarkWedged, spoolUnannounced, silentRoles, quarantined } = signals;
   const faults = describeCaptureFaults(observation, signals);
 
   return {
@@ -372,16 +385,16 @@ async function gather(
     turnsByRole[row.role] = turns;
     turnsDelivered += turns;
     sessionsObserved = Math.max(sessionsObserved, Number(row.sessions));
-    const since =
-      row.seconds_since_last === null ? 0 : Number(row.seconds_since_last);
+    const since = row.seconds_since_last === null ? 0 : Number(row.seconds_since_last);
     silenceSeconds = Math.max(silenceSeconds, 0);
     if (silenceSeconds === 0 || since < silenceSeconds) silenceSeconds = since;
   }
 
-  // Nothing at all in the window is NOT a dead lane: it is a fresh process, a
-  // quiet night, or a namespace nobody is capturing. Publish nothing rather
-  // than assert a verdict from no evidence.
-  if (rows.rows.length === 0) return undefined;
+  // Nothing at all in the window is NOT a dead lane: it is a fresh process or
+  // a quiet night. Publish nothing rather than assert a verdict from no
+  // evidence -- unless the namespace has NEVER had a row, which is a config
+  // typo, not a quiet night (issue 682).
+  if (rows.rows.length === 0) return unknownNamespaceObservation(input);
 
   return {
     sessionsObserved,
@@ -392,6 +405,34 @@ async function gather(
     outageAnnouncements: 0,
     turnsByRole,
     silenceSeconds,
+  };
+}
+
+/**
+ * An empty window's verdict: `undefined` for a known namespace, and a
+ * degraded observation naming the value for one that never had a row.
+ *
+ * Asked only after the window came back empty, so a delivering lane pays
+ * nothing for it. "Known" means at least one row ever, with no time window.
+ */
+async function unknownNamespaceObservation(
+  input: CaptureObserverInput,
+): Promise<CaptureObservation | undefined> {
+  const known = await input.pool.query<{ exists: boolean }>(
+    `SELECT exists(SELECT 1 FROM ob_raw_turns WHERE namespace = $1) AS exists`,
+    [input.window.namespace],
+  );
+  if (known.rows[0]?.exists === true) return undefined;
+  const turnsByRole: Record<string, number> = {};
+  for (const role of EXPECTED_ROLES) turnsByRole[role] = 0;
+  return {
+    sessionsObserved: 0,
+    watermarkBytesAdvanced: 0,
+    spoolPending: 0,
+    outageAnnouncements: 0,
+    turnsByRole,
+    silenceSeconds: 0,
+    unknownNamespace: input.window.namespace,
   };
 }
 
@@ -458,11 +499,9 @@ export function createCaptureLivenessObserver(
 }
 
 /** Env var naming the tenant whose capture lane this process reports on. */
-export const CAPTURE_HEALTH_NAMESPACE_ENV =
-  "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE";
+export const CAPTURE_HEALTH_NAMESPACE_ENV = "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE";
 /** Env var overriding the observation window, in minutes. */
-export const CAPTURE_HEALTH_WINDOW_ENV =
-  "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES";
+export const CAPTURE_HEALTH_WINDOW_ENV = "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES";
 /** Env var overriding the refresh cadence, in milliseconds. */
 export const CAPTURE_HEALTH_REFRESH_ENV = "OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS";
 
@@ -493,29 +532,9 @@ export interface CaptureHealthRuntimeInput {
 /**
  * Build the capture-health observer this PROCESS should run, from config.
  *
- * WHY THE NAMESPACE IS REQUIRED AND HAS NO FALLBACK (operator ruling
- * 2026-08-08, ledger item 28 in `docs/issue-graph.md`). The namespace is the
- * Open Brain data-tenant column on `ob_*` rows — the auth-derived security
- * boundary — so guessing one is not a convenience, it is this process
- * reporting on someone else's data and calling the answer its own health. The
- * ruling generalizes past this observer: identity-selecting config is explicit
- * per deployment, loud on absence, never silently substituted, and a literal
- * "default" tenant is a symptom to fix rather than a value to fall back on.
- *
- * ABSENCE IS LOUD IN THE LOG AND QUIET IN /health, WHICH ARE TWO DIFFERENT
- * AUDIENCES. Unset namespace means no observer, so `/health` publishes no
- * capture block and stays green — a deployment that runs no capture lane must
- * not report itself broken for a job it was never given
- * (`docs/lane-contract.md` Tightenings rounds 8 and 13). But a deployment that
- * MEANT to run one and forgot the variable would then be indistinguishable
- * from one that opted out, so the config notice is emitted at WARN, naming the
- * variable. The health verdict is for the monitor; the notice is for the
- * operator who has to fix the deploy.
- *
- * NOTHING IS ADJUSTED SILENTLY (AGENTS.md Coding Standards). When a ruled
- * default applies it is announced with the values it applied, and an
- * unparseable override is announced together with the default that replaced
- * it — never accepted as a number and never accepted as silence.
+ * The namespace is required and has no fallback: unset means no observer, a
+ * WARN config notice naming the variable, and a `/health` that stays green.
+ * See docs/decisions/liveness-observer-namespace-has-no-fallback.md
  */
 export function createCaptureHealthRuntime(
   input: CaptureHealthRuntimeInput,

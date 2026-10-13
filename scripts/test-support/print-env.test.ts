@@ -29,7 +29,7 @@
  * environment read and `console`.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 
 /**
  * Returns the named environment variable, or throws when it is unset.
@@ -39,7 +39,9 @@ import { describe, expect, it } from "bun:test";
 function requireSuppliedUrl(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`test_database_required: ${name} is unset; run bun run test:isolated`);
+    throw new Error(
+      `test_database_required: ${name} is unset; run bun run test:isolated`,
+    );
   }
   return value;
 }
@@ -49,7 +51,9 @@ describe("isolated runner environment contract (#904)", () => {
     const admin = requireSuppliedUrl("OPENBRAIN_SCRATCH_ADMIN_URL");
     const url = new URL(admin);
     expect(["postgres:", "postgresql:"]).toContain(url.protocol);
-    console.log(`OPENBRAIN_SCRATCH_ADMIN_URL -> ${url.username}@${url.host}${url.pathname}`);
+    console.log(
+      `OPENBRAIN_SCRATCH_ADMIN_URL -> ${url.username}@${url.host}${url.pathname}`,
+    );
   });
 
   it("exports a OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL the clone suite accepts", () => {
@@ -64,6 +68,8 @@ describe("isolated runner environment contract (#904)", () => {
     expect(user).toBe("open_brain_local_clone");
     expect(database.startsWith("open_brain_local_")).toBe(true);
 
-    console.log(`OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL -> ${user}@${host}:${url.port}/${database}`);
+    console.log(
+      `OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL -> ${user}@${host}:${url.port}/${database}`,
+    );
   });
 });

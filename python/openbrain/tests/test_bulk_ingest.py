@@ -44,6 +44,13 @@ FIXTURE = Path(__file__).parent / "fixtures" / "bulk" / "claude-transcript.jsonl
 CODEX_FIXTURE = (
     Path(__file__).parent / "fixtures" / "bulk" / "codex-rollout-sanitized.jsonl"
 )
+CODEX_TUI_FIXTURE = (
+    Path(__file__).parents[3]
+    / "scripts"
+    / "done-means"
+    / "fixtures"
+    / "512-codex-tui-stop.jsonl"
+)
 HERMES_FIXTURE = (
     Path(__file__).parent / "fixtures" / "bulk" / "hermes-messages-sanitized.jsonl"
 )
@@ -90,9 +97,14 @@ class RecordingLane:
 
     batches: list[list[dict[str, Any]]] = field(default_factory=list)
 
-    def ingest_raw_turns(self, turns: Any) -> object:
+    def ingest_raw_turns(self, turns: Any) -> dict[str, Any]:
         self.batches.append([dict(turn) for turn in turns])
-        return {"ingested": len(self.batches[-1])}
+        return {
+            "ingested": len(self.batches[-1]),
+            "duplicates": 0,
+            "filtered": 0,
+            "namespace": "test",
+        }
 
     @property
     def turns(self) -> list[dict[str, Any]]:
@@ -106,13 +118,18 @@ class RejectingLane:
     reject_uuid: str
     accepted: list[str] = field(default_factory=list)
 
-    def ingest_raw_turns(self, turns: Any) -> object:
+    def ingest_raw_turns(self, turns: Any) -> dict[str, Any]:
         batch = [dict(turn) for turn in turns]
         for turn in batch:
             if turn["turn_uuid"] == self.reject_uuid:
                 raise TurnRejectedError
             self.accepted.append(turn["turn_uuid"])
-        return {"ingested": len(batch)}
+        return {
+            "ingested": len(batch),
+            "duplicates": 0,
+            "filtered": 0,
+            "namespace": "test",
+        }
 
 
 def stage_fixture(tmp_path: Path) -> StagingStore:
@@ -173,16 +190,14 @@ class TestContentIsCarriedWhole:
     def test_every_size_reaches_the_lane_unshortened(self, tmp_path: Path) -> None:
         session = "bulk-size"
         lines = "".join(
-            json.dumps(
-                {
-                    "type": "user",
-                    "uuid": f"size-{size}",
-                    "promptSource": "typed",
-                    "sessionId": session,
-                    "timestamp": "2026-08-01T06:00:00.000Z",
-                    "message": {"role": "user", "content": "x" * size},
-                }
-            )
+            json.dumps({
+                "type": "user",
+                "uuid": f"size-{size}",
+                "promptSource": "typed",
+                "sessionId": session,
+                "timestamp": "2026-08-01T06:00:00.000Z",
+                "message": {"role": "user", "content": "x" * size},
+            })
             + "\n"
             for size in self.SIZES
         )
@@ -235,6 +250,7 @@ class TestResumeDoesNotResend:
         second = ingest(store, recovering)
         assert [turn["turn_uuid"] for turn in recovering.turns] == ["op-2"]
         assert second.sent == 1
+        assert list(store.quarantined()) == []
 
 
 class TestRejectedTurnsAreQuarantinedNotDropped:
@@ -421,9 +437,9 @@ class TestHermesObservedSQLiteAdapter:
 
         assert staged.staged == 4
         assert result.sent == 4
-        assert [
-            (turn["session_ref"], turn["occurred_at"]) for turn in lane.turns
-        ] == [(session_id, timestamp) for _, session_id, timestamp in rows]
+        assert [(turn["session_ref"], turn["occurred_at"]) for turn in lane.turns] == [
+            (session_id, timestamp) for _, session_id, timestamp in rows
+        ]
 
     def test_malformed_row_names_location_without_content(self, tmp_path: Path) -> None:
         source = tmp_path / "broken-hermes.jsonl"
@@ -449,6 +465,24 @@ class TestCodexObservedRolloutAdapter:
 
     def test_factory_returns_the_codex_adapter(self) -> None:
         assert adapter_for(InputFormat.CODEX) is codex_raw_turn_from_line
+
+    def test_tui_stop_rollout_stages_both_speakers(self, tmp_path: Path) -> None:
+        store = StagingStore(tmp_path / "tui.sqlite")
+        staged = stage_file(CODEX_TUI_FIXTURE, InputFormat.CODEX, store)
+        lane = RecordingLane()
+
+        result = ingest(store, lane)
+
+        assert staged.staged == result.sent == 2
+        assert result.quarantined == 0
+        assert [turn["content"] for turn in lane.turns] == [
+            "fixture TUI operator prompt",
+            "fixture TUI assistant reply",
+        ]
+        assert [turn["session_ref"] for turn in lane.turns] == [
+            "fixture-tui-session-512",
+            "fixture-tui-session-512",
+        ]
 
     def test_sanitized_observed_sample_reaches_fake_lane(self, tmp_path: Path) -> None:
         store = StagingStore(tmp_path / "codex.sqlite")
@@ -476,6 +510,82 @@ class TestCodexObservedRolloutAdapter:
         assert assistant_turn["is_human_prompt"] is False
         assert assistant_turn["occurred_at"] == "2026-08-02T03:11:27.000Z"
 
+    def test_bulk_staging_scopes_identical_user_records_to_each_session(
+        self, tmp_path: Path
+    ) -> None:
+        """Session-blind staging makes the second file collide on turn UUID."""
+
+        def session_line(session_id: str) -> str:
+            return json.dumps({
+                "timestamp": "2026-09-14T12:00:00.000Z",
+                "type": "session_meta",
+                "payload": {"id": session_id, "session_id": session_id},
+            })
+
+        user_line = json.dumps({
+            "timestamp": "2026-09-14T12:00:01.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "same operator message",
+                "images": [],
+                "local_images": [],
+                "audio": [],
+                "local_audio": [],
+                "text_elements": [],
+            },
+        })
+        sources = [tmp_path / "first.jsonl", tmp_path / "second.jsonl"]
+        for path, session_id in zip(
+            sources, ("session-one", "session-two"), strict=True
+        ):
+            path.write_text(
+                f"{session_line(session_id)}\n{user_line}\n", encoding="utf-8"
+            )
+
+        first_store = StagingStore(tmp_path / "first-stage.sqlite")
+        for source in sources:
+            stage_file(source, InputFormat.CODEX, first_store)
+        first = list(first_store.pending())
+
+        replay_store = StagingStore(tmp_path / "replay-stage.sqlite")
+        for source in sources:
+            stage_file(source, InputFormat.CODEX, replay_store)
+        replay = list(replay_store.pending())
+
+        assert [turn.session_ref for turn in first] == ["session-one", "session-two"]
+        assert first[0].turn_uuid != first[1].turn_uuid
+        assert [turn.turn_uuid for turn in replay] == [turn.turn_uuid for turn in first]
+
+    def test_context_free_bulk_input_retains_legacy_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """A source without session metadata gets no path-invented identity."""
+        line = json.dumps({
+            "timestamp": "2026-09-14T12:00:01.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "legacy context-free input",
+                "images": [],
+                "local_images": [],
+                "audio": [],
+                "local_audio": [],
+                "text_elements": [],
+            },
+        })
+        source = tmp_path / "context-free.jsonl"
+        source.write_text(f"{line}\n", encoding="utf-8")
+        expected = codex_raw_turn_from_line(line)
+        store = StagingStore(tmp_path / "context-free.sqlite")
+
+        stage_file(source, InputFormat.CODEX, store)
+        [staged] = list(store.pending())
+
+        assert expected is not None
+        assert staged.turn_uuid == expected.turn_uuid
+        assert staged.session_ref is None
+
     def test_user_turn_identity_is_unique_per_record_not_per_timestamp(self) -> None:
         # Observed on the real 2026-08-02 corpus: several user_message events
         # share one timestamp to the millisecond, so a timestamp-derived id
@@ -483,21 +593,19 @@ class TestCodexObservedRolloutAdapter:
         # from the whole record instead, which keeps same-instant turns distinct
         # while staying deterministic across re-runs of the same file.
         def user_line(message: str) -> str:
-            return json.dumps(
-                {
-                    "timestamp": "2026-08-02T03:11:24.000Z",
-                    "type": "event_msg",
-                    "payload": {
-                        "type": "user_message",
-                        "message": message,
-                        "images": [],
-                        "local_images": [],
-                        "audio": [],
-                        "local_audio": [],
-                        "text_elements": [],
-                    },
-                }
-            )
+            return json.dumps({
+                "timestamp": "2026-08-02T03:11:24.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": message,
+                    "images": [],
+                    "local_images": [],
+                    "audio": [],
+                    "local_audio": [],
+                    "text_elements": [],
+                },
+            })
 
         first = codex_raw_turn_from_line(user_line("first at this instant"))
         second = codex_raw_turn_from_line(user_line("second at this instant"))
@@ -577,8 +685,7 @@ class TestMalformedCodexLinesFailLoud:
     ) -> None:
         source = tmp_path / "broken-codex.jsonl"
         source.write_text(
-            CODEX_FIXTURE.read_text(encoding="utf-8").splitlines()[0]
-            + "\n{not json\n",
+            CODEX_FIXTURE.read_text(encoding="utf-8").splitlines()[0] + "\n{not json\n",
             encoding="utf-8",
         )
         store = StagingStore(tmp_path / "stage.sqlite")
@@ -598,3 +705,30 @@ class TestClaudeAdapterIsTheReusedPureFunction:
         # function the live adapter parses lines with (operator: "reuse already
         # working code, good.").
         assert adapter_for(InputFormat.CLAUDE) is raw_turn_from_line
+
+
+def test_run_warning_names_filtered_and_quarantined_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loguru import logger
+
+    from openbrain.apps.bulk import run as bulk_run
+    from openbrain.apps.bulk.ingest import IngestResult
+
+    source = tmp_path / "session.jsonl"
+    source.write_text("")
+    monkeypatch.setattr(bulk_run, "load_capture_settings", lambda: None)
+    monkeypatch.setattr(bulk_run, "_lane", lambda *_: None)
+    monkeypatch.setattr(
+        bulk_run,
+        "ingest",
+        lambda *_: IngestResult(sent=0, duplicates=0, filtered=3, quarantined=0),
+    )
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level="WARNING")
+    try:
+        assert bulk_run.run([str(source)]) == 1
+    finally:
+        logger.remove(sink)
+
+    assert any("filtered 3 turns and quarantined 0 turns" in m for m in messages)

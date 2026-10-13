@@ -59,10 +59,10 @@ PACKAGE_VERSION = _resolve_package_version()
 # drift receipt and MUST move in the same change as the server's, never after
 # it: _runtime_router.py compares them for exact equality, so a stale pin turns
 # a blind receipt into a hard refusal the moment the server deploys.
-CURRENT_CONTRACT_VERSION = "2026-08-09.memory-tools.v24"
+CURRENT_CONTRACT_VERSION = "2026-08-09.memory-tools.v25"
 CURRENT_CONTRACT_SCHEMA_VERSION = 1
 CURRENT_CONTRACT_SCHEMA_HASH = (
-    "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c"
+    "170f3ad8c0eeeb97a33bc2edc7df2f51af635e3500e57d1a783f39a132ede12f"
 )
 CURRENT_CONTRACT_HEADER = (
     f"{CURRENT_CONTRACT_VERSION};schema_hash={CURRENT_CONTRACT_SCHEMA_HASH}"
@@ -150,6 +150,10 @@ CURRENT_TOOL_HELP: Mapping[str, str] = {
     "list_repo_facts": "Read curated qmd-derived repository facts.",
     "log_thought": "Write a durable thought or observation to Open Brain.",
     "operator_doctor": "Read privileged Open Brain operator doctor/status JSON.",
+    "promote_reviewed_candidate": (
+        "Copy a human-promoted DREAM fact or decision candidate into the "
+        "caller-authorized durable thoughts namespace; dry-run defaults server-side."
+    ),
     "recovery_wal_append": (
         "Append exact-scope quarantined recovery evidence, not durable memory."
     ),
@@ -1392,6 +1396,9 @@ class OpenBrainClient:
 
     def promote_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("promote_entry", arguments)
+
+    def promote_reviewed_candidate(self, **arguments: Any) -> JSON:
+        return self.call_tool("promote_reviewed_candidate", arguments)
 
     def rate_entry(self, **arguments: Any) -> JSON:
         return self.call_tool("rate_entry", arguments)

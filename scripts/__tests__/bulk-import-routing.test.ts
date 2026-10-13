@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "../test-support/expect-defined.ts";
 import {
@@ -18,7 +19,7 @@ installBulkImportMocks();
 // Import after mocks
 const { readFiles, importThought, importDecision, importSession, parseArgs } =
   await import("../bulk-import.ts");
-const { contentHash } = await import("../../src/embedding.ts");
+const { normalizedContentHash } = await import("../../server/embedding/provider.ts");
 
 let tmpDir: string;
 let unsubscribeLogSink: (() => void) | undefined;
@@ -284,7 +285,7 @@ describe("dry run", () => {
   it("readFiles works but no DB calls are needed in dry-run mode", async () => {
     // Simulate what the main function does in dry-run: read files, print them, exit
     for (let i = 0; i < 5; i++) {
-      await Bun.write(
+      await writeFile(
         join(tmpDir, `note-${i}.md`),
         `---\ntitle: Note ${i}\n---\n\nThis is note ${i} with enough content to pass the minimum length check.`,
       );
@@ -397,23 +398,23 @@ describe("parseArgs", () => {
 
 describe("edge cases", () => {
   it("skips empty files (< 10 chars body)", async () => {
-    await Bun.write(join(tmpDir, "empty.md"), "");
-    await Bun.write(join(tmpDir, "short.md"), "hi");
-    await Bun.write(join(tmpDir, "nine.md"), "123456789"); // exactly 9 chars
+    await writeFile(join(tmpDir, "empty.md"), "");
+    await writeFile(join(tmpDir, "short.md"), "hi");
+    await writeFile(join(tmpDir, "nine.md"), "123456789"); // exactly 9 chars
 
     const files = await readFiles(tmpDir, "**/*.md");
     expect(files).toHaveLength(0);
   });
 
   it("includes files with exactly 10 chars body", async () => {
-    await Bun.write(join(tmpDir, "ten.md"), "1234567890"); // exactly 10 chars
+    await writeFile(join(tmpDir, "ten.md"), "1234567890"); // exactly 10 chars
 
     const files = await readFiles(tmpDir, "**/*.md");
     expect(files).toHaveLength(1);
   });
 
   it("handles files with frontmatter but empty body", async () => {
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "fm-only.md"),
       `---\ntitle: All Frontmatter\ntags: [a, b]\n---\n`,
     );
@@ -423,18 +424,21 @@ describe("edge cases", () => {
   });
 
   it("handles files with frontmatter and very short body", async () => {
-    await Bun.write(join(tmpDir, "fm-short.md"), `---\ntitle: Short Body\n---\n\nHi`);
+    await writeFile(join(tmpDir, "fm-short.md"), `---\ntitle: Short Body\n---\n\nHi`);
 
     const files = await readFiles(tmpDir, "**/*.md");
     expect(files).toHaveLength(0); // "Hi" is < 10 chars
   });
 
   it("handles nested directories with glob pattern", async () => {
-    await Bun.write(
+    // writeFile does not create parent directories, unlike the bun
+    // global it replaces.
+    await mkdir(join(tmpDir, "a", "b", "c"), { recursive: true });
+    await writeFile(
       join(tmpDir, "a", "b", "c", "deep.md"),
       "Deeply nested file content with enough text for the import.",
     );
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "a", "sibling.md"),
       "Sibling file content with enough text for the import test.",
     );
@@ -528,20 +532,20 @@ describe("edge cases: error logging and hashing", () => {
   });
 
   it("content hash is deterministic for identical content", () => {
-    const hash1 = contentHash("Hello world test content");
-    const hash2 = contentHash("Hello world test content");
+    const hash1 = normalizedContentHash("Hello world test content");
+    const hash2 = normalizedContentHash("Hello world test content");
     expect(hash1).toBe(hash2);
   });
 
   it("content hash differs for different content", () => {
-    const hash1 = contentHash("Content version A for hash testing");
-    const hash2 = contentHash("Content version B for hash testing");
+    const hash1 = normalizedContentHash("Content version A for hash testing");
+    const hash2 = normalizedContentHash("Content version B for hash testing");
     expect(hash1).not.toBe(hash2);
   });
 
   it("content hash normalizes whitespace", () => {
-    const hash1 = contentHash("hello  world");
-    const hash2 = contentHash("hello world");
+    const hash1 = normalizedContentHash("hello  world");
+    const hash2 = normalizedContentHash("hello world");
     expect(hash1).toBe(hash2);
   });
 });

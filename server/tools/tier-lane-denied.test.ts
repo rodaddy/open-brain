@@ -17,7 +17,7 @@
  * here is asserted to have recorded ZERO statements — which is itself the
  * second half of the isolation claim (a refused caller never reaches the pool).
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

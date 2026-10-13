@@ -4,22 +4,21 @@
  * Split out of `./operator-doctor.ts` (issue 864) so the builder, the probes,
  * and the cache each stay under the server/ file rule. The interface is a
  * FROZEN contract: any field addition or removal requires bumping
- * `DOCTOR_CONTRACT_VERSION`, and `src/operator-doctor.test.ts` locks the exact
+ * `DOCTOR_CONTRACT_VERSION`, and the operator-doctor suite locks the exact
  * key set against it.
  */
-import type { AuthInfo, PoolHealth } from "../../src/types.ts";
+import type { AuthInfo, PoolHealth } from "../types.ts";
 
 export const DOCTOR_CONTRACT_VERSION = "2026-08-05.operator-doctor.v4";
 export const DISTILLATION_LAG_TTL_SECONDS_DEFAULT = 7 * 24 * 60 * 60;
-export const DISTILLATION_LAG_WARNING_RATIO = 0.5;
-export const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
+const DISTILLATION_LAG_WARNING_RATIO = 0.5;
+const DISTILLATION_LAG_CRITICAL_RATIO = 0.8;
 export const OPTIONAL_TIMEOUT_MS = 2_000;
 export const DOCTOR_CACHE_TTL_MS = 5_000;
 export const QMD_INDEX_STALE_AFTER_HOURS = 48;
 
 // Shared privileged-read predicate for the doctor surface. Consumed by both
-// the MCP tool (src/tools/operator-doctor.ts) and the REST route
-// (src/index.ts) so the gates cannot diverge.
+// the MCP tool and the REST route so the gates cannot diverge.
 export function canReadDoctor(auth: AuthInfo | undefined): boolean {
   return auth?.role === "admin" || auth?.role === "ob-admin";
 }
@@ -122,7 +121,7 @@ export interface OperatorDoctorStatus {
  * The env-derived fields are REQUIRED: `server/main.ts` holds the parsed
  * `ServerConfig` and fills them, so there is no ambient fallback to drift from
  * (`.oxlintrc.json` permits `process.env` only at the composition root). The
- * legacy call form lives on in the `src/operator-doctor.ts` L5 adapter.
+ * legacy env-reading call form lives on in the L5 adapter.
  */
 export interface OperatorDoctorOptions {
   /** `package.json` fallback when the file itself cannot be read. */

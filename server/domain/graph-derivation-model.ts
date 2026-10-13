@@ -1,4 +1,3 @@
-import type pg from "pg";
 import { createHash } from "node:crypto";
 
 /**
@@ -33,9 +32,87 @@ import { createHash } from "node:crypto";
  *    person, or anchor text ever leaves the server through this primitive.
  */
 
-/** Minimal pool surface this primitive needs; keeps tests injectable. */
-export interface GraphDerivationPool {
-  query: pg.Pool["query"];
+/** The anchor row a prior derivation left behind, as the repository returns it. */
+export interface PriorAnchorRow {
+  name?: string | null;
+  display_name?: string | null;
+  derivation_hash?: string | null;
+  content_hash?: string | null;
+}
+
+/** The row every entity/link upsert returns: identity, novelty, and namespace. */
+export interface AnchorUpsertRow {
+  id: string;
+  is_new: boolean;
+  namespace: string;
+}
+
+/** The namespace each archived anchor->term edge is re-verified against. */
+export interface PrunedLinkRow {
+  namespace: string;
+}
+
+/** The values one anchor-row refresh binds. */
+export interface AnchorRefresh {
+  namespace: string;
+  anchorType: string;
+  anchorCanonical: string;
+  storedName: string;
+  metadataPatch: string;
+}
+
+/** The values the anchor-entity upsert binds. */
+export interface AnchorEntityUpsert {
+  anchorType: string;
+  storedName: string;
+  anchorCanonical: string;
+  namespace: string;
+  metadata: string;
+  createdBy: string;
+}
+
+/** The values one derived-term upsert binds. */
+export interface DerivedEntityUpsert {
+  entityType: string;
+  name: string;
+  canonicalId: string;
+  namespace: string;
+  createdBy: string;
+}
+
+/** The values one anchor->term edge upsert binds. */
+export interface AnchorLinkUpsert {
+  anchorEntityId: string;
+  nodeId: string;
+  relation: string;
+  namespace: string;
+  createdBy: string;
+}
+
+/** The exact scope an obsolete-edge sweep is allowed to touch. */
+export interface ObsoleteAnchorLinkScope {
+  namespace: string;
+  anchorEntityId: string;
+  relation: string;
+  liveTargetIds: string[];
+}
+
+/**
+ * The persistence port this primitive depends on; keeps tests injectable. Each
+ * method is one statement, owned by server/db/graph-derivation-repository.ts so
+ * the domain tier holds no SQL text.
+ */
+export interface GraphDerivationRepository {
+  readPriorAnchor(
+    namespace: string,
+    anchorType: string,
+    anchorCanonical: string,
+  ): Promise<PriorAnchorRow | undefined>;
+  refreshAnchor(refresh: AnchorRefresh): Promise<void>;
+  upsertAnchorEntity(upsert: AnchorEntityUpsert): Promise<AnchorUpsertRow>;
+  upsertDerivedEntity(upsert: DerivedEntityUpsert): Promise<AnchorUpsertRow>;
+  upsertAnchorLink(upsert: AnchorLinkUpsert): Promise<AnchorUpsertRow>;
+  archiveObsoleteAnchorLinks(scope: ObsoleteAnchorLinkScope): Promise<PrunedLinkRow[]>;
 }
 
 /**
@@ -105,13 +182,13 @@ export class CrossNamespaceEndpointError extends Error {
   }
 }
 
-export const TOPIC_ENTITY_TYPE = "topic";
-export const PERSON_ENTITY_TYPE = "person";
-export const MAX_TERMS = 200;
+const TOPIC_ENTITY_TYPE = "topic";
+const PERSON_ENTITY_TYPE = "person";
+const MAX_TERMS = 200;
 // The existing ob_entities.name length bound this primitive honors on every
 // stored name. The deterministic anchor storage name and every derived term stay
 // within it; the complete human anchor label is preserved separately in metadata.
-export const MAX_ENTITY_NAME = 500;
+const MAX_ENTITY_NAME = 500;
 
 /**
  * The deterministic, collision-safe storage name for an anchor entity.
@@ -149,7 +226,7 @@ export interface DerivedEntity {
  * preserves the first-seen casing; identity dedup is case-insensitive so
  * "Rico" and "rico" collapse to one node.
  */
-export function normalizeTerm(entityType: string, raw: string): DerivedEntity | null {
+function normalizeTerm(entityType: string, raw: string): DerivedEntity | null {
   const name = raw.trim().replace(/\s+/g, " ");
   if (name.length === 0) return null;
   const canonical = `${entityType}:${name.toLowerCase()}`;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -214,3 +215,130 @@ def test_unreadable_branch_still_fails_closed(tmp_path: Path) -> None:
 
     assert result.blocked
     assert "unable to verify the current branch" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m 'subject line\n\nbody line'",
+        "git commit -m 'chore: land it\n\nnotes: push origin main was avoided'",
+    ],
+)
+def test_multiline_quoted_message_resolves_the_real_branch(
+    tmp_path: Path, command: str
+) -> None:
+    """Issue 740 D2: a newline inside the quoted message must not fail closed."""
+    repo = tmp_path / "feature-repo"
+    _init_repo(repo, "feature/guard-fix")
+
+    result = _run(command, repo, tmp_path / "state.json")
+
+    assert not result.blocked
+
+
+def test_quoted_message_naming_main_on_a_feature_branch_is_allowed(
+    tmp_path: Path,
+) -> None:
+    """Issue 618: conviction comes from branch state, never from message text."""
+    repo = tmp_path / "feature-repo"
+    _init_repo(repo, "feature/guard-fix")
+
+    result = _run(
+        "git commit -m 'fix: stop pushing to main by accident'",
+        repo,
+        tmp_path / "state.json",
+    )
+
+    assert not result.blocked
+
+
+def test_multiline_quoted_message_on_main_is_still_refused(tmp_path: Path) -> None:
+    """The parser fix must not weaken the protected-branch rule itself."""
+    repo = tmp_path / "main-repo"
+    _init_repo(repo, "main")
+
+    result = _run("git commit -m 'subject\n\nbody'", repo, tmp_path / "state.json")
+
+    assert result.blocked
+    assert PROTECTED_BRANCH_REASON in result.stdout
+
+
+def test_unverifiable_branch_message_names_what_failed(tmp_path: Path) -> None:
+    """Issue 740 D3: the refusal states the command run and what it returned."""
+    non_repo = tmp_path / "not-a-repo"
+    non_repo.mkdir()
+
+    result = _run("git push", non_repo, tmp_path / "state.json")
+
+    assert result.blocked
+    assert "git branch --show-current" in result.stdout
+    assert str(non_repo) in result.stdout
+    assert "exited" in result.stdout
+
+
+def _approve_main_push(repo: Path, expires: int) -> None:
+    """Write the marker `_ob/bin/approve-main-push` writes, with one expiry."""
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (Path(git_dir) / "guard-main-push-approved").write_text(
+        f"expires={expires}\n", encoding="utf8"
+    )
+
+
+def test_push_to_main_with_a_live_approval_marker_is_allowed(
+    tmp_path: Path,
+) -> None:
+    """Rico ruling 2026-09-11: the marker IS the explicit approval the refusal names."""
+    repo = tmp_path / "feature-repo"
+    _init_repo(repo, "feature/guard-fix")
+    _approve_main_push(repo, int(time.time()) + 600)
+
+    result = _run("git push origin main", repo, tmp_path / "state.json")
+
+    assert not result.blocked
+
+
+def test_push_to_main_with_an_expired_marker_is_refused(tmp_path: Path) -> None:
+    """A past expiry is a missing approval: the marker cannot become standing."""
+    repo = tmp_path / "feature-repo"
+    _init_repo(repo, "feature/guard-fix")
+    _approve_main_push(repo, int(time.time()) - 1)
+
+    result = _run("git push origin main", repo, tmp_path / "state.json")
+
+    assert result.blocked
+    assert PROTECTED_REF_REASON in result.stdout
+
+
+def test_malformed_marker_is_refused(tmp_path: Path) -> None:
+    """Anything but one `expires=<epoch>` line keeps the guard refusing."""
+    repo = tmp_path / "feature-repo"
+    _init_repo(repo, "feature/guard-fix")
+    git_dir = repo / ".git"
+    (git_dir / "guard-main-push-approved").write_text("yes\n", encoding="utf8")
+
+    result = _run("git push origin main", repo, tmp_path / "state.json")
+
+    assert result.blocked
+
+
+def test_git_dash_c_push_to_main_reads_the_target_repo_marker(
+    tmp_path: Path,
+) -> None:
+    """`git -C <repo> push origin main` is judged by <repo>'s marker, not the cwd's."""
+    approved = tmp_path / "approved-repo"
+    _init_repo(approved, "feature/guard-fix")
+    _approve_main_push(approved, int(time.time()) + 600)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    result = _run(
+        f"git -C {approved} push origin main", elsewhere, tmp_path / "state.json"
+    )
+
+    assert not result.blocked

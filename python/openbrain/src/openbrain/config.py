@@ -598,6 +598,13 @@ class ObservationSettings(_Base):
         validation_alias=AliasChoices("OPENBRAIN_OBSERVATION_HMAC_SECRET"),
     )
 
+    #: Issue 682: the hook wrapper hands an unset opt-in over as ``""``; without
+    #: this, the raise is swallowed by ``loaded_observation()`` and the
+    #: observation lane goes dark silently.
+    _empty_opt_in = field_validator("enabled", mode="before")(
+        _empty_opt_in_means_unset
+    )
+
 
 class CanonSettings(_Base):
     """Where the ``SessionStart`` hook reads canon from, and the scope it reads under.

@@ -7,7 +7,7 @@
  * but credential-shaped spans are replaced at this final emitter boundary before
  * any payload reaches Langfuse. Masking is replacement, never field removal.
  *
- * THIS IS A SECOND, SEPARATE LANE. `src/audit-log.ts` stays exactly as it is:
+ * THIS IS A SECOND, SEPARATE LANE. `server/security/audit-log.ts` stays as it is:
  * it is the content-FREE durable audit record (declared key names, unknown-key
  * counts, size buckets — never a payload), and it writes to Postgres. This
  * module writes payloads to an operator-run Langfuse server, off by default,
@@ -38,7 +38,7 @@
  * carried the OTel ingestion route since v3.
  *
  * THE SEAM IS DELIBERATELY THE SAME SHAPE AS `installMcpAudit`
- * (`src/audit-log.ts:309-408`): wrap `server.registerTool`, so every tool
+ * (`server/security/audit-log.ts`): wrap `server.registerTool`, so every tool
  * handler is instrumented by construction rather than by 65 call sites
  * remembering to. Same WeakSet install-once guard, same `isToolError` result
  * check, same `(extra).authInfo` auth source. Wrapping composes: whichever
@@ -85,26 +85,27 @@
  * shutdown flush — the SDK's own error line is silenced here on purpose (see
  * `defaultSinkFactory`), so nothing else was left to say it.
  */
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { TracedToolRegistrar } from "./trace-types.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { maskTraceValue } from "./trace-masking.ts";
-import { buildToolTraceBody, errorOutput } from "./trace-body.ts";
+import {
+  buildToolTraceBody,
+  errorOutput,
+  failedGeneration,
+  recordGenerationObservation,
+  successfulGeneration,
+  type McpGenerationInput,
+} from "./trace-body.ts";
 export { readMcpTracingConfig, resolveSessionId } from "./trace-config.ts";
 import { resolveSessionId } from "./trace-config.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
-  DEFAULT_FLAP_COOLDOWN_MS,
   reportSinkFailure,
   reportSinkSuccess,
   SinkHealthTracker,
 } from "./trace-sink-health.ts";
-import {
-  DEFAULT_SHUTDOWN_TIMEOUT_MS,
-  defaultSinkFactory,
-  shutdownSink,
-  SINK_EXPORT_TIMEOUT_SECONDS,
-  SINK_HEALTH_PROBE_MS,
-} from "./trace-sink.ts";
+import { defaultSinkFactory, shutdownSink } from "./trace-sink.ts";
+import { degradedTraceSpan } from "./trace-degradation.ts";
 import type {
   McpTracingConfig,
   McpTracingDeps,
@@ -125,7 +126,7 @@ import type {
   BackgroundObservation,
   BackgroundTraceBody,
   BackgroundTraceEmitter,
-} from "../application/background-tracing.ts";
+} from "./background-tracing.ts";
 import type { AuthInfo } from "../types.ts";
 
 /**
@@ -152,7 +153,7 @@ export type {
   TracingSink,
 } from "./trace-types.ts";
 
-const tracingInstalledServers = new WeakSet<McpServer>();
+const tracingInstalledServers = new WeakSet<TracedToolRegistrar>();
 
 /**
  * Emergency circuit breaker for pathological payloads such as the issue #604
@@ -160,6 +161,7 @@ const tracingInstalledServers = new WeakSet<McpServer>();
  * reach this branch; ordinary retrieval evidence flows in full.
  */
 export const MAX_ACTIVE_SPAN_BYTES = 256 * 1024;
+export const MAX_ACTIVE_OBSERVATIONS = 128;
 
 /** A no-op handle, returned whenever tracing is off or already installed. */
 const INACTIVE_HANDLE: McpTracingHandle = {
@@ -169,8 +171,10 @@ const INACTIVE_HANDLE: McpTracingHandle = {
 
 interface ActiveMcpTrace {
   readonly spans: TraceSpanBody[];
+  readonly observations: BackgroundObservation[];
   readonly metadata: Record<string, unknown>;
   spanBytes: number;
+  observationBytes: number;
   payloadDegraded: boolean;
   /**
    * The logger `installMcpTracing` received, carried on the call's own context.
@@ -193,67 +197,43 @@ export function setActiveMcpTraceMetadata(metadata: Record<string, unknown>): vo
   Object.assign(active.metadata, metadata);
 }
 
-function traceValueCounts(value: unknown): Record<string, number> {
-  const counts = {
-    values: 0,
-    arrays: 0,
-    objects: 0,
-    strings: 0,
-    string_bytes: 0,
-  };
-  const pending: unknown[] = [value];
-  const seen = new WeakSet<object>();
-  while (pending.length > 0) {
-    const current = pending.pop();
-    counts.values += 1;
-    if (typeof current === "string") {
-      counts.strings += 1;
-      counts.string_bytes += Buffer.byteLength(current, "utf8");
-      continue;
-    }
-    if (!current || typeof current !== "object") continue;
-    if (seen.has(current)) continue;
-    seen.add(current);
-    if (Array.isArray(current)) counts.arrays += 1;
-    else counts.objects += 1;
-    pending.push(...Object.values(current));
-  }
-  return counts;
-}
-
-function degradedTraceSpan(
-  span: TraceSpanBody,
-  reason: "active_span_bytes_limit" | "serialization_error",
-): TraceSpanBody {
-  return {
-    name: span.name,
-    input: { counts: traceValueCounts(span.input) },
-    output: { counts: traceValueCounts(span.output) },
-    metadata: {
-      ...span.metadata,
-      payload_degraded: true,
-      payload_degradation_reason: reason,
-      payload_limit_bytes: MAX_ACTIVE_SPAN_BYTES,
-    },
-  };
-}
-
 function appendDegradedSpan(
   active: ActiveMcpTrace,
   span: TraceSpanBody,
   reason: "active_span_bytes_limit" | "serialization_error",
 ): void {
-  const degraded = degradedTraceSpan(span, reason);
-  const bytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
-  if (active.spanBytes + bytes <= MAX_ACTIVE_SPAN_BYTES) {
-    active.spans.push(degraded);
-    active.spanBytes += bytes;
-    return;
+  const degraded = degradedTraceSpan(span, reason, MAX_ACTIVE_SPAN_BYTES);
+  const fitted = fitDegradedSpans([...active.spans, degraded]);
+  active.spans.splice(0, active.spans.length, ...fitted);
+  active.spanBytes = serializedSpanBytes(fitted);
+}
+
+/** Keep the active child-span collection bounded after compacting old spans. */
+function fitDegradedSpans(spans: readonly TraceSpanBody[]): TraceSpanBody[] {
+  const kept: TraceSpanBody[] = [];
+  let omitted = 0;
+  for (const span of spans) {
+    const candidate = [...kept, span];
+    if (serializedSpanBytes(candidate) <= MAX_ACTIVE_SPAN_BYTES) kept.push(span);
+    else omitted += 1;
   }
-  const last = active.spans.at(-1);
-  if (!last) return;
-  const omitted = Number(last.metadata.additional_spans_omitted ?? 0);
-  last.metadata.additional_spans_omitted = omitted + 1;
+  if (omitted === 0) return kept;
+  const marker = kept.at(-1);
+  if (!marker) return kept;
+  marker.metadata.additional_spans_omitted =
+    Number(marker.metadata.additional_spans_omitted ?? 0) + omitted;
+  marker.metadata.payload_evidence_truncated = true;
+  while (kept.length > 1 && serializedSpanBytes(kept) > MAX_ACTIVE_SPAN_BYTES) {
+    kept.shift();
+    omitted += 1;
+    marker.metadata.additional_spans_omitted =
+      Number(marker.metadata.additional_spans_omitted ?? 0) + 1;
+  }
+  return kept;
+}
+
+function serializedSpanBytes(spans: readonly TraceSpanBody[]): number {
+  return Buffer.byteLength(JSON.stringify(spans), "utf8");
 }
 
 function recordTraceSpanUnsafe(
@@ -277,11 +257,14 @@ function recordTraceSpanUnsafe(
       return;
     }
     const degraded = active.spans.map((recorded) =>
-      degradedTraceSpan(recorded, "active_span_bytes_limit"),
+      degradedTraceSpan(recorded, "active_span_bytes_limit", MAX_ACTIVE_SPAN_BYTES),
     );
-    degraded.push(degradedTraceSpan(span, "active_span_bytes_limit"));
-    active.spans.splice(0, active.spans.length, ...degraded);
-    active.spanBytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
+    degraded.push(
+      degradedTraceSpan(span, "active_span_bytes_limit", MAX_ACTIVE_SPAN_BYTES),
+    );
+    const fitted = fitDegradedSpans(degraded);
+    active.spans.splice(0, active.spans.length, ...fitted);
+    active.spanBytes = serializedSpanBytes(fitted);
     active.payloadDegraded = true;
   } catch (err: unknown) {
     active.logger.warn(
@@ -322,6 +305,9 @@ function traceSpanOutput<T>(
   try {
     return summarize(result);
   } catch (err: unknown) {
+    // Deliberate: already reported, through the trace itself. The label becomes
+    // the span's own output, so a broken summarize() is visible in Langfuse
+    // rather than taking the traced call down with it.
     return { instrumentation_error: tracingErrorLabel(err) };
   }
 }
@@ -392,7 +378,46 @@ export function traceRetrievalSpanSync<T>(input: RetrievalSpanInput<T, T>): T {
   }
 }
 
-type RegisterTool = McpServer["registerTool"];
+/** Record one provider generation under the active MCP trace without changing work. */
+export async function traceMcpGeneration<T>(input: McpGenerationInput<T>): Promise<T> {
+  const active = activeMcpTrace.getStore();
+  if (!active) return input.run();
+  const startedAt = Date.now();
+  try {
+    const result = await input.run();
+    try {
+      recordGenerationObservation(
+        active,
+        successfulGeneration(input, result, startedAt),
+        MAX_ACTIVE_SPAN_BYTES,
+        MAX_ACTIVE_OBSERVATIONS,
+      );
+    } catch (err: unknown) {
+      active.logger.warn(
+        { error: tracingErrorLabel(err) },
+        "mcp_tool_trace_generation_collection_failed",
+      );
+    }
+    return result;
+  } catch (err: unknown) {
+    try {
+      recordGenerationObservation(
+        active,
+        failedGeneration(input, err, startedAt),
+        MAX_ACTIVE_SPAN_BYTES,
+        MAX_ACTIVE_OBSERVATIONS,
+      );
+    } catch (collectionError: unknown) {
+      active.logger.warn(
+        { error: tracingErrorLabel(collectionError) },
+        "mcp_tool_trace_generation_collection_failed",
+      );
+    }
+    throw err;
+  }
+}
+
+type RegisterTool = TracedToolRegistrar["registerTool"];
 
 /**
  * The ONE place tracing configuration is resolved for this module.
@@ -404,7 +429,7 @@ type RegisterTool = McpServer["registerTool"];
  *
  * There is no environment fallback here (#825, L2b-2). This module reads no
  * environment at all; a caller without a `ServerConfig` — the legacy root
- * `src/index.ts` and `scripts/run-nats-worker.ts` — calls
+ * `scripts/run-nats-worker.ts` — calls
  * `readMcpTracingConfig` on its own environment record and passes the result,
  * so the one place the environment is named is the root that owns it. A
  * missing `deps.config` is a wiring mistake, so it fails at the call site
@@ -455,7 +480,7 @@ function resolveTracingLogger(deps: McpTracingDeps): TracingLogger {
  * change.
  */
 export function installMcpTracing(
-  server: McpServer,
+  server: TracedToolRegistrar,
   deps: McpTracingDeps = {},
 ): McpTracingHandle {
   const config = resolveTracingConfig(deps);
@@ -464,7 +489,9 @@ export function installMcpTracing(
 
   const logger = resolveTracingLogger(deps);
   const shared = deps.sink !== undefined;
-  const sink = deps.sink ?? createSinkSafely(config, logger, deps.createSink);
+  const sink =
+    deps.sink ??
+    createSinkSafely(config, logger, deps.createSink, deps.parseDeployStamp);
   if (!sink) return INACTIVE_HANDLE;
   tracingInstalledServers.add(server);
 
@@ -489,8 +516,10 @@ export function installMcpTracing(
       const started = Date.now();
       const active: ActiveMcpTrace = {
         spans: [],
+        observations: [],
         metadata: {},
         spanBytes: 0,
+        observationBytes: 2,
         payloadDegraded: false,
         logger,
       };
@@ -506,6 +535,7 @@ export function installMcpTracing(
             output: result,
             metadata: active.metadata,
             spans: active.spans,
+            observations: active.observations,
             ...authAndSession(args, extra),
           });
           return result;
@@ -519,6 +549,7 @@ export function installMcpTracing(
             output: errorOutput(err),
             metadata: active.metadata,
             spans: active.spans,
+            observations: active.observations,
             ...authAndSession(args, extra),
           });
           // The caller's error is the one that matters; tracing never changes it.
@@ -563,7 +594,9 @@ export function createTracingRuntime(deps: McpTracingDeps = {}): {
   const config = resolveTracingConfig(deps);
   if (!config.enabled) return { config, shutdown: () => Promise.resolve() };
   const logger = resolveTracingLogger(deps);
-  const built = deps.sink ?? createSinkSafely(config, logger, deps.createSink);
+  const built =
+    deps.sink ??
+    createSinkSafely(config, logger, deps.createSink, deps.parseDeployStamp);
   if (!built) return { config, shutdown: () => Promise.resolve() };
   // THE RUNTIME OWNS THE SHARED SINK, SO IT OWNS THAT SINK'S HEALTH. The real
   // factory attaches its own tracker; an injected sink (a test fake, or one
@@ -702,9 +735,16 @@ function createSinkSafely(
   config: McpTracingConfig,
   logger: TracingLogger,
   factory: McpTracingDeps["createSink"],
+  parseDeployStamp: McpTracingDeps["parseDeployStamp"],
 ): TracingSink | undefined {
   try {
-    return factory ? factory(config) : defaultSinkFactory(config, logger);
+    if (factory) return factory(config);
+    return defaultSinkFactory(config, logger, {
+      // Absent only on the paths that never had a stamp to read (a test, or a
+      // development checkout with no deployed revision); the parser returning
+      // undefined is exactly what those already saw.
+      parseDeployStamp: parseDeployStamp ?? (() => undefined),
+    });
   } catch (err: unknown) {
     logger.warn({ error: tracingErrorLabel(err) }, "mcp_tool_tracing_sink_init_failed");
     return undefined;
@@ -718,11 +758,3 @@ function isToolError(result: unknown): boolean {
     (result as { isError?: unknown }).isError === true,
   );
 }
-
-/** Test-visible constants, so a test asserts the real value and not a copy. */
-export const TRACING_INTERNALS = {
-  DEFAULT_SHUTDOWN_TIMEOUT_MS,
-  SINK_EXPORT_TIMEOUT_SECONDS,
-  DEFAULT_FLAP_COOLDOWN_MS,
-  SINK_HEALTH_PROBE_MS,
-} as const;

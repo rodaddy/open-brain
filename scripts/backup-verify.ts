@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Open Brain backup verification CLI (issue #298).
  *
@@ -25,8 +25,7 @@
  *
  * Exit codes: 0 passed/warned, 1 failed, 2 usage, 3 stale.
  */
-import { CONTRACT_VERSION } from "../src/contract.ts";
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/embedding.ts";
+import { CONTRACT_VERSION, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "./settings.ts";
 import {
   EXIT_FAILED,
   EXIT_OK,
@@ -47,7 +46,7 @@ export interface VerifyArgs {
 function usage(exitCode: number = EXIT_USAGE): never {
   console.error(
     [
-      "Usage: bun run scripts/backup-verify.ts --dir <path>",
+      "Usage: node scripts/backup-verify.ts --dir <path>",
       "       [--allow-embedding-mismatch] [--max-age-hours N]",
       "",
       "<path> is either a single backup set (contains manifest.json) or a",
@@ -59,25 +58,29 @@ function usage(exitCode: number = EXIT_USAGE): never {
   process.exit(exitCode);
 }
 
+/** Parse the `--max-age-hours` value, refusing anything that is not positive. */
+function parseMaxAgeHours(raw: string | undefined): number {
+  const parsed = raw === undefined ? NaN : Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error("--max-age-hours requires a positive number");
+    usage();
+  }
+  return parsed;
+}
+
 export function parseVerifyArgs(argv: string[]): VerifyArgs {
   let dir: string | undefined;
   let allowEmbeddingMismatch = false;
   let maxAgeHours: number | undefined;
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = argv[i];
     if (arg === "--dir") {
       dir = argv[++i];
       if (!dir) usage();
     } else if (arg === "--allow-embedding-mismatch") {
       allowEmbeddingMismatch = true;
     } else if (arg === "--max-age-hours") {
-      const raw = argv[++i];
-      const parsed = raw === undefined ? NaN : Number(raw);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        console.error("--max-age-hours requires a positive number");
-        usage();
-      }
-      maxAgeHours = parsed;
+      maxAgeHours = parseMaxAgeHours(argv[++i]);
     } else if (arg === "--help" || arg === "-h") usage(0);
     else {
       console.error(`Unknown argument: ${arg}`);
@@ -92,7 +95,7 @@ export function parseVerifyArgs(argv: string[]): VerifyArgs {
 }
 
 async function main(): Promise<void> {
-  const args = parseVerifyArgs(Bun.argv.slice(2));
+  const args = parseVerifyArgs(process.argv.slice(2));
   const runtime: CurrentRuntime = {
     repoMigrations: await listRepoMigrations(),
     contractVersion: CONTRACT_VERSION,
@@ -120,8 +123,7 @@ async function main(): Promise<void> {
       status: set.status,
       migration_compat: set.migration_compat,
       contract_compat: set.contract_compat,
-      age_hours:
-        set.age_hours === null ? null : Number(set.age_hours.toFixed(3)),
+      age_hours: set.age_hours === null ? null : Number(set.age_hours.toFixed(3)),
       verdicts: set.verdicts,
     })),
   };

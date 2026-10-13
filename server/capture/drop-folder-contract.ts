@@ -5,13 +5,13 @@
  *
  * Split out of the single `drop-folder-collector.ts` (issue 864, L5) so each
  * sibling holds one responsibility. Nothing here reads the environment: the
- * bounds arrive as `DropCollectorBounds`, filled by the composition root (or by
- * the `src/` adapter for legacy callers), which is what lets the collector live
- * under `server/`.
+ * bounds arrive as `DropCollectorBounds`, filled by the composition root, which
+ * is what lets the collector live under `server/`.
  */
 import { z } from "zod";
 import type pg from "pg";
-import type { generateEmbedding } from "../../src/embedding.ts";
+import type { generateEmbedding } from "../embedding/provider.ts";
+import type { DropFolderRepository } from "../db/drop-folder-repository.ts";
 
 // The only source kind this collector serves. A caller cannot ask it to collect
 // a git/directory/conversation source; those are other families.
@@ -169,6 +169,9 @@ export type DropCollectorPool = Pick<pg.Pool, "query">;
 
 export interface DropCollectorDeps {
   pool: DropCollectorPool;
+  // The durable statements this collector's write path runs (issue 1209); the
+  // capture tier holds no SQL text of its own.
+  repository: DropFolderRepository;
   // Same embedding function the durable log tools use. May return null (no
   // embedding); the durable row is still written and dedupes by content_hash.
   embedFn: typeof generateEmbedding;

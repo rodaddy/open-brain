@@ -69,8 +69,5 @@
     "netnew-fusion-weighting",
     "netnew-checkpoint-window"
   ],
-  "forbidden_ids": [
-    "negative-beacon-secret-key",
-    "negative-telemetry-secret-cache"
-  ]
+  "forbidden_ids": ["negative-beacon-secret-key", "negative-telemetry-secret-cache"]
 }

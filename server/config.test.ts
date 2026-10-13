@@ -3,12 +3,9 @@
  * Design authority: `docs/code-brain-design.md` R3 and
  * `docs/decisions/shared-kb-canonical-namespace.md`.
  */
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it, test } from "vitest";
 import { randomUUID } from "node:crypto";
-import {
-  OPTIONAL_SECRET_KEYS,
-  parseServerConfig,
-} from "./config.ts";
+import { OPTIONAL_SECRET_KEYS, parseServerConfig } from "./config.ts";
 
 const REQUIRED = {
   DB_HOST: "db.internal",
@@ -18,6 +15,28 @@ const REQUIRED = {
 };
 
 describe("server configuration boundary", () => {
+  it("returns structured REM threshold issues through the public boundary", () => {
+    for (const rem of [
+      { OPEN_BRAIN_MAINTENANCE_REM_ENABLED: "1" },
+      {
+        OPEN_BRAIN_MAINTENANCE_REM_ENABLED: "1",
+        OPEN_BRAIN_MAINTENANCE_REM_BACKLOG_HIGH_WATER: "10turns",
+        OPEN_BRAIN_MAINTENANCE_REM_MAX_REQUESTS_PER_MINUTE: "3",
+        OPEN_BRAIN_MAINTENANCE_REM_MIN_HEADROOM_BYTES: "1000",
+        OPEN_BRAIN_MAINTENANCE_REM_FORCED_SLICE_SIZE: "25",
+      },
+    ]) {
+      const result = parseServerConfig({ ...REQUIRED, ...rem });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected invalid REM configuration");
+      expect(result.issues).toEqual([
+        {
+          path: "OPEN_BRAIN_MAINTENANCE_REM",
+          message: expect.stringMatching(/requires explicit positive integers/),
+        },
+      ]);
+    }
+  });
   it("returns structured field errors instead of a partial config", () => {
     const result = parseServerConfig({ LOG_FILE: "logs/test.log" });
     expect(result.ok).toBe(false);
@@ -91,17 +110,14 @@ describe("server configuration boundary", () => {
  * way on the next environment that sets one to empty.
  */
 describe("optional secrets that are present but empty", () => {
-  test.each([...OPTIONAL_SECRET_KEYS])(
-    "%s: empty string parses as absent",
-    (key) => {
-      const result = parseServerConfig({ ...REQUIRED, [key]: "" });
-      if (!result.ok) {
-        throw new Error(
-          `empty ${key} must not fail the config boundary: ${JSON.stringify(result.issues)}`,
-        );
-      }
-    },
-  );
+  test.each([...OPTIONAL_SECRET_KEYS])("%s: empty string parses as absent", (key) => {
+    const result = parseServerConfig({ ...REQUIRED, [key]: "" });
+    if (!result.ok) {
+      throw new Error(
+        `empty ${key} must not fail the config boundary: ${JSON.stringify(result.issues)}`,
+      );
+    }
+  });
 
   it("covers every field declared with the shared optional-secret schema", () => {
     // Guards the parameterization above: a NEW optionalSecret field added to the
@@ -148,9 +164,7 @@ describe("optional secrets that are present but empty", () => {
   it("still parses when EVERY optional secret is empty at once", () => {
     // The real clone environment sets several of these blank together; the
     // per-field cases above would all pass even if the combination did not.
-    const empties = Object.fromEntries(
-      OPTIONAL_SECRET_KEYS.map((key) => [key, ""]),
-    );
+    const empties = Object.fromEntries(OPTIONAL_SECRET_KEYS.map((key) => [key, ""]));
     const result = parseServerConfig({ ...REQUIRED, ...empties });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");
@@ -241,9 +255,7 @@ describe("EMBEDDING_API_KEY across every observed state", () => {
   it("applies the blank rule to every optional secret, not just the embedding key", () => {
     // Same reasoning as the empty-string parameterization above: the defect is
     // in the shared schema, so a whitespace value in ANY of them must be absent.
-    const blanks = Object.fromEntries(
-      OPTIONAL_SECRET_KEYS.map((key) => [key, "   "]),
-    );
+    const blanks = Object.fromEntries(OPTIONAL_SECRET_KEYS.map((key) => [key, "   "]));
     const result = parseServerConfig({ ...REQUIRED, ...blanks });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected valid configuration");

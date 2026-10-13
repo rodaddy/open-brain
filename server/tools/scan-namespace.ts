@@ -39,6 +39,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { ALL_TABLES, tableEnum } from "./curation-helpers.ts";
+import { createPromotionRepository } from "../db/promotion-repository.ts";
 
 /** Entries scanned per table when the caller names no preference. */
 const DEFAULT_ENTRIES_PER_TABLE = 20;
@@ -166,17 +167,13 @@ async function queryNominatedRows(
   if (scope.since !== undefined) values.push(scope.since);
   const sinceFilter = scope.since !== undefined ? " AND t.created_at >= $3" : "";
 
-  const { rows } = await dependencies.pool.query(
-    `SELECT t.id, t.content_hash, t.namespace, t.created_at,
-            ${promotionMetadataSelect(table)} AS metadata
-       FROM ${table} t
-      WHERE t.namespace = $1
-        AND t.archived_at IS NULL${explicitSharedNominationSqlPredicate(table)}${sinceFilter}
-      ORDER BY t.created_at DESC
-      LIMIT $2`,
-    values,
-  );
-  return rows;
+  return createPromotionRepository(dependencies.pool).scanNominatedRows({
+    table,
+    metadataSelect: promotionMetadataSelect(table),
+    nominationFilter: explicitSharedNominationSqlPredicate(table),
+    sinceFilter,
+    params: values,
+  });
 }
 
 /**
@@ -190,13 +187,16 @@ async function findTargetDuplicateId(
   targetPhysical: string,
 ): Promise<string | undefined> {
   if (!contentHash) return undefined;
-  const { rows: existing } = await dependencies.pool.query(
-    `SELECT id FROM ${table}
-      WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
-      LIMIT 1`,
-    [contentHash, targetPhysical],
-  );
-  return (existing[0] as { id: string } | undefined)?.id;
+  // The same statement rest-promotion runs, so it calls the repository's
+  // existing method rather than adding a second copy of it.
+  const existing = await createPromotionRepository(
+    dependencies.pool,
+  ).findDuplicateInTarget({
+    table,
+    contentHash: contentHash as string,
+    targetNamespace: targetPhysical,
+  });
+  return existing[0]?.id;
 }
 
 /**

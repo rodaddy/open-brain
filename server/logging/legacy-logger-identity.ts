@@ -44,8 +44,8 @@ export function getHostName(): string {
 /**
  * Rotating file sink path derivation (OB issue #193).
  *
- * Rotation is only single-writer safe, so when a worker name is set (the
- * two-worker launcher sets a distinct name per child) the effective path is
+ * Rotation is only single-writer safe, so when a worker name is set (each
+ * worker process sets its own distinct name) the effective path is
  * derived per worker automatically: `open-brain.log` becomes
  * `open-brain.<worker-name>.log`. Two workers inheriting the same configured
  * log file therefore never share an active file or rotation chain.

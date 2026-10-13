@@ -11,6 +11,11 @@
  *   promoter presenting the header is a 403, not a silent downgrade to its own
  *   namespace. Silently ignoring the header is the dangerous variant: the
  *   caller believes it wrote somewhere it did not.
+ * - `X-Agent-Id` is honoured as-is ONLY for the same `admin`/`ob-admin` set.
+ *   Any other role is not refused (the Python client sends the header on every
+ *   call once an agent id is configured, so a 403 would break live capture);
+ *   its claim is recorded as `unverified:<claim>` instead, so no token can
+ *   stamp another agent's id onto audit and trace records (issue 684).
  * - Both delegated values are shape-validated before they reach `req.auth`,
  *   because everything downstream treats `auth.clientId` as a trusted
  *   namespace string and interpolates it into predicates.
@@ -37,7 +42,7 @@ import { resolveBearerToken } from "./tokens.ts";
 const DELEGATED_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 
 /** Identity as it is attached to a request, including delegation provenance. */
-export interface RequestAuthInfo extends AuthIdentity {
+interface RequestAuthInfo extends AuthIdentity {
   readonly agentId?: string;
 }
 
@@ -71,12 +76,17 @@ function authenticateBearerHeader(
   if (!header?.startsWith("Bearer ")) {
     return { status: 401, error: "Missing Bearer token" };
   }
-  const identity = resolveBearerToken(
-    header.slice("Bearer ".length),
-    configuredTokens,
-  );
+  const identity = resolveBearerToken(header.slice("Bearer ".length), configuredTokens);
   if (!identity) return { status: 401, error: "Invalid token" };
   return identity;
+}
+
+/**
+ * The roles trusted to act on another identity's behalf: `X-Namespace`
+ * delegation and an honoured `X-Agent-Id` both require one of these.
+ */
+function mayDelegate(role: AuthIdentity["role"]): boolean {
+  return role === "admin" || role === "ob-admin";
 }
 
 function isRefusal(value: AuthIdentity | AuthRefusal): value is AuthRefusal {
@@ -95,7 +105,7 @@ function checkDelegatedNamespace(
   role: AuthIdentity["role"],
 ): AuthRefusal | undefined {
   if (!namespace) return undefined;
-  if (role !== "admin" && role !== "ob-admin") {
+  if (!mayDelegate(role)) {
     return { status: 403, error: "Role not permitted to delegate namespace" };
   }
   if (!DELEGATED_ID_RE.test(namespace)) {
@@ -104,22 +114,38 @@ function checkDelegatedNamespace(
   return undefined;
 }
 
-/** Check the delegated agent id has the delegated-id shape. */
-function checkDelegatedAgentId(
-  agentId: string | undefined,
-): AuthRefusal | undefined {
+/**
+ * Check the claimed agent id has the delegated-id shape. Applies to every
+ * role; which roles have the claim honoured is decided in `recordedAgentId`.
+ */
+function checkDelegatedAgentId(agentId: string | undefined): AuthRefusal | undefined {
   if (agentId && !DELEGATED_ID_RE.test(agentId)) {
     return { status: 400, error: "Invalid X-Agent-Id header" };
   }
   return undefined;
 }
 
+/**
+ * The agent id to record for this request. `admin`/`ob-admin` have the claim
+ * honoured as-is; every other role gets `unverified:<claim>`, a generic form
+ * that keeps the request working without letting the token impersonate the
+ * named agent on audit and trace records (issue 684).
+ */
+function recordedAgentId(
+  agentId: string | undefined,
+  role: AuthIdentity["role"],
+): string | undefined {
+  if (!agentId) return undefined;
+  return mayDelegate(role) ? agentId : `unverified:${agentId}`;
+}
+
 /** Compose the token identity and the validated delegated values into `req.auth`. */
 function buildRequestAuthInfo(
   identity: AuthIdentity,
   namespace: string | undefined,
-  agentId: string | undefined,
+  claimedAgentId: string | undefined,
 ): RequestAuthInfo {
+  const agentId = recordedAgentId(claimedAgentId, identity.role);
   return {
     role: identity.role,
     clientId: namespace ?? identity.clientId,
@@ -146,9 +172,7 @@ export function createAuthMiddleware(
       configuredTokens,
     );
     if (isRefusal(authenticated)) {
-      response
-        .status(authenticated.status)
-        .json({ error: authenticated.error });
+      response.status(authenticated.status).json({ error: authenticated.error });
       return;
     }
     const namespace = headerValue(request.headers["x-namespace"]);
@@ -160,8 +184,11 @@ export function createAuthMiddleware(
       response.status(refusal.status).json({ error: refusal.error });
       return;
     }
-    (request as Request & { auth?: RequestAuthInfo }).auth =
-      buildRequestAuthInfo(authenticated, namespace, agentId);
+    (request as Request & { auth?: RequestAuthInfo }).auth = buildRequestAuthInfo(
+      authenticated,
+      namespace,
+      agentId,
+    );
     next();
   };
 }

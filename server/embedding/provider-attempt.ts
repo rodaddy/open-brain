@@ -10,7 +10,7 @@
  * keeps the parts that need its own state — the abort wiring, the timeout, and
  * `lastError`.
  */
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import type { EmbeddingError, EmbeddingResult } from "./provider.ts";
 
 /** Milliseconds waited before each retry, indexed by the attempt just made. */

@@ -17,6 +17,7 @@ from openbrain_provider.guard import (
     MAX_INPUT_BYTES,
     contains_forbidden_open_brain_command,
     guard_claude_command,
+    strip_heredocs,
     tokens_invoke_open_brain,
 )
 from openbrain_provider.shell_lexer import (
@@ -38,6 +39,47 @@ def _payload(tool_name: str, command: str) -> bytes:
 
 def _is_block(output: str) -> bool:
     return output != "" and json.loads(output)["decision"] == "block"
+
+
+class TestHeredocBodies:
+    """Development dev#954 item 2: a data heredoc's prose is not a command."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat > /x/pr.md <<'EOF'\n`runner-job` `finish()` publishes artifacts\nEOF",
+            "python3 - <<'EOF'\nt='''(`RUNNER_JOB_ID=x`, `RUNNER_RUNTIME=s`)'''\nEOF",
+            f"tee /x/note.md <<EOF\n`{CLI}` `{SVC}` is retired here\nEOF",
+            f"cat <<A <<B\n`a` `b`\nA\n{FORBIDDEN}\nB",
+        ],
+    )
+    def test_a_non_shell_heredoc_body_is_data(self, command: str) -> None:
+        assert not contains_forbidden_open_brain_command(command)
+        assert not _is_block(guard_claude_command(_payload("Bash", command)))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            f"bash <<'EOF'\n{FORBIDDEN}\nEOF",
+            f"sudo -u root bash <<EOF\n{FORBIDDEN}\nEOF",
+            f"cat <<EOF\n`a` `b`\nEOF\n{FORBIDDEN}",
+            f"cat <<EOF\n`a` `b`\nEOF; {FORBIDDEN}",
+            f"cat <<EOF\n`a` `b`\n{FORBIDDEN}",
+        ],
+    )
+    def test_a_shell_body_or_text_outside_the_body_still_blocks(
+        self, command: str
+    ) -> None:
+        assert contains_forbidden_open_brain_command(command)
+
+    def test_strip_matches_the_typescript_byte_for_byte(self) -> None:
+        # Recorded from `stripHeredocs` in `_ob/scripts/command-gate-shell.ts`:
+        # the body and its terminator go, the newline that ended the opener
+        # line stays; a shell keeps its body; an unterminated body is kept.
+        stripped = strip_heredocs("cat <<EOF\nx\nEOF\necho after")
+        assert stripped == "cat <<EOF\n\necho after"
+        assert strip_heredocs("bash <<EOF\nx\nEOF") == "bash <<EOF\nx\n"
+        assert strip_heredocs("cat <<EOF\nx\n") == "cat <<EOF\nx\n"
 
 
 class TestTheBlockedRoute:

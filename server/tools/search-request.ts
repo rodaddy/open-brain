@@ -16,7 +16,7 @@ import type { Tier } from "./search-constants.ts";
 import type { SearchMode } from "./search-engine.ts";
 
 /** The request-shaped arguments after defaults are applied. */
-export interface NormalizedSearchArgs {
+interface NormalizedSearchArgs {
   limit: number;
   offset: number;
   mode: SearchMode;

@@ -13,11 +13,8 @@
  */
 import type { AuthInfo } from "../types.ts";
 import { maskTraceValue } from "./trace-masking.ts";
-import type {
-  McpTraceStatus,
-  TraceBody,
-  TraceSpanBody,
-} from "./trace-types.ts";
+import type { BackgroundObservation } from "./background-tracing.ts";
+import type { McpTraceStatus, TraceBody, TraceSpanBody } from "./trace-types.ts";
 
 /** Tags on every trace this lane writes, so server traffic is filterable. */
 const TRACE_TAGS = ["open-brain-server", "mcp-tool"] as const;
@@ -33,6 +30,104 @@ export interface ToolTraceBodyInput {
   maskingEnabled?: boolean;
   metadata?: Record<string, unknown>;
   spans?: TraceSpanBody[];
+  observations?: BackgroundObservation[];
+}
+
+export interface McpGenerationInput<T> {
+  name: string;
+  model: string;
+  input?: unknown;
+  metadata?: Record<string, unknown>;
+  run: () => Promise<T>;
+  output?: (result: T) => unknown;
+  servedModel?: (result: T) => string;
+  usageDetails?: (result: T) => Record<string, number> | undefined;
+}
+
+export function successfulGeneration<T>(
+  input: McpGenerationInput<T>,
+  result: T,
+  startedAt: number,
+): BackgroundObservation {
+  const usageDetails = input.usageDetails?.(result);
+  return {
+    name: input.name,
+    type: "generation",
+    input: input.input,
+    output: input.output?.(result),
+    metadata: { configured_model: input.model, ...input.metadata },
+    startedAt,
+    endedAt: Date.now(),
+    model: input.servedModel?.(result) ?? input.model,
+    ...(usageDetails === undefined ? {} : { usageDetails }),
+    level: "DEFAULT",
+  };
+}
+
+export function failedGeneration<T>(
+  input: McpGenerationInput<T>,
+  error: unknown,
+  startedAt: number,
+): BackgroundObservation {
+  return {
+    name: input.name,
+    type: "generation",
+    input: input.input,
+    output: errorOutput(error),
+    metadata: { configured_model: input.model, ...input.metadata },
+    startedAt,
+    endedAt: Date.now(),
+    model: input.model,
+    level: "ERROR",
+    statusMessage: error instanceof Error ? error.name : typeof error,
+  };
+}
+
+export interface ActiveObservationCollection {
+  readonly observations: BackgroundObservation[];
+  readonly metadata: Record<string, unknown>;
+  observationBytes: number;
+}
+
+export function recordGenerationObservation(
+  active: ActiveObservationCollection,
+  observation: BackgroundObservation,
+  maxBytes: number,
+  maxCount: number,
+): void {
+  if (active.observations.length >= maxCount) {
+    active.metadata.generation_observations_omitted =
+      Number(active.metadata.generation_observations_omitted ?? 0) + 1;
+    return;
+  }
+  const serializedBytes = Buffer.byteLength(JSON.stringify(observation), "utf8");
+  const delimiterBytes = active.observations.length === 0 ? 0 : 1;
+  if (active.observationBytes + delimiterBytes + serializedBytes <= maxBytes) {
+    active.observations.push(observation);
+    active.observationBytes += delimiterBytes + serializedBytes;
+    return;
+  }
+  const degraded: BackgroundObservation = {
+    ...observation,
+    input: { payload_degraded: true },
+    output: { payload_degraded: true },
+    metadata: {
+      ...observation.metadata,
+      payload_degraded: true,
+      degradation_reason: "active_observation_bytes_limit",
+      original_bytes: serializedBytes,
+    },
+  };
+  const degradedBytes = Buffer.byteLength(JSON.stringify(degraded), "utf8");
+  if (active.observationBytes + delimiterBytes + degradedBytes <= maxBytes) {
+    active.observations.push(degraded);
+    active.observationBytes += delimiterBytes + degradedBytes;
+    active.metadata.generation_observations_degraded =
+      Number(active.metadata.generation_observations_degraded ?? 0) + 1;
+    return;
+  }
+  active.metadata.generation_observations_omitted =
+    Number(active.metadata.generation_observations_omitted ?? 0) + 1;
 }
 
 /** Apply masking, or pass the value through untouched when it is off. */
@@ -57,10 +152,10 @@ function toolTraceMetadata(
   input: ToolTraceBodyInput,
   maskingEnabled: boolean,
 ): Record<string, unknown> {
-  const traceMetadata = maskWhenEnabled(
-    input.metadata ?? {},
-    maskingEnabled,
-  ) as Record<string, unknown>;
+  const traceMetadata = maskWhenEnabled(input.metadata ?? {}, maskingEnabled) as Record<
+    string,
+    unknown
+  >;
   return {
     ...traceMetadata,
     ...callerIdentityMetadata(input.auth),
@@ -75,9 +170,7 @@ function toolTraceMetadata(
  * Null rather than omitted so a trace missing an identity is distinguishable
  * from one where the field was never recorded.
  */
-function callerIdentityMetadata(
-  auth: AuthInfo | undefined,
-): Record<string, unknown> {
+function callerIdentityMetadata(auth: AuthInfo | undefined): Record<string, unknown> {
   const metadata: Record<string, unknown> = {};
   for (const [field, key] of CALLER_IDENTITY_FIELDS) {
     metadata[key] = auth?.[field] ?? null;
@@ -109,7 +202,19 @@ function maskedTraceSpans(
     name: span.name,
     input: maskWhenEnabled(span.input, maskingEnabled),
     output: maskWhenEnabled(span.output, maskingEnabled),
-    metadata: maskWhenEnabled(span.metadata, maskingEnabled) as Record<
+    metadata: maskWhenEnabled(span.metadata, maskingEnabled) as Record<string, unknown>,
+  }));
+}
+
+function maskedObservations(
+  observations: BackgroundObservation[] | undefined,
+  maskingEnabled: boolean,
+): BackgroundObservation[] | undefined {
+  return observations?.map((observation) => ({
+    ...observation,
+    input: maskWhenEnabled(observation.input, maskingEnabled),
+    output: maskWhenEnabled(observation.output, maskingEnabled),
+    metadata: maskWhenEnabled(observation.metadata, maskingEnabled) as Record<
       string,
       unknown
     >,
@@ -124,6 +229,7 @@ function maskedTraceSpans(
 export function buildToolTraceBody(input: ToolTraceBodyInput): TraceBody {
   const maskingEnabled = input.maskingEnabled !== false;
   const spans = maskedTraceSpans(input.spans, maskingEnabled);
+  const observations = maskedObservations(input.observations, maskingEnabled);
   return {
     name: input.toolName,
     input: maskWhenEnabled(input.args, maskingEnabled),
@@ -131,10 +237,9 @@ export function buildToolTraceBody(input: ToolTraceBodyInput): TraceBody {
     tags: [...TRACE_TAGS],
     metadata: toolTraceMetadata(input, maskingEnabled),
     ...(spans === undefined ? {} : { spans }),
+    ...(observations === undefined ? {} : { observations }),
     ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
-    ...(input.auth?.clientId === undefined
-      ? {}
-      : { userId: input.auth.clientId }),
+    ...(input.auth?.clientId === undefined ? {} : { userId: input.auth.clientId }),
   };
 }
 

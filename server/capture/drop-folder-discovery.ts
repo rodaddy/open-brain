@@ -8,7 +8,7 @@
  */
 import { opendir, realpath, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import { DROP_SOURCE_KIND, maxEntriesInspected } from "./drop-folder-contract.ts";
 
 // Supported text file extensions. Only these are read; anything else is skipped
@@ -146,11 +146,12 @@ class DiscoveryWalk {
   // surface filesystem paths from an untrusted tree.
   private readonly skipCodes: Record<string, string> = {};
 
-  constructor(
-    private readonly realRoot: string,
-    private readonly limit: number,
-    bounds: DiscoveryBounds,
-  ) {
+  private readonly realRoot: string;
+  private readonly limit: number;
+
+  constructor(realRoot: string, limit: number, bounds: DiscoveryBounds) {
+    this.realRoot = realRoot;
+    this.limit = limit;
     this.rootPrefix = realRoot.endsWith(sep) ? realRoot : realRoot + sep;
     this.depthCap = bounds.depth;
     this.scanBound = maxEntriesInspected(limit, bounds.scanEntries);

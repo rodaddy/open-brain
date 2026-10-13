@@ -212,6 +212,7 @@ def contains_forbidden_open_brain_command(command: str, depth: int = 0) -> bool:
     """
     if not command or len(command) > MAX_INPUT_BYTES or depth > _MAX_NESTING_DEPTH:
         return False
+    command = strip_heredocs(command)
     for nested in executable_substitutions(command):
         if contains_forbidden_open_brain_command(nested, depth + 1):
             return True
@@ -223,6 +224,109 @@ def contains_forbidden_open_brain_command(command: str, depth: int = 0) -> bool:
         if not segment_is_in_pipeline and segment.terminator not in ("|", "&"):
             _record_persistent_assignments(segment.tokens, assignments)
         segment_is_in_pipeline = segment.terminator == "|"
+    return False
+
+
+_HEREDOC_OPEN: Final[re.Pattern[str]] = re.compile(
+    r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1"
+)
+_HEREDOC_OWNER_BOUNDARY: Final[str] = ";\n&|(){}"
+
+
+def strip_heredocs(command: str) -> str:
+    """Remove heredoc bodies that are data; keep the ones a shell executes.
+
+    A body fed to ``cat``, ``python3 -``, ``tee``, or any other non-shell is
+    DATA, and prose in it is not a command. Without this, a PR body written
+    through ``cat > pr.md <<'EOF'`` whose first line read "`runner-job`
+    `finish()` publishes ..." tokenized as a command whose executable and first
+    argument were both dynamic (backticks) -- the ``$tool $service`` shape --
+    and the write was refused (Development dev#954 item 2). When the owner is a
+    shell (``bash <<EOF``) the body is the program and stays.
+
+    Port of ``stripHeredocs`` in ``_ob/scripts/command-gate-shell.ts``: openers
+    sharing one line are consumed in order from a single cursor, a terminator
+    owns its own line, and an UNTERMINATED heredoc keeps its text (fail closed).
+
+    Args:
+        command: The shell command text.
+
+    Returns:
+        The command with data heredoc bodies removed.
+    """
+    out = command
+    scan = 0
+    while True:
+        match = _HEREDOC_OPEN.search(out, scan)
+        if match is None:
+            return out
+        body_start = out.find("\n", match.start())
+        if body_start == -1:
+            return out
+        openers = [
+            opener
+            for opener in _HEREDOC_OPEN.finditer(out, match.start())
+            if opener.start() < body_start
+        ]
+        cursor = body_start + 1
+        rebuilt = out[:cursor]
+        aborted = False
+        for opener in openers:
+            keep_body = _heredoc_owner_is_shell(out, opener.start())
+            terminator = re.compile(
+                r"^[ \t]*" + re.escape(opener.group(2)) + r"[ \t]*(?=$|[;&|)\n])",
+                re.MULTILINE,
+            )
+            end = terminator.search(out[cursor:])
+            if end is None:
+                aborted = True
+                break
+            body_end = cursor + end.start()
+            if keep_body:
+                rebuilt += out[cursor:body_end]
+            cursor = body_end + len(end.group(0))
+        scan = match.start() + 1
+        if aborted:
+            continue
+        out = rebuilt + out[cursor:]
+
+
+def _heredoc_owner_is_shell(text: str, index: int) -> bool:
+    """Report whether the element opening a heredoc at ``index`` runs a shell.
+
+    Reads only the text BEFORE the operator, from the last unquoted separator.
+    Any word of that element naming a shell keeps the body: ``bash <<EOF``,
+    ``sudo -u x bash <<EOF``, ``env A=1 bash <<EOF``. That is broader than the
+    TypeScript owner rule (head after wrappers) and only in the fail-closed
+    direction -- a kept body can block, never allow.
+
+    Args:
+        text: The full command text.
+        index: Offset of the ``<<`` operator.
+
+    Returns:
+        True when the heredoc body must be kept as executable text.
+    """
+    before = text[:index]
+    start = 0
+    quote: str | None = None
+    position = 0
+    while position < len(before):
+        char = before[position]
+        if quote:
+            if char == quote and before[position - 1] != "\\":
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "\\":
+            position += 1
+        elif char in _HEREDOC_OWNER_BOUNDARY:
+            start = position + 1
+        position += 1
+    for segment in tokenize_shell_detailed(before[start:]):
+        for token in segment.tokens:
+            if _basename(token.value) in SHELLS:
+                return True
     return False
 
 

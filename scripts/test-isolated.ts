@@ -1,9 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * test-isolated — run the test suite against a database nobody else is using.
  *
- *   bun run test:isolated                    # whole suite
- *   bun run test:isolated src/foo.pg.test.ts # one file (any `bun test` args)
+ *   npm run test:isolated --                    # whole suite
+ *   npm run test:isolated -- src/foo.pg.test.ts # one file (Vitest arguments)
  *
  * WHY THIS EXISTS (#614). A full `bun test` run against the shared dogfood
  * database returns a DIFFERENT failure count each time on unmodified code —
@@ -16,7 +16,7 @@
  * something each lane hand-builds.
  *
  * WHAT IT DOES: creates a uniquely-named database, migrates it, points
- * OPENBRAIN_TEST_DATABASE_URL at it, runs `bun test` with whatever arguments
+ * OPENBRAIN_TEST_DATABASE_URL at it, runs Vitest with whatever arguments
  * were passed, prints the database name, and drops the database on the way out.
  *
  * IT ALSO SUPPLIES WHAT THE OTHER PG SUITES ASK FOR (#904, #878). Two suites
@@ -39,8 +39,8 @@
  *  - NOTHING NEW IS INVENTED. The creation mechanism is the one CI already
  *    uses (`createdb -E UTF8 -T template0`, .github/workflows/ci.yml:68) by way
  *    of `scripts/lane-bootstrap.ts --fresh-db`, which borrowed it first;
- *    migrations run through the existing `bun run migrate` path with DB_NAME
- *    overridden. `bun test` itself is unchanged, and the tests' existing
+ *    migrations run through the existing Node migration path with DB_NAME
+ *    overridden. Vitest receives the tests' existing
  *    OPENBRAIN_TEST_DATABASE_URL convention is what is being fed.
  *
  *  - IT DROPS ONLY WHAT IT CREATED. This is the narrow exception to the
@@ -72,9 +72,21 @@ import { fileURLToPath } from "node:url";
 import {
   adminUrl,
   CLONE_DB_PREFIX,
+  propagateClonePassword,
   provisionCloneDatabase,
   type CloneProvision,
 } from "./test-support/clone-database.ts";
+import { resolveCloneAdmin } from "./test-support/clone-admin.ts";
+import {
+  describeTestDbServer,
+  resolveTestDbServer,
+} from "./test-support/test-db-server.ts";
+import {
+  createdbTemplate,
+  propagateTestTemplateDb,
+  resolveTestTemplateDb,
+  TEST_TEMPLATE_DB_ENV,
+} from "./test-support/test-template-db.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -122,11 +134,33 @@ function note(step: string, detail: string): void {
   process.stdout.write(`  [ok]   ${step}: ${detail}\n`);
 }
 
-function resolveDbConfig(): DbConfig {
+function resolveDbConfig(): { cfg: DbConfig; fileEnv: Record<string, string> } {
   const envPath = join(REPO_ROOT, ".env");
   // The environment wins over the file, so a caller that has already exported
   // PG*/DB_* (CI does exactly this) is honoured without a .env present at all.
   const fileEnv = existsSync(envPath) ? readEnvFile(envPath) : {};
+  propagateClonePassword(process.env, fileEnv);
+  // #1667: the template override flows like the clone password does — the
+  // environment wins, the repo .env fills it in — and is validated here so a
+  // bad value fails before anything is created.
+  propagateTestTemplateDb(process.env, fileEnv);
+  try {
+    resolveTestTemplateDb();
+  } catch (err) {
+    fail("config", err instanceof Error ? err.message : String(err));
+  }
+  // #1667: OPENBRAIN_TEST_DB_* (environment, then .env) names the test server
+  // and wins over DB_*, which stays the dogfood connection. Unset -> today's path.
+  let testServer: DbConfig | undefined;
+  try {
+    testServer = resolveTestDbServer(process.env, fileEnv);
+  } catch (err) {
+    fail("config", err instanceof Error ? err.message : String(err));
+  }
+  if (testServer) {
+    note("config", describeTestDbServer(testServer, "DB_*"));
+    return { cfg: testServer, fileEnv };
+  }
   const pick = (...keys: string[]): string => {
     for (const key of keys) {
       const fromProcess = process.env[key];
@@ -146,10 +180,13 @@ function resolveDbConfig(): DbConfig {
     );
   }
   return {
-    host: pick("DB_HOST", "PGHOST") || "127.0.0.1",
-    port: pick("DB_PORT", "PGPORT") || "5432",
-    user,
-    password: pick("DB_PASSWORD", "PGPASSWORD"),
+    cfg: {
+      host: pick("DB_HOST", "PGHOST") || "127.0.0.1",
+      port: pick("DB_PORT", "PGPORT") || "5432",
+      user,
+      password: pick("DB_PASSWORD", "PGPASSWORD"),
+    },
+    fileEnv,
   };
 }
 
@@ -191,9 +228,15 @@ function dropCommand(cfg: DbConfig, dbName: string): string {
 // ---------------------------------------------------------------------------
 
 const testArgs = process.argv.slice(2);
-const cfg = resolveDbConfig();
+const { cfg, fileEnv } = resolveDbConfig();
+// #1667: the local clone stays on the .env loopback server even when the main
+// database is remote; identical to cfg when the main database is loopback.
+const cloneAdmin = resolveCloneAdmin(cfg, fileEnv);
+const cloneCfg: DbConfig = cloneAdmin.admin;
 const runSuffix = makeRunSuffix();
 const dbName = `${DB_PREFIX}${runSuffix}`;
+const template = createdbTemplate();
+const templateOverride = resolveTestTemplateDb();
 
 // Printed BEFORE creation, so an interrupt at any point after this line leaves
 // the operator holding the name. A tool that names its database only on success
@@ -208,6 +251,16 @@ process.stdout.write(
     `  clone:     ${CLONE_DB_PREFIX}${runSuffix}  (created for this run, dropped on exit)`,
     `  clone role: open_brain_local_clone  (shared; created if absent, never dropped)`,
     `  host:      ${cfg.host}:${cfg.port}`,
+    ...(cloneCfg === cfg
+      ? []
+      : [
+          `  clone host: ${cloneCfg.host}:${cloneCfg.port}  (.env loopback, template0)`,
+        ]),
+    ...(templateOverride
+      ? [
+          `  template:  ${templateOverride}  (${TEST_TEMPLATE_DB_ENV}; replaces template0)`,
+        ]
+      : []),
     `  scope:     ${testArgs.length ? testArgs.join(" ") : "full suite"}`,
     `  if this run is killed, drop it with:`,
     `    ${dropCommand(cfg, dbName)}`,
@@ -231,7 +284,7 @@ let clone: CloneProvision | null = null;
  * ever name a database from makeDbName(). Synchronous on purpose: it has to
  * complete inside a signal handler and inside process.on("exit").
  */
-function dropOne(name: string, prefix: string, reason: string): void {
+function dropOne(target: DbConfig, name: string, prefix: string, reason: string): void {
   if (!name.startsWith(prefix)) {
     // Unreachable by construction; kept because the cost of being wrong here is
     // dropping a database that matters.
@@ -242,8 +295,18 @@ function dropOne(name: string, prefix: string, reason: string): void {
   }
   const result = spawnSync(
     "dropdb",
-    ["--if-exists", "--force", "-h", cfg.host, "-p", cfg.port, "-U", cfg.user, name],
-    { env: pgEnv(cfg), encoding: "utf-8" },
+    [
+      "--if-exists",
+      "--force",
+      "-h",
+      target.host,
+      "-p",
+      target.port,
+      "-U",
+      target.user,
+      name,
+    ],
+    { env: pgEnv(target), encoding: "utf-8" },
   );
   if (result.error || result.status !== 0) {
     // LOUD, per the no-silent rule. The operator gets the name and the command.
@@ -255,7 +318,7 @@ function dropOne(name: string, prefix: string, reason: string): void {
         `  name: ${name}`,
         `  err:  ${result.error?.message ?? ((result.stderr || "").trim() || `dropdb exited ${result.status}`)}`,
         "  drop it yourself with:",
-        `    ${dropCommand(cfg, name)}`,
+        `    ${dropCommand(target, name)}`,
         "!".repeat(72),
         "",
       ].join("\n"),
@@ -273,8 +336,8 @@ function dropOne(name: string, prefix: string, reason: string): void {
 function teardown(reason: string): void {
   if (torndown || !created) return;
   torndown = true;
-  if (clone) dropOne(clone.database, CLONE_DB_PREFIX, `${reason}/clone`);
-  dropOne(dbName, DB_PREFIX, reason);
+  if (clone) dropOne(cloneCfg, clone.database, CLONE_DB_PREFIX, `${reason}/clone`);
+  dropOne(cfg, dbName, DB_PREFIX, reason);
 }
 
 process.on("exit", () => teardown("exit"));
@@ -286,7 +349,9 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   });
 }
 process.on("uncaughtException", (err) => {
-  process.stderr.write(`\n  [FAIL] uncaught: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.stderr.write(
+    `\n  [FAIL] uncaught: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
   teardown("uncaughtException");
   process.exit(2);
 });
@@ -301,25 +366,41 @@ process.on("uncaughtException", (err) => {
 {
   const result = spawnSync(
     "createdb",
-    ["-h", cfg.host, "-p", cfg.port, "-U", cfg.user, "-E", "UTF8", "-T", "template0", dbName],
+    [
+      "-h",
+      cfg.host,
+      "-p",
+      cfg.port,
+      "-U",
+      cfg.user,
+      "-E",
+      "UTF8",
+      "-T",
+      template,
+      dbName,
+    ],
     { env: pgEnv(cfg), encoding: "utf-8" },
   );
-  if (result.error) fail("db-create", `could not execute createdb: ${result.error.message}`);
+  if (result.error)
+    fail("db-create", `could not execute createdb: ${result.error.message}`);
   if (result.status !== 0) {
-    fail("db-create", `createdb exited ${result.status}: ${(result.stderr || "").trim()}`);
+    fail(
+      "db-create",
+      `createdb exited ${result.status}: ${(result.stderr || "").trim()}`,
+    );
   }
   created = true;
-  note("db-create", `${dbName} created (UTF8, template0)`);
+  note("db-create", `${dbName} created (UTF8, ${template})`);
 }
 
 // --- migrate ---------------------------------------------------------------
-// Through the EXISTING path: `bun run migrate` -> scripts/migrate.ts ->
+// Through the existing migration entrypoint under the same Node runtime ->
 // createPool() (src/db/pool.ts), which reads DB_NAME from the environment.
 // Overriding DB_NAME is how that path is pointed at the new database; no second
 // migration path is introduced. The `vector` extension comes from migration
 // 001_init.sql, so there is no separate extension step.
 {
-  const result = spawnSync("bun", ["run", "migrate"], {
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, "scripts/migrate.ts")], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -331,7 +412,8 @@ process.on("uncaughtException", (err) => {
     },
     stdio: ["ignore", "ignore", "inherit"],
   });
-  if (result.error) fail("db-migrate", `could not execute bun run migrate: ${result.error.message}`);
+  if (result.error)
+    fail("db-migrate", `could not execute migrations: ${result.error.message}`);
   if (result.status !== 0) fail("db-migrate", `migrations exited ${result.status}`);
   note("db-migrate", `migrations applied to ${dbName}`);
 }
@@ -342,37 +424,48 @@ process.on("uncaughtException", (err) => {
 // the false green #878 is about. The provisioning is CI's own recipe; see
 // scripts/test-support/clone-database.ts for why the ROLE outlives the run.
 {
-  const provisioned = provisionCloneDatabase(cfg, runSuffix);
+  const provisioned = provisionCloneDatabase(
+    cloneCfg,
+    runSuffix,
+    cloneAdmin.useTestTemplate,
+  );
   if ("error" in provisioned) {
     fail("db-clone", provisioned.error);
   }
   clone = provisioned;
   // Nothing is adjusted silently: every choice the provisioner made is printed.
-  for (const notice of provisioned.notices) note("db-clone", notice);
+  for (const notice of [...cloneAdmin.notices, ...provisioned.notices]) {
+    note("db-clone", notice);
+  }
   note("db-clone", `${provisioned.database} created, owned by ${provisioned.role}`);
 
-  const result = spawnSync("bun", ["run", "migrate"], {
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, "scripts/migrate.ts")], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
-      DB_HOST: cfg.host,
-      DB_PORT: cfg.port,
-      DB_USER: cfg.user,
+      DB_HOST: cloneCfg.host,
+      DB_PORT: cloneCfg.port,
+      DB_USER: cloneCfg.user,
       DB_NAME: provisioned.database,
-      ...(cfg.password ? { DB_PASSWORD: cfg.password } : {}),
+      // A remote main password must never reach the loopback clone's migration.
+      ...(cloneCfg.password || cloneCfg !== cfg
+        ? { DB_PASSWORD: cloneCfg.password }
+        : {}),
     },
     stdio: ["ignore", "ignore", "inherit"],
   });
-  if (result.error) fail("db-clone-migrate", `could not execute bun run migrate: ${result.error.message}`);
-  if (result.status !== 0) fail("db-clone-migrate", `clone migrations exited ${result.status}`);
+  if (result.error)
+    fail("db-clone-migrate", `could not execute migrations: ${result.error.message}`);
+  if (result.status !== 0)
+    fail("db-clone-migrate", `clone migrations exited ${result.status}`);
   note("db-clone-migrate", `migrations applied to ${provisioned.database}`);
 }
 
 // --- run tests -------------------------------------------------------------
-// `bun test` itself is unchanged; it is handed the isolated URL through the
+// Vitest is handed the isolated URL through the
 // env var the tests already honour. Anything after `--`/the script name is
-// passed straight through, so `bun run test:isolated src/x.pg.test.ts` and any
-// other bun test flag work exactly as they do bare.
+// passed straight through, so `npm run test:isolated -- src/x.pg.test.ts` and
+// supported Vitest flags work exactly as they do in a direct Vitest run.
 // Narrowed rather than asserted: provisioning above calls fail() on any error,
 // so `clone` is set by here, and this makes that readable to the checker too.
 if (!clone) fail("db-clone", "clone provisioning did not complete");
@@ -386,6 +479,8 @@ const testEnv: NodeJS.ProcessEnv = {
   // maintenance database; the clone URL names the per-run clone.
   OPENBRAIN_SCRATCH_ADMIN_URL: adminUrl(cfg),
   OPENBRAIN_LOCAL_CLONE_TEST_DATABASE_URL: cloneUrl,
+  // #1667: the suites that create their own scratch databases read this too.
+  ...(templateOverride ? { [TEST_TEMPLATE_DB_ENV]: templateOverride } : {}),
   DB_HOST: cfg.host,
   DB_PORT: cfg.port,
   DB_USER: cfg.user,
@@ -393,16 +488,23 @@ const testEnv: NodeJS.ProcessEnv = {
 };
 if (cfg.password) testEnv.DB_PASSWORD = cfg.password;
 
-note("test", `OPENBRAIN_TEST_DATABASE_URL -> ${dbName}; running bun test ${testArgs.join(" ")}`);
+note(
+  "test",
+  `OPENBRAIN_TEST_DATABASE_URL -> ${dbName}; running vitest ${testArgs.join(" ")}`,
+);
 
-const child = spawn("bun", ["test", ...testArgs], {
-  cwd: REPO_ROOT,
-  env: testEnv,
-  stdio: "inherit",
-});
+const child = spawn(
+  process.execPath,
+  [join(REPO_ROOT, "node_modules/vitest/vitest.mjs"), "run", ...testArgs],
+  {
+    cwd: REPO_ROOT,
+    env: testEnv,
+    stdio: "inherit",
+  },
+);
 
 child.on("error", (err) => {
-  process.stderr.write(`\n  [FAIL] test: could not execute bun test: ${err.message}\n`);
+  process.stderr.write(`\n  [FAIL] test: could not execute vitest: ${err.message}\n`);
   teardown("spawn-error");
   process.exit(2);
 });

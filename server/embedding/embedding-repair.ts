@@ -1,69 +1,27 @@
 /**
- * Shared stale-embedding detection and idempotent repair primitives.
+ * Shared stale-embedding detection and idempotent repair primitives -- building
+ * blocks (issue #345), not a queue handler and not a migration.
  *
- * These are building blocks -- not a queue handler and not a migration. Issue
- * #343's spool/queue handler wires `repairOne` per unit; #345 (this module)
- * only provides the reusable detection + repair logic and its tests.
- *
- * Design invariants:
- *  - Embeddings are generated OUTSIDE any DB transaction/lock. The SELECT that
- *    picks candidates and the UPDATE that writes the vector are separate round
- *    trips; the provider round trip happens between them with no lock held.
- *  - The UPDATE is guarded on a TRUTHFUL source column. For targets with
- *    content_hash, the guard is the stored hash OBSERVED at selection: the
- *    UPDATE writes the FRESH hash of the source we embedded but only lands while
- *    the stored content_hash still equals what we observed (NULL-safe, so a
- *    never-hashed missing row and a genuinely source-drifted row both repair).
- *    If a concurrent edit re-embedded the row (moving its stored hash off the
- *    observed value) between SELECT and UPDATE, the guarded UPDATE matches zero
- *    rows and we skip -- never clobbering a newer embedding. For targets WITHOUT
- *    content_hash (ob_entities), the only detectable staleness is a missing
- *    embedding, so the guard is `embedding IS NULL`: we fill only a still-empty
- *    slot and a concurrent write that already populated it wins. We never
- *    fabricate a content_hash/provenance column that does not exist.
- *  - Namespace scope is EXPLICIT and mandatory on every read/write -- omission
- *    is not a scope. Callers pass either a non-empty auth-derived
- *    { namespaces: [...] } (the safe path, bound on BOTH the SELECT and the
- *    guarded UPDATE) or the separately named { global: true } (an intentional
- *    global-role choice). Tables with a namespace column bind it directly;
- *    tables isolated via a foreign key (ob_session_events -> ob_session_lanes)
- *    bind it through that FK. An id-only read or write can never cross a
- *    namespace boundary, and there is no unscoped default.
- *  - Targets WITHOUT content_hash (ob_entities) additionally snapshot-guard
- *    their real source columns (sourceGuardColumns) with IS NOT DISTINCT FROM,
- *    so a concurrent source edit that leaves the embedding NULL cannot be
- *    clobbered by an embedding built from the stale snapshot.
- *  - Duplicate delivery converges: repairing the same unit twice with unchanged
- *    source yields the same stored vector/hash/model and the second call is a
- *    no-op-equivalent (idempotent). A provider failure leaves the row untouched.
- *  - Provider failures are classified into retryable vs. permanent, content-free
- *    (code + counts only, never source text) so a queue can decide re-delivery.
- *
- * Staleness reasons, in priority order:
- *  - "missing"       embedding IS NULL
- *  - "model_drift"   stored embedding_model <> current model (needs the column)
- *  - "source_drift"  stored content_hash <> hash(current source) (needs column)
- * A target lacking the backing column cannot report the reasons that depend on
- * it (see EmbeddingTarget.provenance); those rows are simply not selected for
- * that reason, and no fabricated column is written.
+ * See docs/decisions/embedding-repair-guards-on-observed-truth.md
+ * See docs/decisions/embedding-repair-staleness-reasons.md
  */
 import { toSql } from "pgvector/pg";
 import {
-  EMBEDDING_MODEL,
+  embeddingModel,
   generateEmbeddingWithMetadata,
   type EmbeddingError,
   type EmbeddingResult,
-} from "../../src/embedding.ts";
+} from "../embedding/provider.ts";
 import {
   getEmbeddingTarget,
   type EmbeddingTarget,
   type TargetRow,
 } from "./embedding-targets.ts";
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import {
   namespacePredicate,
   normalizeScope,
-  selectStale,
+  selectStaleWithCursor,
 } from "./embedding-repair-selection.ts";
 import type {
   RepairCandidate,
@@ -81,7 +39,8 @@ export type RepairStatus =
   | "skipped_source_changed" // guard matched zero rows -- concurrent edit won
   | "skipped_empty_text" // nothing to embed (empty canonical text)
   | "retryable_failure" // provider transient -- safe to re-deliver
-  | "permanent_failure"; // provider/input permanent -- do not blindly retry
+  | "permanent_failure" // provider/input permanent -- do not blindly retry
+  | "content_hash_collision"; // fresh hash already held by another row (23505)
 
 /** Provider-failure categories mapped to re-delivery semantics, content-free. */
 const RETRYABLE_CODES = new Set<EmbeddingError["code"]>([
@@ -143,6 +102,20 @@ function providerFailureResult(
     errorCode: code,
     updated: false,
   };
+}
+
+/**
+ * True for a unique violation (SQLSTATE 23505) on a content_hash unique index,
+ * e.g. `idx_sessions_content_hash`. Any other error is not ours to absorb.
+ */
+function isContentHashCollision(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const { code, constraint } = err as { code?: unknown; constraint?: unknown };
+  return (
+    code === "23505" &&
+    typeof constraint === "string" &&
+    constraint.includes("content_hash")
+  );
 }
 
 /**
@@ -214,8 +187,8 @@ export async function repairOne(
     return providerFailureResult(candidate.table, id, result.error?.code);
   }
 
-  const currentModel = options.currentModel ?? EMBEDDING_MODEL;
-  const { sql, params } = buildGuardedUpdate(
+  const currentModel = options.currentModel ?? embeddingModel();
+  const update = buildGuardedUpdate(
     target,
     candidate.row,
     {
@@ -228,50 +201,62 @@ export async function repairOne(
     scope,
   );
 
-  const { rowCount } = await db.query(sql, params);
-  if ((rowCount ?? 0) === 0) {
-    // Row vanished, was archived, or its source changed since selection.
-    logger.info("embedding_repair_guard_no_match", {
-      table: candidate.table,
+  return applyGuardedUpdate(db, { table: candidate.table, id }, update);
+}
+
+/**
+ * Run one guarded UPDATE and map its outcome to a RepairResult. A unique
+ * violation on a content_hash index (issue 1462) is that row's outcome, not
+ * the batch's: both callers (the repair CLI and the queue handler) pass a pool,
+ * so each UPDATE is its own autocommit statement and nothing else rolls back.
+ * Any other error propagates unchanged.
+ */
+async function applyGuardedUpdate(
+  db: Queryable,
+  unit: { table: string; id: string },
+  update: { sql: string; params: unknown[] },
+): Promise<RepairResult> {
+  const { table, id } = unit;
+  let rowCount: number | null;
+  try {
+    ({ rowCount } = await db.query(update.sql, update.params));
+  } catch (err) {
+    if (!isContentHashCollision(err)) throw err;
+    // Content-free: ids only, never the source text or the hash.
+    logger.warn("embedding_repair_content_hash_collision", {
+      table,
       id,
     });
     return {
-      table: candidate.table,
+      table,
+      id,
+      status: "content_hash_collision",
+      updated: false,
+    };
+  }
+  if ((rowCount ?? 0) === 0) {
+    // Row vanished, was archived, or its source changed since selection.
+    logger.info("embedding_repair_guard_no_match", {
+      table,
+      id,
+    });
+    return {
+      table,
       id,
       status: "skipped_source_changed",
       updated: false,
     };
   }
 
-  return { table: candidate.table, id, status: "repaired", updated: true };
+  return { table, id, status: "repaired", updated: true };
 }
 
 /**
  * Build the idempotent, guarded UPDATE for one row. Only provenance columns
- * that physically exist on the target are written -- no fabricated provenance.
+ * that physically exist on the target are written -- no fabricated provenance,
+ * and the WHERE clause guards on observed truth plus the namespace scope.
  *
- * The WHERE clause carries a TRUTHFUL no-overwrite guard so a raced concurrent
- * edit never gets its newer embedding clobbered:
- *  - content_hash targets SET the fresh source hash but GUARD on the hash
- *    OBSERVED at selection (`content_hash IS NOT DISTINCT FROM $observed`,
- *    NULL-safe). A missing row (observed NULL) fills; a source-drifted row
- *    (observed = the stale stored hash) repairs and writes the fresh hash; a row
- *    a concurrent writer re-embedded (stored hash moved off the observed value)
- *    misses and is skipped. Guarding on the fresh hash would break drift repair.
- *  - targets WITHOUT content_hash (ob_entities) guard on `embedding IS NULL`
- *    PLUS a snapshot of the actual source columns (`sourceGuardColumns`, each
- *    bound `<col> IS NOT DISTINCT FROM $captured`). `embedding IS NULL` alone
- *    prevents clobbering a concurrent embedding write, but NOT writing an
- *    embedding built from stale entity_type/name after a concurrent source edit
- *    that left the embedding NULL; the source-column snapshot closes that gap.
- *    These are real, physically present columns -- not an invented provenance
- *    guard.
- *
- * The scope guard binds namespace (directly or via the target FK) for a
- * `{ namespaces: [...] }` scope so an id-only UPDATE cannot escape the
- * auth-derived scope; `{ global: true }` emits none. `row` is the SAME snapshot
- * that was embedded, so the captured source-column values are exactly what the
- * embedding was generated from.
+ * See docs/decisions/embedding-repair-guards-on-observed-truth.md
  */
 function buildGuardedUpdate(
   target: EmbeddingTarget,
@@ -369,6 +354,13 @@ export interface RepairBatchSummary {
   skipped: number;
   retryableFailures: number;
   permanentFailures: number;
+  /** Rows whose fresh content_hash another row already holds (issue 1462). */
+  contentHashCollisions: number;
+  /**
+   * Id of the last row the selection returned, or null when it returned none.
+   * Pass it back as `afterId` to advance a keyset drain (issue 1612).
+   */
+  lastSelectedId: string | null;
   results: RepairResult[];
 }
 
@@ -388,12 +380,17 @@ export async function repairStaleBatch(
   // Scope is validated up front so an entire batch cannot run unscoped; the
   // same options.scope flows to both selectStale and repairOne below.
   normalizeScope(options.scope);
-  const candidates = await selectStale(db, table, options);
+  const { candidates, lastSelectedId } = await selectStaleWithCursor(
+    db,
+    table,
+    options,
+  );
   const results: RepairResult[] = [];
   let repaired = 0;
   let skipped = 0;
   let retryableFailures = 0;
   let permanentFailures = 0;
+  let contentHashCollisions = 0;
 
   for (const candidate of candidates) {
     const result = await repairOne(db, candidate, embedFn, options);
@@ -412,6 +409,9 @@ export async function repairStaleBatch(
       case "permanent_failure":
         permanentFailures += 1;
         break;
+      case "content_hash_collision":
+        contentHashCollisions += 1;
+        break;
     }
   }
 
@@ -422,6 +422,7 @@ export async function repairStaleBatch(
     skipped,
     retryableFailures,
     permanentFailures,
+    contentHashCollisions,
   });
 
   return {
@@ -431,6 +432,8 @@ export async function repairStaleBatch(
     skipped,
     retryableFailures,
     permanentFailures,
+    contentHashCollisions,
+    lastSelectedId,
     results,
   };
 }

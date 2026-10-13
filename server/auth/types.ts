@@ -16,8 +16,4 @@ export interface AuthIdentity {
 
 export type Permission = "read" | "write" | "delete";
 export type ResourceTable =
-  | "thoughts"
-  | "decisions"
-  | "relationships"
-  | "projects"
-  | "sessions";
+  "thoughts" | "decisions" | "relationships" | "projects" | "sessions";

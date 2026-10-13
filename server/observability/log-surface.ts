@@ -34,7 +34,7 @@
  * file (1 MB, 3 retained). Shipping is not this process's job — Alloy tails the
  * output into Loki. The application must never know its destination.
  */
-export { logger } from "../../src/logger.ts";
+export { logger } from "../logging/legacy-logger.ts";
 export {
   withContext,
   currentContext,

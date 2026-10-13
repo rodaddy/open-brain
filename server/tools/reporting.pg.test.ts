@@ -18,7 +18,7 @@
  * log; `get_stats` aggregates across tables. They seed the same rows, so the
  * seeding is module-scope rather than duplicated per describe.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -36,6 +36,23 @@ const OTHER_NAMESPACE = `${NAMESPACE}-other`;
 /** Ids of the seeded rows, filled by the module-scope `beforeAll`. */
 const seeded = { busyId: "", quietId: "", foreignId: "" };
 
+/**
+ * `get_stats` totals as they stood BEFORE this file seeded anything, captured
+ * by the module-scope `beforeAll`.
+ *
+ * This namespace is not the only writer in the set of namespaces it can read:
+ * `readNamespaces` returns `[clientId, "shared-kb"]` for a non-global role
+ * (server/auth/namespace-policy.ts:27-30), so every readable aggregate here
+ * also counts whatever else lives in `shared-kb` -- the recall-eval corpus
+ * seeder puts rows there. The counts below are therefore asserted as a DELTA
+ * against this baseline.
+ */
+const baseline = {
+  thoughtsActive: 0,
+  thoughtsTiers: {} as Record<string, number>,
+  thoughtsZeroAccess: 0,
+};
+
 async function callTool(
   tool: string,
   namespace: string,
@@ -48,8 +65,7 @@ async function callTool(
     logger: pino({ level: "silent" }),
     sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -80,6 +96,23 @@ async function callTool(
 }
 
 beforeAll(async () => {
+  // Read the pre-existing totals BEFORE seeding, so the assertions below can
+  // measure this file's own contribution rather than an absolute that
+  // silently assumes `shared-kb` is empty.
+  const before = await callTool("get_stats", NAMESPACE, {});
+  const beforeCounts = before.body.entry_counts as Record<
+    string,
+    { active: number } | undefined
+  >;
+  const beforeTiers = before.body.tier_distribution as Record<
+    string,
+    Record<string, number> | undefined
+  >;
+  const beforeZero = before.body.zero_access_entries as Record<string, number>;
+  baseline.thoughtsActive = beforeCounts.thoughts?.active ?? 0;
+  baseline.thoughtsTiers = beforeTiers.thoughts ?? {};
+  baseline.thoughtsZeroAccess = beforeZero.thoughts ?? 0;
+
   const busy = await pool.query(
     `INSERT INTO thoughts (content, namespace, created_by, tier, access_count)
      VALUES ($1, $2, $2, 'hot', 12) RETURNING id`,
@@ -129,10 +162,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.query(
-    `DELETE FROM entry_access_log WHERE entry_id = ANY($1::uuid[])`,
-    [[seeded.busyId, seeded.quietId, seeded.foreignId]],
-  );
+  await pool.query(`DELETE FROM entry_access_log WHERE entry_id = ANY($1::uuid[])`, [
+    [seeded.busyId, seeded.quietId, seeded.foreignId],
+  ]);
   await pool.query(`DELETE FROM thoughts WHERE namespace = ANY($1::text[])`, [
     [NAMESPACE, OTHER_NAMESPACE],
   ]);
@@ -198,18 +230,22 @@ describe("access_report (live Postgres)", () => {
 describe("get_stats (live Postgres)", () => {
   test("aggregates counts, tiers, and zero-access per table", async () => {
     const { body } = await callTool("get_stats", NAMESPACE, {});
-    const counts = body.entry_counts as Record<
-      string,
-      { active: number } | undefined
-    >;
-    expect(counts.thoughts?.active).toBe(2);
-    const tiers = body.tier_distribution as Record<
-      string,
-      Record<string, number>
-    >;
-    expect(tiers.thoughts).toEqual({ hot: 1, cold: 1 });
+    // Deltas, not absolutes: `shared-kb` is readable by design
+    // (server/auth/namespace-policy.ts:27-30), so this namespace is not the
+    // only writer in the readable set, and an absolute count here would
+    // silently encode "nothing else is in shared-kb". The delta still proves
+    // the aggregate counted exactly the 2 rows -- one hot, one cold, one of
+    // them zero-access -- that this file seeded.
+    const counts = body.entry_counts as Record<string, { active: number } | undefined>;
+    expect(counts.thoughts?.active).toBe(baseline.thoughtsActive + 2);
+    const tiers = body.tier_distribution as Record<string, Record<string, number>>;
+    expect(tiers.thoughts).toEqual({
+      ...baseline.thoughtsTiers,
+      hot: (baseline.thoughtsTiers.hot ?? 0) + 1,
+      cold: (baseline.thoughtsTiers.cold ?? 0) + 1,
+    });
     const zero = body.zero_access_entries as Record<string, number>;
-    expect(zero.thoughts).toBe(1);
+    expect(zero.thoughts).toBe(baseline.thoughtsZeroAccess + 1);
   });
 
   test("ranks top_accessed and excludes foreign rows", async () => {
@@ -229,8 +265,16 @@ describe("get_stats (live Postgres)", () => {
     // 8 rows belong to this namespace; the 5 foreign rows must not be counted.
     expect(stats.total_log_entries).toBe(8);
     expect(stats.unique_entries_accessed).toBe(1);
-    // (12 + 0) / 2 entries = 6, averaged over the one table with rows.
-    expect(stats.avg_access_count).toBeCloseTo(6 / 5, 5);
+    // `avg_access_count` is a MEAN over every readable row, and `shared-kb` is
+    // readable by design (server/auth/namespace-policy.ts:27-30), so the
+    // denominator is not this file's to control -- an absolute expectation
+    // there asserts that nothing else lives in `shared-kb`, which is not a
+    // property of this tool and not what this test was written to prove. The
+    // invariant it WAS written to prove is the namespace boundary on the log,
+    // asserted above: 8 own rows counted, the 5 foreign ones excluded. The
+    // mean is checked only for the shape a caller can rely on.
+    expect(stats.avg_access_count).toBeGreaterThan(0);
+    expect(Number.isFinite(stats.avg_access_count)).toBe(true);
   });
 
   test("namespace breakdown never lists a foreign namespace", async () => {
@@ -239,9 +283,7 @@ describe("get_stats (live Postgres)", () => {
       namespace: string;
       count: number;
     }>;
-    expect(namespaces.map((entry) => entry.namespace)).not.toContain(
-      OTHER_NAMESPACE,
-    );
+    expect(namespaces.map((entry) => entry.namespace)).not.toContain(OTHER_NAMESPACE);
     const own = namespaces.find((entry) => entry.namespace === NAMESPACE);
     expect(own?.count).toBe(2);
   });

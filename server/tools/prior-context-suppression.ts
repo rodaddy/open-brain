@@ -98,8 +98,7 @@ export const recallIdentitySchema = z
       value.citation_id !== undefined ||
       value.source_ref !== undefined,
     {
-      message:
-        "recall identity requires canonical_id, citation_id, or source_ref",
+      message: "recall identity requires canonical_id, citation_id, or source_ref",
       path: ["canonical_id"],
     },
   );
@@ -192,12 +191,8 @@ export function suppressReferencedRecords<T>(
     const identity: RecallIdentity | null =
       raw.citation_id !== undefined || raw.source_ref !== undefined
         ? recallIdentitySchema.parse({
-            ...(raw.citation_id !== undefined
-              ? { citation_id: raw.citation_id }
-              : {}),
-            ...(raw.source_ref !== undefined
-              ? { source_ref: raw.source_ref }
-              : {}),
+            ...(raw.citation_id !== undefined ? { citation_id: raw.citation_id } : {}),
+            ...(raw.source_ref !== undefined ? { source_ref: raw.source_ref } : {}),
           })
         : null;
 

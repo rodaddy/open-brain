@@ -66,7 +66,7 @@ const probes: Probe[] = [
   { name: "budget-repair-enter-refused", script: "budget", argv: [...budgetArgs("repair-enter", "rec-2"), "--repair-minutes", "5"], stdin: { session_id: "rec-2", cwd } },
   { name: "budget-checkpoint-done-refused", script: "budget", argv: budgetArgs("checkpoint-done", "rec-2"), stdin: { session_id: "rec-2", cwd } },
   { name: "budget-stop-no-work", script: "budget", argv: budgetArgs("stop", "rec-3"), stdin: { session_id: "rec-3", cwd } },
-  { name: "budget-outside-development", script: "budget", argv: budgetArgs("user-prompt-submit", "rec-4", null), stdin: { session_id: "rec-4", cwd: "/Users/rico" } },
+  { name: "budget-outside-development", script: "budget", argv: budgetArgs("user-prompt-submit", "rec-4", null), stdin: { session_id: "rec-4", cwd: "/home/user" } },
   { name: "budget-empty-stdin", script: "budget", argv: budgetArgs("status", "rec-5"), stdin: {} },
   // --- policy-refresh-gate ---
   { name: "policy-session-start", script: "policy", argv: policyArgs("session-start", "pol-1"), stdin: { session_id: "pol-1", cwd } },

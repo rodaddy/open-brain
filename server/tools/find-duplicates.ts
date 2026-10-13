@@ -1,58 +1,22 @@
 /**
- * `find_duplicates`: pairwise vector-similarity duplicate discovery.
+ * `find_duplicates`: pairwise vector-similarity duplicate discovery. READ-ONLY
+ * -- it reports pairs and archives nothing; acting on a pair is a separate
+ * explicit `bulk_archive` call. The self-join is always namespace-bounded,
+ * including for a global role, and runs in a bounded READ ONLY transaction.
  *
- * Design authority: `docs/decisions/cognitive-tiering-dream-cycle.md` (curation
- * is a proposal step) and `docs/decisions/privilege-isolation-closed-brain.md`
- * (server-side isolation).
+ * Why it is bounded, with the measured #485 defect behind it:
+ * See docs/decisions/1214-find-duplicates-namespace-bounded-self-join.md
  *
- * READ-ONLY. It reports pairs; it archives nothing. Acting on a pair is a
- * separate explicit `bulk_archive` call, which is the same proposal/mutation
- * split `tiering.ts` and `tier-mutations.ts` sit on either side of.
- *
- * ## #485: the global-role self-join must stay scoped
- *
- * Current-src builds this self-join by appending a read predicate to each side:
- *
- *     const namespacePredicateA = appendReadNamespacePredicate(auth, params, "a.namespace");
- *     const namespacePredicateB = appendReadNamespacePredicate(auth, params, "b.namespace");
- *
- * For a global role (`admin`, `ob-admin`) the readable-namespace set is
- * `undefined`, so BOTH predicates collapse to the empty string and the join runs
- * over every pair in the table. Measured on `open_brain_local_play` (24,845
- * embedded non-archived thoughts, ~308M pairwise halfvec distances, and no index
- * able to serve `a.embedding <=> b.embedding < $1` across arbitrary pairs):
- *
- *   | shape                    | result                                   |
- *   |--------------------------|------------------------------------------|
- *   | namespace-scoped         | 256.7 ms, 5 rows                         |
- *   | unscoped (the admin path)| cancelled at 60,074 ms by statement_timeout |
- *
- * `ORDER BY distance ASC` means the row ceiling cannot help: every surviving
- * pair's distance is computed before anything can be ordered. Worse than slow,
- * the pooled connections never came back -- 42 backends were observed still
- * `state='active'` on this join five minutes after the run that launched them
- * had ended, which turned one query into a cascade of unrelated red in `bun test`
- * and made a #463 parity run report 13 failures where only 6 were real.
- *
- * The port carries the fix, not the defect, taking both complementary
- * directions the issue named:
- *
- *   1. **The join is always namespace-bounded.** A global role resolves to a
- *      concrete namespace set rather than to "no predicate at all": it defaults
- *      to its own namespace and may name another via `namespace`. There is no
- *      input that produces an unscoped self-join.
- *   2. **The statement is bounded anyway.** The query runs in a `READ ONLY`
- *      transaction carrying a server-side `statement_timeout`, so even a
- *      pathological namespace cannot hold a pooled connection open forever. This
- *      is the same net `search_brain`'s unindexed FTS path already uses.
- *
- * (1) is the fix; (2) is the safety net. Cross-namespace duplicate PAIRS are not
- * reported for a global caller, which is a real behavior change and is stated
- * here rather than assumed: reporting them is what requires the unbounded join.
+ * Design authority: docs/decisions/cognitive-tiering-dream-cycle.md and
+ * docs/decisions/privilege-isolation-closed-brain.md
  */
 import { z } from "zod";
-import type { PoolClient } from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  createEntryWriteRepository,
+  type EntryWriteRepository,
+} from "../db/entry-write-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 import { canRead } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
@@ -126,9 +90,7 @@ function scanNamespaces(
   requested: string | undefined,
 ): readonly string[] | undefined {
   if (requested !== undefined) {
-    return canTargetNamespace(identity, "read", requested)
-      ? [requested]
-      : undefined;
+    return canTargetNamespace(identity, "read", requested) ? [requested] : undefined;
   }
   return [identity.clientId];
 }
@@ -212,12 +174,8 @@ function resolveDuplicateScanScope(
     };
   }
 
-  const requestedTables = args.table
-    ? [args.table as ResourceTable]
-    : ALL_TABLES;
-  const tables = requestedTables.filter((table) =>
-    canRead(identity.role, table),
-  );
+  const requestedTables = args.table ? [args.table as ResourceTable] : ALL_TABLES;
+  const tables = requestedTables.filter((table) => canRead(identity.role, table));
   if (tables.length === 0) {
     return { denied: "Permission denied: no readable tables" };
   }
@@ -243,58 +201,43 @@ function resolveDuplicateScanScope(
  * @returns The raw rows, nearest pair first.
  */
 async function queryDuplicatePairs(options: {
-  client: PoolClient;
+  repository: EntryWriteRepository;
   table: ResourceTable;
   scope: DuplicateScanScope;
   remaining: number;
 }): Promise<Record<string, unknown>[]> {
-  const { client, table, scope, remaining } = options;
-  const { rows } = await client.query(
-    `SELECT
-       a.id AS id_a,
-       LEFT(${previewForAlias(table, "a")}, ${PREVIEW_WIDTH}) AS preview_a,
-       b.id AS id_b,
-       LEFT(${previewForAlias(table, "b")}, ${PREVIEW_WIDTH}) AS preview_b,
-       a.embedding <=> b.embedding AS distance
-     FROM ${table} a
-     JOIN ${table} b ON a.id < b.id
-       AND b.archived_at IS NULL
-       AND b.embedding IS NOT NULL
-       AND b.namespace = ANY($3::text[])
-     WHERE a.archived_at IS NULL
-       AND a.embedding IS NOT NULL
-       AND a.namespace = ANY($3::text[])
-       AND a.embedding <=> b.embedding < $1
-     ORDER BY distance ASC
-     LIMIT $2`,
-    [scope.threshold, remaining, scope.namespaces],
-  );
-  return rows;
+  const { repository, table, scope, remaining } = options;
+  return repository.selectDuplicatePairs({
+    table,
+    previewA: previewForAlias(table, "a"),
+    previewB: previewForAlias(table, "b"),
+    previewWidth: PREVIEW_WIDTH,
+    threshold: scope.threshold,
+    remaining,
+    namespaces: scope.namespaces,
+  });
 }
 
 /**
- * Scan every accessible table inside one bounded READ ONLY transaction.
+ * Scan every accessible table through one repository bound to one transaction.
  *
- * One connection covers the whole scan. Taking a fresh pooled connection per
+ * The caller opens that transaction READ ONLY with the statement timeout, so
+ * one connection covers the whole scan. Taking a fresh pooled connection per
  * table would re-arm the timeout each time but would also let a slow table hold
  * a connection the next table then waits for.
  *
  * @returns The pairs found, nearest first within each table, in table order.
  */
 async function scanTablesForDuplicates(
-  client: PoolClient,
+  repository: EntryWriteRepository,
   scope: DuplicateScanScope,
 ): Promise<DuplicatePair[]> {
   const duplicates: DuplicatePair[] = [];
-  await client.query("BEGIN READ ONLY");
-  await client.query("SELECT set_config('statement_timeout', $1, true)", [
-    `${SELF_JOIN_STATEMENT_TIMEOUT_MS}ms`,
-  ]);
 
   for (const table of scope.tables) {
     if (duplicates.length >= scope.wanted) break;
     const rows = await queryDuplicatePairs({
-      client,
+      repository,
       table,
       scope,
       remaining: scope.wanted - duplicates.length,
@@ -309,7 +252,6 @@ async function scanTablesForDuplicates(
       });
     }
   }
-  await client.query("COMMIT");
   return duplicates;
 }
 
@@ -354,14 +296,24 @@ async function handleFindDuplicates(
   const { scope } = resolved;
 
   let duplicates: DuplicatePair[];
-  const client = await dependencies.pool.connect();
   try {
-    duplicates = await scanTablesForDuplicates(client, scope);
+    duplicates = await withTransaction({
+      pool: dependencies.pool,
+      readOnly: true,
+      statementTimeoutMs: SELF_JOIN_STATEMENT_TIMEOUT_MS,
+      run: async (tx) => scanTablesForDuplicates(createEntryWriteRepository(tx), scope),
+      onRollbackFailure: (rollbackError: unknown) => {
+        dependencies.logger.warn(
+          {
+            tool: "find_duplicates",
+            errorName: rollbackError instanceof Error ? rollbackError.name : "unknown",
+          },
+          "find_duplicates_rollback_failed",
+        );
+      },
+    });
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
     return respondToScanFailure(dependencies, error);
-  } finally {
-    client.release();
   }
 
   dependencies.logger.info(

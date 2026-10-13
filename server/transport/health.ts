@@ -1,5 +1,10 @@
 import type { Logger } from "pino";
 import type { DatabaseHealth } from "../db/pool.ts";
+import type { TransportCaptureHealth } from "../capture/liveness-observer.ts";
+
+// Re-exported so `server/transport/index.ts` keeps offering the name from
+// this module, unchanged, while capture owns the declaration (issue 1210).
+export type { TransportCaptureHealth };
 
 export interface TransportNatsHealth {
   readonly requested_transport: "http" | "nats";
@@ -31,65 +36,6 @@ export interface TransportProducerHealth {
   /** Ticks skipped because a previous one was still running. */
   readonly overlapped_ticks: number;
   readonly completed_ticks: number;
-}
-
-/**
- * The raw-capture lane's liveness, as `/health` reports it.
- *
- * WHY THIS IS A HEALTH INPUT AT ALL (#647, ledger item 25). Raw capture is
- * AUTOMATIC — a `Stop` hook reads since the watermark and delivers — and
- * automatic is what makes it dangerous: nothing was ever asked to notice it
- * stopping. `ob_raw_turns` records ARRIVALS; nothing anywhere read ABSENCE, so
- * a silently-dead capture lane was server-side indistinguishable from an idle
- * one. This is the #625 producer argument applied to the second background
- * lane, and it replaces an enforcement tier rather than adding a test: ledger
- * item 25 retired the capture merge-gate on the reasoning that gating a
- * human's PR is the wrong instrument for a background pipeline.
- *
- * Every field is derived from EVENT COUNTS by
- * `openbrain.apps.capture.liveness`. `silence_seconds` is reported, never
- * compared — a wall-clock verdict cannot tell a wedged pipeline from a quiet
- * afternoon (`docs/lane-contract.md`, Tightenings round 5).
- */
-export interface TransportCaptureHealth {
-  /** True once any capture fault below fired. */
-  readonly stale: boolean;
-  /** Sessions ran and the watermark advanced zero bytes. */
-  readonly watermark_wedged: boolean;
-  /** The spool holds records and the outage latch announced nothing. */
-  readonly spool_unannounced: boolean;
-  /**
-   * Speakers that delivered nothing while the lane was active.
-   *
-   * PER ROLE, not per lane, and this field is the reason the block exists in
-   * this shape: `docs/decisions/capture-never-drops-a-turn.md:188-200` records
-   * that the operator's numbers stayed healthy for six days while the
-   * assistant side sat at zero (#447). A lane total reads as busy traffic;
-   * only the per-role view sees a dead speaker.
-   */
-  readonly silent_roles: readonly string[];
-  readonly sessions_observed: number;
-  readonly turns_delivered: number;
-  readonly spool_pending: number;
-  /**
-   * Units the capture lane ABANDONED after exhausting its replay attempts.
-   *
-   * ABSENT, never 0, when no vantage point reported the count (#680). The two
-   * states are genuinely different — "nothing was abandoned" and "nobody
-   * looked" — and collapsing them into a confident zero is the exact defect
-   * this field exists to end: on 2026-07-30 a hardcoded 0 stood in for an
-   * unmeasured quantity while fifteen turns were gone for good, and `/health`
-   * read `spool_pending:0, reason:"capture lane delivering"` over the top of
-   * it.
-   *
-   * A monitor alerts on this crossing 0 -> 1, so a reporting vantage point
-   * publishes a real 0 rather than omitting the field.
-   */
-  readonly quarantined_count?: number;
-  /** Reported for an operator; no verdict is derived from it. */
-  readonly silence_seconds: number;
-  /** Content-free sentence naming which fault fired. */
-  readonly reason: string;
 }
 
 export interface SingleWorkerHealth {
@@ -148,7 +94,7 @@ export interface SingleWorkerHealthInput {
    * and `producerHealth` are: the live component knows its counters and this
    * module must not guess them. Omitted composes no capture block and cannot
    * degrade the status — which is the ordinary case for most workers, not an
-   * edge (core01 runs several; `AGENTS.md`).
+   * edge (a deployment can run several).
    */
   readonly captureHealth?: () => TransportCaptureHealth | undefined;
 }
@@ -162,9 +108,7 @@ const HTTP_NATS_HEALTH: TransportNatsHealth = {
   last_error: null,
 };
 
-async function probeEmbedding(
-  input: SingleWorkerHealthInput,
-): Promise<boolean> {
+async function probeEmbedding(input: SingleWorkerHealthInput): Promise<boolean> {
   if (!input.embeddingBaseUrl) return false;
   const headers = new Headers();
   if (input.embeddingApiKey) {
@@ -178,10 +122,7 @@ async function probeEmbedding(
     const connected = response.ok;
     await response.body?.cancel();
     if (!connected) {
-      input.logger.warn(
-        { status: response.status },
-        "embedding_health_degraded",
-      );
+      input.logger.warn({ status: response.status }, "embedding_health_degraded");
     }
     return connected;
   } catch (error: unknown) {

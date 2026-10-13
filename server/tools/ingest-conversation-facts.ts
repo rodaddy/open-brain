@@ -33,8 +33,13 @@ import { canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import type { AuthInfo } from "../types.ts";
+import {
+  createContextPackRepository,
+  type ContextPackRepository,
+} from "../db/context-pack-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
 import { containsSecret } from "../domain/sharing.ts";
 import { resolveIngestionEligibility } from "../domain/source-registry.ts";
 import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
@@ -262,25 +267,16 @@ async function resolveTargetLane(
   scope: ConversationIngestArgs["scope"],
 ): Promise<{ laneId: string } | { refusal: Refusal }> {
   const { dependencies, namespace } = context;
-  const { rows: laneRows } = await dependencies.pool.query(
-    `SELECT id, status FROM ob_session_lanes
-      WHERE namespace = $1
-        AND session_key = $2
-        AND agent = $3
-        AND source = $4
-        AND metadata->>'server_id' = $5
-        AND channel_id = $6
-        AND thread_id IS NOT DISTINCT FROM $7::text`,
-    [
-      namespace,
-      scope.session_key,
-      scope.agent,
-      scope.platform,
-      scope.server_id,
-      scope.channel_id,
-      scope.thread_id,
-    ],
-  );
+  const repository = createContextPackRepository(dependencies.pool);
+  const { rows: laneRows } = await repository.selectScopedLane({
+    namespace,
+    sessionKey: scope.session_key,
+    agent: scope.agent,
+    platform: scope.platform,
+    serverId: scope.server_id,
+    channelId: scope.channel_id,
+    threadId: scope.thread_id,
+  });
   const lane = laneRows[0] as { id: unknown; status: unknown } | undefined;
   if (!lane) {
     return {
@@ -328,7 +324,7 @@ async function prepareUnits(
   const { dependencies, namespace } = context;
   const prepared: PreparedUnit[] = facts.map((fact) => ({
     fact,
-    eventContentHash: contentHash(fact.content),
+    eventContentHash: normalizedContentHash(fact.content),
     embedding: null,
   }));
   for (const unit of prepared) {
@@ -396,20 +392,14 @@ function unitMetadata(target: WriteTarget, unit: PreparedUnit) {
  * transaction rather than dropped silently.
  */
 async function writeUnit(
-  client: Queryable & { query: PoolClientQuery },
+  client: Queryable,
+  repository: ContextPackRepository,
   target: WriteTarget,
   unit: PreparedUnit,
 ): Promise<WrittenUnit> {
   const { fact, eventContentHash, embedding } = unit;
-  const { rows } = await client.query(
-    `INSERT INTO ob_session_events
-       (lane_id, event_type, content, source, importance, metadata,
-        embedding, content_hash, embedded_at, embedding_model, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)
-     ON CONFLICT (lane_id, content_hash) WHERE content_hash IS NOT NULL
-       DO NOTHING
-     RETURNING id`,
-    [
+  const { rows } = await repository.insertConversationFactEvent({
+    values: [
       target.laneId,
       fact.event_type,
       fact.content,
@@ -419,10 +409,10 @@ async function writeUnit(
       embedding ? toSql(embedding) : null,
       eventContentHash,
       embedding ? new Date().toISOString() : null,
-      embedding ? EMBEDDING_MODEL : null,
+      embedding ? embeddingModel() : null,
       target.clientId,
     ],
-  );
+  });
 
   const inserted = rows[0] as { id: unknown } | undefined;
   if (inserted) {
@@ -448,11 +438,6 @@ async function writeUnit(
   };
 }
 
-type PoolClientQuery = (
-  sql: string,
-  params?: unknown[],
-) => Promise<{ rows: Array<Record<string, unknown>> }>;
-
 /**
  * Write the whole batch inside one transaction.
  *
@@ -469,19 +454,17 @@ async function writeBatch(
   if (typeof dependencies.pool.connect !== "function") {
     throw new Error("ingest_conversation_facts requires a transactional pg pool");
   }
-  const client = await dependencies.pool.connect();
-  const written: WrittenUnit[] = [];
-
-  try {
-    await client.query("BEGIN");
-    for (const unit of prepared) {
-      written.push(await writeUnit(client, target, unit));
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
+  return await withTransaction({
+    pool: dependencies.pool,
+    run: async (tx) => {
+      const repository = createContextPackRepository(tx);
+      const written: WrittenUnit[] = [];
+      for (const unit of prepared) {
+        written.push(await writeUnit(tx, repository, target, unit));
+      }
+      return written;
+    },
+    onRollbackFailure: (rollbackError) => {
       dependencies.logger.warn(
         {
           tool: "ingest_conversation_facts",
@@ -490,13 +473,8 @@ async function writeBatch(
         },
         "ingest_conversation_facts_rollback_failed",
       );
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  return written;
+    },
+  });
 }
 
 /** The content-free receipt, plus the matching `tool_result` log line. */

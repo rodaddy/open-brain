@@ -1,36 +1,11 @@
 /**
  * Single source of truth for every embedding-bearing table in Open Brain.
+ * `scripts/backfill.ts` and `src/embedding-repair.ts` both consume it; a new
+ * embedding column needs exactly one entry here.
  *
- * Both `scripts/backfill.ts` and `src/embedding-repair.ts` consume this registry
- * instead of duplicating table -> text mappings. When a new embedding column
- * lands, add exactly one entry here and both the backfill and the repair
- * primitive pick it up.
- *
- * ## Two distinct texts per target
- *
- * `canonicalText` is the source text whose change means "the row was edited and
- * the embedding is now stale". It MUST match the exact input each table's
- * write-path feeds to `contentHash(...)`, so a stored `content_hash` can be
- * compared against a freshly computed one to detect source drift.
- *
- * `embedText` is what we actually pass to the embedding provider. It may differ
- * from `canonicalText` (e.g. thoughts append their tags to the embed text but
- * hash only the content -- see src/tools/log-thought.ts). Repair regenerates
- * from `embedText`; staleness is decided from `canonicalText`.
- *
- * ## Provenance capability
- *
- * `provenance` records which model/staleness columns physically exist on the
- * table in the CURRENT stored schema (see src/db/migrations). Staleness that
- * relies on a column MUST NOT be claimed for a table lacking it. `ob_entities`
- * has an `embedding` column but no `content_hash` / `embedded_at` /
- * `embedding_model`; only missing-embedding detection is runtime-truthful there
- * until the migration contract in docs/embedding-repair.md is applied. Because
- * it has no `content_hash` to guard on, it declares `sourceGuardColumns` so the
- * repair UPDATE snapshot-guards its actual source columns and never writes an
- * embedding built from source text that changed since selection.
+ * See docs/decisions/embedding-targets-canonical-vs-embed-text.md
  */
-import { contentHash } from "../../src/embedding.ts";
+import { normalizedContentHash } from "../embedding/provider.ts";
 import {
   decisionCanonicalText,
   sessionEmbedText,
@@ -71,7 +46,7 @@ export interface EmbeddingTarget {
   embedText: (row: TargetRow) => string;
   /**
    * Stable identity hash of the source, matching this table's write-path
-   * `contentHash(...)` input exactly. Compared against the stored `content_hash`
+   * `normalizedContentHash(...)` input exactly. Compared against the stored `content_hash`
    * to detect source drift and to guard idempotent no-overwrite updates.
    */
   sourceHash: (row: TargetRow) => string;
@@ -79,24 +54,10 @@ export interface EmbeddingTarget {
   provenance: TargetProvenance;
   /**
    * Source columns to snapshot-guard on the UPDATE for targets that have NO
-   * `content_hash` column (so no hash-based no-overwrite guard is possible).
+   * `content_hash` column. Every identifier is registry-static; these columns
+   * MUST be in `selectColumns`. Ignored when `provenance.hasContentHash`.
    *
-   * For such a target the only column-level staleness we can detect is a missing
-   * embedding, but `embedding IS NULL` alone does NOT prevent writing an
-   * embedding generated from now-stale source text: a concurrent edit can change
-   * `entity_type`/`name` while leaving `embedding` NULL, and the stale UPDATE
-   * would still match. To stay truthful, the guarded UPDATE additionally binds
-   * each declared column with `<col> IS NOT DISTINCT FROM $captured` (NULL-safe),
-   * using the exact value projected at selection time. If any source column
-   * changed since selection, the UPDATE matches zero rows and repair skips
-   * instead of clobbering the row with an embedding built from stale text.
-   *
-   * Every identifier here is registry-static (never caller-supplied), so it is
-   * safe to interpolate; the captured VALUES are always parameterized. These
-   * columns MUST be in `selectColumns` so the captured snapshot is available.
-   *
-   * Only meaningful when `provenance.hasContentHash` is false; a target WITH a
-   * content_hash guards on the hash instead and ignores this field.
+   * See docs/decisions/embedding-targets-source-guard-columns.md
    */
   sourceGuardColumns?: string[];
   /**
@@ -151,9 +112,27 @@ const ENTITY_PROVENANCE: TargetProvenance = {
   hasEmbeddingModel: false,
 };
 
+/**
+ * Render one projected column value as text. Rows arrive as
+ * `Record<string, unknown>` (the driver's shape), so a value can be a string, a
+ * number, or a parsed jsonb object; `String(value)` on the last of those yields
+ * `[object Object]`. Narrow to the stringifiable primitives explicitly and
+ * JSON-encode anything else, so no emit site ever leans on Object's default
+ * stringification.
+ */
+function asText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return JSON.stringify(value) ?? "";
+}
+
 function joinNonEmpty(parts: Array<unknown>): string {
   return parts
-    .map((p) => (p == null ? "" : String(p)))
+    .map(asText)
     .filter((s) => s.length > 0)
     .join("\n");
 }
@@ -172,7 +151,7 @@ function joinNonEmpty(parts: Array<unknown>): string {
  *                 embed summary [\n key_decisions] [\n next_steps] [\n blockers];
  *                 shared via sessionSourceHashInput()/sessionEmbedText())
  * - ob_session_lanes  src/tools/append-session-event.ts (topic [\n project];
- *                     hash = contentHash(session_key + "|" + topic))
+ *                     hash = normalizedContentHash(session_key + "|" + topic))
  * - ob_session_events src/tools/append-session-event.ts (content)
  * - ob_entities   src/tools/hydrate-entities.ts (entity_type: name)
  */
@@ -187,7 +166,7 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
       const tags = row.tags as string[] | null | undefined;
       return tags?.length ? `${content}\n${tags.join(" ")}` : content;
     },
-    sourceHash: (row) => contentHash((row.content as string) ?? ""),
+    sourceHash: (row) => normalizedContentHash((row.content as string) ?? ""),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -212,7 +191,7 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     // [title, rationale, context?, alternatives.join(", ")?, tags.join(" ")?].
     canonicalText: (row) => decisionCanonicalText(row),
     embedText: (row) => decisionCanonicalText(row),
-    sourceHash: (row) => contentHash(decisionCanonicalText(row)),
+    sourceHash: (row) => normalizedContentHash(decisionCanonicalText(row)),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -223,7 +202,7 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     canonicalText: (row) => joinNonEmpty([row.person_name, row.context, row.notes]),
     embedText: (row) => joinNonEmpty([row.person_name, row.context, row.notes]),
     sourceHash: (row) =>
-      contentHash(joinNonEmpty([row.person_name, row.context, row.notes])),
+      normalizedContentHash(joinNonEmpty([row.person_name, row.context, row.notes])),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -233,7 +212,8 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     selectColumns: ["id", "name", "description", "namespace"],
     canonicalText: (row) => joinNonEmpty([row.name, row.description]),
     embedText: (row) => joinNonEmpty([row.name, row.description]),
-    sourceHash: (row) => contentHash(joinNonEmpty([row.name, row.description])),
+    sourceHash: (row) =>
+      normalizedContentHash(joinNonEmpty([row.name, row.description])),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -255,11 +235,11 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
       "namespace",
     ],
     // Canonical text drives sourceHash and MUST equal the writers' hash input:
-    // contentHash(summary + "|" + project). It is NOT the embed text.
+    // normalizedContentHash(summary + "|" + project). It is NOT the embed text.
     canonicalText: (row) => sessionSourceHashInput(row),
     // Embed text is the richer continuity text every writer feeds the provider.
     embedText: (row) => sessionEmbedText(row),
-    sourceHash: (row) => contentHash(sessionSourceHashInput(row)),
+    sourceHash: (row) => normalizedContentHash(sessionSourceHashInput(row)),
     provenance: FULL_PROVENANCE,
     namespaceColumn: "namespace",
   },
@@ -275,7 +255,7 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     // this would flag every lane as drifted on the first scan.
     sourceHash: (row) => {
       const topic = (row.topic as string) ?? "";
-      return contentHash(`${row.session_key ?? ""}|${topic}`);
+      return normalizedContentHash(`${asText(row.session_key)}|${topic}`);
     },
     provenance: FULL_PROVENANCE,
     baseFilterSql: "topic IS NOT NULL AND btrim(topic) <> ''",
@@ -291,7 +271,7 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     selectColumns: ["id", "content", "lane_id"],
     canonicalText: (row) => (row.content as string) ?? "",
     embedText: (row) => (row.content as string) ?? "",
-    sourceHash: (row) => contentHash((row.content as string) ?? ""),
+    sourceHash: (row) => normalizedContentHash((row.content as string) ?? ""),
     provenance: FULL_PROVENANCE,
     namespaceVia: {
       table: "ob_session_lanes",
@@ -304,12 +284,13 @@ export const EMBEDDING_TARGETS: Record<string, EmbeddingTarget> = {
     table: "ob_entities",
     idColumn: "id",
     selectColumns: ["id", "entity_type", "name", "namespace"],
-    canonicalText: (row) => `${row.entity_type ?? ""}: ${row.name ?? ""}`,
-    embedText: (row) => `${row.entity_type ?? ""}: ${row.name ?? ""}`,
+    canonicalText: (row) => `${asText(row.entity_type)}: ${asText(row.name)}`,
+    embedText: (row) => `${asText(row.entity_type)}: ${asText(row.name)}`,
     // No content_hash column exists; sourceHash is provided for callers that
     // opt into the documented migration contract, but is NOT persisted or
     // compared at runtime today.
-    sourceHash: (row) => contentHash(`${row.entity_type ?? ""}: ${row.name ?? ""}`),
+    sourceHash: (row) =>
+      normalizedContentHash(`${asText(row.entity_type)}: ${asText(row.name)}`),
     provenance: ENTITY_PROVENANCE,
     // No content_hash guard is possible; snapshot-guard the actual source
     // columns instead so a concurrent name/type edit (which leaves embedding

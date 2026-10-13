@@ -2,47 +2,14 @@
  * DISTILL windowing -- turning a flat table of turns into extraction units with
  * context. Issue #382.
  *
- * THE PROBLEM THIS SOLVES. Measured on the live dogfood corpus 2026-07-28:
- * operator turns have a median length of 100 characters, and the shortest real
- * ones are "go for it", "try it", "switched both". Read alone, a 9-character
- * turn carries no extractable claim. Read after the two turns that preceded it,
- * the SAME 9 characters are an authorization of a specific proposal -- which is
- * the densest decision content in the corpus and the whole reason full-send
- * capture exists (docs/full-send-derivation-spec.md, 032_raw_turns.sql:96-99).
- *
- * THE MECHANISM IS BORROWED FROM GRAPHITI, verbatim from its prompt contract
- * (graphiti_core/prompts/extract_nodes_and_edges.py:8): "Only extract entities
- * from CURRENT MESSAGES - PREVIOUS MESSAGES are context only." Graphiti's
- * default window is the previous 3 units. We adopt both the split and the
- * default. Attribution: docs/prior-art/ATTRIBUTION.md.
- *
- * Why the split matters rather than just concatenating: without it, every
- * candidate extracted from a window would claim all N turns as its source, and
- * the same claim would be re-extracted once per window it appears in. Marking
- * exactly one turn as CURRENT makes `source_turn_ids` honest -- it names the
- * turn that made the claim, not the turns that happened to be nearby.
- *
- * ORDERING KEY: (session_ref, occurred_at, id). NOT turn_index -- migration
- * 036_raw_turns_session_seq.sql:5-16 measured that turn_index is per-hook-batch
- * (every session carries only 0..7) and never per-session. NOT
- * parent_turn_uuid -- 036:41-44 measured 24% of parent links dangle.
- *
- * session_seq (036) is the server-owned ordering column and IS the intended
- * key, but it is populated only by that migration's one-shot backfill: nothing
- * on the insert path assigns it, so turns that arrive after the migration ran
- * carry NULL. Measured 2026-07-28: 59 of 3,795 turns have session_seq IS NULL.
- * (session_ref, occurred_at, id) is the expression the backfill computes
- * session_seq FROM (036:57-63), and it is still a perfect total order on the
- * live corpus -- 3,795 turns, 3,795 distinct (session_ref, occurred_at) pairs,
- * zero ties, re-measured 2026-07-28. So ordering on the source expression is
- * both identical to session_seq where it exists and correct where it does not,
- * which is what keeps those 59 turns from being silently skipped. session_seq
- * is still SELECTed and reported, so a backfill gap stays visible.
+ * A unit is one CURRENT turn plus read-only context, ordered by
+ * (session_ref, occurred_at, id).
+ * See docs/decisions/distill-window-context-is-read-only.md
  */
 
 import type pg from "pg";
 
-import { NON_SPEECH_ROLES } from "../maintenance/dream-light.ts";
+import { NON_SPEECH_ROLES } from "./raw-turn-roles.ts";
 
 /** One raw turn as the distiller reads it. Content is already redacted at write. */
 export interface DistillTurn {
@@ -83,30 +50,8 @@ export const DEFAULT_MAX_DISTILL_SESSIONS = 4;
  * Is this turn SPEECH -- something a person or an agent actually said, and
  * therefore something that can make a claim?
  *
- * This is the same distinction Light draws, and it now uses the SAME SET
- * (NON_SPEECH_ROLES, src/dream-light.ts:143) rather than a second private list.
- * The two stages still USE the answer differently, and that difference is
- * deliberate:
- *
- *   Light      does not COUNT tool output (it recurs meaninglessly).
- *   Distill    does not EXTRACT FROM tool output, but DOES pass it as context.
- *
- * Tool output is often the evidence a claim rests on -- measured in session
- * 069dd23f seq 102-103, the assistant's factual turn "2370 pass, 0 fail" is
- * only checkable because the tool turn before it carried the test output. So
- * dropping tool turns from the window entirely would remove the grounding;
- * extracting from them would produce candidates out of `ls` output. Context,
- * not source, is the correct disposition for both.
- *
- * THE DIRECTION IS LOAD-BEARING, and this was previously wrong here. An earlier
- * version declared an allowlist (`{user, assistant}`), which inverted Light's
- * documented failure mode: an unrecognised role yielded NO CANDIDATE AT ALL --
- * the silent, permanent drop that dream-light.ts:126-142 and the 2026-07-28
- * "let everything pass" decision both forbid. Zero impact on today's corpus
- * (assistant 2172 / tool 1360 / user 263 on the clone, so no unknown role
- * exists yet) and total impact the first day a new runtime writes one. As a
- * denylist an unknown role is treated as speech and over-extracts a little,
- * which the operator queue and the tier system are there to correct.
+ * A denylist, so an unknown role is treated as speech rather than silently
+ * dropped. See docs/decisions/distill-window-speech-is-a-denylist.md
  */
 export function isSpeech(role: string): boolean {
   return !NON_SPEECH_ROLES.has(role);
@@ -183,23 +128,8 @@ export const DISTILL_ORDER_BY = "session_ref NULLS LAST, occurred_at NULLS LAST,
 /**
  * Claim a bounded batch of undistilled turns and build their units.
  *
- * WHY IT CLAIMS BY SESSION, NOT BY ROW. A LIMIT over the whole table would cut
- * a session mid-conversation and hand the tail of it to a later batch with no
- * context -- the exact failure the windowing exists to prevent, reintroduced by
- * the pagination. Selecting whole sessions costs a larger read and buys a
- * guarantee: a unit's context is always the turns that actually preceded it.
- *
- * Sessions are ordered oldest-first by their earliest undistilled turn, so the
- * backlog drains in the order it accumulated.
- *
- * FOR UPDATE SKIP LOCKED is deliberately NOT used here. It is the right
- * primitive for row-at-a-time queues (the maintenance queue uses it at
- * src/maintenance-queue.ts:440), but here the claim unit is a whole session and
- * the context read must see turns that are ALREADY distilled -- locking them
- * would serialise two sweeps working on unrelated sessions. Concurrency is
- * instead handled where it actually matters: the `distilled_at IS NULL`
- * predicate plus `ON CONFLICT DO NOTHING` on the candidate write make a
- * double-run converge rather than duplicate.
+ * The claim unit is a whole session, and FOR UPDATE SKIP LOCKED is
+ * deliberately not used. See docs/decisions/distill-window-claims-whole-sessions.md
  */
 /** Caller-supplied selection for one claim. */
 export interface ClaimDistillOptions {
@@ -357,14 +287,14 @@ export async function claimDistillBatch(
   //     undistilled backlog    : 190,102
   //
   // A claim of 1500 turns containing nothing to do. The handler stamps only
-  // `if (consumedTurnIds.length > 0)` (src/distill-handler.ts), so an empty
+  // `if (consumedTurnIds.length > 0)` (the distill handler), so an empty
   // claim stamped nothing, threw nothing, and completed as `succeeded`; and
   // because the producer's idempotency key hashes the DUE turns
-  // (src/maintenance-queue.ts) under ON CONFLICT DO NOTHING, that unchanged
+  // (the maintenance queue) under ON CONFLICT DO NOTHING, that unchanged
   // hash then silently dropped every later enqueue. 392 succeeded jobs, zero
   // turns stamped, no error anywhere, 27 days of starvation.
   //
-  // Same family as the producer-side defect in src/maintenance-sweep.ts, where
+  // Same family as the producer-side defect in the maintenance sweep, where
   // already-distilled turns were ranked ahead of due ones and pushed the due
   // work past the rank cutoff. Both are "the bound was applied to the wrong
   // set", and fixing either alone yields nothing: the producer enqueues work

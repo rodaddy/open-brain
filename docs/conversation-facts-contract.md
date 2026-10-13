@@ -111,4 +111,4 @@ values, or pg `DETAIL`/`CONTEXT` into the logs, response, or receipt.
 - No raw transcript persistence and no transcript-storage column.
 - No automatic capture and no lane creation.
 - No auto-promotion into shared-kb or candidate memory.
-- No client/Hermes integration or quality-model tuning.
+- No client integration or quality-model tuning.

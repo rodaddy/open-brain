@@ -1,0 +1,40 @@
+# Open Brain — kustomize BASE (issue 762).
+#
+# STATUS: WRITTEN. Not applied anywhere; the prod overlay pins replicas to 0.
+#
+# THE BASE IS NEVER APPLIED DIRECTLY. It declares no namespace and claims no
+# LoadBalancer address; the overlay supplies the namespace. Applying a base is
+# how two environments end up sharing one namespace.
+#
+# Rendering it locally is the fastest way to check an edit, and neither command
+# touches the cluster or needs Docker:
+#
+#   kustomize build k8s/base
+#   kustomize build k8s/overlays/prod | kubeconform -strict -ignore-missing-schemas
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Common labels on every object. `app.kubernetes.io/name` is what the
+# topologySpreadConstraints and the Service selector both match, so it is not
+# cosmetic: changing it here without changing those breaks scheduling and
+# routing silently. `includeSelectors: false` keeps these two out of the
+# selectors, where an immutable-field conflict would otherwise be waiting.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: open-brain
+      app.kubernetes.io/managed-by: argocd
+
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+
+# SECRETS ARE ABSENT AND THAT IS THE DESIGN.
+#
+# No `secretGenerator`, no committed Secret manifests. This cluster has no ESO
+# and no sealed-secrets, so every Secret is applied out of band from your secret store
+# into the target namespace. The Deployments reference them BY NAME
+# (`open-brain-secrets`, `open-brain-regcred`) and Argo never manages them — an
+# Argo-managed Secret is a secret in git.

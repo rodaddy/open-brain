@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { toSql } from "pgvector/pg";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
@@ -7,33 +6,21 @@ import type { MemoryToolDependencies } from "./types.ts";
 import { errorResult } from "./types.ts";
 
 /**
- * The session-event vocabulary, re-exported from the single existing declaration.
+ * The session-event vocabulary, re-exported from the single existing
+ * declaration. A hand-copied vocabulary here was an eighth redeclaration of a
+ * frozen cross-language vocabulary, and the Python census test failed on it by
+ * design.
  *
- * This file previously hand-copied the nine event types and three importance
- * levels. That made it an EIGHTH redeclaration of a frozen cross-language
- * vocabulary, and `python/openbrain-memory/tests/test_event_vocabulary.py`
- * (`test_vocabulary_is_declared_exactly_where_expected`) failed on it by design
- * -- the guard exists precisely to stop a new copy appearing where no
- * per-surface drift test watches it.
- *
- * Adding this file to the guard's `known` set was the wrong fix: the guard is a
- * census, and silencing it would have kept the copy while removing the alarm.
- * The vocabulary is authoritative in Python (`openbrain_memory.EVENT_TYPES`) and
- * mirrored in exactly the surfaces that have their own equality tests. The
- * rewrite needs no new mirror -- it needs the one `src/` already declares, which
- * `src/tools/append-session-event.ts` consumes the same way. Re-exporting keeps
- * `z.enum(EVENT_TYPES)` in `session-events.ts` byte-identical in behavior while
- * collapsing two declarations back to one.
- *
- * This is the same cross-boundary reuse the rest of this wave already does
- * (`server/tools/repo-facts.ts`, `get-contract.ts`, `promotion.ts` all import
- * their builders from `src/`), so it introduces no new coupling direction.
+ * See docs/decisions/memory-helpers-vocabulary-is-re-exported-not-recopied.md
  */
 export { EVENT_TYPES, IMPORTANCE_LEVELS } from "../db/table-constants.ts";
 
-export function contentHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
+/**
+ * Re-exported so this module's importers stay unchanged. The single definition
+ * — and the reason its output may never drift — lives in
+ * `server/db/content-hash.ts`.
+ */
+export { contentHash } from "../db/content-hash.ts";
 
 export function decisionText(input: {
   title: string;
@@ -66,7 +53,11 @@ export async function embeddingFields(
   dependencies: MemoryToolDependencies,
   text: string,
 ): Promise<{
-  embedding: ReturnType<typeof toSql> | null;
+  // `toSql` is untyped in pgvector, so `ReturnType<typeof toSql>` is `any` and
+  // swallows the `| null` beside it. It returns the SQL vector literal for the
+  // array form used here (`node_modules/pgvector/src/utils/index.js:47-51`),
+  // so the honest annotation is the one the call site actually produces.
+  embedding: string | null;
   embeddedAt: string | null;
   model: string | null;
   embedded: boolean;

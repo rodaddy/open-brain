@@ -2,43 +2,18 @@
  * The rewrite's process entrypoint, and since the Phase 6 cutover, THE serving
  * entrypoint for the local dogfood clone.
  *
- * Design authority: `_plans/463-server-rewrite-charter.md` §4 Phase 5 built this
- * file as a candidate "still not the package default"; §4 Phase 6 made it the
- * default. `package.json` `start` and the local-clone launcher's spawn target
- * now name this file, and `server/state.ts` reads `servesTraffic: true`.
+ * Startup order is config -> logger -> tokens -> pool -> migrations -> tool
+ * deps -> NATS -> application -> listener, each failure fatal before the socket
+ * opens; shutdown is the reverse, via `application.close()`.
  *
- * ROLLBACK IS `src/index.ts`, BYTE-UNTOUCHED. The charter's strangler rule
- * retires an old module only after the candidate is proven RUNNING, so the
- * previous server is still present and still starts. Reverting the spawn target
- * is the whole rollback; there is no code to restore.
- *
- * WHAT THIS FILE IS FOR. Every boundary under `server/` was previously reachable
- * only from a test that hand-assembled it. `createShadowApplication` takes a
- * database, a logger, an `authenticate` handler and a server factory — it binds
- * no socket, opens no pool, runs no migration, and builds no token map, so
- * every one of those steps existed ONLY inside `src/index.ts:255-437`. That is
- * the gap this closes: this file is the one place where an environment becomes
- * a running process.
- *
- * START-EQUIVALENCE IS THE ACCEPTANCE BAR. From launchd's perspective this must
- * be interchangeable with `src/index.ts`: the same env contract, the same port
- * default, the same bind-host rule, the same `/health` body, the same signals,
- * the same non-zero exit on a startup failure. Where a behavior is preserved
- * rather than improved, the receipt is named inline — the charter's frozen-
- * surface table is what makes those non-negotiable, not taste.
- *
- * ORDER IS THE CONTENT OF THIS FILE. Startup is: config (one env read) ->
- * logger -> tokens -> pool -> migrations -> tool deps -> NATS -> application ->
- * listener. Each step's failure must be fatal BEFORE the socket opens, because
- * a process that binds a port and then discovers it has no tokens has already
- * told the load balancer it is ready. Shutdown is the reverse and is delegated
- * to `application.close()`, which drains in dependency order.
+ * See docs/decisions/main-entrypoint-start-equivalence.md
  */
 import express from "express";
 import type { Server } from "node:http";
 import type { Logger } from "pino";
 import type pg from "pg";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createBrainServer } from "./application/brain-server.ts";
 import {
   createShadowApplication,
   type ShadowApplication,
@@ -51,9 +26,15 @@ import {
 } from "./application/nats.ts";
 import { createAuthMiddleware } from "./auth/middleware.ts";
 import { createCaptureHealthRuntime } from "./capture/liveness-observer.ts";
-import { loadServerConfig, natsHealthFromConfig, type ServerConfig } from "./config.ts";
+import {
+  loadServerConfig,
+  natsHealthFromConfig,
+  promotionKillSwitch,
+  type ServerConfig,
+} from "./config.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { createDatabase, type Database } from "./db/pool.ts";
+import { registerCrashHandlers } from "./logging/crash-handlers.ts";
 import { withLogging } from "./logging/decorate.ts";
 import { createLogger } from "./logging/logger.ts";
 import { setLegacyLoggerSettingsReader } from "./logging/legacy-logger-settings.ts";
@@ -64,24 +45,21 @@ import {
 import { RecoveryWalStore } from "./realtime/recovery-wal.ts";
 import { WorkingSetStore } from "./realtime/working-set.ts";
 import { registerMemoryTools } from "./tools/index.ts";
-import {
-  createRestSurface,
-  installHttpMiddleware,
-  parseAllowedOrigins,
-} from "./transport/rest.ts";
+import { createRestSurface, installHttpMiddleware } from "./transport/rest.ts";
+import { readDeployedRevision } from "./transport/server-identity.ts";
 import { installMcpAudit } from "./security/audit-log.ts";
-import { generateEmbedding, generateEmbeddingWithMetadata } from "../src/embedding.ts";
+import {
+  generateEmbedding,
+  generateEmbeddingWithMetadata,
+} from "./embedding/provider.ts";
 import {
   composeMaintenanceHandlers,
   MAINTENANCE_GRAPH_AUTH,
 } from "./maintenance/maintenance-bootstrap.ts";
 import { getOperatorDoctorStatus } from "./application/operator-doctor.ts";
 import { setEmbeddingSettingsReader } from "./embedding/provider.ts";
-import type { ToolDeps } from "../src/tools/index.ts";
+import type { ToolDeps } from "./tools/tool-deps.ts";
 import type { AuthInfo } from "./types.ts";
-
-/** Default listening port, unchanged from `src/index.ts:349`. */
-const DEFAULT_PORT = 3100;
 
 export interface StartedServer {
   readonly application: ShadowApplication;
@@ -147,27 +125,11 @@ export function installToolLogging(server: McpServer, logger: Logger): void {
 /**
  * Build the per-session MCP server factory.
  *
- * A FRESH `McpServer` per session, not one shared instance: the SDK binds a
- * server to a single transport, so a shared one throws "Already connected to a
- * transport" the moment two clients overlap. `src/index.ts:214-221` makes the
- * same choice for the same reason.
+ * Returns a FRESH `McpServer` per session. `installMcpAudit` and
+ * `installMcpTracing` run BEFORE tool registration; the realtime stores are
+ * built once and captured.
  *
- * `installMcpAudit` runs BEFORE tool registration, because it works by wrapping
- * `registerTool` and `validateToolInput` — a tool registered before the wrapper
- * is installed is a tool whose calls are never audited. Ordering here is the
- * whole of the audit guarantee.
- *
- * `installMcpTracing` (#530) is installed alongside it, under the same ordering
- * rule and for the same reason. THE TWO ARE NOT ALTERNATIVES: audit is the
- * content-FREE durable Postgres record and is on by default; tracing is the
- * content-FUL Langfuse export and is off unless the operator configures it.
- * Both wrap `registerTool`, so both see every call; `tracingSink` is undefined
- * whenever tracing is off, which makes the install a no-op.
- *
- * The realtime stores are built ONCE and captured, not per session: the working
- * set is the process's scratch for the active turn and the recovery WAL holds a
- * crashed session's trace, so rebuilding them per connection would make both
- * report a permanent and very convincing zero.
+ * See docs/decisions/main-per-session-server-and-install-order.md
  */
 function createServerFactory(input: {
   pool: pg.Pool;
@@ -185,7 +147,10 @@ function createServerFactory(input: {
   };
   const toolLogger = logger.child({ component: "tools" });
   return () => {
-    const server = new McpServer({ name: "open-brain", version: "1.0.0" });
+    // Through createBrainServer, not a hand-built McpServer: the shared builder
+    // also installs the validation-summary formatter, which is what produces
+    // the `input_validation_failed` envelope the parity contracts assert.
+    const server = createBrainServer();
     installToolLogging(server, toolLogger);
     installMcpAudit(server, { pool, config: config.mcpAudit });
     // `sink` undefined means tracing is off for this process; the install then
@@ -201,9 +166,9 @@ function createServerFactory(input: {
       pool,
       embedFn: generateEmbedding,
       logger: toolLogger,
-      ...(config.transport.embeddingBaseUrl
-        ? { embeddingModel: config.transport.embeddingBaseUrl }
-        : {}),
+      // The model NAME, never the provider URL (#1463): `embedding_model` is
+      // what `model_drift` repair compares against `embeddingModel()`.
+      embeddingModel: config.embedding.model,
       // The values the tool layer used to read from `process.env` itself, now
       // handed down from the ONE validated parse (#778 typed them;
       // `_plans/463-server-rewrite-charter.md:108,119` puts the parsing here).
@@ -212,6 +177,9 @@ function createServerFactory(input: {
       // would give the doctor a boundary object that can drift from the one the
       // bridge and `/health` actually run on.
       searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
+      jev: { config: config.search.jevSearch },
+      // Issue 1618 B3: the promote_shared screen; off unless the flag is on.
+      jevShareScreen: { config: config.search.jevShareScreen },
       ftsCorpusConfig: config.fts.corpusConfig,
       promotionKillSwitch: config.promotion.killSwitch,
       // The DROP_COLLECTOR_* overrides the L5 move lifted out of the collector.
@@ -306,7 +274,7 @@ interface NatsPhase {
 /**
  * Bring up the NATS ingress: boundary, health counters, and the bridge runtime.
  *
- * The token map the bridge needs is the `src/` shape. It is derived from the
+ * The token map the bridge needs is the legacy shape. It is derived from the
  * SAME parsed config the HTTP middleware uses, not from a second env read, so
  * the two ingresses cannot end up honoring different tokens.
  */
@@ -393,6 +361,10 @@ function composeApplication(input: {
     embedFn: generateEmbedding,
     authenticate,
     logger: logger.child({ component: "rest" }),
+    searchEmbeddingTimeoutMs: config.search.embeddingTimeoutMs,
+    jev: { config: config.search.jevSearch },
+    sharedNamespaceNames: config.sharedNamespaceNames,
+    promotionKillSwitch,
     operatorDoctor: () =>
       getOperatorDoctorStatus(database.pool, nats.boundary, nats.health, {
         serviceVersionFallback: config.doctor.serviceVersionFallback,
@@ -425,8 +397,7 @@ function composeApplication(input: {
     // see its own health requests cannot tell a dead monitor from a healthy
     // service.
     beforeRoutes: installHttpMiddleware({
-      allowedOrigins:
-        options.allowedOrigins ?? parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
+      allowedOrigins: options.allowedOrigins ?? config.http.allowedOrigins,
       logger: logger.child({ component: "http" }),
     }),
     routers: [{ path: "/api/v1", handler: restSurface }],
@@ -450,6 +421,9 @@ function composeApplication(input: {
       logger: handlerLogger(logger.child({ component: "maintenance" })),
       embedFn: generateEmbeddingWithMetadata,
       graphAuth: MAINTENANCE_GRAPH_AUTH,
+      jevRem: { config: config.search.jevRem },
+      jevDistillType: { config: config.search.jevDistillType },
+      ...(config.maintenance.route ? { route: config.maintenance.route } : {}),
       ...(tracing.background ? { tracing: tracing.background } : {}),
     }),
     // A LIVE bridge knows its own failure counters; config cannot. Health
@@ -473,11 +447,13 @@ function composeApplication(input: {
 async function openListener(input: {
   application: ShadowApplication;
   options: StartServerOptions;
+  configuredPort: number;
+  configuredBindHost?: string;
   logger: Logger;
 }): Promise<{ server: Server; boundPort: number }> {
-  const { application, options, logger } = input;
-  const port = options.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
-  const bindHost = options.bindHost ?? process.env.OPEN_BRAIN_BIND_HOST?.trim();
+  const { application, options, configuredPort, configuredBindHost, logger } = input;
+  const port = options.port ?? configuredPort;
+  const bindHost = options.bindHost ?? configuredBindHost;
   const server = await new Promise<Server>((resolve, reject) => {
     const listener = bindHost
       ? application.app.listen(port, bindHost, () => resolve(listener))
@@ -509,11 +485,19 @@ async function releaseAfterFailedStart(input: {
   try {
     await input.application?.close();
   } catch {
-    // Already reported by closeInOrder's own logging; the startup failure is
-    // the one the operator needs, so it wins.
+    // Deliberate fail-open: already logged by closeInOrder's own logging; the
+    // startup failure is the one the operator needs, so it wins.
   }
-  await input.tracing.shutdown().catch(() => undefined);
-  await input.database.close().catch(() => undefined);
+  await input.tracing.shutdown().catch(() => {
+    // Deliberate fail-open, per the doc comment at :507-510: this is teardown
+    // of a failed start, so a shutdown error must not replace the startup one.
+    return undefined;
+  });
+  await input.database.close().catch(() => {
+    // Deliberate fail-open, per the doc comment at :507-510: the startup error
+    // is the operator's answer and a close error would hide it.
+    return undefined;
+  });
 }
 
 /**
@@ -528,31 +512,56 @@ async function releaseAfterFailedStart(input: {
  * header says order is its content, so the order has to be readable on one
  * screen instead of inferred from interleaved composition.
  */
-export async function startServer(
-  options: StartServerOptions = {},
-): Promise<StartedServer> {
-  const config = options.config ?? loadServerConfig();
-  // The legacy `src/logger.ts` singleton still emits from every tool this
+/**
+ * Point the two legacy reader slots at this process's config, and hand back the
+ * undo.
+ *
+ * Both slots are module-level and process-wide, so a started-and-stopped server
+ * that left its readers installed would keep answering from a dead server's
+ * config for everything that ran afterwards — in a test process, the next test
+ * file. The restore closure is the same shape `setEmbeddingSettingsReader`
+ * already uses at shutdown and on a failed start.
+ */
+export function registerConfigReaders(config: ServerConfig): () => void {
+  // The legacy logger singleton still emits from every tool this
   // process loads, and under issue 864 it reads no environment of its own.
   // Registering here — before the first line can be emitted — makes this
   // process's own configuration the source of its envelope, rather than a
   // second parse of the same variables. Fields config does not carry stay
   // undefined, which is exactly the value the module defaults on.
-  setLegacyLoggerSettingsReader(() => ({
+  //
+  // `hostName` prefers the `HOSTNAME`/`HOST` identity the legacy reader used
+  // and falls back to the transport identity only when neither is set. Those
+  // are DIFFERENT names: the transport one resolves from `OPEN_BRAIN_BIND_HOST`
+  // or `os.hostname` (`server/transport/server-identity.ts`) and is the
+  // `/health` identity, so preferring it unconditionally — which is what this
+  // did before L6 — relabelled the envelope of a deployment that sets
+  // `HOSTNAME`.
+  const previousLoggerSettingsReader = setLegacyLoggerSettingsReader(() => ({
     logLevel: config.logging.level,
-    hostName: config.transport.hostname,
+    hostName: config.loggerIdentity.hostName ?? config.transport.hostname,
     logFile: config.logging.file,
     logMaxBytes: undefined,
     logMaxFiles: undefined,
     serviceName: config.logging.service,
     workerName: config.logging.workerName,
   }));
-  const logger = options.logger ?? createLogger(config.logging);
 
+  return () => {
+    setLegacyLoggerSettingsReader(previousLoggerSettingsReader);
+  };
+}
+
+export async function startServer(
+  options: StartServerOptions = {},
+): Promise<StartedServer> {
+  const config = options.config ?? loadServerConfig();
+  const restoreConfigReaders = registerConfigReaders(config);
+  const logger = options.logger ?? createLogger(config.logging);
   // The embedding provider reads no environment of its own (issue 864); in the
   // server runtime its values come from the config this function already holds.
   // Registered here rather than at module scope because `config` is what the
-  // reader answers from, and the `src/` adapter's env reader is what it
+  // reader answers from, and the retired adapter's env reader is what it
   // replaces.
   //
   // The replaced reader is kept and restored at shutdown. The provider is one
@@ -572,7 +581,7 @@ export async function startServer(
 
   // TOKENS FIRST, before anything is allocated. A process with no configured
   // tokens can authenticate nobody, so every request it could ever serve is a
-  // 401. `src/index.ts:343-346` checks this only after the pool and the bridge
+  // 401. The previous entrypoint checks this only after the pool and the bridge
   // are already up; checking it first means a misconfigured deploy fails
   // without having opened a connection or a broker subscription.
   if (config.authTokens.length === 0) {
@@ -585,7 +594,13 @@ export async function startServer(
   // set all four OPENBRAIN_TRACING_* variables; `createTracingRuntime` never
   // throws, so a misconfigured or unreachable Langfuse can never keep the
   // service from starting.
-  const tracing = createTracingRuntime({ config: config.tracing, logger });
+  // The deploy-stamp parser is handed DOWN from here (#1210): observability is
+  // a leaf tier and must not import the transport tier that owns the format.
+  const tracing = createTracingRuntime({
+    config: config.tracing,
+    logger,
+    parseDeployStamp: readDeployedRevision,
+  });
   logger.info({ enabled: tracing.sink !== undefined }, "mcp_tracing_configured");
   let application: ShadowApplication | undefined;
   try {
@@ -625,6 +640,8 @@ export async function startServer(
     const { server, boundPort } = await openListener({
       application: composed,
       options,
+      configuredPort: config.http.port,
+      configuredBindHost: config.http.bindHost,
       logger,
     });
 
@@ -636,9 +653,16 @@ export async function startServer(
       logger,
       shutdown: async () => {
         try {
-          await shutdown({ application: composed, database, server, logger, tracing });
+          await shutdown({
+            application: composed,
+            database,
+            server,
+            logger,
+            tracing,
+          });
         } finally {
           setEmbeddingSettingsReader(previousEmbeddingSettingsReader);
+          restoreConfigReaders();
         }
       },
     };
@@ -647,6 +671,7 @@ export async function startServer(
     // allocated so far is released, and the original failure is rethrown so the
     // caller sees the CAUSE rather than a cleanup error.
     setEmbeddingSettingsReader(previousEmbeddingSettingsReader);
+    restoreConfigReaders();
     await releaseAfterFailedStart({ application, database, tracing });
     throw error;
   }
@@ -723,22 +748,34 @@ async function shutdown(running: RunningProcess): Promise<void> {
  */
 export async function main(): Promise<void> {
   const started = await startServer();
+  // Installed only here, in the process entrypoint, after startup has
+  // succeeded: a startServer() that throws must not leave process listeners
+  // behind, and a test that starts and stops the server in-process must never
+  // own them (main.pg.test.ts:318 asserts a rejecting startServer; the isolated
+  // suite died on a leaked handler when this sat inside startServer).
+  const crashHandlers = registerCrashHandlers(started.logger);
   let stopping = false;
   const stop = (): void => {
     if (stopping) return;
     stopping = true;
+    // From here the process is deliberately going away.
+    crashHandlers.unregister();
     started
       .shutdown()
       .then(() => process.exit(0))
-      .catch(() => process.exit(1));
+      .catch(() => {
+        // Deliberate: the non-zero exit IS the report, per the doc comment at
+        // :767-768. This is the signal handler's last statement, so the
+        // application and its logger are already shutting down.
+        return process.exit(1);
+      });
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
 }
 
-// Guarded so importing this module for a test never starts a process. The
-// charter's Phase 5 rule is that the candidate entrypoint EXISTS and is not the
-// package default; `package.json` still references `src/index.ts`.
+// Guarded so importing this module for a test never starts a process: only a
+// direct execution of this file boots the server.
 if (import.meta.main) {
   await main();
 }

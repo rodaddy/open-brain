@@ -41,14 +41,9 @@ export interface PackAllocator {
  *
  * Absent `max_tokens` => no whole-pack bound.
  */
-export function wholePackBudgetFor(
-  maxTokens: number | undefined,
-): number | null {
+export function wholePackBudgetFor(maxTokens: number | undefined): number | null {
   return maxTokens !== undefined
-    ? Math.max(
-        0,
-        maxTokens * CHARS_PER_TOKEN - CONTEXT_PACK_ENVELOPE_CHAR_RESERVE,
-      )
+    ? Math.max(0, maxTokens * CHARS_PER_TOKEN - CONTEXT_PACK_ENVELOPE_CHAR_RESERVE)
     : null;
 }
 
@@ -118,16 +113,13 @@ export function noteBudgetTruncation(
  * The content allowance handed to a loader that trims raw content chars before
  * the serialized section is re-fitted.
  */
-export interface SectionServing {
+interface SectionServing {
   frame: number;
   serving: number;
   contentLimit: number | undefined;
 }
 
-export function sectionServing(
-  allocator: PackAllocator,
-  key: string,
-): SectionServing {
+export function sectionServing(allocator: PackAllocator, key: string): SectionServing {
   const frame = sectionFrameCost(key, allocator.firstSectionAdmitted);
   const serving =
     allocator.wholePackBudget === null

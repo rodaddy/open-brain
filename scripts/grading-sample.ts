@@ -45,7 +45,7 @@
  * same 50, or "we fixed the rendering" cannot be checked against the same set.
  */
 
-import { createPool } from "../src/db/pool.ts";
+import { createPool } from "./settings.ts";
 
 const TARGET = 50;
 
@@ -76,15 +76,13 @@ try {
       WHERE agent_turns >= 2 AND operator_len >= 40 AND len < 3990
       ORDER BY md5(id::text)
       LIMIT $1`,
-    [TARGET - auq.rowCount!],
+    [TARGET - (auq.rowCount ?? 0)],
   );
 
   const picked = [...auq.rows, ...typed.rows];
 
   console.log(`pilot set: ${picked.length} exchanges`);
-  console.log(
-    `  askuserquestion: ${auq.rowCount} (all of them, filters bypassed)`,
-  );
+  console.log(`  askuserquestion: ${auq.rowCount} (all of them, filters bypassed)`);
   console.log(`  typed:           ${typed.rowCount}`);
   console.log();
   console.log("ids:");

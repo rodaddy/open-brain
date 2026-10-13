@@ -16,26 +16,21 @@
  * content_occurrences and stamps ob_raw_turns.light_swept_at.
  */
 
-import { Pool } from "pg";
-import { runLightSweep, DEFAULT_LIGHT_BATCH_SIZE } from "../src/dream-light.ts";
+import type { Pool } from "pg";
+import {
+  runLightSweep,
+  DEFAULT_LIGHT_BATCH_SIZE,
+} from "../server/maintenance/dream-light.ts";
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
-
-const logger = {
-  info: (msg: string, meta?: Record<string, unknown>) =>
-    console.log(msg, meta ? JSON.stringify(meta) : ""),
-  warn: (msg: string, meta?: Record<string, unknown>) =>
-    console.warn(msg, meta ? JSON.stringify(meta) : ""),
-};
+const logger = createConsoleLogger();
 
 async function stats(pool: Pool): Promise<void> {
   const q = await pool.query<{
     total: string;
     unswept: string;
+    deferred_missing_timestamp: string;
     occurrences: string;
     corroborated: string;
     max_sessions: string;
@@ -43,26 +38,27 @@ async function stats(pool: Pool): Promise<void> {
     `SELECT
        (SELECT count(*) FROM ob_raw_turns) AS total,
        (SELECT count(*) FROM ob_raw_turns WHERE light_swept_at IS NULL) AS unswept,
+       (SELECT count(*) FROM ob_raw_turns
+         WHERE light_swept_at IS NULL AND occurred_at IS NULL) AS deferred_missing_timestamp,
        (SELECT count(*) FROM content_occurrences) AS occurrences,
        (SELECT count(*) FROM content_occurrences WHERE session_count > 1) AS corroborated,
        (SELECT coalesce(max(session_count), 0) FROM content_occurrences) AS max_sessions`,
   );
-  const r = q.rows[0]!;
+  const r = q.rows[0];
+  if (!r) {
+    console.log("no stats row returned");
+    return;
+  }
   console.log("turns total       :", r.total);
   console.log("turns unswept     :", r.unswept);
+  console.log("deferred no time  :", r.deferred_missing_timestamp);
   console.log("occurrence rows   :", r.occurrences);
   console.log("cross-session (>1):", r.corroborated);
   console.log("max session_count :", r.max_sessions);
 }
 
 async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
-  });
+  const pool = createPool();
 
   try {
     if (has("--stats")) {

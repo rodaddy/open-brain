@@ -55,6 +55,8 @@ from openbrain.apps.hooks.session import (
     StartedLane,
     StopHook,
     SubagentStopHook,
+    _capture_origin,
+    _scoped_watermark_key,
     run_post_compact,
     run_post_tool_use,
     run_session_end,
@@ -203,6 +205,13 @@ def capture_settings(watermark_path: Path) -> CaptureSettings:
     )
 
 
+def scoped_capture_key(settings: CaptureSettings, session_key: str) -> str:
+    """Return the auth-bound watermark key used by the capture spine."""
+    origin = _capture_origin(settings)
+    assert origin is not None
+    return _scoped_watermark_key(origin, session_key)
+
+
 class TestStopDeliversThroughTheSpine:
     """run_stop is the capability the entrypoint calls; drive it with a lane."""
 
@@ -228,7 +237,9 @@ class TestStopDeliversThroughTheSpine:
         assert lane.turns[0]["content"] == "use postgres not sqlite"
         # Advanced only after the lane returned: the stored offset now matches
         # what the delivery reported, which is EOF of the read file.
-        stored = await WatermarkStore(watermark).offset_for("sess")
+        stored = await WatermarkStore(watermark).offset_for(
+            scoped_capture_key(settings, "sess")
+        )
         assert stored == result.next_offset
         assert stored == transcript.stat().st_size
 
@@ -363,7 +374,9 @@ class TestSubagentStopDeliversThroughTheSpine:
         assert result.delivered == 1
         assert lane.turns[0]["content"] == "subagent turn one"
         # Advanced under the per-subagent key, not the parent session_id.
-        stored = await WatermarkStore(watermark).offset_for("parent-sess:agent-xyz")
+        stored = await WatermarkStore(watermark).offset_for(
+            scoped_capture_key(settings, "parent-sess:agent-xyz")
+        )
         assert stored == result.next_offset
         # The parent session's own key is untouched by a subagent stop.
         assert await WatermarkStore(watermark).offset_for("parent-sess") == 0
@@ -1409,7 +1422,9 @@ class TestEveryRequestDelayedStillFitsTheDeadline:
             assert server.count("delete") == 1
             # A full clean delivery: this run succeeded, so the watermark advanced
             # to EOF -- the delay never broke the write, it only slowed it.
-            stored = asyncio_run(WatermarkStore(watermark).offset_for("sess"))
+            stored = asyncio_run(
+                WatermarkStore(watermark).offset_for(scoped_capture_key(settings, "sess"))
+            )
             assert stored == transcript.stat().st_size
         finally:
             server.close()
@@ -1567,11 +1582,11 @@ class TestCanonReadOmitsAnUnderivableRepo:
 
         RecordingCanonClient.instances = []
         monkeypatch.setattr(client_module, "OpenBrainClient", RecordingCanonClient)
-        settings = canon_settings().model_copy(update={"repo": "king-signals"})
+        settings = canon_settings().model_copy(update={"repo": "acme-signals"})
 
         _canon_context(settings)
 
-        assert RecordingCanonClient.instances[0].calls[0]["repo"] == "king-signals"
+        assert RecordingCanonClient.instances[0].calls[0]["repo"] == "acme-signals"
 
 
 class TestSessionStartRequestsCanonOnly:
@@ -1646,13 +1661,13 @@ class TestSessionStartBindsRepoFromCwd:
 
     The regression: ``CanonSettings.repo`` defaulted to ``"open-brain"`` and the
     hook never looked at ``cwd``, so every session on the machine -- Development
-    root, king repos, anywhere -- was served open-brain's repo facts. Proven
+    root, acme repos, anywhere -- was served open-brain's repo facts. Proven
     live 2026-08-03 against the dogfood DB (Development has 1 bound fact; the
     emission returned open-brain's 7).
     """
 
     async def test_repo_is_derived_from_the_payload_cwd(self, tmp_path) -> None:
-        root = tmp_path / "King-Core"
+        root = tmp_path / "Acme-Core"
         (root / ".git").mkdir(parents=True)
         nested = root / "src" / "deep"
         nested.mkdir(parents=True)
@@ -1661,7 +1676,7 @@ class TestSessionStartBindsRepoFromCwd:
 
         await run_session_start(payload, canon_settings(), canon_factory=reader)
 
-        assert reader.requested[0].repo == "king-core"
+        assert reader.requested[0].repo == "acme-core"
 
     async def test_an_explicit_repo_setting_wins_over_derivation(self, tmp_path) -> None:
         root = tmp_path / "some-repo"
@@ -1862,6 +1877,31 @@ _FIXTURE_PACK = {
     "warnings": {"scope_denials": [], "degraded_sources": [], "truncation": []},
 }
 
+_DURABLE_CONTENT_PACK = {
+    "schema": "openbrain.agent_context_pack.v1",
+    "scope": {"namespace": "rico", "agent": "claude"},
+    "sections": {
+        "profile_guidance": {
+            "items": [{"guidance": "PROFILE-GUIDANCE-CONTROL"}],
+        },
+        "repo_facts": {
+            "items": [{"fact": "REPO-FACT-CONTROL"}],
+        },
+        "durable_memory": {
+            "items": [
+                {
+                    "id": "durable-1",
+                    "source_type": "memory",
+                    "namespace": "rico",
+                    "content": "DURABLE-STORED-CONTENT",
+                    "citation_id": "brain_record:durable-1",
+                    "source_ref": {"table": "memory", "id": "durable-1"},
+                }
+            ],
+        },
+    },
+}
+
 
 class TestSessionStartRendersCanonAsPlainText:
     """render_pack renders every rule WHOLE as plain text -- no JSON envelope."""
@@ -2035,6 +2075,49 @@ class TestSessionStartEntrypointWritesTheInjection:
 
         envelope = json.loads(out.getvalue())
         assert big in envelope["hookSpecificOutput"]["additionalContext"]
+
+    def test_unsplit_additional_context_renders_durable_content(self) -> None:
+        out = io.StringIO()
+        _write_injection(_DURABLE_CONTENT_PACK, out)
+
+        envelope = json.loads(out.getvalue())
+        context = envelope["hookSpecificOutput"]["additionalContext"]
+        assert "PROFILE-GUIDANCE-CONTROL" in context
+        assert "REPO-FACT-CONTROL" in context
+        assert "DURABLE-STORED-CONTENT" in context
+
+    def test_split_additional_context_renders_durable_content(self) -> None:
+        reader = CanonPackReader(pack=_DURABLE_CONTENT_PACK)
+        import openbrain.apps.hooks.session as session_mod
+
+        original = session_mod._canon_context
+        session_mod._canon_context = reader  # type: ignore[assignment]
+        try:
+            first_out = io.StringIO()
+            remaining_out = io.StringIO()
+            settings = canon_settings(
+                base_url=None,
+                token=None,
+                sections=("profile_guidance", "repo_facts", "durable_memory"),
+            )
+            session_start.inject_canon_with(
+                io.StringIO(fixture_bytes("SessionStart")), first_out, settings
+            )
+            session_start.inject_canon_remaining_with(
+                io.StringIO(fixture_bytes("SessionStart")), remaining_out, settings
+            )
+        finally:
+            session_mod._canon_context = original  # type: ignore[assignment]
+
+        first_context = json.loads(first_out.getvalue())["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        remaining_context = json.loads(remaining_out.getvalue())["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        assert "PROFILE-GUIDANCE-CONTROL" in first_context
+        assert "REPO-FACT-CONTROL" in remaining_context
+        assert "DURABLE-STORED-CONTENT" in remaining_context
 
     def test_the_entrypoint_writes_the_envelope_end_to_end(self) -> None:
         # inject_canon_with, real path but injected factory via monkeypatch-free

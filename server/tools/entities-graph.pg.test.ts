@@ -11,7 +11,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
  * database, never the dogfood database. `bun run test:isolated` sets it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -41,8 +41,7 @@ async function callTool(
   };
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -101,14 +100,12 @@ afterAll(async () => {
   await pool.query(`DELETE FROM ob_links WHERE namespace = ANY($1::text[])`, [
     [NAMESPACE, OTHER_NAMESPACE],
   ]);
-  await pool.query(
-    `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
-    [[NAMESPACE, OTHER_NAMESPACE]],
-  );
-  await pool.query(
-    `DELETE FROM relationships WHERE namespace = ANY($1::text[])`,
-    [[NAMESPACE, OTHER_NAMESPACE]],
-  );
+  await pool.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
+  await pool.query(`DELETE FROM relationships WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
   await pool.end();
 });
 
@@ -155,9 +152,7 @@ describe("entity and link tools (live Postgres)", () => {
     });
     expect((first.body as { is_new: boolean }).is_new).toBe(true);
     expect((second.body as { is_new: boolean }).is_new).toBe(false);
-    expect((second.body as { id: string }).id).toBe(
-      (first.body as { id: string }).id,
-    );
+    expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id);
   });
 
   test("unlink_entities cannot archive a foreign namespace's link", async () => {

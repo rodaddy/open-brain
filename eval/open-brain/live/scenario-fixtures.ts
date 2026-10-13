@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { ScenarioFixture } from "./scenario-types.ts";
 
@@ -13,12 +14,12 @@ const CONTRACT_SCOPE_KEYS = new Set([
 ]);
 
 export class ScenarioFixtureScopeKeyError extends Error {
-  constructor(
-    readonly invalidKeys: string[],
-    path?: string,
-  ) {
+  readonly invalidKeys: string[];
+
+  constructor(invalidKeys: string[], path?: string) {
     const prefix = path ? `Invalid scenario fixture ${path}: ` : "";
     super(`${prefix}non-contract scope key(s): ${invalidKeys.join(", ")}`);
+    this.invalidKeys = invalidKeys;
     this.name = "ScenarioFixtureScopeKeyError";
   }
 }
@@ -129,7 +130,7 @@ export function parseScenarioFixture(raw: unknown): ScenarioFixture {
 export async function loadScenarioFixture(path: string): Promise<ScenarioFixture> {
   let raw: unknown;
   try {
-    raw = await Bun.file(path).json();
+    raw = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to read scenario fixture ${path}: ${message}`);

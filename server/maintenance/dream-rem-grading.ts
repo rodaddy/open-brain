@@ -1,7 +1,7 @@
-import type pg from "pg";
+import type { DreamRemGradingRepository } from "../db/dream-rem-grading-repository.ts";
 
-import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
-import type { BackgroundTraceRecorder } from "../application/background-tracing.ts";
+import type { MaintenanceQueueLogger } from "./maintenance-queue-runner.ts";
+import type { BackgroundTraceRecorder } from "../observability/background-tracing.ts";
 import type { NamedRemGrader, RemCandidate, RemGrade } from "./dream-rem.ts";
 
 /** One ungraded candidate row, joined to its Light occurrence counts. */
@@ -21,7 +21,8 @@ export interface RemCandidateRow {
 
 /** What grading one candidate needs from the pass. */
 export interface RemGradingContext {
-  pool: pg.Pool;
+  /** Owns the machine-grade write-back; see ../db/dream-rem-grading-repository.ts. */
+  grading: DreamRemGradingRepository;
   logger: MaintenanceQueueLogger;
   trace?: BackgroundTraceRecorder;
 }
@@ -81,26 +82,28 @@ export async function gradeOneCandidate(
 /**
  * Persist one machine grade.
  *
- * ONLY machine_grade and machine_grade_model. review_action, reviewed_at, and
- * graded_by are absent by design -- see the module note in dream-rem.ts. The
- * `reviewed_at IS NULL` predicate is restated here rather than trusted from the
- * SELECT: the operator may have graded the item in the interval, and their
- * grade must win.
+ * Machine grade/model plus optional classification-only score, timestamp, and
+ * judgement. review_action, reviewed_at, and graded_by are absent by design.
+ * The
+ * statement, and why it restates `reviewed_at IS NULL` rather than trusting the
+ * SELECT that produced the candidate, now live in
+ * ../db/dream-rem-grading-repository.ts (issue 1209).
  */
 export async function storeMachineGrade(
   ctx: RemGradingContext,
-  candidateId: string,
-  graderName: string,
-  verdict: RemGrade,
+  input: {
+    candidateId: string;
+    namespace: string;
+    graderName: string;
+    verdict: RemGrade;
+  },
 ): Promise<void> {
-  await ctx.pool.query(
-    `UPDATE candidate_memory
-        SET machine_grade = $2,
-            machine_grade_model = $3,
-            uncertainty_reason = COALESCE(uncertainty_reason, $4)
-      WHERE id = $1
-        AND reviewed_at IS NULL
-        AND machine_grade IS NULL`,
-    [candidateId, verdict.grade, graderName, verdict.reason ?? null],
-  );
+  await ctx.grading.storeMachineGrade({
+    candidateId: input.candidateId,
+    namespace: input.namespace,
+    grade: input.verdict.grade,
+    graderName: input.graderName,
+    reason: input.verdict.reason ?? null,
+    decision: input.verdict.decision ?? null,
+  });
 }

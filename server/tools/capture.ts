@@ -8,6 +8,8 @@ import {
   embeddingFields,
 } from "./memory-helpers.ts";
 import { writeThoughtChunks, chunkReceiptFields } from "../capture/chunk-write.ts";
+import { createChunkRepository } from "../db/chunk-repository.ts";
+import { createEntryWriteRepository } from "../db/entry-write-repository.ts";
 
 const sourceRefsSchema = z.array(z.record(z.string(), z.unknown())).max(20);
 
@@ -91,33 +93,24 @@ async function writeThought(
     dependencies,
     args.tags?.length ? `${args.content}\n${args.tags.join(" ")}` : args.content,
   );
-  const rows = await dependencies.pool.query(
-    `INSERT INTO thoughts
-       (content, tags, source, created_by, namespace, embedding, content_hash,
-        embedded_at, embedding_model, source_refs)
-     VALUES ($1, $2, 'mcp', $3, $4, $5, $6, $7, $8, $9::jsonb)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-     DO UPDATE SET tags = EXCLUDED.tags, updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, source_refs`,
-    [
-      args.content,
-      args.tags ?? [],
-      createdBy,
-      namespace,
-      embedded.embedding,
-      contentHash(args.content),
-      embedded.embeddedAt,
-      embedded.model,
-      JSON.stringify(args.source_refs ?? []),
-    ],
-  );
-  const row = rows.rows[0];
+  const repository = createEntryWriteRepository(dependencies.pool);
+  const row = await repository.upsertThought({
+    content: args.content,
+    tags: args.tags ?? [],
+    createdBy,
+    namespace,
+    embedding: embedded.embedding,
+    contentHash: contentHash(args.content),
+    embeddedAt: embedded.embeddedAt,
+    embeddingModel: embedded.model,
+    sourceRefs: JSON.stringify(args.source_refs ?? []),
+  });
 
   // CHUNK ROWS FOR A LONG ENTRY (#605). The parent above holds the full text
   // and its own whole-text vector; these add per-section resolution. This tree
   // previously reported a hardcoded chunks_written: 0 while writing no chunks
   // at all, which read as "short entry" for entries of any length.
-  const chunks = await writeThoughtChunks(dependencies.pool, {
+  const chunks = await writeThoughtChunks(createChunkRepository(dependencies.pool), {
     parentId: row.id as string,
     namespace,
     createdBy,
@@ -158,30 +151,21 @@ async function writeDecision(
 ) {
   const canonical = decisionText(args);
   const embedded = await embeddingFields(dependencies, canonical);
-  const rows = await dependencies.pool.query(
-    `INSERT INTO decisions
-       (title, rationale, alternatives, tags, context, created_by, namespace,
-        embedding, content_hash, embedded_at, embedding_model, source_refs)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-     DO UPDATE SET tags = EXCLUDED.tags, updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, source_refs`,
-    [
-      args.title,
-      args.rationale,
-      JSON.stringify(args.alternatives ?? []),
-      args.tags ?? [],
-      args.context ?? null,
-      createdBy,
-      namespace,
-      embedded.embedding,
-      contentHash(canonical),
-      embedded.embeddedAt,
-      embedded.model,
-      JSON.stringify(args.source_refs ?? []),
-    ],
-  );
-  const row = rows.rows[0];
+  const repository = createEntryWriteRepository(dependencies.pool);
+  const row = await repository.upsertDecision({
+    title: args.title,
+    rationale: args.rationale,
+    alternatives: JSON.stringify(args.alternatives ?? []),
+    tags: args.tags ?? [],
+    context: args.context ?? null,
+    createdBy,
+    namespace,
+    embedding: embedded.embedding,
+    contentHash: contentHash(canonical),
+    embeddedAt: embedded.embeddedAt,
+    embeddingModel: embedded.model,
+    sourceRefs: JSON.stringify(args.source_refs ?? []),
+  });
   dependencies.logger.info(
     { tool: "log_decision", embedded: embedded.embedded },
     "tool_result",

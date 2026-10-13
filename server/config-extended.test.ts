@@ -3,7 +3,7 @@
  * (#868) so each file stays under the max-lines rule. The shared REQUIRED
  * baseline is repeated here because each test file stands alone.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { parseServerConfig } from "./config.ts";
 
 const REQUIRED = {
@@ -16,14 +16,64 @@ const REQUIRED = {
 function extendedConfig(overrides: Record<string, string | undefined> = {}) {
   const result = parseServerConfig({ ...REQUIRED, ...overrides });
   if (!result.ok) {
-    throw new Error(
-      `expected valid configuration: ${JSON.stringify(result.issues)}`,
-    );
+    throw new Error(`expected valid configuration: ${JSON.stringify(result.issues)}`);
   }
   return result.config;
 }
 
 describe("extended env — search", () => {
+  it.each(["OPENBRAIN_JEV_REM_ENABLED", "OPENBRAIN_JEV_SEARCH_ENABLED"])(
+    "rejects %s=1 with a missing or blank API key without exposing secret material",
+    (enabledFlag) => {
+      for (const apiKey of [undefined, "   "]) {
+        const result = parseServerConfig({
+          ...REQUIRED,
+          [enabledFlag]: "1",
+          OPENBRAIN_JEV_API_KEY: apiKey,
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error("expected invalid Jev configuration");
+        expect(result.issues).toEqual([
+          {
+            path: "OPENBRAIN_JEV_API_KEY",
+            message: `${enabledFlag}=1 requires OPENBRAIN_JEV_API_KEY`,
+          },
+        ]);
+        expect(JSON.stringify(result.issues)).not.toContain("api-key-secret");
+      }
+    },
+  );
+
+  it("keeps Jev disabled by default without requiring an API key", () => {
+    const config = extendedConfig();
+    expect(config.search.jevRem.enabled).toBe(false);
+    expect(config.search.jevSearch.enabled).toBe(false);
+  });
+
+  it("parses the REM confidence floor: absent is off, a [0,1] number is kept", () => {
+    expect(extendedConfig().search.jevRem.confidenceFloor).toBeUndefined();
+    expect(
+      extendedConfig({ OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR: "0.5" }).search.jevRem
+        .confidenceFloor,
+    ).toBe(0.5);
+  });
+
+  it.each(["1.5", "abc", "-0.1"])(
+    "rejects OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR=%s with a named error",
+    (value) => {
+      const result = parseServerConfig({
+        ...REQUIRED,
+        OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR: value,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected invalid floor configuration");
+      expect(result.issues.map((issue) => issue.path)).toContain(
+        "OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR",
+      );
+    },
+  );
+
   it("defaults the embedding timeout to 3000ms", () => {
     expect(extendedConfig().search.embeddingTimeoutMs).toBe(3_000);
   });
@@ -37,8 +87,7 @@ describe("extended env — search", () => {
 
   it("falls back to the legacy name when the preferred one is absent", () => {
     expect(
-      extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: "900" }).search
-        .embeddingTimeoutMs,
+      extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: "900" }).search.embeddingTimeoutMs,
     ).toBe(900);
   });
 
@@ -63,6 +112,21 @@ describe("extended env — search", () => {
       }).search.embeddingTimeoutMs,
     ).toBe(3_000);
   });
+
+  it("keeps configurable Jev byte ceilings at or below documented model limits", () => {
+    const config = extendedConfig({
+      OPENBRAIN_JEV_MAX_REQUEST_BYTES: "63000",
+      OPENBRAIN_JEV_MAX_STATE_QUESTION_BYTES: "31000",
+    });
+    expect(config.search.jevSearch.maxRequestBytes).toBe(63_000);
+    expect(config.search.jevSearch.maxStateQuestionBytes).toBe(31_000);
+
+    const tooLarge = parseServerConfig({
+      ...REQUIRED,
+      OPENBRAIN_JEV_MAX_REQUEST_BYTES: "192001",
+    });
+    expect(tooLarge.ok).toBe(false);
+  });
 });
 
 describe("extended env — fts", () => {
@@ -71,15 +135,15 @@ describe("extended env — fts", () => {
   });
 
   it("takes an explicit supported configuration", () => {
-    expect(
-      extendedConfig({ OPENBRAIN_FTS_CONFIG: "simple" }).fts.corpusConfig,
-    ).toBe("simple");
+    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: "simple" }).fts.corpusConfig).toBe(
+      "simple",
+    );
   });
 
   it("maps a language token to its configuration", () => {
-    expect(
-      extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig,
-    ).toBe("spanish");
+    expect(extendedConfig({ OPENBRAIN_FTS_CONFIG: " Spanish " }).fts.corpusConfig).toBe(
+      "spanish",
+    );
   });
 
   // The unrecognized-token fallback is asserted against `resolveFtsConfig`
@@ -111,8 +175,7 @@ describe("extended env — recovery", () => {
 
   it("takes an explicit WAL path", () => {
     expect(
-      extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "var/wal.log" }).recovery
-        .walPath,
+      extendedConfig({ OPENBRAIN_RECOVERY_WAL_PATH: "var/wal.log" }).recovery.walPath,
     ).toBe("var/wal.log");
   });
 
@@ -135,8 +198,8 @@ describe("extended env — sharedNamespaceNames", () => {
 
   it("takes an explicit physical name pointed away from the canonical one", () => {
     expect(
-      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" })
-        .sharedNamespaceNames.physicalSharedNamespace,
+      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v2" }).sharedNamespaceNames
+        .physicalSharedNamespace,
     ).toBe("shared-kb-v2");
   });
 
@@ -158,16 +221,16 @@ describe("extended env — sharedNamespaceNames", () => {
   it("enables the legacy fallback on each permissive true token", () => {
     for (const token of ["1", "true", "YES", " on "]) {
       expect(
-        extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: token })
-          .sharedNamespaceNames.legacyFallbackEnabled,
+        extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: token }).sharedNamespaceNames
+          .legacyFallbackEnabled,
       ).toBe(true);
     }
   });
 
   it("treats an unrecognized flag token as false rather than failing startup", () => {
     expect(
-      extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: "maybe" })
-        .sharedNamespaceNames.legacyFallbackEnabled,
+      extendedConfig({ OPENBRAIN_LEGACY_SHARED_FALLBACK: "maybe" }).sharedNamespaceNames
+        .legacyFallbackEnabled,
     ).toBe(false);
   });
 
@@ -188,9 +251,7 @@ describe("extended env — sharedNamespaceNames", () => {
   });
 
   it("leaves legacy shared writes refused when no escape hatch is set", () => {
-    expect(extendedConfig().sharedNamespaceNames.allowLegacySharedWrites).toBe(
-      false,
-    );
+    expect(extendedConfig().sharedNamespaceNames.allowLegacySharedWrites).toBe(false);
   });
 
   it("opens legacy shared writes when the escape hatch is set", () => {
@@ -205,8 +266,8 @@ describe("extended env — sharedNamespaceNames", () => {
       extendedConfig().sharedNamespaceNames.canonicalSharedNamespace,
     );
     expect(
-      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v9" })
-        .sharedNamespaceNames.sharedNamespace,
+      extendedConfig({ SHARED_NAMESPACE_PHYSICAL: "shared-kb-v9" }).sharedNamespaceNames
+        .sharedNamespace,
     ).toBe("shared-kb-v9");
   });
 });
@@ -238,8 +299,8 @@ describe("extended env — tracing", () => {
   it("stays off when the coordinates are complete but the flag is not exactly 1", () => {
     // An external payload-carrying export is opt-in; `true` is not the flag.
     expect(
-      extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "true" })
-        .tracing.enabled,
+      extendedConfig({ ...COORDINATES, OPENBRAIN_TRACING_ENABLED: "true" }).tracing
+        .enabled,
     ).toBe(false);
   });
 
@@ -248,8 +309,7 @@ describe("extended env — tracing", () => {
 
   it("disables masking only on an exact 0", () => {
     expect(
-      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing
-        .maskingEnabled,
+      extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "0" }).tracing.maskingEnabled,
     ).toBe(false);
     expect(
       extendedConfig({ OPENBRAIN_TRACING_MASKING_ENABLED: "false" }).tracing
@@ -280,8 +340,7 @@ describe("extended env — captureHealth", () => {
   it("treats a blank namespace as unset, which is what disables the observer", () => {
     expect(
       "namespace" in
-        extendedConfig({ OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "  " })
-          .captureHealth,
+        extendedConfig({ OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "  " }).captureHealth,
     ).toBe(false);
   });
 
@@ -309,8 +368,7 @@ describe("extended env — http", () => {
     // the start-equivalence block below.
     const result = parseServerConfig({ ...REQUIRED, PORT: "not-a-port" });
     expect(result.ok).toBe(false);
-    if (result.ok)
-      throw new Error("expected an unbindable port to be rejected");
+    if (result.ok) throw new Error("expected an unbindable port to be rejected");
     expect(result.issues.map((issue) => issue.path)).toEqual(["PORT"]);
   });
 

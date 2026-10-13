@@ -62,11 +62,7 @@ function logExit(operationLogger: Logger, started: number): void {
   operationLogger.info({ duration_ms: elapsedMs(started) }, "operation_result");
 }
 
-function logFailure(
-  operationLogger: Logger,
-  started: number,
-  error: unknown,
-): void {
+function logFailure(operationLogger: Logger, started: number, error: unknown): void {
   operationLogger.error(
     {
       duration_ms: elapsedMs(started),
@@ -95,10 +91,7 @@ function isThenable(value: unknown): value is Promise<unknown> {
  * plain return value into a promise and change every caller — so the result is
  * only chained when it is actually thenable.
  */
-function runDecorated(
-  options: DecorationOptions,
-  invoke: () => unknown,
-): unknown {
+function runDecorated(options: DecorationOptions, invoke: () => unknown): unknown {
   const started = performance.now();
   const operationLogger = logEntry(options);
   let result: unknown;
@@ -137,9 +130,7 @@ export function withLogging<F extends AnyFunction>(
     this: unknown,
     ...args: Parameters<F>
   ): ReturnType<F> {
-    return runDecorated(options, () =>
-      Reflect.apply(fn, this, args),
-    ) as ReturnType<F>;
+    return runDecorated(options, () => Reflect.apply(fn, this, args)) as ReturnType<F>;
   };
   return wrapped as unknown as F;
 }

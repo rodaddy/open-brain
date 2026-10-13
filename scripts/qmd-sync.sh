@@ -3,13 +3,13 @@ set -euo pipefail
 
 umask 077
 
-DEV_ROOT="${DEV_ROOT:-/Volumes/ThunderBolt/Development}"
-QMD_BIN="${QMD_BIN:-/Users/rico/.local/bin/qmd}"
-LOG_DIR="${LOG_DIR:-/Volumes/ThunderBolt/open-brain-local/log}"
+DEV_ROOT="${DEV_ROOT:-/srv/dev}"
+QMD_BIN="${QMD_BIN:-/home/user/.local/bin/qmd}"
+LOG_DIR="${LOG_DIR:-/srv/open-brain-local/log}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/qmd-sync.log}"
 GLOBAL_INDEX="global_docs_instructions"
-HOME="${HOME:-/Users/rico}"
-PATH="/opt/homebrew/bin:/Users/rico/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+HOME="${HOME:-/home/user}"
+PATH="/opt/homebrew/bin:/home/user/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 QMD_EMBED_WATCHDOG_SECONDS="${QMD_EMBED_WATCHDOG_SECONDS:-1800}"
 QMD_RUN_WATCHDOG_SECONDS="${QMD_RUN_WATCHDOG_SECONDS:-21600}"
 QMD_WATCHDOG_KILL_AFTER_SECONDS="${QMD_WATCHDOG_KILL_AFTER_SECONDS:-20}"

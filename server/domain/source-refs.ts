@@ -1,5 +1,10 @@
+// Scoped source references for closed-brain deployments: the schema a caller
+// attaches to a memory row (document, path, matter, ethical wall, span), the
+// scope a caller reads under, and the pure predicates plus SQL fragment that
+// keep a row visible only inside its own scope.
+
 import { z } from "zod";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 
 const isoDateTime = z.string().datetime();
 

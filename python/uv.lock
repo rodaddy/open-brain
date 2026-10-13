@@ -424,7 +424,7 @@ dev = [
 
 [[package]]
 name = "openbrain-provider"
-version = "0.9.0"
+version = "0.9.1"
 source = { editable = "openbrain-provider" }
 dependencies = [
     { name = "loguru" },

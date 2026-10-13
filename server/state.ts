@@ -12,8 +12,8 @@
  * entrypoint changes to `server/main.ts`, and the flags below change with it in
  * the same commit. Flipping them is not a status update about work that already
  * happened elsewhere -- it and the entrypoint change ARE the same decision, so
- * a green suite with `servesTraffic: true` and a chain still pointing at
- * `src/index.ts` is a contradiction the pin test is there to catch.
+ * a green suite with `servesTraffic: true` and a chain still pointing at the
+ * previous entrypoint is a contradiction the pin test is there to catch.
  *
  * `law0` STAYS BELOW RUNNING ON PURPOSE. Merging this PR makes the rewrite the
  * configured serving target; it does not make it a process answering requests.
@@ -22,7 +22,7 @@
  * the upgrade. Whoever proves `/health` on the deployed rewrite may raise this
  * to `RUNNING`; nobody should raise it from a passing test suite.
  *
- * `src/` IS THE ROLLBACK AND STAYS BYTE-UNTOUCHED. The charter's strangler rule
+ * THE PREVIOUS ENTRYPOINT IS THE ROLLBACK. The charter's strangler rule
  * is absolute: old modules are retired only after the candidate has been proven
  * RUNNING. Until then, reverting the spawn target restores the previous server
  * with no code motion, which is the entire reason this cutover is one flag and

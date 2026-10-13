@@ -1,16 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type os from "node:os";
-import {
-  readDeployedRevision,
-  resolveServerIdentity,
-} from "./server-identity.ts";
+import { readDeployedRevision, resolveServerIdentity } from "./server-identity.ts";
 
 type Interfaces = NodeJS.Dict<os.NetworkInterfaceInfo[]>;
 
-function ipv4(
-  address: string,
-  internal = false,
-): os.NetworkInterfaceInfo {
+function ipv4(address: string, internal = false): os.NetworkInterfaceInfo {
   return {
     address,
     netmask: "255.255.255.0",
@@ -40,14 +34,14 @@ function macMiniInterfaces(): Interfaces {
     lo0: [ipv4("127.0.0.1", true)],
     en0: [ipv4("172.16.0.20")],
     en1: [ipv4("172.16.0.131")],
-    en10: [ipv4("192.168.127.11")],
+    en10: [ipv4("192.168.50.11")],
   };
 }
 
-const hostname = () => "Mini-M4-Pro.local";
+const hostname = () => "mini.local";
 
+// -- The defect --------------------------------------------------------------
 describe("server identity resolution", () => {
-  // -- The defect ------------------------------------------------------------
   it("reports the real LAN address when the bind host is the 0.0.0.0 wildcard", () => {
     // RED PROOF. This is the measured local-clone configuration: no
     // OPEN_BRAIN_SERVER_IP, OPEN_BRAIN_BIND_HOST=0.0.0.0. The shipped code
@@ -72,8 +66,10 @@ describe("server identity resolution", () => {
     expect(identity.serverIp).toBe("172.16.0.20");
     expect(identity.serverIps).not.toEqual(["unknown"]);
   });
+});
 
-  // -- Precedence ------------------------------------------------------------
+// -- Precedence --------------------------------------------------------------
+describe("server identity resolution precedence", () => {
   it("prefers the explicitly advertised address over detection", () => {
     const identity = resolveServerIdentity({
       configuredServerIp: "172.16.0.21",
@@ -136,8 +132,10 @@ describe("server identity resolution", () => {
 
     expect(identity.serverIp).toBe("172.16.0.20");
   });
+});
 
-  // -- Ordering and disclosure bounds ----------------------------------------
+// -- Ordering and disclosure bounds ------------------------------------------
+describe("server identity resolution ordering and disclosure", () => {
   it("orders physical interfaces ahead of virtual bridges", () => {
     const identity = resolveServerIdentity({
       interfaces: () => ({
@@ -156,7 +154,7 @@ describe("server identity resolution", () => {
     // answer that reshuffles between restarts is not an identity.
     const shuffled = resolveServerIdentity({
       interfaces: () => ({
-        en10: [ipv4("192.168.127.11")],
+        en10: [ipv4("192.168.50.11")],
         en1: [ipv4("172.16.0.131")],
         en0: [ipv4("172.16.0.20")],
       }),
@@ -164,21 +162,20 @@ describe("server identity resolution", () => {
     });
 
     expect(shuffled.serverIps).toEqual(
-      resolveServerIdentity({ interfaces: macMiniInterfaces, hostname })
-        .serverIps,
+      resolveServerIdentity({ interfaces: macMiniInterfaces, hostname }).serverIps,
     );
   });
 
   it("sorts interface names numerically so en2 precedes en10", () => {
     const identity = resolveServerIdentity({
       interfaces: () => ({
-        en10: [ipv4("192.168.127.11")],
+        en10: [ipv4("192.168.50.11")],
         en2: [ipv4("172.16.0.55")],
       }),
       hostname,
     });
 
-    expect(identity.serverIps).toEqual(["172.16.0.55", "192.168.127.11"]);
+    expect(identity.serverIps).toEqual(["172.16.0.55", "192.168.50.11"]);
   });
 
   it("keeps every detected private address visible, not just the winner", () => {
@@ -192,7 +189,7 @@ describe("server identity resolution", () => {
     expect(identity.serverIps).toEqual([
       "172.16.0.20",
       "172.16.0.131",
-      "192.168.127.11",
+      "192.168.50.11",
     ]);
   });
 
@@ -249,15 +246,17 @@ describe("server identity resolution", () => {
 
     expect(identity.serverIps).toEqual(["172.16.0.20"]);
   });
+});
 
-  // -- Hostname --------------------------------------------------------------
+// -- Hostname ----------------------------------------------------------------
+describe("server identity resolution hostname", () => {
   it("reports the machine hostname alongside the address", () => {
     const identity = resolveServerIdentity({
       interfaces: macMiniInterfaces,
       hostname,
     });
 
-    expect(identity.hostname).toBe("Mini-M4-Pro.local");
+    expect(identity.hostname).toBe("mini.local");
   });
 
   it("degrades the hostname rather than failing when it cannot be read", () => {
@@ -281,7 +280,7 @@ describe("server identity resolution", () => {
     });
 
     expect(identity.serverIp).toBe("unknown");
-    expect(identity.hostname).toBe("Mini-M4-Pro.local");
+    expect(identity.hostname).toBe("mini.local");
   });
 });
 

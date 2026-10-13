@@ -1,6 +1,6 @@
 /** Shared typed fakes for the TS client tests (peer of `_runtime_fakes.py`). */
 
-import { repoFactMetadata } from "../../../src/tools/repo-facts.ts";
+import { repoFactMetadata } from "../../../server/domain/repo-facts.ts";
 import type { Json, Transport, TransportResponse } from "../src/client.ts";
 import {
   CURRENT_CONTRACT_SCHEMA_HASH,
@@ -24,12 +24,10 @@ export function runtimeContractManifest(): Json {
       ([name, version]) => ({ kind: "tool", name, version }),
     ),
     tool_contracts: Object.fromEntries(
-      Object.entries(FIRST_CLASS_RUNTIME_TOOL_VERSIONS).map(
-        ([name, version]) => [
-          name,
-          { version, input_schema: {}, output_shape: "object" },
-        ],
-      ),
+      Object.entries(FIRST_CLASS_RUNTIME_TOOL_VERSIONS).map(([name, version]) => [
+        name,
+        { version, input_schema: {}, output_shape: "object" },
+      ]),
     ),
   };
 }
@@ -71,26 +69,9 @@ export class LaneAwareTransport implements Transport {
       timeout: options.timeout,
     });
     const body = options.json;
-    const method = body["method"];
-    if (method === "initialize") {
-      return {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-          "mcp-session-id": "runtime-session",
-        },
-        text: JSON.stringify({
-          jsonrpc: "2.0",
-          id: body["id"],
-          result: { protocolVersion: "2025-03-26" },
-        }),
-      };
-    }
-    if (method === "notifications/initialized") {
-      return { status: 202, headers: {}, text: "" };
-    }
-    if (method !== "tools/call") {
-      throw new Error(`unexpected method: ${String(method)}`);
+    const nonToolCall = nonToolCallResponse(body);
+    if (nonToolCall !== null) {
+      return nonToolCall;
     }
     const params = body["params"] as Json;
     const tool = params["name"] as string;
@@ -100,144 +81,21 @@ export class LaneAwareTransport implements Transport {
       return toolResult(requestId, runtimeContractManifest());
     }
     if (tool === "session_start") {
-      if (this.failSessionStart) {
-        return toolError(requestId, "lane creation failed");
-      }
-      const requestedLane: Json = {
-        namespace: "bilby",
-        session_key: args["session_key"],
-        agent: args["agent"] ?? null,
-        source: args["platform"] ?? null,
-        channel_id: args["channel_id"] ?? null,
-        thread_id: args["thread_id"] ?? null,
-        project: args["project"] ?? null,
-        current_context_md: null,
-        metadata: { server_id: args["server_id"] ?? null },
-      };
-      const sessionKey = args["session_key"] as string;
-      let lane = this.startedSessions.get(sessionKey);
-      const isNew = lane === undefined;
-      if (lane === undefined) {
-        lane = requestedLane;
-        this.startedSessions.set(sessionKey, lane);
-      }
-      const laneMetadata = lane["metadata"] as Json;
-      const requestedMetadata = requestedLane["metadata"] as Json;
-      const mismatch =
-        ["agent", "source", "channel_id", "thread_id"].some(
-          (key) => lane?.[key] !== requestedLane[key],
-        ) || laneMetadata["server_id"] !== requestedMetadata["server_id"];
-      if (mismatch) {
-        return toolError(
-          requestId,
-          "existing lane exact scope does not match session_start request",
-        );
-      }
-      return toolResult(requestId, { lane, events: [], is_new: isNew });
+      return this.failSessionStart
+        ? toolError(requestId, "lane creation failed")
+        : sessionStartResponse(this.startedSessions, args, requestId);
     }
     if (tool === "append_session_event" || tool === "session_wrap") {
-      const sessionKey = args["session_key"] as string | undefined;
-      const lane =
-        sessionKey !== undefined
-          ? this.startedSessions.get(sessionKey)
-          : undefined;
-      if (lane === undefined) {
-        return toolError(requestId, "session lane does not exist");
-      }
-      const laneMetadata = lane["metadata"] as Json;
-      const expectedScope: Json = {
-        agent: lane["agent"],
-        platform: lane["source"],
-        server_id: laneMetadata["server_id"],
-        channel_id: lane["channel_id"],
-        thread_id: lane["thread_id"],
-      };
-      const mismatch = Object.entries(expectedScope).some(
-        ([key, value]) => (args[key] ?? null) !== value,
-      );
-      if (mismatch) {
-        return toolError(
-          requestId,
-          `existing lane scope does not match requested ${tool} scope`,
-        );
-      }
-      if (tool === "session_wrap") {
-        lane["current_context_md"] = args["summary"];
-        return toolResult(requestId, {
-          session_id: "session-1",
-          lane_id: "lane-1",
-          context_updated: true,
-        });
-      }
-      return toolResult(requestId, {
-        event_id: "event-1",
-        lane_id: "lane-1",
-        lane_created: false,
-      });
+      return laneScopedResponse(this.startedSessions, tool, args, requestId);
     }
     if (tool === "agent_context_pack") {
-      const sessionKey = args["session_key"] as string;
-      const lane = this.startedSessions.get(sessionKey);
-      const laneMetadata =
-        lane !== undefined ? (lane["metadata"] as Json) : undefined;
-      const exact =
-        lane !== undefined &&
-        lane["agent"] === args["agent"] &&
-        lane["source"] === args["platform"] &&
-        laneMetadata?.["server_id"] === args["server_id"] &&
-        lane["channel_id"] === args["channel_id"] &&
-        (lane["thread_id"] ?? null) === (args["thread_id"] ?? null);
-      const requestedSections = Array.isArray(args["requested_sections"])
-        ? (args["requested_sections"] as string[])
-        : [];
-      let durable: Json | null = null;
-      if (
-        exact &&
-        lane !== undefined &&
-        requestedSections.includes("durable_lane_context")
-      ) {
-        durable = {
-          label: "durable_lane_context",
-          lane: { current_context_md: lane["current_context_md"] ?? null },
-          events: [],
-        };
-      }
-      return toolResult(requestId, {
-        tool,
-        arguments: args,
-        scope: {
-          namespace: "bilby",
-          session_key: args["session_key"],
-          agent: args["agent"],
-          platform: args["platform"],
-          server_id: args["server_id"],
-          channel_id: args["channel_id"],
-          thread_id: args["thread_id"] ?? null,
-        },
-        sections: durable !== null ? { durable_lane_context: durable } : {},
-      });
+      return contextPackResponse(this.startedSessions, args, requestId);
     }
     // Fixture replay must exercise schema-compatible tool arguments. Keeping
     // this fake permissive would let malformed parked records drain green.
-    if (tool === "lane_upsert") {
-      if (!nonEmpty(args["session_key"])) {
-        return toolError(requestId, "lane_upsert requires session_key");
-      }
-    } else if (tool === "upsert_repo_fact") {
-      if (!validRepoFactMetadata(args["metadata"])) {
-        return toolError(requestId, "upsert_repo_fact metadata is invalid");
-      }
-    } else if (tool === "log_thought") {
-      if (!nonEmpty(args["content"])) {
-        return toolError(requestId, "log_thought requires content");
-      }
-    } else if (tool === "log_decision") {
-      if (!nonEmpty(args["title"]) || !nonEmpty(args["rationale"])) {
-        return toolError(
-          requestId,
-          "log_decision requires title and rationale",
-        );
-      }
+    const rejection = fixtureArgumentRejection(tool, args);
+    if (rejection !== null) {
+      return toolError(requestId, rejection);
     }
     return toolResult(requestId, {
       tool,
@@ -245,6 +103,226 @@ export class LaneAwareTransport implements Transport {
       sections: { working_set: { items: [] } },
     });
   }
+}
+
+/**
+ * Handle the JSON-RPC methods that are not `tools/call`; null means the caller
+ * should proceed with tool dispatch. An unknown method throws, as before.
+ */
+function nonToolCallResponse(body: Json): TransportResponse | null {
+  const method = body["method"];
+  if (method === "initialize") {
+    return initializeResponse(body["id"]);
+  }
+  if (method === "notifications/initialized") {
+    return { status: 202, headers: {}, text: "" };
+  }
+  if (method !== "tools/call") {
+    throw new Error(`unexpected method: ${String(method)}`);
+  }
+  return null;
+}
+
+function initializeResponse(requestId: Json[string]): TransportResponse {
+  return {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+      "mcp-session-id": "runtime-session",
+    },
+    text: JSON.stringify({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: { protocolVersion: "2025-03-26" },
+    }),
+  };
+}
+
+/** Does the request carry the server's complete exact-scope predicate? */
+function claimsCompleteExactScope(args: Json): boolean {
+  return ["agent", "platform", "server_id", "channel_id"].every(
+    (key) => args[key] !== undefined && args[key] !== null,
+  );
+}
+
+/** Does the stored lane disagree with the scope the request claims? */
+function laneScopeDiffers(
+  lane: Json,
+  requestedLane: Json,
+  laneMetadata: Json,
+  requestedMetadata: Json,
+): boolean {
+  return (
+    ["agent", "source", "channel_id", "thread_id"].some(
+      (key) => lane[key] !== requestedLane[key],
+    ) || laneMetadata["server_id"] !== requestedMetadata["server_id"]
+  );
+}
+
+function sessionStartResponse(
+  startedSessions: Map<string, Json>,
+  args: Json,
+  requestId: number,
+): TransportResponse {
+  const requestedLane: Json = {
+    namespace: "bilby",
+    session_key: args["session_key"],
+    agent: args["agent"] ?? null,
+    source: args["platform"] ?? null,
+    channel_id: args["channel_id"] ?? null,
+    thread_id: args["thread_id"] ?? null,
+    project: args["project"] ?? null,
+    current_context_md: null,
+    metadata: { server_id: args["server_id"] ?? null },
+  };
+  const sessionKey = args["session_key"] as string;
+  let lane = startedSessions.get(sessionKey);
+  const isNew = lane === undefined;
+  if (lane === undefined) {
+    lane = requestedLane;
+    startedSessions.set(sessionKey, lane);
+  }
+  const laneMetadata = lane["metadata"] as Json;
+  const requestedMetadata = requestedLane["metadata"] as Json;
+  // Mirrors the server's complete-exact-scope gate: the one-way-fill refusal
+  // below runs ONLY when the request carries the complete exact-scope
+  // predicate. A request that claims no scope takes the server's other branch
+  // and gets the existing lane back verbatim, which is what a wrap or
+  // checkpoint adopting a lane relies on (issue 736).
+  const mismatch =
+    claimsCompleteExactScope(args) &&
+    laneScopeDiffers(lane, requestedLane, laneMetadata, requestedMetadata);
+  if (mismatch) {
+    return toolError(
+      requestId,
+      "existing lane exact scope does not match session_start request",
+    );
+  }
+  return toolResult(requestId, { lane, events: [], is_new: isNew });
+}
+
+function laneScopedResponse(
+  startedSessions: Map<string, Json>,
+  tool: string,
+  args: Json,
+  requestId: number,
+): TransportResponse {
+  const sessionKey = args["session_key"] as string | undefined;
+  const lane = sessionKey !== undefined ? startedSessions.get(sessionKey) : undefined;
+  if (lane === undefined) {
+    return toolError(requestId, "session lane does not exist");
+  }
+  const laneMetadata = lane["metadata"] as Json;
+  const expectedScope: Json = {
+    agent: lane["agent"],
+    platform: lane["source"],
+    server_id: laneMetadata["server_id"],
+    channel_id: lane["channel_id"],
+    thread_id: lane["thread_id"],
+  };
+  const mismatch = Object.entries(expectedScope).some(
+    ([key, value]) => (args[key] ?? null) !== value,
+  );
+  if (mismatch) {
+    return toolError(
+      requestId,
+      `existing lane scope does not match requested ${tool} scope`,
+    );
+  }
+  if (tool === "session_wrap") {
+    lane["current_context_md"] = args["summary"];
+    return toolResult(requestId, {
+      session_id: "session-1",
+      lane_id: "lane-1",
+      context_updated: true,
+    });
+  }
+  return toolResult(requestId, {
+    event_id: "event-1",
+    lane_id: "lane-1",
+    lane_created: false,
+  });
+}
+
+function contextPackResponse(
+  startedSessions: Map<string, Json>,
+  args: Json,
+  requestId: number,
+): TransportResponse {
+  const sessionKey = args["session_key"] as string;
+  const lane = startedSessions.get(sessionKey);
+  const durable = durableLaneSection(lane, args);
+  return toolResult(requestId, {
+    tool: "agent_context_pack",
+    arguments: args,
+    scope: contextPackScope(args),
+    sections: durable !== null ? { durable_lane_context: durable } : {},
+  });
+}
+
+function contextPackScope(args: Json): Json {
+  return {
+    namespace: "bilby",
+    session_key: args["session_key"],
+    agent: args["agent"],
+    platform: args["platform"],
+    server_id: args["server_id"],
+    channel_id: args["channel_id"],
+    thread_id: args["thread_id"] ?? null,
+  };
+}
+
+/** True only when the stored lane's scope matches the request exactly. */
+function laneScopeIsExact(lane: Json, args: Json): boolean {
+  const laneMetadata = lane["metadata"] as Json;
+  if (lane["agent"] !== args["agent"] || lane["source"] !== args["platform"]) {
+    return false;
+  }
+  if (laneMetadata?.["server_id"] !== args["server_id"]) {
+    return false;
+  }
+  return (
+    lane["channel_id"] === args["channel_id"] &&
+    (lane["thread_id"] ?? null) === (args["thread_id"] ?? null)
+  );
+}
+
+function durableLaneSection(lane: Json | undefined, args: Json): Json | null {
+  const requestedSections = Array.isArray(args["requested_sections"])
+    ? (args["requested_sections"] as string[])
+    : [];
+  if (lane === undefined || !requestedSections.includes("durable_lane_context")) {
+    return null;
+  }
+  if (!laneScopeIsExact(lane, args)) {
+    return null;
+  }
+  return {
+    label: "durable_lane_context",
+    lane: { current_context_md: lane["current_context_md"] ?? null },
+    events: [],
+  };
+}
+
+/** The rejection message for a schema-incompatible fixture, else null. */
+function fixtureArgumentRejection(tool: string, args: Json): string | null {
+  if (tool === "lane_upsert") {
+    return nonEmpty(args["session_key"]) ? null : "lane_upsert requires session_key";
+  }
+  if (tool === "upsert_repo_fact") {
+    return validRepoFactMetadata(args["metadata"])
+      ? null
+      : "upsert_repo_fact metadata is invalid";
+  }
+  if (tool === "log_thought") {
+    return nonEmpty(args["content"]) ? null : "log_thought requires content";
+  }
+  if (tool === "log_decision") {
+    return nonEmpty(args["title"]) && nonEmpty(args["rationale"])
+      ? null
+      : "log_decision requires title and rationale";
+  }
+  return null;
 }
 
 function nonEmpty(value: unknown): value is string {
@@ -267,10 +345,7 @@ export function toolResult(requestId: number, body: Json): TransportResponse {
   };
 }
 
-export function toolError(
-  requestId: number,
-  message: string,
-): TransportResponse {
+export function toolError(requestId: number, message: string): TransportResponse {
   return {
     status: 200,
     headers: { "content-type": "application/json" },
@@ -321,9 +396,7 @@ export class StartThenFailClient implements DirectClient {
     if (!this.started) {
       throw new Error("lane missing");
     }
-    throw new Error(
-      "append failed with " + ["token", "secret-value"].join("="),
-    );
+    throw new Error("append failed with " + ["token", "secret-value"].join("="));
   }
 
   lane_upsert(_args: Json): Json {
@@ -350,9 +423,7 @@ export class StartThenFailClient implements DirectClient {
   }
 
   agent_context_pack(_args: Json): Json {
-    throw new Error(
-      "recall failed with " + ["token", "secret-value"].join("="),
-    );
+    throw new Error("recall failed with " + ["token", "secret-value"].join("="));
   }
 
   close(): void {
@@ -374,9 +445,7 @@ export class ScopeProofClient extends StartThenFailClient {
   }
 }
 
-export function runtimeConfig(
-  overrides: Partial<RuntimeConfig> = {},
-): RuntimeConfig {
+export function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     baseUrl: "https://brain.example",
     token: TEST_TOKEN,

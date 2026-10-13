@@ -27,12 +27,16 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
 import {
+  createEntryReadRepository,
+  type AdjacentLinkRow,
+} from "../db/entry-read-repository.ts";
+import {
   authIdentity,
   errorResult,
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
-import { canReadNamespace } from "./read-scope.ts";
+import { canReadNamespace } from "../domain/read-scope.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import { LINK_RELATIONS } from "./search-constants.ts";
 
@@ -42,22 +46,6 @@ const GRAPH_READ_DENIED = "Permission denied: cannot read link graph";
 
 /** UUID shape accepted for the source node id. */
 const graphUuid = z.string().uuid().describe("UUID of the source node");
-
-interface LinkRow {
-  id: string;
-  from_type: string;
-  from_id: string;
-  to_type: string;
-  to_id: string;
-  relation: string;
-  weight: number;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-  from_name: string | null;
-  from_canonical_id: string | null;
-  to_name: string | null;
-  to_canonical_id: string | null;
-}
 
 /** One returned edge, already restated from the source node's perspective. */
 interface AdjacentLink {
@@ -82,16 +70,11 @@ const adjacentContextInputSchema = {
     .max(500)
     .optional()
     .describe("Namespace for isolation (defaults to agent's clientId)"),
-  relation: z
-    .enum(LINK_RELATIONS)
-    .optional()
-    .describe("Filter by relation type"),
+  relation: z.enum(LINK_RELATIONS).optional().describe("Filter by relation type"),
   direction: z
     .enum(DIRECTIONS)
     .optional()
-    .describe(
-      'Traversal direction: "outgoing", "incoming", or "both" (default)',
-    ),
+    .describe('Traversal direction: "outgoing", "incoming", or "both" (default)'),
   limit: z
     .number()
     .int()
@@ -223,12 +206,11 @@ LIMIT ${limitRef}`;
  * @returns The link with `direction` and `linked_*` fields relative to the source node.
  */
 function linkFromSourcePerspective(
-  row: LinkRow,
+  row: AdjacentLinkRow,
   request: AdjacentContextRequest,
 ): AdjacentLink {
   // Reported from the CALLER's perspective, not the row's storage order.
-  const isOutgoing =
-    row.from_type === request.type && row.from_id === request.id;
+  const isOutgoing = row.from_type === request.type && row.from_id === request.id;
   return {
     id: row.id,
     direction: isOutgoing ? "outgoing" : "incoming",
@@ -265,11 +247,7 @@ function authorizeAdjacencyRead(
 
   const requestedNamespace = requestedFromArgs ?? identity.clientId;
   if (
-    !canReadNamespace(
-      identity,
-      requestedNamespace,
-      dependencies.sharedNamespaceNames,
-    )
+    !canReadNamespace(identity, requestedNamespace, dependencies.sharedNamespaceNames)
   ) {
     return {
       denied: errorResult(
@@ -278,10 +256,7 @@ function authorizeAdjacencyRead(
     };
   }
   return {
-    namespace: physicalNamespace(
-      requestedNamespace,
-      dependencies.sharedNamespaceNames,
-    ),
+    namespace: physicalNamespace(requestedNamespace, dependencies.sharedNamespaceNames),
   };
 }
 
@@ -300,7 +275,8 @@ async function runAdjacencyLookup(options: {
   const { direction } = request;
 
   try {
-    const { rows } = await dependencies.pool.query<LinkRow>(sql, params);
+    const repository = createEntryReadRepository(dependencies.pool);
+    const rows = await repository.runAdjacencyQuery({ sql, params });
     const links = rows.map((row) => linkFromSourcePerspective(row, request));
 
     dependencies.logger.info(
@@ -333,11 +309,7 @@ export function registerAdjacentContextTool(
     },
     async (args, extra) => {
       const identity = authIdentity(extra.authInfo);
-      const scope = authorizeAdjacencyRead(
-        identity,
-        dependencies,
-        args.namespace,
-      );
+      const scope = authorizeAdjacencyRead(identity, dependencies, args.namespace);
       if ("denied" in scope) return scope.denied;
 
       return await runAdjacencyLookup({

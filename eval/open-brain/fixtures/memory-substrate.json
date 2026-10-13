@@ -88,7 +88,11 @@
       "readable_namespaces": ["skippy", "shared-kb"],
       "top_k": 3,
       "relevant_ids": ["codex-compact-recovery"],
-      "expected_answer_terms": ["issue #214", "feat/memory-substrate-adapter-contract", "issue #216"],
+      "expected_answer_terms": [
+        "issue #214",
+        "feat/memory-substrate-adapter-contract",
+        "issue #216"
+      ],
       "required_source_ref_ids": ["codex-compact-recovery"]
     },
     {
@@ -109,7 +113,12 @@
       "top_k": 3,
       "relevant_ids": ["receipt-complete-report"],
       "expected_citation_ids": ["receipt-complete-report"],
-      "expected_answer_terms": ["docs/source-a.md", "base-template.pdf", "reports/generated-report.md", "manual PDF comparison"],
+      "expected_answer_terms": [
+        "docs/source-a.md",
+        "base-template.pdf",
+        "reports/generated-report.md",
+        "manual PDF comparison"
+      ],
       "required_source_ref_ids": ["receipt-complete-report"]
     },
     {
@@ -119,7 +128,14 @@
       "readable_namespaces": ["skippy", "shared-kb"],
       "top_k": 3,
       "relevant_ids": ["recall-linked-agent-context"],
-      "expected_answer_terms": ["Rico", "Skippy", "C123", "T456", "docs/agent-memory-substrate-plan.md", "issue #215"],
+      "expected_answer_terms": [
+        "Rico",
+        "Skippy",
+        "C123",
+        "T456",
+        "docs/agent-memory-substrate-plan.md",
+        "issue #215"
+      ],
       "required_source_ref_ids": ["recall-linked-agent-context"]
     }
   ]

@@ -1,4 +1,4 @@
-import type { createPool } from "../src/db/pool.ts";
+import type { createPool } from "./settings.ts";
 
 /**
  * Thought-cluster supplementation knobs (Issue #173, piece (c) of #161).

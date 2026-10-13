@@ -24,11 +24,11 @@ checkout serves nothing.
 
 Measured 2026-07-30: the real dogfood service was running `bun run src/index.ts`
 with **cwd set to the dev checkout** (pid 79427, cwd
-`/Volumes/ThunderBolt/Development/open-brain`). Every uncommitted edit was one
+`/srv/dev/open-brain`). Every uncommitted edit was one
 restart away from being the running memory service.
 
 `scripts/local-clone-autostart.sh` set
-`REPO_DIR=/Volumes/ThunderBolt/Development/open-brain` and then `cd`'d into it;
+`REPO_DIR=/srv/dev/open-brain` and then `cd`'d into it;
 `scripts/local-clone.ts:397-398` spawns with `cwd: process.cwd()`, so the
 running code was whatever was in the working tree at restart time.
 
@@ -37,7 +37,7 @@ running code was whatever was in the working tree at restart time.
 committed revision. The launchd plist runs the launcher from that runtime too,
 so nothing in the boot path reads the working tree.
 
-Verified after the swap: pid 46396, `cwd=/Volumes/ThunderBolt/open-brain-local/app`,
+Verified after the swap: pid 46396, `cwd=/srv/open-brain-local/app`,
 serving `a06f7ca`, turn count unchanged at 35,577 across the restart, and the
 runtime contains **no `.git`** — it cannot drift, only be redeployed.
 
@@ -55,7 +55,7 @@ scripts/local-clone-deploy.sh --rollback     # restore .previous
 # --- the PLAYGROUND ------------------------------------------------
 # deploy a COMMITTED revision into the playground
 OPENBRAIN_RUNTIME_NAME=app-play \
-OPENBRAIN_CLONE_ENV_FILE=/Volumes/ThunderBolt/open-brain-local/play.env \
+OPENBRAIN_CLONE_ENV_FILE=/srv/open-brain-local/play.env \
   scripts/local-clone-deploy.sh              # HEAD
   scripts/local-clone-deploy.sh <ref>        # any commit
 
@@ -63,8 +63,8 @@ OPENBRAIN_CLONE_ENV_FILE=/Volumes/ThunderBolt/open-brain-local/play.env \
 scripts/local-clone-db.sh
 
 # start it
-cd /Volumes/ThunderBolt/open-brain-local/app-play
-set -a && . /Volumes/ThunderBolt/open-brain-local/play.env && set +a
+cd /srv/open-brain-local/app-play
+set -a && . /srv/open-brain-local/play.env && set +a
 bun run src/index.ts
 
 # throw it away
@@ -82,9 +82,9 @@ object storage. The working tree is structurally invisible to it.
 Proven 2026-07-30: appending a line to `src/index.ts`, then re-exporting HEAD,
 produced an archive containing **zero** occurrences of it.
 
-This differs from `scripts/core01-deploy-local.sh:136`, which tars `$REPO_DIR`
-directly and therefore carries uncommitted edits. That is acceptable on core01
-because an origin gate (`:58-61`) already proved HEAD is pushed; locally there
+This differs from the retired host's deploy script, which tarred `$REPO_DIR`
+directly and therefore carried uncommitted edits. That was acceptable on the
+retired host because an origin gate already proved HEAD was pushed; locally there
 is no such gate, so the archive boundary does the work instead.
 
 The script **reports** uncommitted paths rather than ignoring them — not
@@ -103,7 +103,7 @@ runtime. Each runtime uses its own env file.
 
 A schema-scoped playground was considered and rejected. The repo's own migration
 test says why
-(`src/db/migrations/028_maintenance_jobs_lease_expired_compat.test.ts:83`):
+(`server/db/migrations/028_maintenance_jobs_lease_expired_compat.test.ts:83`):
 
 > *"A dedicated `Client` (not a `Pool`) so the schema-scoping `search_path` set
 > once at connect time holds for every query in this file. **A Pool hands out
@@ -200,8 +200,8 @@ Playground isolation:
   deploying a non-existent ref, creating an unservable name
 
 Runtime repoint (2026-07-31):
-- Before: pid 79427, `cwd=/Volumes/ThunderBolt/Development/open-brain`
-- After: pid 46396, `cwd=/Volumes/ThunderBolt/open-brain-local/app`, `a06f7ca`
+- Before: pid 79427, `cwd=/srv/dev/open-brain`
+- After: pid 46396, `cwd=/srv/open-brain-local/app`, `a06f7ca`
 - `ob_raw_turns` = 35,577 before and after — **no data loss across the restart**
 - Maintenance queue restarted with all five handlers
   (`embedding.repair, graph.derive, memory.distill, dream.light, dream.rem`)
@@ -213,6 +213,5 @@ Runtime repoint (2026-07-31):
 **See Also:**
 - `scripts/local-clone-deploy.sh` — commit → runtime
 - `scripts/local-clone-db.sh` — live → playground database
-- `scripts/core01-deploy-local.sh` — the production pattern this mirrors
 - `docs/local-clone-dogfood.md` — the clone's own runbook
 - `docs/CI_CD_REQUIREMENTS.md` — the four gates

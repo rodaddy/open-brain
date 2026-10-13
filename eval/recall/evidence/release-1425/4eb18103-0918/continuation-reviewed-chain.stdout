@@ -1,0 +1,46 @@
+
+> open-brain@0.9.0 test:isolated
+> node scripts/test-isolated.ts server/tools/reviewed-candidate-promotion.pg.test.ts server/maintenance/reviewed-candidate-chain.pg.test.ts
+
+
+────────────────────────────────────────────────────────────────────────
+ISOLATED TEST RUN (#614)
+────────────────────────────────────────────────────────────────────────
+  database:  ob_isolated_831_mu7oof3jvs  (created for this run, dropped on exit)
+  clone:     open_brain_local_831_mu7oof3jvs  (created for this run, dropped on exit)
+  clone role: open_brain_local_clone  (shared; created if absent, never dropped)
+  host:      127.0.0.1:5432
+  scope:     server/tools/reviewed-candidate-promotion.pg.test.ts server/maintenance/reviewed-candidate-chain.pg.test.ts
+  if this run is killed, drop it with:
+    dropdb --if-exists --force -h 127.0.0.1 -p 5432 -U ob_1425_continuation ob_isolated_831_mu7oof3jvs
+────────────────────────────────────────────────────────────────────────
+  [ok]   db-create: ob_isolated_831_mu7oof3jvs created (UTF8, template0)
+(node:840) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+{"impact":"vector operations will not work","remediation":"install the pgvector extension (CREATE EXTENSION vector)","error_name":"Error","error_message":"vector type not found in the database","error_stack":"Error: vector type not found in the database\n    at Object.registerTypes (/work/open-brain-continuation/node_modules/pgvector/src/pg/index.js:13:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)","level":"error","message":"pgvector_registration_failed","timestamp":"2026-09-19T01:03:13.727Z","service":"open-brain","host":"runner-2"}
+  [ok]   db-migrate: migrations applied to ob_isolated_831_mu7oof3jvs
+  [ok]   db-clone: role open_brain_local_clone already existed; DB_PASSWORD_LOCAL_CLONE was unset, so its password was RESET to a freshly generated one for this run (the role is shared and is never dropped here). Export DB_PASSWORD_LOCAL_CLONE to keep a stable password instead
+  [ok]   db-clone: open_brain_local_831_mu7oof3jvs created, owned by open_brain_local_clone
+(node:860) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+  [ok]   db-clone-migrate: migrations applied to open_brain_local_831_mu7oof3jvs
+  [ok]   test: OPENBRAIN_TEST_DATABASE_URL -> ob_isolated_831_mu7oof3jvs; running vitest server/tools/reviewed-candidate-promotion.pg.test.ts server/maintenance/reviewed-candidate-chain.pg.test.ts
+
+ RUN  v5.0.0 /work/open-brain-continuation
+
+
+ Test Files  2 passed (2)
+      Tests  8 passed (8)
+   Start at  01:03:14
+   Duration  711ms (import 45%, transform 30%, tests 24%, worker 1%)
+
+
+────────────────────────────────────────────────────────────────────────
+  tests exited 0
+  database:  ob_isolated_831_mu7oof3jvs
+────────────────────────────────────────────────────────────────────────
+
+  [ok]   teardown (test-complete/clone): open_brain_local_831_mu7oof3jvs dropped
+
+  [ok]   teardown (test-complete): ob_isolated_831_mu7oof3jvs dropped
+RESULT PASS — reviewed-candidate promotion and raw-turn chain: 2 files, 8 tests

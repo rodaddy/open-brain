@@ -1,26 +1,11 @@
 import os from "node:os";
 
 /**
- * Who and where this brain is, for `/health`.
+ * Who and where this brain is, for `/health`. Configuration wins; the host's
+ * real private LAN interfaces answer only when configuration names no concrete
+ * address, and a wildcard or loopback bind is never an answer.
  *
- * `/health` is the only surface a client can hit to answer "am I pointed at the
- * right brain?", and until now it could not: `server_ip` came from
- * `OPEN_BRAIN_SERVER_IP` alone (#197, `db2e05b`), so a host that never set the
- * variable — every local clone — reported the literal string `unknown`. production-host
- * looked correct only because its env happens to carry the value. The field
- * existed; the resolution did not.
- *
- * The rule this module implements: the answer comes from CONFIGURATION first,
- * and falls back to the host's real LAN interfaces only when configuration
- * names no concrete address. A loopback or wildcard bind is NOT an answer —
- * `0.0.0.0` tells a client nothing about which machine it reached, which is the
- * entire question `/health` is being asked.
- *
- * This deliberately supersedes the `does not auto-disclose host interface IPs`
- * stance that shipped alongside #197. That was an implementation choice, never
- * a recorded requirement, and it is what produced the `unknown` defect. The
- * disclosure it guarded against is instead bounded below: detection only ever
- * volunteers private addresses.
+ * See docs/decisions/server-identity-config-first-then-private-interfaces.md
  */
 
 /** A bind value that identifies no particular machine, so it can never be the answer. */
@@ -82,8 +67,7 @@ function isPrivateIpv4(address: string): boolean {
   if (parsed === undefined) return false;
   const [a, b] = parsed;
   return PRIVATE_IPV4_RANGES.some(
-    (range) =>
-      a === range.first && b >= range.secondMin && b <= range.secondMax,
+    (range) => a === range.first && b >= range.secondMin && b <= range.secondMax,
   );
 }
 
@@ -91,7 +75,7 @@ function isPrivateIpv4(address: string): boolean {
  * Interfaces that exist on developer machines but are not how anything reaches
  * this service: container/VM bridges and virtual adapters. They are real,
  * non-internal, and private, so nothing else here excludes them — and on the
- * Mac that exposed this defect one of them (`en10`, 192.168.127.11) would
+ * Mac that exposed this defect one of them (`en10`, 192.168.50.11) would
  * otherwise compete with the true LAN address. They stay in `server_ips`; they
  * just never take first place.
  */
@@ -162,8 +146,7 @@ function detectLanIpv4(
   for (const [name, addresses] of Object.entries(entries)) {
     for (const address of addresses ?? []) {
       // Node <18.4 reports `family` as the number 4; newer as the string "IPv4".
-      const isV4 =
-        address.family === "IPv4" || (address.family as unknown) === 4;
+      const isV4 = address.family === "IPv4" || (address.family as unknown) === 4;
       if (!isV4 || address.internal) continue;
       if (!isPrivateIpv4(address.address)) continue;
       if (isVirtualInterface(name)) {
@@ -223,9 +206,7 @@ function configuredServerIp(input: ServerIdentityInput): string | undefined {
   return undefined;
 }
 
-export function resolveServerIdentity(
-  input: ServerIdentityInput = {},
-): ServerIdentity {
+export function resolveServerIdentity(input: ServerIdentityInput = {}): ServerIdentity {
   const hostname = resolveHostname(input.hostname ?? (() => os.hostname()));
 
   const configured = configuredServerIp(input);
@@ -233,9 +214,7 @@ export function resolveServerIdentity(
     return { hostname, serverIp: configured, serverIps: [configured] };
   }
 
-  const detected = detectLanIpv4(
-    input.interfaces ?? (() => os.networkInterfaces()),
-  );
+  const detected = detectLanIpv4(input.interfaces ?? (() => os.networkInterfaces()));
   const [first] = detected;
   if (first !== undefined) {
     return { hostname, serverIp: first, serverIps: detected };
@@ -264,6 +243,10 @@ export function readDeployedRevision(
   try {
     raw = readStamp();
   } catch {
+    // Deliberate fail-open, per the doc comment at :258: a tree that was never
+    // deployed has no stamp, which is normal rather than a fault. This module
+    // imports only `node:os` and stays logger-free; the tracing caller treats
+    // undefined as an ordinary miss (observability/trace-release.ts:53).
     return undefined;
   }
   if (!raw) return undefined;

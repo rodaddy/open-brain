@@ -12,7 +12,7 @@
  * The pool is faked and throws, so no arm can return rows; the denial envelope
  * is what separates the two cases.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -53,8 +53,7 @@ async function clientWith(names?: SharedNamespaceConfig): Promise<Client> {
     logger: pino({ level: "silent" }),
     sharedNamespaceNames: names,
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     send(message, {
@@ -95,9 +94,7 @@ const TOOLS = ["search_brain", "search_all", "brain_answer"];
 describe("search tools take shared-namespace names from dependencies", () => {
   for (const tool of TOOLS) {
     test(`${tool} authorizes the injected shared namespace`, async () => {
-      expect(await textFor(tool, INJECTED_NAMES)).not.toContain(
-        NAMESPACE_DENIED,
-      );
+      expect(await textFor(tool, INJECTED_NAMES)).not.toContain(NAMESPACE_DENIED);
     });
 
     test(`${tool} fails loudly when no names are injected`, async () => {

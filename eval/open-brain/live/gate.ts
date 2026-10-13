@@ -1,4 +1,5 @@
 import type { LiveEvalConfig } from "./config.ts";
+import { buildGateReceipt, collectGateFailures } from "./gate-phases.ts";
 import { buildScorecard } from "./metrics.ts";
 import {
   LiveTransportError,
@@ -178,9 +179,7 @@ async function seedEntry(
 ): Promise<SeededRecord> {
   const isNegative = entry.namespace_role === "negative";
   const client = isNegative ? clients.negative : clients.primary;
-  const namespace = isNegative
-    ? config.negativeNamespace
-    : config.primaryNamespace;
+  const namespace = isNegative ? config.negativeNamespace : config.primaryNamespace;
 
   const result = await client.logMemory({
     table: entry.table,
@@ -309,9 +308,7 @@ async function probeNegativeControl(
 
   // Prefer probes that declare a forbidden (negative) id; fall back to all
   // probes so the proof always exercises at least one read.
-  const withForbidden = fixture.probes.filter(
-    (p) => p.forbidden_ids.length > 0,
-  );
+  const withForbidden = fixture.probes.filter((p) => p.forbidden_ids.length > 0);
   const probes = withForbidden.length > 0 ? withForbidden : fixture.probes;
 
   let anyDenied = false;
@@ -329,9 +326,7 @@ async function probeNegativeControl(
     } catch (error) {
       // A non-denial transport error means we could not establish the proof.
       const label =
-        error instanceof LiveTransportError
-          ? error.label
-          : "attempt-read-error";
+        error instanceof LiveTransportError ? error.label : "attempt-read-error";
       proof.denied = false;
       proof.failure = `negative-control read failed: ${label}`;
       return proof;
@@ -435,72 +430,32 @@ export async function runLiveGate(opts: RunGateOptions): Promise<GateOutcome> {
   // --- Score + threshold ---
   const scorecard = buildScorecard(fixture, thresholds, retrievedByProbe);
 
-  const primarySeeded = seeded.filter(
-    (r) => r.namespace_role === "primary",
-  ).length;
-  const negativeSeeded = seeded.filter(
-    (r) => r.namespace_role === "negative",
-  ).length;
-
   // Composite gate verdict. A metrics-only pass is never enough: the isolation
-  // proof must have denied, and teardown must have stranded nothing.
+  // proof must have denied, and teardown must have stranded nothing. The
+  // failure list and the receipt are assembled in ./gate-phases.ts (issue 752);
+  // both are pure over the facts this run already established.
   const teardownClean = teardownTally.failed === 0;
-  const gateFailures = [...scorecard.failures];
-  if (!negativeControl.ran) {
-    gateFailures.push(
-      `negative-control proof did not run: ${negativeControl.failure ?? "unknown"}`,
-    );
-  } else if (!negativeControl.denied) {
-    gateFailures.push(
-      `negative-control not denied: ${negativeControl.failure ?? "isolation not proven"}`,
-    );
-  }
-  if (!teardownClean) {
-    gateFailures.push(
-      `teardown failed to archive ${teardownTally.failed} of ${teardownTally.attempted} seeded records`,
-    );
-  }
+  const gateFailures = collectGateFailures({
+    scorecard,
+    negativeControl,
+    teardownTally,
+  });
   const passed =
-    scorecard.passed &&
-    negativeControl.ran &&
-    negativeControl.denied &&
-    teardownClean;
+    scorecard.passed && negativeControl.ran && negativeControl.denied && teardownClean;
 
-  const receipt: LiveGateReceipt = {
-    schema: "openbrain.live_recall_gate.v1",
-    generated_at: generatedAt,
+  const receipt = buildGateReceipt({
+    scorecard,
+    thresholds,
+    config,
+    fixtureId: fixture.fixture_id,
     commit,
-    fixture_id: fixture.fixture_id,
-    thresholds_id: thresholds.thresholds_id,
-    top_k: thresholds.top_k,
-    primary_namespace: config.primaryNamespace,
-    negative_namespace: config.negativeNamespace,
-    seeded: { primary: primarySeeded, negative: negativeSeeded },
-    metrics: {
-      recall_at_k: scorecard.recall_at_k,
-      precision_at_k: scorecard.precision_at_k,
-      mrr: scorecard.mrr,
-      namespace_leaks: scorecard.namespace_leaks,
-    },
-    thresholds: thresholds.thresholds,
-    probes: scorecard.probes.map((p) => ({
-      probe_id: p.probe_id,
-      recall_at_k: p.recall_at_k,
-      precision_at_k: p.precision_at_k,
-      reciprocal_rank: p.reciprocal_rank,
-      namespace_leaks: p.namespace_leaks,
-    })),
-    negative_control: {
-      ran: negativeControl.ran,
-      denied: negativeControl.denied,
-      observed_hit_count: negativeControl.observed_hit_count,
-      cross_token: negativeControl.cross_token,
-      failure: negativeControl.failure,
-    },
+    generatedAt,
+    seeded,
+    negativeControl,
+    teardownTally,
+    gateFailures,
     passed,
-    failures: gateFailures,
-    teardown: teardownTally,
-  };
+  });
 
   return { scorecard, receipt, passed };
 }

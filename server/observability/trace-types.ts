@@ -5,8 +5,9 @@
  * (`langfuse-tracing.ts`) both need them, and a type-only module is what keeps
  * that from becoming an import cycle through the SDK.
  */
-import type { BackgroundObservation } from "../application/background-tracing.ts";
+import type { BackgroundObservation } from "./background-tracing.ts";
 import type { SinkHealthTracker } from "./trace-sink-health.ts";
+import type { DeployStampParser } from "./trace-release.ts";
 
 export type McpTraceStatus = "success" | "error" | "exception";
 
@@ -115,6 +116,17 @@ export interface McpTracingDeps {
    */
   createSink?: (config: McpTracingConfig) => TracingSink;
   /**
+   * Parser for the deploy-stamp format, on its way to the release identity.
+   *
+   * Injected from the composition root because observability must not import
+   * the transport tier that owns the stamp format (#1210). Optional here for
+   * the same reason `createSink` is: a caller that supplies its own `sink` or
+   * `createSink` never reaches the default factory and so never needs it. When
+   * the default factory IS reached without it, the release resolves from the
+   * git checkout alone, which is the pre-existing development-mode path.
+   */
+  parseDeployStamp?: DeployStampParser;
+  /**
    * Deadline for the shutdown drain, in milliseconds.
    *
    * Injectable so a test can prove the bound holds against a sink that never
@@ -136,4 +148,18 @@ export interface McpTracingHandle {
   readonly active: boolean;
   /** Flush pending events and stop the SDK's background machinery. */
   shutdown(): Promise<void>;
+}
+
+/**
+ * The one member of the MCP server the tracing wrapper actually touches.
+ *
+ * `installMcpTracing` binds `registerTool`, replaces it, and calls the original
+ * through `(...a: unknown[]) => unknown` in both directions -- it never reads a
+ * schema, a generic parameter, or any other member. Declaring that shape here
+ * instead of importing `McpServer` keeps the observability tier from naming the
+ * MCP SDK server module (issue 1210); a real `McpServer` stays structurally
+ * assignable, so `server/main.ts` passes one unchanged.
+ */
+export interface TracedToolRegistrar {
+  registerTool: (name: string, config: never, cb: never) => unknown;
 }

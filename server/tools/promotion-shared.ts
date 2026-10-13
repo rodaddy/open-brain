@@ -61,10 +61,7 @@ export function legacyTargetRefusal(
   target: string,
   shared: SharedNamespaceConfig,
 ): string | undefined {
-  if (
-    target === LEGACY_SHARED_NAMESPACE ||
-    target === shared.legacySharedNamespace
-  ) {
+  if (target === LEGACY_SHARED_NAMESPACE || target === shared.legacySharedNamespace) {
     return `Permission denied: '${target}' is a legacy migration source and cannot be a promotion target; use '${shared.canonicalSharedNamespace}'`;
   }
   return undefined;

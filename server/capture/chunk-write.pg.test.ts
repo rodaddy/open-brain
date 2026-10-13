@@ -14,11 +14,12 @@
  * does not depend on a live MLX endpoint; the splitting, the inserts, the
  * parent linkage, and the stored text all run against real Postgres.
  */
-import { afterAll, beforeAll, afterEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, afterEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { runMigrations } from "../../src/db/migrate.ts";
-import { EMBEDDING_DIMENSIONS, contentHash } from "../../src/embedding.ts";
+import { runMigrations } from "../db/migrate.ts";
+import { embeddingDimensions, normalizedContentHash } from "../embedding/provider.ts";
 import { writeEntryChunks } from "./chunk-write.ts";
+import { createChunkRepository } from "../db/chunk-repository.ts";
 import { toSql } from "pgvector/pg";
 import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 
@@ -33,7 +34,8 @@ import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-
 const NS = `ns-chunk-write-test-${process.pid}`;
 const CREATED_BY = "chunk-write-test";
 
-const stubEmbed = async (): Promise<number[]> => Array(EMBEDDING_DIMENSIONS).fill(0.01);
+const stubEmbed = async (): Promise<number[]> =>
+  Array(embeddingDimensions()).fill(0.01);
 
 const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
@@ -55,7 +57,7 @@ async function insertParent(content: string): Promise<string> {
        (content, tags, source, created_by, namespace, embedding, content_hash)
      VALUES ($1, '{}', 'test', $2, $3, $4, $5)
      RETURNING id`,
-    [content, CREATED_BY, NS, toSql(await stubEmbed()), contentHash(content)],
+    [content, CREATED_BY, NS, toSql(await stubEmbed()), normalizedContentHash(content)],
   );
   return rows[0].id as string;
 }
@@ -68,7 +70,7 @@ describe("parent + chunk entry storage (live Postgres)", () => {
     expect(content.length).toBeGreaterThan(51_283);
 
     const parentId = await insertParent(content);
-    await writeEntryChunks(pool, {
+    await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,
@@ -89,7 +91,7 @@ describe("parent + chunk entry storage (live Postgres)", () => {
     const content = "Sentence about the migration plan. ".repeat(400);
     const parentId = await insertParent(content);
 
-    const result = await writeEntryChunks(pool, {
+    const result = await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,
@@ -136,7 +138,7 @@ describe("parent + chunk entry storage (live Postgres)", () => {
     const content = `${filler}${marker}${filler}`;
 
     const parentId = await insertParent(content);
-    await writeEntryChunks(pool, {
+    await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,
@@ -164,7 +166,7 @@ describe("chunk write duplicate and fallback handling (live Postgres)", () => {
     const content = "Identical repeated sentence. ".repeat(500);
     const parentId = await insertParent(content);
 
-    const result = await writeEntryChunks(pool, {
+    const result = await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,
@@ -186,7 +188,7 @@ describe("chunk write duplicate and fallback handling (live Postgres)", () => {
     const content = "A short thought.";
     const parentId = await insertParent(content);
 
-    const result = await writeEntryChunks(pool, {
+    const result = await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,
@@ -208,7 +210,7 @@ describe("chunk write duplicate and fallback handling (live Postgres)", () => {
     const content = "Sentence that will fail to embed. ".repeat(300);
     const parentId = await insertParent(content);
 
-    const result = await writeEntryChunks(pool, {
+    const result = await writeEntryChunks(createChunkRepository(pool), {
       table: "thoughts",
       parentId,
       namespace: NS,

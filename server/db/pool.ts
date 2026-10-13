@@ -57,7 +57,10 @@ export function ownDatabasePool<PoolType extends DatabasePool>(
           waiting: pool.waitingCount,
         };
       } catch (error: unknown) {
-        logger.error({ error_category: errorCategory(error) }, "database_health_failed");
+        logger.error(
+          { error_category: errorCategory(error) },
+          "database_health_failed",
+        );
         return {
           connected: false,
           total: pool.totalCount,

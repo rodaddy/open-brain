@@ -1,3 +1,12 @@
+import {
+  collectAnswerFailures,
+  collectCitationFailures,
+  collectLatencyFailures,
+  collectMetricFailures,
+  collectRetrievalFailures,
+  collectUncertainty,
+  collectUncertaintyFailures,
+} from "./runner-scoring.ts";
 import type {
   EvalCategory,
   EvalCorpusEntry,
@@ -141,61 +150,29 @@ export function scoreProbe(corpus: EvalCorpusEntry[], probe: EvalProbe): ProbeSc
   const latencyMs = Math.max(0, performance.now() - started);
   const retrievedIds = ranked.map(({ entry }) => entry.id);
   const entries = ranked.map(({ entry }) => entry);
-  const failures: string[] = [];
-  const uncertainty: string[] = [];
 
   const recall = recallAtK(retrievedIds, probe.relevant_ids);
   const precision = precisionAtK(retrievedIds, probe.relevant_ids);
   const citationIds = entries.map((entry) => entry.source_ref.id);
-  const forbiddenIds = probe.expected_forbidden_ids ?? [];
   const answer = answerForProbe(entries, probe);
 
-  if (recall < (probe.min_recall_at_k ?? 1)) {
-    failures.push(`recall ${recall.toFixed(3)} below threshold`);
-  }
-  if (precision < (probe.min_precision_at_k ?? 0)) {
-    failures.push(`precision ${precision.toFixed(3)} below threshold`);
-  }
-  if (forbiddenIds.some((id) => retrievedIds.includes(id))) {
-    failures.push("retrieved forbidden namespace evidence");
-  }
-  if (probe.expect_no_results && retrievedIds.length > 0) {
-    failures.push("expected no retrievable evidence");
-  }
-  for (const junkId of probe.junk_ids ?? []) {
-    if (retrievedIds.includes(junkId)) {
-      failures.push(`retrieved declared junk ${junkId}`);
-    }
-  }
-  for (const expectedCitation of probe.expected_citation_ids ?? []) {
-    if (!citationIds.includes(expectedCitation)) {
-      failures.push(`missing expected citation ${expectedCitation}`);
-    }
-  }
-  for (const expectedSourceRef of probe.required_source_ref_ids ?? []) {
-    if (!citationIds.includes(expectedSourceRef)) {
-      failures.push(`missing required source ref ${expectedSourceRef}`);
-    }
-  }
-  for (const expectedTerm of probe.expected_answer_terms ?? []) {
-    if (!answer.toLowerCase().includes(expectedTerm.toLowerCase())) {
-      failures.push(`missing expected answer term ${expectedTerm}`);
-    }
-  }
-  if (entries.some((entry) => isStale(entry, probe))) {
-    uncertainty.push("stale");
-  }
-  if (hasUseContradiction(entries)) {
-    uncertainty.push("contradiction");
-  }
-  for (const expected of probe.expected_uncertainty ?? []) {
-    if (!uncertainty.includes(expected)) {
-      failures.push(`missing expected uncertainty ${expected}`);
-    }
-  }
-  if (probe.max_latency_ms && latencyMs > probe.max_latency_ms) {
-    failures.push(`latency ${latencyMs.toFixed(3)}ms above threshold`);
-  }
+  // Staleness and contradiction detection stay here, next to the retrieval
+  // logic; the collectors in ./runner-scoring.ts (issue 752) compose their
+  // results. The concatenation order below is the original push order, so the
+  // failure list is byte-identical.
+  const uncertainty = collectUncertainty({
+    stale: entries.some((entry) => isStale(entry, probe)),
+    contradiction: hasUseContradiction(entries),
+  });
+
+  const failures = [
+    ...collectMetricFailures(probe, { recall, precision }),
+    ...collectRetrievalFailures(probe, retrievedIds),
+    ...collectCitationFailures(probe, citationIds),
+    ...collectAnswerFailures(probe, answer),
+    ...collectUncertaintyFailures(probe, uncertainty),
+    ...collectLatencyFailures(probe, latencyMs),
+  ];
 
   return {
     id: probe.id,
@@ -246,7 +223,9 @@ export function runEvalSuite(
         {
           probes_total: categoryProbes.length,
           probes_passed: categoryProbes.filter((probe) => probe.passed).length,
-          recall_at_k: Number(mean(categoryProbes.map((probe) => probe.recall_at_k)).toFixed(3)),
+          recall_at_k: Number(
+            mean(categoryProbes.map((probe) => probe.recall_at_k)).toFixed(3),
+          ),
           precision_at_k: Number(
             mean(categoryProbes.map((probe) => probe.precision_at_k)).toFixed(3),
           ),
@@ -267,14 +246,23 @@ export function runEvalSuite(
     probes_failed: probes.filter((probe) => !probe.passed).length,
     metrics: {
       recall_at_k: Number(mean(probes.map((probe) => probe.recall_at_k)).toFixed(3)),
-      precision_at_k: Number(mean(probes.map((probe) => probe.precision_at_k)).toFixed(3)),
+      precision_at_k: Number(
+        mean(probes.map((probe) => probe.precision_at_k)).toFixed(3),
+      ),
       citation_grounding: Number(
-        mean(citationProbes.map((probe) => (probe.failures.length === 0 ? 1 : 0))).toFixed(3),
+        mean(
+          citationProbes.map((probe) => (probe.failures.length === 0 ? 1 : 0)),
+        ).toFixed(3),
       ),
       namespace_leak_count: probes.filter((probe) =>
         probe.failures.includes("retrieved forbidden namespace evidence"),
       ).length,
-      p95_latency_ms: Number(percentile(probes.map((probe) => probe.latency_ms), 95).toFixed(3)),
+      p95_latency_ms: Number(
+        percentile(
+          probes.map((probe) => probe.latency_ms),
+          95,
+        ).toFixed(3),
+      ),
     },
     categories,
     probes,

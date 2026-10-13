@@ -39,10 +39,7 @@ import {
   type WorkingSetContextPackFragment,
   type WorkingSetScope,
 } from "../realtime/working-set.ts";
-import {
-  createAllocator,
-  wholePackBudgetFor,
-} from "./context-pack-allocator.ts";
+import { createAllocator, wholePackBudgetFor } from "./context-pack-allocator.ts";
 import { admitAppendSection } from "./context-pack-append-sections.ts";
 import {
   agentContextPackStrictSchema,
@@ -61,11 +58,8 @@ import {
 import { CONTEXT_PACK_SECTION_PRIORITY } from "./context-pack-budget.ts";
 import { POINTERS_SECTION_NAME } from "./context-pack-pointers.ts";
 import { assembleSections, sectionsReceipt } from "./context-pack-payload.ts";
-import {
-  selectSections,
-  type SectionSelection,
-} from "./context-pack-selection.ts";
-import { canReadNamespace } from "./read-scope.ts";
+import { selectSections, type SectionSelection } from "./context-pack-selection.ts";
+import { canReadNamespace } from "../domain/read-scope.ts";
 import { recoveryWalStoreFor, workingSetStoreFor } from "./realtime-stores.ts";
 import { physicalNamespace } from "./shared-namespace.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
@@ -75,7 +69,7 @@ import type { MemoryToolDependencies } from "./types.ts";
 export { SECTION_NAMES } from "./context-pack-args.ts";
 export { CONTEXT_PACK_SECTION_PRIORITY };
 
-export interface AgentContextPackBuildResult {
+interface AgentContextPackBuildResult {
   payload: unknown;
   isError: boolean;
 }
@@ -89,8 +83,7 @@ function authorizePack(
   args: AgentContextPackArgs,
   auth: AuthIdentity | undefined,
   names?: SharedNamespaceConfig,
-):
-  { denial: AgentContextPackBuildResult } | { auth: AuthIdentity; ns: string } {
+): { denial: AgentContextPackBuildResult } | { auth: AuthIdentity; ns: string } {
   if (!auth || !canRead(auth.role, "sessions")) {
     return {
       denial: {
@@ -171,9 +164,7 @@ export async function buildAgentContextPackPayload(
   // never bleed across the boundary.
   const readNamespace = physicalNamespace(ns, names);
 
-  const allocator = createAllocator(
-    wholePackBudgetFor(args.budget?.max_tokens),
-  );
+  const allocator = createAllocator(wholePackBudgetFor(args.budget?.max_tokens));
   const stores = loadAppendStores({ selection, scope, dependencies });
 
   // ---- working_set (priority 1), recovery (priority 2) --------------------
@@ -181,8 +172,7 @@ export async function buildAgentContextPackPayload(
     allocator,
     key: "working_set",
     section:
-      (stores.workingSet?.working_set as Record<string, unknown> | undefined) ??
-      null,
+      (stores.workingSet?.working_set as Record<string, unknown> | undefined) ?? null,
     reconciledCounts: ["item_count"],
   });
   // Both counts reconcile: `pending_count` is what the caller acts on, so a
@@ -191,9 +181,7 @@ export async function buildAgentContextPackPayload(
   const recoverySection = admitAppendSection({
     allocator,
     key: "recovery",
-    section:
-      (stores.recovery?.recovery as Record<string, unknown> | undefined) ??
-      null,
+    section: (stores.recovery?.recovery as Record<string, unknown> | undefined) ?? null,
     reconciledCounts: ["item_count", "pending_count"],
   });
 
@@ -261,7 +249,7 @@ export async function buildAgentContextPackPayload(
   };
 }
 
-export interface AgentReflexPointersBuildResult {
+interface AgentReflexPointersBuildResult {
   payload: unknown;
   isError: boolean;
 }
@@ -280,7 +268,7 @@ export interface AgentReflexPointersBuildResult {
  * Placement into the prompt is the CLIENT's job — this returns a small
  * structured envelope, never an implicit MCP `_meta` injection.
  */
-export async function buildAgentReflexPointersPayload(
+async function buildAgentReflexPointersPayload(
   args: AgentReflexPointersArgs,
   auth: AuthIdentity | undefined,
   dependencies: MemoryToolDependencies,

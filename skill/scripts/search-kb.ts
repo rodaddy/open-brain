@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Search PAI Knowledge Base
 // Usage: search-kb.ts <query> [--decisions] [--learnings] [--patterns] [--limit N]
 
@@ -31,13 +31,7 @@ interface SearchResult extends KBEntry {
 }
 
 function loadKB(filename: string): KBEntry[] {
-  const kbPath = join(
-    homedir(),
-    ".config",
-    "pai-private",
-    "knowledge",
-    filename,
-  );
+  const kbPath = join(homedir(), ".config", "pai-private", "knowledge", filename);
   if (!existsSync(kbPath)) return [];
 
   try {
@@ -56,8 +50,8 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 2);
 }
 
-function scoreEntry(entry: KBEntry, queryTokens: string[]): number {
-  const searchFields = [
+function searchableText(entry: KBEntry): string {
+  return [
     entry.title || "",
     entry.summary || "",
     entry.context || "",
@@ -69,82 +63,114 @@ function scoreEntry(entry: KBEntry, queryTokens: string[]): number {
   ]
     .join(" ")
     .toLowerCase();
+}
 
+function tokenScore(entry: KBEntry, queryTokens: string[]): number {
+  const searchFields = searchableText(entry);
+  const title = (entry.title || "").toLowerCase();
   let score = 0;
 
-  // Token matching
   for (const token of queryTokens) {
     if (searchFields.includes(token)) {
       score += 10;
       // Bonus for title match
-      if ((entry.title || "").toLowerCase().includes(token)) {
+      if (title.includes(token)) {
         score += 20;
       }
     }
   }
 
-  // Weight bonus (0-100 normalized to 0-10)
-  score += (entry.weight || 0) / 10;
-
-  // Recency bonus (last 7 days = +20, last 30 days = +10)
-  if (entry.lastSeen) {
-    const lastSeen = new Date(entry.lastSeen);
-    const now = new Date();
-    const daysSince =
-      (now.getTime() - lastSeen.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSince <= 7) score += 20;
-    else if (daysSince <= 30) score += 10;
-  }
-
-  // Impact bonus
-  if (entry.impact === "CRITICAL") score += 15;
-  else if (entry.impact === "HIGH") score += 10;
-
   return score;
 }
 
-function search(
-  query: string,
-  categories: string[],
-  limit: number,
+// Recency bonus (last 7 days = +20, last 30 days = +10)
+function recencyBonus(lastSeen: string | undefined): number {
+  if (!lastSeen) return 0;
+  const seen = new Date(lastSeen);
+  const now = new Date();
+  const daysSince = (now.getTime() - seen.getTime()) / (1000 * 60 * 60 * 24);
+  if (daysSince <= 7) return 20;
+  if (daysSince <= 30) return 10;
+  return 0;
+}
+
+function impactBonus(impact: string | undefined): number {
+  if (impact === "CRITICAL") return 15;
+  if (impact === "HIGH") return 10;
+  return 0;
+}
+
+function scoreEntry(entry: KBEntry, queryTokens: string[]): number {
+  return (
+    tokenScore(entry, queryTokens) +
+    // Weight bonus (0-100 normalized to 0-10)
+    (entry.weight || 0) / 10 +
+    recencyBonus(entry.lastSeen) +
+    impactBonus(entry.impact)
+  );
+}
+
+function collectCategory(
+  filename: string,
+  category: SearchResult["category"],
+  queryTokens: string[],
 ): SearchResult[] {
+  const collected: SearchResult[] = [];
+  for (const entry of loadKB(filename)) {
+    const score = scoreEntry(entry, queryTokens);
+    if (score > 10) {
+      collected.push({ ...entry, category, score });
+    }
+  }
+  return collected;
+}
+
+function search(query: string, categories: string[], limit: number): SearchResult[] {
   const queryTokens = tokenize(query);
+  const wanted = (name: string) => categories.includes(name) || categories.length === 0;
   const results: SearchResult[] = [];
 
-  if (categories.includes("decisions") || categories.length === 0) {
-    const decisions = loadKB("decisions-v2.json");
-    for (const entry of decisions) {
-      const score = scoreEntry(entry, queryTokens);
-      if (score > 10) {
-        results.push({ ...entry, category: "decision", score });
-      }
-    }
+  if (wanted("decisions")) {
+    results.push(...collectCategory("decisions-v2.json", "decision", queryTokens));
   }
 
-  if (categories.includes("learnings") || categories.length === 0) {
-    const learnings = loadKB("learnings-v2.json");
-    for (const entry of learnings) {
-      const score = scoreEntry(entry, queryTokens);
-      if (score > 10) {
-        results.push({ ...entry, category: "learning", score });
-      }
-    }
+  if (wanted("learnings")) {
+    results.push(...collectCategory("learnings-v2.json", "learning", queryTokens));
   }
 
-  if (categories.includes("patterns") || categories.length === 0) {
-    const patterns = loadKB("patterns-v2.json");
-    for (const entry of patterns) {
-      const score = scoreEntry(entry, queryTokens);
-      if (score > 10) {
-        results.push({ ...entry, category: "pattern", score });
-      }
-    }
+  if (wanted("patterns")) {
+    results.push(...collectCategory("patterns-v2.json", "pattern", queryTokens));
   }
 
   // Sort by score descending
   results.sort((a, b) => b.score - a.score);
 
   return results.slice(0, limit);
+}
+
+function formatDecisionDetail(result: SearchResult): string {
+  let output = "";
+  if (result.context) {
+    output += `\n  *Rationale:* ${result.context.slice(0, 200)}...`;
+  }
+  if (result.alternatives && result.alternatives.length > 0) {
+    output += `\n  *Rejected:* ${result.alternatives[0]}`;
+  }
+  return output;
+}
+
+function formatLearningDetail(result: SearchResult): string {
+  let output = "";
+  if (result.problem) {
+    output += `\n  *Problem:* ${result.problem}`;
+  }
+  if (result.solution) {
+    output += `\n  *Solution:* ${result.solution}`;
+  }
+  if (result.avoid) {
+    output += `\n  *Avoid:* ${result.avoid}`;
+  }
+  return output;
 }
 
 function formatResult(result: SearchResult): string {
@@ -159,33 +185,23 @@ function formatResult(result: SearchResult): string {
   }
 
   if (result.category === "decision") {
-    if (result.context) {
-      output += `\n  *Rationale:* ${result.context.slice(0, 200)}...`;
-    }
-    if (result.alternatives && result.alternatives.length > 0) {
-      output += `\n  *Rejected:* ${result.alternatives[0]}`;
-    }
+    output += formatDecisionDetail(result);
   }
 
   if (result.category === "learning") {
-    if (result.problem) {
-      output += `\n  *Problem:* ${result.problem}`;
-    }
-    if (result.solution) {
-      output += `\n  *Solution:* ${result.solution}`;
-    }
-    if (result.avoid) {
-      output += `\n  *Avoid:* ${result.avoid}`;
-    }
+    output += formatLearningDetail(result);
   }
 
   return output;
 }
 
-function main() {
-  const args = process.argv.slice(2);
+interface ParsedArgs {
+  categories: string[];
+  limit: number;
+  query: string;
+}
 
-  // Parse flags
+function parseArgs(args: string[]): ParsedArgs {
   const categories: string[] = [];
   let limit = 10;
   const queryParts: string[] = [];
@@ -202,7 +218,35 @@ function main() {
     }
   }
 
-  const query = queryParts.join(" ");
+  return { categories, limit, query: queryParts.join(" ") };
+}
+
+function printSection(heading: string, results: SearchResult[]): void {
+  if (results.length === 0) return;
+  console.log(`### ${heading} (${results.length} found)\n`);
+  results.forEach((r) => console.log(formatResult(r) + "\n"));
+}
+
+function printResults(query: string, results: SearchResult[]): void {
+  console.log(`## Brain Query: "${query}"\n`);
+
+  // Group by category
+  printSection(
+    "Decisions",
+    results.filter((r) => r.category === "decision"),
+  );
+  printSection(
+    "Learnings",
+    results.filter((r) => r.category === "learning"),
+  );
+  printSection(
+    "Patterns",
+    results.filter((r) => r.category === "pattern"),
+  );
+}
+
+function main() {
+  const { categories, limit, query } = parseArgs(process.argv.slice(2));
 
   if (!query) {
     console.log(
@@ -218,29 +262,7 @@ function main() {
     process.exit(0);
   }
 
-  console.log(`## Brain Query: "${query}"\n`);
-
-  // Group by category
-  const byCategory = {
-    decision: results.filter((r) => r.category === "decision"),
-    learning: results.filter((r) => r.category === "learning"),
-    pattern: results.filter((r) => r.category === "pattern"),
-  };
-
-  if (byCategory.decision.length > 0) {
-    console.log(`### Decisions (${byCategory.decision.length} found)\n`);
-    byCategory.decision.forEach((r) => console.log(formatResult(r) + "\n"));
-  }
-
-  if (byCategory.learning.length > 0) {
-    console.log(`### Learnings (${byCategory.learning.length} found)\n`);
-    byCategory.learning.forEach((r) => console.log(formatResult(r) + "\n"));
-  }
-
-  if (byCategory.pattern.length > 0) {
-    console.log(`### Patterns (${byCategory.pattern.length} found)\n`);
-    byCategory.pattern.forEach((r) => console.log(formatResult(r) + "\n"));
-  }
+  printResults(query, results);
 }
 
 main();

@@ -17,6 +17,7 @@ import {
   openBrainWriterMetadata,
   writerProvenance,
 } from "./session-event-provenance.ts";
+import { createSessionRepository } from "../db/session-repository.ts";
 
 /**
  * The tool's declared input shape, lifted out of the registration call so the
@@ -61,23 +62,15 @@ async function resolveLane(
   namespace: string,
   clientId: string,
 ): Promise<{ lane: LaneRow | undefined; created: boolean }> {
-  const lanes = await dependencies.pool.query(
-    `SELECT id, status FROM ob_session_lanes
-          WHERE namespace = $1 AND session_key = $2`,
-    [namespace, args.session_key],
-  );
-  const existing = lanes.rows[0];
-  if (existing || !args.create_if_missing)
-    return { lane: existing, created: false };
+  const repository = createSessionRepository(dependencies.pool);
+  const existing = await repository.selectEventLane({
+    namespace,
+    sessionKey: args.session_key,
+  });
+  if (existing || !args.create_if_missing) return { lane: existing, created: false };
 
-  const created = await dependencies.pool.query(
-    `INSERT INTO ob_session_lanes
-             (session_key, namespace, status, agent, source, channel_id, thread_id,
-              project, topic, metadata, created_by)
-           VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
-           ON CONFLICT (namespace, session_key) DO NOTHING
-           RETURNING id, status`,
-    [
+  const lane = await repository.insertEventLane({
+    values: [
       args.session_key,
       namespace,
       args.agent ?? null,
@@ -89,8 +82,7 @@ async function resolveLane(
       JSON.stringify(args.server_id ? { server_id: args.server_id } : {}),
       clientId,
     ],
-  );
-  const lane = created.rows[0];
+  });
   return { lane, created: Boolean(lane) };
 }
 
@@ -106,18 +98,11 @@ async function insertEvent(options: {
   metadata: Record<string, unknown>;
   clientId: string;
 }): Promise<{ id: unknown; created_at: unknown } | undefined> {
-  const { dependencies, args, laneId, importance, metadata, clientId } =
-    options;
+  const { dependencies, args, laneId, importance, metadata, clientId } = options;
   const embedded = await embeddingFields(dependencies, args.content);
-  const events = await dependencies.pool.query(
-    `INSERT INTO ob_session_events
-           (lane_id, event_type, content, source, artifact_path, transcript_ref,
-            transcript, occurred_at, importance, metadata, embedding, content_hash,
-            embedded_at, embedding_model, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15)
-         ON CONFLICT (lane_id, content_hash) WHERE content_hash IS NOT NULL DO NOTHING
-         RETURNING id, created_at`,
-    [
+  const repository = createSessionRepository(dependencies.pool);
+  return repository.insertSessionEvent({
+    values: [
       laneId,
       args.event_type,
       args.content,
@@ -134,8 +119,7 @@ async function insertEvent(options: {
       embedded.model,
       clientId,
     ],
-  );
-  return events.rows[0];
+  });
 }
 
 async function appendSessionEvent(

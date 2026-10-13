@@ -1,5 +1,5 @@
 import { BackgroundTraceRecorder } from "./background-tracing.ts";
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import type { FleetEnvelope } from "./nats-runtime.ts";
 import { envelopeFromBytes, envelopeToBytes } from "./nats-runtime.ts";
 import type {

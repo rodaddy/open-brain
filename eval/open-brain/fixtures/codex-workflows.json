@@ -86,7 +86,10 @@
       "title": "One-off system tmp instruction",
       "content": "One-off task instruction: for this single tool compatibility check, write Codex temporary worktrees and scratch reports under /tmp and delete them immediately.",
       "tags": ["one-off", "tmp", "tool-compatibility", "codex"],
-      "aliases": ["single tool compatibility check", "temporary worktrees scratch reports"],
+      "aliases": [
+        "single tool compatibility check",
+        "temporary worktrees scratch reports"
+      ],
       "created_at": "2026-06-12T08:00:00.000Z",
       "source_ref": {
         "source": "brain",
@@ -126,7 +129,11 @@
       "title": "Stale Open Brain runtime note",
       "content": "Old repo evidence: Open Brain runtime TypeScript validation should use npm and Node 20 scripts.",
       "tags": ["open-brain", "runtime", "stale", "node", "typescript"],
-      "aliases": ["old node runtime", "npm typecheck", "Open Brain runtime TypeScript validation"],
+      "aliases": [
+        "old node runtime",
+        "npm typecheck",
+        "Open Brain runtime TypeScript validation"
+      ],
       "created_at": "2024-02-01T00:00:00.000Z",
       "updated_at": "2024-02-01T00:00:00.000Z",
       "source_ref": {

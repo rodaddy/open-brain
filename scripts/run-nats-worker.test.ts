@@ -1,19 +1,38 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { silentTracingLogger } from "../server/observability/trace-logger-fixture.ts";
-import { createNatsBridgeHealth } from "../src/nats-bridge.ts";
+import { createNatsBridgeHealth } from "../server/application/nats-bridge.ts";
 import {
   readNatsWorkerBoundary,
   type NatsWorkerRuntime,
   type StartNatsWorkerOptions,
-} from "../src/nats-worker.ts";
-import type { BackgroundTraceBody } from "../src/background-tracing.ts";
+} from "../server/application/nats-worker.ts";
+import type { BackgroundTraceBody } from "../server/application/background-tracing.ts";
+import type { AuthInfo } from "../server/types.ts";
 import {
   createTracingRuntime,
   type McpTracingConfig,
   type TraceBody,
   type TracingSink,
 } from "../server/observability/langfuse-tracing.ts";
-import { safeWorkerError, startNatsWorkerProcess } from "./run-nats-worker.ts";
+import {
+  safeWorkerError,
+  startNatsWorkerProcess,
+  type StartNatsWorkerProcessOptions,
+} from "./run-nats-worker.ts";
+
+type CreateDbPoolFn = NonNullable<StartNatsWorkerProcessOptions["createDbPool"]>;
+type ServeFn = NonNullable<StartNatsWorkerProcessOptions["serve"]>;
+
+/**
+ * A pool stand-in that only has to answer `end()`.
+ *
+ * `pg.Pool` is far wider than these tests exercise, so the fake is narrowed at
+ * the seam with a single documented assertion rather than an `any` at each call
+ * site.
+ */
+function fakePool(onEnd: () => void | Promise<void>): ReturnType<CreateDbPoolFn> {
+  return { end: async () => onEnd() } as unknown as ReturnType<CreateDbPoolFn>;
+}
 
 const ENABLED_CONFIG: McpTracingConfig = {
   enabled: true,
@@ -39,34 +58,54 @@ function recordingSink(): TracingSink & {
   };
 }
 
+/**
+ * The bridge runtime every case below starts from: AVAILABLE, on the same
+ * subject, with only its `close` behavior varying per case.
+ */
+function workerRuntime(
+  env: NodeJS.ProcessEnv,
+  close: () => Promise<void>,
+): NatsWorkerRuntime {
+  return {
+    boundary: readNatsWorkerBoundary(env),
+    health: createNatsBridgeHealth("available"),
+    subject: "dev.ob.memory.context_pack",
+    close,
+  };
+}
+
+/** The one configured token these cases need to get past the auth gate. */
+function testTokens(): Map<string, AuthInfo> {
+  return new Map([["secret-token", { role: "admin", clientId: "rico" }]]);
+}
+
+/** One background trace the worker's own sink is expected to carry and drain. */
+const BACKGROUND_TRACE: BackgroundTraceBody = {
+  name: "nats.message",
+  tags: ["background-job", "nats"],
+  metadata: { status: "success" },
+  observations: [],
+  startedAt: 1,
+  endedAt: 2,
+};
+
+/** A credential-free broker on an ephemeral health port — no port is bound. */
+const LOCAL_WORKER_ENV = {
+  OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
+  OPEN_BRAIN_NATS_WORKER_HEALTH_PORT: "0",
+};
+
 describe("startNatsWorkerProcess", () => {
   it("routes background traces into the process-owned sink and drains it on shutdown", async () => {
-    const env = {
-      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
-      OPEN_BRAIN_NATS_WORKER_HEALTH_PORT: "0",
-    };
+    const env = { ...LOCAL_WORKER_ENV };
     const sink = recordingSink();
-    const body: BackgroundTraceBody = {
-      name: "nats.message",
-      tags: ["background-job", "nats"],
-      metadata: { status: "success" },
-      observations: [],
-      startedAt: 1,
-      endedAt: 2,
-    };
-    const runtime: NatsWorkerRuntime = {
-      boundary: readNatsWorkerBoundary(env),
-      health: createNatsBridgeHealth("available"),
-      subject: "dev.ob.memory.context_pack",
-      close: async () => undefined,
-    };
+    const runtime = workerRuntime(env, async () => undefined);
 
     const processRuntime = await startNatsWorkerProcess({
       env,
       log: { info: () => undefined, error: () => undefined },
-      buildTokens: () =>
-        new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
-      createDbPool: () => ({ end: async () => undefined }) as any,
+      buildTokens: testTokens,
+      createDbPool: () => fakePool(() => undefined),
       createTracing: () =>
         createTracingRuntime({
           config: ENABLED_CONFIG,
@@ -74,7 +113,7 @@ describe("startNatsWorkerProcess", () => {
           logger: silentTracingLogger(),
         }),
       startWorker: async (options: StartNatsWorkerOptions) => {
-        options.tracing?.emitBackground(body);
+        options.tracing?.emitBackground(BACKGROUND_TRACE);
         return runtime;
       },
     });
@@ -94,14 +133,9 @@ describe("startNatsWorkerProcess", () => {
     let poolEnded = false;
     const infoLogs: string[] = [];
     const errorLogs: string[] = [];
-    const runtime: NatsWorkerRuntime = {
-      boundary: readNatsWorkerBoundary(env),
-      health: createNatsBridgeHealth("available"),
-      subject: "dev.ob.memory.context_pack",
-      close: async () => {
-        runtimeClosed = true;
-      },
-    };
+    const runtime = workerRuntime(env, async () => {
+      runtimeClosed = true;
+    });
 
     await expect(
       startNatsWorkerProcess({
@@ -114,18 +148,15 @@ describe("startNatsWorkerProcess", () => {
             errorLogs.push(JSON.stringify({ message, extra }));
           },
         },
-        buildTokens: () =>
-          new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+        buildTokens: testTokens,
         createDbPool: () =>
-          ({
-            end: async () => {
-              poolEnded = true;
-            },
-          }) as any,
+          fakePool(() => {
+            poolEnded = true;
+          }),
         startWorker: async () => runtime,
         serve: (() => {
           throw new Error("listen failed for nats://user:pass@broker.internal");
-        }) as any,
+        }) as unknown as ServeFn,
       }),
     ).rejects.toThrow("listen failed");
 
@@ -138,20 +169,14 @@ describe("startNatsWorkerProcess", () => {
 
   it("continues pool shutdown when bridge close times out", async () => {
     const env = {
-      OPENBRAIN_NATS_URL: "nats://127.0.0.1:4222",
-      OPEN_BRAIN_NATS_WORKER_HEALTH_PORT: "0",
+      ...LOCAL_WORKER_ENV,
       OPEN_BRAIN_NATS_WORKER_SHUTDOWN_TIMEOUT_MS: "1",
     };
     let poolEnded = false;
     const errorLogs: string[] = [];
-    const runtime: NatsWorkerRuntime = {
-      boundary: readNatsWorkerBoundary(env),
-      health: createNatsBridgeHealth("available"),
-      subject: "dev.ob.memory.context_pack",
-      close: async () => {
-        await new Promise(() => undefined);
-      },
-    };
+    const runtime = workerRuntime(env, async () => {
+      await new Promise(() => undefined);
+    });
 
     const processRuntime = await startNatsWorkerProcess({
       env,
@@ -161,14 +186,11 @@ describe("startNatsWorkerProcess", () => {
           errorLogs.push(JSON.stringify({ message, extra }));
         },
       },
-      buildTokens: () =>
-        new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+      buildTokens: testTokens,
       createDbPool: () =>
-        ({
-          end: async () => {
-            poolEnded = true;
-          },
-        }) as any,
+        fakePool(() => {
+          poolEnded = true;
+        }),
       startWorker: async () => runtime,
     });
 
@@ -204,9 +226,9 @@ describe("safeWorkerError", () => {
     expect(safeWorkerError(new RangeError("x"))).toEqual({
       error_type: "RangeError",
     });
-    expect(
-      safeWorkerError(new AggregateError([new Error("a")], "agg")),
-    ).toEqual({ error_type: "AggregateError" });
+    expect(safeWorkerError(new AggregateError([new Error("a")], "agg"))).toEqual({
+      error_type: "AggregateError",
+    });
   });
 
   it("reports typeof for non-Error throws", () => {

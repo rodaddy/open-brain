@@ -1,6 +1,9 @@
 # Dream stages — ethereal runs
 
-**Status:** design, not implemented.
+**Status:** implemented for REM grading (checked 2026-09-21):
+`scripts/rem-ethereal-cohort.ts` freezes a cohort and `scripts/rem-ethereal-run.ts`
+grades it into a disposable `dream_run_NNN` schema. The corpus figures below are
+the 2026-07-27 measurement, not current counts.
 **Written:** 2026-07-27
 
 ## The rule
@@ -117,7 +120,7 @@ Read from a random sample of the actual content:
 2. **The model contradicts itself in a single sentence.** One candidate reads
    *"use model 'gpt-5.6-sol' (not 'gpt-5.6-sol')"* — emitted verbatim, unnoticed.
    4B is undersized for this work, which is what **#383** (local MLX generation
-   endpoint sized for core01) exists to address.
+   endpoint sized for the retired host) exists to address.
 3. **The two largest outputs cannot be promoted.** `preference` (112) and
    `correction` (12) are not in `GRADUATE_TYPES`, which is only
    `fact | decision | handoff`. As it stands the distiller's most common product
@@ -133,7 +136,7 @@ and the failure is not extraction but taxonomy.
 ## Dogfood-only guard rails
 
 **These are scaffolding, not architecture. They come out when this leaves
-dogfood mode or moves to core01.** Stated explicitly so nobody later mistakes
+dogfood mode or moves to the retired host.** Stated explicitly so nobody later mistakes
 temporary experiment safety for a permanent design property.
 
 A dedicated Postgres role with `SELECT` on real tables and full rights on
@@ -143,7 +146,7 @@ quietly. It is cheaper than remembering not to, and it protects the corpus
 through 20–100 destructive iterations.
 
 **Removal condition:** when dream stages graduate from experiment to real
-behavior — on core01, or when dogfooding ends — runs move into the normal lanes
+behavior — on the retired host, or when dogfooding ends — runs move into the normal lanes
 and this role goes away. The owner's call: *"just for this while we're
 dogfooding, it shouldn't be a real thing."*
 

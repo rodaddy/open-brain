@@ -31,7 +31,7 @@ export type LegacyLoggerSettingsReader = () => LegacyLoggerSettings;
  * Env-absent defaults.
  *
  * Registered before anything else, so a script or a test that imports a
- * `server/` module directly — without going through the `src/logger.ts`
+ * `server/` module directly — without going through the legacy logging
  * adapter or `server/main.ts` — logs exactly as it did when no relevant
  * variable was set: level `info`, service `open-brain`, no file sink.
  */

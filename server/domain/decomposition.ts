@@ -1,5 +1,11 @@
-import type { Table } from "../../src/types.ts";
-import { CHUNK_THRESHOLD, chunkText } from "../../src/chunking.ts";
+/**
+ * DreamEngine entry decomposition: plans how one oversized entry would be split
+ * into overlapping chunks. Pure planning -- `dry_run` is always true and this
+ * module writes nothing.
+ */
+
+import type { Table } from "../types.ts";
+import { CHUNK_THRESHOLD, chunkText } from "../embedding/chunking.ts";
 
 export const DEFAULT_DECOMPOSITION_MAX_CHARS = 2000;
 export const DEFAULT_DECOMPOSITION_OVERLAP_CHARS = 200;

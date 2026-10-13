@@ -5,10 +5,15 @@
  * index on ob_entities. Split out of graph-derivation.test.ts so each suite
  * stays a readable size.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
-import { auth, baseInput, FakeGraph } from "./graph-derivation-test-helpers.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
+import {
+  auth,
+  baseInput,
+  asRepository,
+  FakeGraph,
+} from "./graph-derivation-test-helpers.ts";
 
 const ANCHOR_CANONICAL = "thought:11111111-1111-4111-8111-111111111111";
 
@@ -32,7 +37,7 @@ async function stableCanonicalIdSurvivesADisplayNameChange() {
   // arbitrate on the canonical index so the rename is an in-place UPDATE.
   const g = new FakeGraph();
   const first = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorName: "release plan",
@@ -57,7 +62,7 @@ async function stableCanonicalIdSurvivesADisplayNameChange() {
   // on any unarbitrated index collision, so this resolving cleanly is the proof
   // the canonical arbiter is correct.
   const renamed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorName: "Release Plan v2",
@@ -83,7 +88,7 @@ async function pureRenameRefreshesDisplayStateWhenTermsAreUnchanged() {
   const g = new FakeGraph();
 
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorName: "Original Title",
@@ -92,7 +97,7 @@ async function pureRenameRefreshesDisplayStateWhenTermsAreUnchanged() {
   );
 
   const renamed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorName: "Renamed Only",
@@ -121,7 +126,7 @@ async function twoAnchorsWithTheSameDisplayTitleCoexist() {
   const idB = "bbbbbbbb-2222-4222-8222-222222222222";
 
   const a = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorType: "source",
@@ -133,7 +138,7 @@ async function twoAnchorsWithTheSameDisplayTitleCoexist() {
   // The second source shares the exact title but is a different canonical id.
   // Pre-fix this call threw FakeUniqueViolation("idx_ob_entities_lookup_unique").
   const b = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorType: "source",
@@ -169,7 +174,7 @@ async function renamingAnchorOntoASiblingTitleDoesNotCollide() {
   const idB = "bbbbbbbb-4444-4444-8444-444444444444";
 
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorType: "source",
@@ -179,7 +184,7 @@ async function renamingAnchorOntoASiblingTitleDoesNotCollide() {
     }),
   );
   await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorType: "source",
@@ -191,7 +196,7 @@ async function renamingAnchorOntoASiblingTitleDoesNotCollide() {
 
   // Rename B onto A's title, adding a term so the run takes the write path.
   const renamed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       anchorType: "source",

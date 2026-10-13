@@ -2,7 +2,7 @@
 
 Open Brain changes are not complete just because this repository passes tests
 or the hosted server answers locally. Open Brain is a runtime dependency for
-MCP clients, generated skills, and Hermes agents. Any PR that changes a public
+MCP clients and generated skills. Any PR that changes a public
 contract must classify and, when applicable, complete the downstream rollout.
 
 ## When This Applies
@@ -16,7 +16,7 @@ Run this gate for any change that touches:
 - Database migrations that alter externally visible behavior.
 - `python/openbrain-memory` client behavior or package exports.
 - Generated skill content under `skill/` or agent-facing usage guidance.
-- Anything that a Hermes agent, mcp2cli, or another MCP consumer may call
+- Anything that mcp2cli or another MCP consumer may call
   directly.
 
 If none of those apply, say so explicitly in the PR and release notes.
@@ -30,22 +30,25 @@ If none of those apply, say so explicitly in the PR and release notes.
      operator's real local `~/.config/mcp2cli` as a test fixture.
 
 2. **Open Brain hosted verification**
-   - Merge alone does not deploy production-host. After the candidate is on current
-     `origin/main`, use the `CI` workflow's explicit `workflow_dispatch` on
-     `main` with `deploy_production=true`, or push a `v*` tag whose commit is
-     reachable from `origin/main`. The deploy job waits for `check`,
-     `db-integration`, and `python-package`, then runs
-     `scripts/core01-deploy-local.sh` on the `[self-hosted, macOS, production-host]`
-     runner.
-   - The script refuses unsupported refs, requires a manual-dispatch checkout to
-     equal the current `origin/main` tip, stages the runtime, installs locked
-     dependencies, bootstraps qmd when its script is present, runs migrations,
-     swaps the runtime, restarts the `gui/<uid>/com.rico.open-brain` LaunchAgent (and, warn-only, `com.rico.open-brain-nats-worker`), and checks
-     `http://127.0.0.1:3100/health`. After health passes it runs the Bun
-     `search-all` test file. That test is regression coverage, not a live
-     changed-tool smoke. On failed health the script restores the previous
-     runtime and checks health again.
-   - Therefore workflow success is necessary but not sufficient: after it
+   - Merge alone does not deploy. The live Open Brain is the Mini's launchd
+     service `com.rico.open-brain-local-clone`.
+     Deploy a committed `dogfood-v*` tag
+     from the repo checkout with
+     `OPENBRAIN_NATS_WORKER_LABEL=com.rico.open-brain-local-nats-worker OPENBRAIN_SERVICE_LABEL=com.rico.open-brain-local-clone scripts/local-clone-deploy.sh <tag>`
+     (`docs/local-clone-dogfood.md`, "Installed release"). The script has no
+     origin gate (its header, lines 10-14): it deploys any committed ref,
+     merged or not. Before deploying, confirm the tag is on main with
+     `git merge-base --is-ancestor <tag> origin/main` (exit 0).
+   - The script archives the committed ref with `git archive` (uncommitted
+     edits cannot ship), stages the runtime, runs migrations against the clone
+     env file, swaps the runtime with a `.previous` rollback, restarts the
+     service label and kickstarts the NATS worker label (warn-only), then
+     proves the new process is serving: the listener pid on the clone port
+     changed, its cwd is the runtime directory, and the runtime's
+     `.deployed-revision` equals the deployed sha. `/health` on
+     `http://127.0.0.1:3100/health` is a secondary liveness check. On a failed
+     proof the script rolls back to the previous runtime.
+   - Therefore deploy success is necessary but not sufficient: after it
      succeeds, run a real hosted MCP call for every changed tool or behavior and
      record the returned contract/version evidence.
 
@@ -112,40 +115,6 @@ If none of those apply, say so explicitly in the PR and release notes.
      refreshed tool schemas. Update the mcp2cli Open Brain generated skill/docs
      when changed behavior affects agent guidance.
 
-5. **rtech-hermes Python runtime/plugin check**
-   - Check whether the direct Hermes Open Brain path needs changes:
-     - `packages/rtech-hermes-runtime/src/rtech_hermes_runtime/openbrain/`
-     - `plugins/memory/openbrain/`
-     - `tests/plugins/memory/`
-     - `packages/rtech-hermes-runtime/tests/test_openbrain_*`
-   - Add or update fake-transport tests for call shapes, namespace/identity
-     behavior, error redaction, HTTP/mcp2cli transport behavior, and provider
-     load when applicable.
-   - Merge the `rtech-hermes` PR before claiming agent readiness.
-
-6. **Hermes live rollout**
-   - Do not use TN01 / `192.0.2.11` as the control point for this workflow.
-   - SSH to `192.0.2.71` as Rico or `bilby`.
-   - From there, update the fs collab checkout and run the agent update path:
-
-     ```bash
-     cd /mnt/collab/agent-backups/rtech-hermes
-     git pull --ff-only origin main
-     /opt/homebrew/bin/bash scripts/update.sh
-     ```
-
-   - Run this for each opted-in agent/profile that should receive the Open
-     Brain behavior.
-
-7. **Live agent canaries**
-   - Verify the agent venv imports the updated `rtech-hermes-runtime`.
-   - Verify `openbrain` loads through the Hermes memory registry.
-   - Verify a representative Open Brain read/write through the agent's
-     configured transport.
-   - Start a fresh Hermes session or restart the gateway when plugin/tool
-     schemas are snapshotted at session start.
-   - Check that no `openbrain_spool.jsonl` failures remain for the canary.
-
 ## Definition Of Done
 
 A contract-changing Open Brain PR is done only when all applicable downstream
@@ -155,8 +124,8 @@ steps above are either:
 - explicitly marked not applicable with a short reason.
 
 Do not close the issue or report the rollout done after only local tests,
-hosted Open Brain tests, or mcp2cli schema checks when Hermes agent behavior is
-in scope.
+hosted Open Brain tests, or mcp2cli schema checks when another downstream
+consumer is in scope.
 
 ## Contract Manifest
 
@@ -182,21 +151,22 @@ The manifest includes:
 
 `contract_scope` is `required_openbrain_memory_contract`. The manifest is the
 canonical compatibility contract for required memory/session/repo-fact behavior
-that Hermes, mcp2cli, and generated Open Brain skills must depend on. It is not
+that mcp2cli and generated Open Brain skills must depend on. It is not
 yet a typed schema export for every optional Open Brain MCP tool.
 
 `schema_hash` is deterministic and excludes `generated_at`. It includes the
 required capability list, required tool contracts, repo-fact metadata contract,
-and repo-fact validation semantics. Downstream clients such as `rtech-hermes`
-should validate `contract_version`, `contract_scope`, `schema_hash`, minimum
+and repo-fact validation semantics. Downstream clients should validate
+`contract_version`, `contract_scope`, `schema_hash`, minimum
 client version, compatible range, and required capabilities at startup. In
 required memory mode, incompatible or unreachable contracts must fail closed.
 
 ## qmd-Derived Repo Facts
 
-qmd runs with Open Brain on production-host (`192.0.2.21`) and acts as the
-repo-knowledge compiler. Open Brain is the shared runtime distribution layer
-for agents that cannot run qmd.
+qmd runs on the Mini (`10.0.1.20`), the same host as the live Open Brain
+service `com.rico.open-brain-local-clone`, and acts as the repo-knowledge
+compiler. Open Brain is the shared runtime distribution layer for agents that
+cannot run qmd.
 Required repo knowledge is promoted into Open Brain with `upsert_repo_fact` and
 read with `list_repo_facts`.
 
@@ -245,7 +215,7 @@ document:
 - proof that Open Brain remains a consumer of curated qmd-derived facts, not the
   owner of raw remote qmd access, SSH/host routing, bridge credentials, or
   operator identity policy;
-- non-fatal failure behavior for Hermes and other agents;
+- non-fatal failure behavior for downstream agents;
 - proof that required repo facts remain available through Open Brain when qmd
   is unavailable;
 - live canary evidence for both wrapper success and qmd-unavailable fallback.
@@ -262,8 +232,7 @@ Local classification:
 - Open Brain local verification applies.
 - Python package contract-version pin applies.
 - Hosted Open Brain deploy, mcp2cli cache refresh/generated skills, rtech-mcps
-  handoff, rtech-hermes runtime changes, Hermes live rollout, and live agent
-  canaries are deferred to #216 and must not run during the local-complete
+  handoff and live agent canaries are deferred to #216 and must not run during the local-complete
   slice without explicit Rico approval.
 
 Required #216 evidence later:
@@ -271,5 +240,5 @@ Required #216 evidence later:
 - Hosted `get_contract` returns the new `contract_version`,
   `agent_memory_adapter`, and `receipt_contract`.
 - mcp2cli and generated skills consume the refreshed manifest.
-- Hermes runtime/plugin compatibility is checked against the new adapter and
-  receipt contract fields before live canaries.
+- Downstream compatibility is checked against the new adapter and receipt
+  contract fields before live canaries.

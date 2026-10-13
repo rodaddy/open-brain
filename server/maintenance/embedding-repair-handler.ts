@@ -1,9 +1,9 @@
 /**
  * Server-owned maintenance-queue handler that drives stale-embedding repair.
  *
- * Issue #345. This is the piece that plugs the reusable detection/repair
- * primitives in `src/embedding-repair.ts` into the real, server-owned
- * `MaintenanceQueueRunner` from #343 (`src/maintenance-queue.ts`). The runner
+ * Plugs the reusable detection/repair primitives in
+ * `server/embedding/embedding-repair.ts` into the server-owned
+ * `MaintenanceQueueRunner` (`./maintenance-queue-runner.ts`). The runner
  * dispatches a claimed job to the handler registered under its `kind`; this
  * module builds exactly one such handler, for kind `embedding.repair`.
  *
@@ -35,7 +35,7 @@
  * Provider/model:
  *  - Repair uses the current configured embedding provider/model (embedding.ts).
  *    It never selects a new model. Model-drift detection compares against the
- *    current `EMBEDDING_MODEL`; the payload cannot request a different model.
+ *    current `embeddingModel`; the payload cannot request a different model.
  *
  * Telemetry:
  *  - Content-free. Every log line carries counts and the target table only —
@@ -47,8 +47,11 @@ import {
   BackgroundTraceRecorder,
   backgroundSessionId,
   type BackgroundTraceEmitter,
-} from "../application/background-tracing.ts";
-import { generateEmbeddingWithMetadata, EMBEDDING_MODEL } from "../../src/embedding.ts";
+} from "../observability/background-tracing.ts";
+import {
+  generateEmbeddingWithMetadata,
+  embeddingModel,
+} from "../embedding/provider.ts";
 import {
   repairStaleBatch,
   MAX_BATCH,
@@ -56,13 +59,13 @@ import {
   type EmbedWithMetaFn,
   type RepairBatchSummary,
   type StalenessReason,
-} from "../../src/embedding-repair.ts";
+} from "../embedding/embedding-repair.ts";
 import { EMBEDDING_TARGET_NAMES } from "../embedding/embedding-targets.ts";
+import type { MaintenanceJob } from "./maintenance-job.ts";
 import type {
-  MaintenanceJob,
   MaintenanceJobHandler,
   MaintenanceQueueLogger,
-} from "../../src/maintenance-queue.ts";
+} from "./maintenance-queue-runner.ts";
 
 /** Registered job kind for stale-embedding repair. Immutable identity. */
 export const EMBEDDING_REPAIR_JOB_KIND = "embedding.repair";
@@ -173,7 +176,7 @@ export function createEmbeddingRepairHandler(
   deps: EmbeddingRepairHandlerDeps,
 ): MaintenanceJobHandler {
   const embedFn = deps.embedFn ?? generateEmbeddingWithMetadata;
-  const currentModel = deps.currentModel ?? EMBEDDING_MODEL;
+  const currentModel = deps.currentModel ?? embeddingModel();
 
   return async function embeddingRepairHandler(job: MaintenanceJob): Promise<void> {
     const trace = new BackgroundTraceRecorder(deps.tracing, {

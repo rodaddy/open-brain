@@ -1,29 +1,21 @@
 /**
  * Tier and archive MUTATIONS: `set_tier`, `bulk_set_tier`, `bulk_archive`,
- * `demote_entry`.
+ * `demote_entry`. The WRITE half of the tiering surface whose read half is
+ * `tiering.ts`; every statement carries the auth-derived mutation predicate
+ * `namespacePredicate(identity, "write", ...)` on the UPDATE itself.
  *
- * Design authority: `docs/decisions/cognitive-tiering-dream-cycle.md` (the tier
- * model), `docs/identity-boundary.md` (token-derived identity), and
- * `docs/decisions/privilege-isolation-closed-brain.md` (server-side isolation).
- *
- * These are the WRITE half of the tiering surface whose read half is
- * `tiering.ts`. That split is the dream-cycle contract: `tier_recommendations`
- * and `list_stale` score and propose, and nothing in this file runs unless a
- * caller invoked it by name with the ids it wants changed. There is no planning
- * path into these handlers, so the dry-run default that governs DreamEngine has
- * nothing to default here -- an explicit `set_tier` call IS the opt-in.
- *
- * Every statement carries the auth-derived MUTATION predicate
- * (`namespacePredicate(identity, "write", ...)`), which resolves to the
- * caller's own namespace only -- never the shared read set. An ID-based update
- * without it writes whichever namespace happens to own the UUID, which is the
- * isolation bug class this repo's rules name explicitly. The predicate is on
- * the UPDATE itself, never a check in a prior statement, so there is no window
- * between the check and the write.
+ * See docs/decisions/tier-mutations-explicit-call-and-update-predicate.md for
+ * why these handlers need no dry-run default and why that predicate is not a
+ * prior check, and for the design authority this file answers to
+ * (docs/decisions/cognitive-tiering-dream-cycle.md,
+ * docs/identity-boundary.md, and
+ * docs/decisions/privilege-isolation-closed-brain.md).
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PoolClient } from "pg";
+import { withTransaction } from "../db/transaction.ts";
+import { createTieringStatements } from "../db/tiering-repository.ts";
+import { BULK_SET_TIER_CAUSE } from "../db/tier-moves.ts";
 import { canDelete, canWrite } from "../auth/permissions.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
 import type { ResourceTable } from "../auth/types.ts";
@@ -36,7 +28,7 @@ import {
 import { tableEnum, tierEnum } from "./curation-helpers.ts";
 
 /**
- * Entries a bulk call accepts, reproduced from observed current-src.
+ * Entries a bulk call accepts.
  *
  * This is a FROZEN WIRE VALUE, not a new bound introduced here: both bulk tools
  * already advertise `.max(100)` in their published schemas, so changing it
@@ -208,20 +200,16 @@ async function handleSetTier(
   // `table` reaches an interpolated position only after `tableEnum` has
   // narrowed it to one of five compile-time literals.
   const predicate = namespacePredicate(identity, "write", 3);
-  const { rows } = await dependencies.pool.query(
-    `UPDATE ${table} SET tier = $1
-          WHERE id = $2 AND archived_at IS NULL${predicate.clause}
-          RETURNING id, tier`,
-    [args.tier, args.id, ...predicate.values],
-  );
+  const rows = await createTieringStatements(dependencies.pool).setTier({
+    table,
+    predicateClause: predicate.clause,
+    params: [args.tier, args.id, ...predicate.values],
+  });
 
   // Not-mine and not-there collapse to ONE string, so this tool cannot be
   // used to probe which UUIDs exist in a namespace the caller cannot write.
   if (rows.length === 0) {
-    dependencies.logger.info(
-      { tool: "set_tier", table, matched: 0 },
-      "set_tier_noop",
-    );
+    dependencies.logger.info({ tool: "set_tier", table, matched: 0 }, "set_tier_noop");
     return errorResult("Entry not found or archived");
   }
 
@@ -255,10 +243,37 @@ async function handleBulkSetTier(
     dependencies,
     "bulk_set_tier",
     entries,
+    // Each entry's UPDATE also appends its `tier_moves` row (#1469 item 5),
+    // inside the transaction `runBulkTransaction` already opens -- so a batch
+    // that rolls back takes its history with it rather than leaving moves
+    // recorded for tiers that never changed.
+    //
+    // `affected` must keep counting ROWS UPDATED, so the outer statement
+    // selects from `moved`: the history INSERT is a side CTE whose own row
+    // count is not reported. `pre` supplies `from_tier`, which the UPDATE's
+    // `RETURNING` cannot see. The UPDATE text and its predicates are unchanged.
     (entry) => ({
-      sql: `UPDATE ${entry.table as ResourceTable} SET tier = $1
-                 WHERE id = $2 AND archived_at IS NULL${predicate.clause}`,
-      values: [entry.tier, entry.id, ...predicate.values],
+      sql: `WITH pre AS (
+                   SELECT id, tier FROM ${entry.table as ResourceTable} WHERE id = $2
+                 ), moved AS (
+                   UPDATE ${entry.table as ResourceTable} SET tier = $1
+                    WHERE id = $2 AND archived_at IS NULL${predicate.clause}
+                    RETURNING id, tier
+                 ), history AS (
+                   INSERT INTO tier_moves
+                     (entry_id, source_table, from_tier, to_tier, cause, routing_run_id)
+                   SELECT moved.id, $${predicate.values.length + 4},
+                          pre.tier, moved.tier, $${predicate.values.length + 3}, NULL
+                     FROM moved JOIN pre ON pre.id = moved.id
+                 )
+                 SELECT id FROM moved`,
+      values: [
+        entry.tier,
+        entry.id,
+        ...predicate.values,
+        BULK_SET_TIER_CAUSE,
+        entry.table as ResourceTable,
+      ],
     }),
   );
   if (!result.ok) return result.response;
@@ -335,12 +350,11 @@ async function archiveDemotedEntry(
   id: string,
 ): Promise<number> {
   const writePredicate = namespacePredicate(identity, "delete", 2);
-  const { rowCount } = await dependencies.pool.query(
-    `UPDATE ${table} SET archived_at = NOW()
-          WHERE id = $1 AND archived_at IS NULL${writePredicate.clause}`,
-    [id, ...writePredicate.values],
-  );
-  return rowCount ?? 0;
+  return createTieringStatements(dependencies.pool).archiveDemotedEntry({
+    table,
+    predicateClause: writePredicate.clause,
+    params: [id, ...writePredicate.values],
+  });
 }
 
 /** `demote_entry`: reverse a promotion, break-glass roles only. */
@@ -353,10 +367,7 @@ async function handleDemoteEntry(
   // Demotion reverses shared truth, so it is gated on the break-glass
   // identities by ROLE rather than the table permission matrix: a promoter
   // may promote INTO shared-kb but may not unwind what is already there.
-  if (
-    !identity ||
-    (identity.role !== "admin" && identity.role !== "ob-admin")
-  ) {
+  if (!identity || (identity.role !== "admin" && identity.role !== "ob-admin")) {
     return errorResult("Permission denied: admin or ob-admin role required");
   }
 
@@ -364,11 +375,11 @@ async function handleDemoteEntry(
   const notFound = errorResult("Entry not found or already archived");
 
   const readPredicate = namespacePredicate(identity, "read", 2);
-  const { rows } = await dependencies.pool.query(
-    `SELECT id, namespace, promoted_from FROM ${table}
-          WHERE id = $1 AND archived_at IS NULL${readPredicate.clause}`,
-    [args.id, ...readPredicate.values],
-  );
+  const rows = await createTieringStatements(dependencies.pool).selectDemoteSource({
+    table,
+    predicateClause: readPredicate.clause,
+    params: [args.id, ...readPredicate.values],
+  });
   if (rows.length === 0) return notFound;
 
   const provenance = (rows[0] as { promoted_from: unknown }).promoted_from;
@@ -376,9 +387,7 @@ async function handleDemoteEntry(
     return errorResult("Entry was not promoted — cannot demote");
   }
 
-  if (
-    (await archiveDemotedEntry(dependencies, identity, table, args.id)) === 0
-  ) {
+  if ((await archiveDemotedEntry(dependencies, identity, table, args.id)) === 0) {
     return notFound;
   }
 
@@ -426,21 +435,31 @@ async function runBulkTransaction<TEntry>(
   entries: readonly TEntry[],
   statementFor: (entry: TEntry) => { sql: string; values: unknown[] },
 ): Promise<BulkOutcome> {
-  const client: PoolClient = await dependencies.pool.connect();
   let affected = 0;
   try {
-    await client.query("BEGIN");
-    for (const entry of entries) {
-      const { sql, values } = statementFor(entry);
-      const { rowCount } = await client.query(sql, values);
-      affected += rowCount ?? 0;
-    }
-    await client.query("COMMIT");
+    await withTransaction({
+      pool: dependencies.pool,
+      run: async (tx) => {
+        const statements = createTieringStatements(tx);
+        for (const entry of entries) {
+          const { sql, values } = statementFor(entry);
+          affected += await statements.runBulkStatement({ sql, params: values });
+        }
+      },
+      // A failed ROLLBACK must not mask the original failure, and it must not
+      // throw out of a catch block: the connection is released either way, and
+      // the caller still gets the stable refusal.
+      onRollbackFailure: (rollbackError: unknown) => {
+        dependencies.logger.warn(
+          {
+            tool,
+            errorName: rollbackError instanceof Error ? rollbackError.name : "unknown",
+          },
+          "bulk_transaction_rollback_failed",
+        );
+      },
+    });
   } catch (error) {
-    // A failed ROLLBACK must not mask the original failure, and it must not
-    // throw out of a catch block: the connection is released either way, and
-    // the caller still gets the stable refusal.
-    await client.query("ROLLBACK").catch(() => undefined);
     dependencies.logger.error(
       {
         tool,
@@ -450,8 +469,6 @@ async function runBulkTransaction<TEntry>(
       "bulk_transaction_error",
     );
     return { ok: false, response: errorResult("Transaction failed") };
-  } finally {
-    client.release();
   }
   return { ok: true, affected };
 }

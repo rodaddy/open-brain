@@ -1,4 +1,9 @@
-import type { Table } from "../../src/types.ts";
+/**
+ * Where a table keeps its promotion metadata, and the predicate that recognizes
+ * an explicit shared-namespace nomination in it, as SQL fragments and a matching
+ * in-memory check so both paths read the same two metadata keys.
+ */
+import type { Table } from "../types.ts";
 
 export function promotionMetadataSelect(table: Table, alias = "t"): string {
   if (table === "thoughts" || table === "decisions") {

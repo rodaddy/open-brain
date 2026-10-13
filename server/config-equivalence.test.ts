@@ -4,7 +4,7 @@
  * `extendedConfig` helper are repeated here because each test file stands
  * alone.
  */
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it, test } from "vitest";
 import { parseServerConfig } from "./config.ts";
 import { resolveFtsConfig } from "./tools/fts-config.ts";
 import { resolveQmdPath } from "./tools/search-all.ts";
@@ -31,9 +31,7 @@ const REQUIRED = {
 function extendedConfig(overrides: Record<string, string | undefined> = {}) {
   const result = parseServerConfig({ ...REQUIRED, ...overrides });
   if (!result.ok) {
-    throw new Error(
-      `expected valid configuration: ${JSON.stringify(result.issues)}`,
-    );
+    throw new Error(`expected valid configuration: ${JSON.stringify(result.issues)}`);
   }
   return result.config;
 }
@@ -70,10 +68,7 @@ const DIVERGENCE_INPUTS = [
 ] as const;
 
 /** `server/capture/liveness-observer.ts:535-550`, reproduced: `Number`, not `parseInt`. */
-function readPositiveInteger(
-  raw: string | undefined,
-  fallback: number,
-): number {
+function readPositiveInteger(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const parsed = Number(raw.trim());
   const ok = Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0;
@@ -99,8 +94,7 @@ function searchEmbeddingTimeoutMs(
  */
 function expectPortMatchesReader(input: string | undefined): void {
   const expected = Number(input ?? 3_100);
-  const bindable =
-    Number.isInteger(expected) && expected >= 0 && expected <= 65_535;
+  const bindable = Number.isInteger(expected) && expected >= 0 && expected <= 65_535;
   const result = parseServerConfig({ ...REQUIRED, PORT: input });
   if (bindable) {
     expect(result.ok).toBe(true);
@@ -128,8 +122,7 @@ function expectSearchTimeoutMatchesReader(input: string | undefined): void {
       .embeddingTimeoutMs,
   ).toBe(searchEmbeddingTimeoutMs(input, undefined));
   expect(
-    extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: input }).search
-      .embeddingTimeoutMs,
+    extendedConfig({ SEARCH_EMBEDDING_TIMEOUT_MS: input }).search.embeddingTimeoutMs,
   ).toBe(searchEmbeddingTimeoutMs(undefined, input));
 }
 
@@ -144,6 +137,21 @@ function expectExportedReadersAgree(input: string | undefined): void {
   expect(config.http.allowedOrigins).toEqual(parseAllowedOrigins(input));
   expect(config.qmd.path).toBe(resolveQmdPath({ QMD_PATH: input }));
 }
+
+describe("http.bindHost — the parsed OPEN_BRAIN_BIND_HOST reaches the config", () => {
+  it("trims the value main.ts used to trim itself", () => {
+    // `server/main.ts` read `process.env.OPEN_BRAIN_BIND_HOST?.trim()`. The
+    // schema already trims at parse time (`server/config.ts:179`); this pins
+    // that the trimmed value is what arrives on the http group.
+    expect(
+      extendedConfig({ OPEN_BRAIN_BIND_HOST: "  192.0.2.21  " }).http.bindHost,
+    ).toBe("192.0.2.21");
+  });
+
+  it("is undefined when unset, which is the wildcard bind", () => {
+    expect(extendedConfig().http.bindHost).toBeUndefined();
+  });
+});
 
 describe("start-equivalence — every field answers what its reader answers", () => {
   test.each([...DIVERGENCE_INPUTS])("every reader agrees for %o", (input) => {
@@ -210,9 +218,9 @@ describe("start-equivalence — shared-namespace canonical precedence", () => {
       "shared-kb-v2",
     ],
   ])("resolves the physical name from %o", (env, expected) => {
-    expect(
-      extendedConfig(env).sharedNamespaceNames.physicalSharedNamespace,
-    ).toBe(expected);
+    expect(extendedConfig(env).sharedNamespaceNames.physicalSharedNamespace).toBe(
+      expected,
+    );
   });
 
   it("matches readMcpTracingConfig on the complete and incomplete shapes", () => {
@@ -277,24 +285,14 @@ describe("shared-namespace helpers require the validated name set", () => {
   });
 
   it("throws naming sharedNamespaceNames when the set is missing", () => {
-    expect(() => isSharedNamespace("x", undefined)).toThrow(
-      /sharedNamespaceNames/,
-    );
-    expect(() => isSharedNamespace("x", undefined)).toThrow(
-      /isSharedNamespace/,
-    );
+    expect(() => isSharedNamespace("x", undefined)).toThrow(/sharedNamespaceNames/);
+    expect(() => isSharedNamespace("x", undefined)).toThrow(/isSharedNamespace/);
   });
 
   it("throws from every helper that resolves a name", () => {
-    expect(() => canonicalNamespace("x", undefined)).toThrow(
-      /sharedNamespaceNames/,
-    );
-    expect(() => physicalNamespace("x", undefined)).toThrow(
-      /sharedNamespaceNames/,
-    );
-    expect(() => sharedNamespaceConfig(undefined)).toThrow(
-      /sharedNamespaceNames/,
-    );
+    expect(() => canonicalNamespace("x", undefined)).toThrow(/sharedNamespaceNames/);
+    expect(() => physicalNamespace("x", undefined)).toThrow(/sharedNamespaceNames/);
+    expect(() => sharedNamespaceConfig(undefined)).toThrow(/sharedNamespaceNames/);
   });
 
   it("carries the same fields as the validated config group", () => {

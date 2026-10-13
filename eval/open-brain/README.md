@@ -12,11 +12,11 @@ issues a place to add live adapters and Codex workflow scenarios.
 ## Run
 
 ```bash
-bun run eval:memory
-bun run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json
-bun run eval:memory -- --fixture eval/open-brain/fixtures/memory-substrate.json
-bun run eval:memory -- --json
-bun run eval:memory -- --report eval/open-brain/reports/latest.json
+npm run eval:memory
+npm run eval:memory -- --fixture eval/open-brain/fixtures/codex-workflows.json
+npm run eval:memory -- --fixture eval/open-brain/fixtures/memory-substrate.json
+npm run eval:memory -- --json
+npm run eval:memory -- --report eval/open-brain/reports/latest.json
 ```
 
 Reports are only written when `--report` is supplied. Use a visible repo path
@@ -61,14 +61,14 @@ tears down exactly this run's records. It is the live counterpart to the offline
 smoke suite and exercises the real contract, auth, and namespace boundary.
 
 ```bash
-bun run eval:live
-bun run eval:live -- --json
-bun run eval:live -- --report /workspace/_tmp/open-brain/live-recall.json
+npm run eval:live
+npm run eval:live -- --json
+npm run eval:live -- --report /workspace/_tmp/open-brain/live-recall.json
 ```
 
 ### Opt-in and required environment
 
-The gate is OFF by default so `bun test` and the offline eval never touch a
+The gate is OFF by default so `npm test` and the offline eval never touch a
 hosted service. It runs only when explicitly opted in. Set these variable
 **names** in the environment (never paste token or URL values into the repo,
 logs, issues, or a report):
@@ -235,9 +235,9 @@ records. It reuses the recall gate's config/transport/setup discipline and is
 run directly:
 
 ```bash
-bun run eval/open-brain/live/complete-pack-cli.ts
-bun run eval/open-brain/live/complete-pack-cli.ts --json
-bun run eval/open-brain/live/complete-pack-cli.ts --report /workspace/_tmp/open-brain/complete-pack.json
+node eval/open-brain/live/complete-pack-cli.ts
+node eval/open-brain/live/complete-pack-cli.ts --json
+node eval/open-brain/live/complete-pack-cli.ts --report /workspace/_tmp/open-brain/complete-pack.json
 ```
 
 ## Reflex A/B Suppression Gate (REFLEX-4, issue #335)
@@ -250,10 +250,10 @@ returns **demonstrably fewer already-known items** than suppression OFF over the
 evidence preserved.
 
 ```bash
-bun run eval:reflex-ab
-bun run eval:reflex-ab -- --json
-bun run eval:reflex-ab -- --report /workspace/_tmp/open-brain/reflex-ab.json
-bun run eval:reflex-ab -- --budget-tokens 8000
+npm run eval:reflex-ab
+npm run eval:reflex-ab -- --json
+npm run eval:reflex-ab -- --report /workspace/_tmp/open-brain/reflex-ab.json
+npm run eval:reflex-ab -- --budget-tokens 8000
 ```
 
 One run:
@@ -315,9 +315,9 @@ per-invocation throwaway namespace derivation, real MCP client/fake caller seam,
 content-free receipt discipline, and EVAL-3 teardown tally.
 
 ```bash
-bun run eval:scenarios
-bun run eval:scenarios -- --json
-bun run eval:scenarios -- --fixture eval/open-brain/fixtures/scenarios-v1.json
+npm run eval:scenarios
+npm run eval:scenarios -- --json
+npm run eval:scenarios -- --fixture eval/open-brain/fixtures/scenarios-v1.json
 ```
 
 `fixtures/scenarios-v1.json` contains the first three scenarios:
@@ -330,7 +330,7 @@ bun run eval:scenarios -- --fixture eval/open-brain/fixtures/scenarios-v1.json
 - capture + checkpoint + resume-read, asserting the lane event and checkpoint
   summary both surface.
 
-Plain `bun test` runs these against a fake `ScenarioTransport`; no service or
+Plain `npm test` runs these against a fake `ScenarioTransport`; no service or
 PostgreSQL connection is touched. Live mode uses the installed
 `openbrain-memory` provider for capture/checkpoint, the existing MCP transport
 for reads and pack assembly, and exact-id cleanup for the records created by the

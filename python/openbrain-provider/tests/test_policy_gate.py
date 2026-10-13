@@ -338,6 +338,12 @@ def test_safety_blocks_fire_even_when_policy_is_fresh(tmp_path: Path) -> None:
         ("Edit", {"file_path": "/private/tmp/evil.txt"}),
         ("Bash", {"command": "echo hi > /tmp/x.txt"}),
         ("Bash", {"command": "cp a.txt /var/tmp/b.txt"}),
+        ("Bash", {"command": "cat > /tmp/x.md <<'EOF'\nhi\nEOF"}),
+        ("Bash", {"command": "mkdir -p /tmp/scratch-x"}),
+        ("Bash", {"command": "make 2>&1 | tee /tmp/build.log"}),
+        ("Bash", {"command": "sudo -u root cp a.txt /private/tmp/a.txt"}),
+        # A shell's heredoc body is its program, so a write inside it counts.
+        ("Bash", {"command": "bash <<'EOF'\ncp a.txt /tmp/a.txt\nEOF"}),
     ],
 )
 def test_a_write_into_system_temp_is_refused(
@@ -357,7 +363,17 @@ def test_a_write_into_system_temp_is_refused(
 
 @pytest.mark.parametrize(
     "command",
-    ["cat /tmp/some.sock", "ls /tmp", "rg pattern /var/tmp/log.txt"],
+    [
+        "cat /tmp/some.sock",
+        "ls /tmp",
+        "rg pattern /var/tmp/log.txt",
+        # rtech-infra #954 item 3: prose naming a tmp write is not a write.
+        "cat > /srv/_tmp/r/_scratch/n.md <<'EOF'\n"
+        "never cp a.txt /tmp/a.txt\nEOF",
+        "git commit -m 'docs: never tee into /tmp/x'",
+        "python3 - <<'EOF'\nprint('mkdir -p /tmp/scratch-x')\nEOF",
+        "gh issue create --body 'the gate refuses cp into /tmp/'",
+    ],
 )
 def test_reading_from_system_temp_is_allowed(tmp_path: Path, command: str) -> None:
     # Only writes are refused. Plenty of legitimate work reads system-owned

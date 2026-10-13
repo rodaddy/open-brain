@@ -84,43 +84,99 @@ class FakeClient:
         return self._record("upsert_repo_fact", arguments)
 
 
-TOOL_SCHEMA_FILES = {
-    "append_session_event": "append-session-event.ts",
-    "brain_answer": "brain-answer.ts",
-    "lane_load": "lane-load.ts",
-    "lane_upsert": "lane-upsert.ts",
-    "list_repo_facts": "repo-facts.ts",
-    "log_decision": "log-decision.ts",
-    "log_thought": "log-thought.ts",
-    "search_all": "search-all.ts",
-    "session_context": "session-context.ts",
-    "session_start": "session-start.ts",
-    "session_wrap": "session-wrap.ts",
-    "upsert_repo_fact": "repo-facts.ts",
+# Each tool's declared input shape, named by the file that holds it and the
+# exact text that opens its block. These used to live under `src/tools/`, one
+# file per tool; issue 864 (L7) deleted `src/` and the declarations now sit in
+# `server/tools/`, several tools to a file. So a filename alone no longer
+# identifies a schema -- the anchor does.
+TOOL_SCHEMA_ANCHORS: dict[str, tuple[str, str]] = {
+    "session_start": ("session-lifecycle.ts", "const START_INPUT_SCHEMA = {"),
+    "session_context": ("session-lifecycle.ts", "const CONTEXT_INPUT_SCHEMA = {"),
+    "session_wrap": ("session-lifecycle.ts", "const WRAP_INPUT_SCHEMA = {"),
+    "append_session_event": ("session-events.ts", "const INPUT_SCHEMA = {"),
+    "lane_upsert": ("lanes.ts", "const laneUpsertInputSchema = {"),
+    "lane_load": ("lanes.ts", "const laneLoadInputSchema = {"),
+    "upsert_repo_fact": ("repo-facts.ts", "const UPSERT_REPO_FACT_SCHEMA = {"),
+    "list_repo_facts": ("repo-facts.ts", "const LIST_REPO_FACTS_SCHEMA = {"),
+    "search_all": ("search-all.ts", "const searchAllInputSchema = {"),
+    "brain_answer": ("brain-answer.ts", "const BRAIN_ANSWER_INPUT_SCHEMA = {"),
+    # These two are still declared inline in their registration call, and
+    # `inputSchema: {` appears once per tool in the same file -- so the anchor
+    # is the registration name, and the block is the first `inputSchema: {`
+    # after it.
+    "log_thought": ("capture.ts", '"log_thought",'),
+    "log_decision": ("capture.ts", '"log_decision",'),
 }
 
 
 def server_tool_schema_block(name: str) -> str:
+    """The text of one tool's input-schema object literal, braces included.
+
+    Sliced by brace depth from the opening `{` rather than by "up to the next
+    `annotations:`", because two of these schemas are top-level `const`s with
+    no `annotations` after them at all. A missing anchor raises: a silently
+    empty block would make every key assertion below vacuously true, which is
+    the failure mode this parity test exists to prevent.
+    """
+    filename, anchor = TOOL_SCHEMA_ANCHORS[name]
     repo_root = Path(__file__).resolve().parents[3]
-    source = repo_root / "src" / "tools" / TOOL_SCHEMA_FILES[name]
-    text = source.read_text(encoding="utf-8")
-    return text.split("inputSchema:", 1)[1].split("annotations:", 1)[0]
+    text = (repo_root / "server" / "tools" / filename).read_text(encoding="utf-8")
+    if anchor not in text:
+        raise AssertionError(
+            f"anchor {anchor!r} not found in server/tools/{filename}; the schema "
+            f"for {name!r} was renamed or moved. Update TOOL_SCHEMA_ANCHORS -- "
+            "do not delete the check."
+        )
+    start = text.index(anchor)
+    if not anchor.endswith("{"):
+        marker = "inputSchema: {"
+        if marker not in text[start:]:
+            raise AssertionError(
+                f"no {marker!r} after anchor {anchor!r} in server/tools/{filename}"
+            )
+        start = text.index(marker, start)
+    open_brace = text.index("{", start)
+    depth = 0
+    for offset in range(open_brace, len(text)):
+        if text[offset] == "{":
+            depth += 1
+        elif text[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace : offset + 1]
+    raise AssertionError(
+        f"unbalanced braces after anchor {anchor!r} in server/tools/{filename}"
+    )
+
+
+def _top_level_key_pattern(block: str) -> re.Pattern[str]:
+    """A regex matching only the block's own keys, at whatever indent it uses.
+
+    The indent is read off the first key rather than hardcoded, because the
+    `const` schemas sit at two spaces and the inline ones at eight.
+    """
+    first = re.search(
+        r"^([ \t]+)([A-Za-z_][A-Za-z0-9_]*)\s*:", block, flags=re.MULTILINE
+    )
+    if first is None:
+        raise AssertionError("no keys found in schema block")
+    indent = re.escape(first.group(1))
+    return re.compile(rf"^{indent}([A-Za-z_][A-Za-z0-9_]*)\s*:", flags=re.MULTILINE)
 
 
 def server_tool_keys(name: str) -> set[str]:
     block = server_tool_schema_block(name)
-    return set(
-        re.findall(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", block, flags=re.MULTILINE)
-    )
+    return set(_top_level_key_pattern(block).findall(block))
 
 
 def server_required_tool_keys(name: str) -> set[str]:
     block = server_tool_schema_block(name)
+    pattern = _top_level_key_pattern(block)
     keys = []
     current_key = None
-    current_lines = []
+    current_lines: list[str] = []
     for line in block.splitlines():
-        match = re.match(r"^\s{8}([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
+        match = pattern.match(line)
         if match:
             if current_key is not None and ".optional()" not in "\n".join(
                 current_lines
@@ -134,6 +190,27 @@ def server_required_tool_keys(name: str) -> set[str]:
     if current_key is not None and ".optional()" not in "\n".join(current_lines):
         keys.append(current_key)
     return set(keys)
+
+
+def test_schema_parser_fails_loudly_on_a_bad_anchor_and_a_bogus_key():
+    """The parser must not answer an empty set for a declaration it cannot find.
+
+    A silent empty block turns `set(payload) <= server_tool_keys(name)` into a
+    check that only ever passes when the payload is empty, and
+    `server_required_tool_keys(name) <= set(payload)` into one that always
+    passes -- so the parity test below would report success over a moved file.
+    """
+    TOOL_SCHEMA_ANCHORS["_bogus_tool"] = ("session-lifecycle.ts", "const NOPE = {")
+    try:
+        with pytest.raises(AssertionError, match="anchor .* not found"):
+            server_tool_schema_block("_bogus_tool")
+    finally:
+        del TOOL_SCHEMA_ANCHORS["_bogus_tool"]
+
+    keys = server_tool_keys("session_start")
+    assert "session_key" in keys
+    assert "not_a_real_field" not in keys
+    assert server_required_tool_keys("session_start") == {"session_key"}
 
 
 def assert_server_contract_call(name: str, payload: dict) -> None:

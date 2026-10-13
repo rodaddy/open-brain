@@ -3,10 +3,9 @@
  *
  * Design authority: `_plans/463-server-rewrite-charter.md` section 3 —
  * `server/config/` owns ALL env parsing and startup validation, replacing the
- * 18 scattered `process.env` readers the charter counts in `src/`. The behavior
- * being preserved is `src/nats-runtime.ts`'s `readNatsRuntimeBoundary`, and the
- * `/health` `nats` block it feeds (`src/index.ts` health payload), both frozen
- * by the charter's `/health` row.
+ * 18 scattered `process.env` readers the charter counts. The behavior being
+ * preserved is the pre-transplant `readNatsRuntimeBoundary`, and the `/health`
+ * `nats` block it feeds, both frozen by the charter's `/health` row.
  *
  * WHY THIS IS CONFIG AND NOT TRANSPORT. Everything here is a decision about the
  * ENVIRONMENT: which transport was requested, whether a bridge was enabled,
@@ -89,6 +88,10 @@ function urlAvailability(
   try {
     parsed = new URL(url);
   } catch {
+    // Deliberate fail-open: the classification IS the report. The consumer
+    // logs it at application/nats-runtime.ts:287 ("nats_url_unparseable"), and
+    // this function stays logger-free so it cannot leak the credential-bearing
+    // URL named in the doc comment above.
     return "url_unparseable";
   }
   if (LOCAL_NATS_HOSTS.has(parsed.hostname.toLowerCase())) return null;

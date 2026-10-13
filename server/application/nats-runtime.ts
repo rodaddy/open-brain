@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { SECTION_NAMES } from "../tools/context-pack-args.ts";
-import { obContextPackSubject } from "../../src/nats-subjects.ts";
-import { logger } from "../../src/logger.ts";
+import { obContextPackSubject } from "../config/nats-subjects.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 // ============================================================================
 // CROSS-LANGUAGE WIRE CONTRACT (source of truth for the Python client lane)
 // ============================================================================
 //
 // Open Brain's NATS wire format is reconciled to the fleet-bus Envelope
-// (rodaddy/fleet-bus, `packages/fleet-nats/src/fleet_nats/envelope.py`). Any
+// (rodaddy/fleet-bus, the fleet-nats package's `envelope.py`). Any
 // client that speaks to the Open Brain NATS worker — including the separate
 // `python/openbrain-memory` lane — MUST match the shapes below.
 //
@@ -156,20 +156,20 @@ export interface NatsRuntimeBoundary {
   };
 }
 
-export interface NatsUrlLogSummary {
+interface NatsUrlLogSummary {
   configured: boolean;
   protocol: string | null;
   contains_credentials: boolean;
   local: boolean | null;
 }
 
-export interface NatsBridgePlanInput {
+interface NatsBridgePlanInput {
   subject: string;
   envelope: unknown;
   bearerToken: string | null | undefined;
 }
 
-export interface NatsBridgePlan {
+interface NatsBridgePlan {
   status: "http_mcp_fallback";
   request_id: string;
   subject: string;

@@ -35,8 +35,7 @@ export const COMPLETE_PACK_SECTION_NAMES = [
   "candidate_memory",
 ] as const;
 
-export type CompletePackSectionName =
-  (typeof COMPLETE_PACK_SECTION_NAMES)[number];
+export type CompletePackSectionName = (typeof COMPLETE_PACK_SECTION_NAMES)[number];
 
 /**
  * One sealed synthetic seed for the complete-pack corpus.

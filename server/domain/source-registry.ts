@@ -1,8 +1,13 @@
+// Pool-backed CRUD for the source registry (`ob_sources`): register, list,
+// update, remove, and the ingestion-eligibility read. Every path authorizes
+// against the resolved target namespace before touching a row. The vocabulary,
+// schemas, and pure helpers are in ./source-registry-model.ts.
+
 import type pg from "pg";
-import type { AuthInfo } from "../../src/types.ts";
-import { canWriteNamespace } from "../../src/namespace-policy.ts";
-import { canReadNamespace, readableNamespaces } from "../../src/read-policy.ts";
-import { logger } from "../../src/logger.ts";
+import type { AuthInfo } from "../types.ts";
+import { canWriteNamespace } from "../security/namespace-policy.ts";
+import { canReadNamespace, readableNamespaces } from "./read-policy.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import {
   SELECT_COLUMNS,
   SOURCE_REGISTRY_TABLE,

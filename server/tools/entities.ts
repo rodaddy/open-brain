@@ -9,24 +9,22 @@
  * that predicate is exactly the isolation bug class the repo rules call out.
  */
 import { z } from "zod";
-import type { PoolClient } from "pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canDelete, canRead, canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
+import {
+  createEntityRepository,
+  type EntityRepository,
+} from "../db/entity-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 import {
   authIdentity,
   errorResult,
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
-import {
-  registerLinkEntities,
-  registerUnlinkEntities,
-} from "./entity-links.ts";
+import { registerLinkEntities, registerUnlinkEntities } from "./entity-links.ts";
 import { registerHydrateEntities } from "./entity-hydrate.ts";
 import {
   applyNamespaceScope,
@@ -79,11 +77,13 @@ function registerGetEntity(
         return errorResult("Permission denied: cannot read entities");
       }
       const predicate = namespacePredicate(identity, "read", 2);
-      const { rows } = await dependencies.pool.query(
-        `SELECT ${ENTITY_COLUMNS} FROM ob_entities
-          WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-        [args.id, ...predicate.values],
-      );
+      const repository = createEntityRepository(dependencies.pool);
+      const rows = await repository.getEntityById({
+        columns: ENTITY_COLUMNS,
+        predicateClause: predicate.clause,
+        id: args.id,
+        predicateValues: predicate.values,
+      });
       if (rows.length === 0) return errorResult("Entity not found");
       dependencies.logger.info({ tool: "get_entity" }, "tool_result");
       return textResult(rows[0]);
@@ -143,31 +143,19 @@ function registerUpsertEntity(
         `${args.entity_type}: ${args.name}`,
       );
 
-      const { rows } = await dependencies.pool.query(
-        `INSERT INTO ob_entities
-           (entity_type, name, canonical_id, namespace, metadata, embedding, created_by)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
-         ON CONFLICT (namespace, entity_type, lower(name))
-         WHERE archived_at IS NULL
-         DO UPDATE SET
-           canonical_id = COALESCE(EXCLUDED.canonical_id, ob_entities.canonical_id),
-           metadata = ob_entities.metadata || EXCLUDED.metadata,
-           embedding = COALESCE(EXCLUDED.embedding, ob_entities.embedding),
-           archived_at = NULL,
-           updated_at = NOW()
-         RETURNING id, (xmax = 0) AS is_new, entity_type, name, namespace, created_at, updated_at`,
-        [
-          args.entity_type,
-          args.name,
-          args.canonical_id ?? null,
-          target.namespace,
-          JSON.stringify(args.metadata ?? {}),
-          embedding,
-          identity.clientId,
-        ],
-      );
+      const repository = createEntityRepository(dependencies.pool);
+      const rows = await repository.upsertEntity({
+        entityType: args.entity_type,
+        name: args.name,
+        canonicalId: args.canonical_id ?? null,
+        namespace: target.namespace,
+        metadata: JSON.stringify(args.metadata ?? {}),
+        embedding,
+        createdBy: identity.clientId,
+      });
 
-      const row = rows[0];
+      const [row] = rows;
+      if (!row) return errorResult("Upsert returned no row");
       dependencies.logger.info(
         { tool: "upsert_entity", id: row.id, isNew: row.is_new },
         "tool_result",
@@ -251,26 +239,17 @@ function registerListEntities(
       }
       // A named namespace is checked BEFORE it narrows anything, so asking for
       // a foreign lane is refused rather than silently returning nothing.
-      if (
-        args.namespace &&
-        !canTargetNamespace(identity, "read", args.namespace)
-      ) {
+      if (args.namespace && !canTargetNamespace(identity, "read", args.namespace)) {
         return errorResult("Permission denied: namespace read access denied");
       }
 
       const filters = new SqlFilters("archived_at IS NULL");
       applyNamespaceScope(filters, identity, "read", args.namespace);
       if (args.entity_type) {
-        filters.add(
-          (placeholder) => `entity_type = ${placeholder}`,
-          args.entity_type,
-        );
+        filters.add((placeholder) => `entity_type = ${placeholder}`, args.entity_type);
       }
       if (args.name) {
-        filters.add(
-          (placeholder) => `name ILIKE ${placeholder}`,
-          `%${args.name}%`,
-        );
+        filters.add((placeholder) => `name ILIKE ${placeholder}`, `%${args.name}%`);
       }
       if (args.canonical_id) {
         filters.add(
@@ -281,14 +260,14 @@ function registerListEntities(
       const limitPlaceholder = filters.push(args.limit ?? 50);
       const offsetPlaceholder = filters.push(args.offset ?? 0);
 
-      const { rows } = await dependencies.pool.query(
-        `SELECT ${ENTITY_COLUMNS}
-           FROM ob_entities
-          WHERE ${filters.where()}
-          ORDER BY updated_at DESC, created_at DESC
-          LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
-        filters.values,
-      );
+      const repository = createEntityRepository(dependencies.pool);
+      const rows = await repository.listEntities({
+        columns: ENTITY_COLUMNS,
+        where: filters.where(),
+        limitPlaceholder,
+        offsetPlaceholder,
+        filterValues: filters.values,
+      });
       dependencies.logger.info(
         { tool: "list_entities", returned: rows.length },
         "tool_result",
@@ -305,7 +284,7 @@ function registerListEntities(
  * @returns The tool result payload, or `null` when nothing matched.
  */
 async function archiveEntityInTransaction(
-  client: PoolClient,
+  repository: EntityRepository,
   identity: AuthIdentity,
   id: string,
 ): Promise<{
@@ -318,33 +297,25 @@ async function archiveEntityInTransaction(
   // beforehand: an ID-based write that authorizes in a separate statement
   // is the isolation bug class this repo's rules name explicitly.
   const entityPredicate = namespacePredicate(identity, "delete", 2);
-  const { rows } = await client.query(
-    `UPDATE ob_entities
-        SET archived_at = NOW(), updated_at = NOW()
-      WHERE id = $1 AND archived_at IS NULL${entityPredicate.clause}
-      RETURNING id, namespace`,
-    [id, ...entityPredicate.values],
-  );
+  const rows = await repository.archiveEntity({
+    predicateClause: entityPredicate.clause,
+    id,
+    predicateValues: entityPredicate.values,
+  });
 
-  if (rows.length === 0) return null;
+  const [archived] = rows;
+  if (!archived) return null;
 
-  // The link sweep matches on the namespace the entity was actually found
-  // in, taken from the RETURNING row rather than re-derived from the
-  // caller, so the cascade cannot reach a neighbouring namespace.
-  const { rowCount } = await client.query(
-    `UPDATE ob_links
-        SET archived_at = NOW(), updated_at = NOW()
-      WHERE archived_at IS NULL
-        AND ((from_type = 'entity' AND from_id = $1) OR (to_type = 'entity' AND to_id = $1))
-        AND namespace = $2`,
-    [id, rows[0].namespace],
-  );
+  const linksArchived = await repository.archiveLinksForEntity({
+    id,
+    namespace: archived.namespace,
+  });
 
   return {
-    id: rows[0].id,
-    namespace: rows[0].namespace,
+    id: archived.id,
+    namespace: archived.namespace,
     archived: true,
-    links_archived: rowCount ?? 0,
+    links_archived: linksArchived,
   };
 }
 
@@ -376,15 +347,12 @@ function registerArchiveEntity(
       // Entity and link archival are ONE transaction. A half-applied archive
       // leaves live links pointing at a dead node, which reads as a graph edge
       // to every traversal while the node it names is gone.
-      const client = await dependencies.pool.connect();
       try {
-        await client.query("BEGIN");
-        const result = await archiveEntityInTransaction(
-          client,
-          identity,
-          args.id,
-        );
-        await client.query("COMMIT");
+        const result = await withTransaction({
+          pool: dependencies.pool,
+          run: async (tx) =>
+            archiveEntityInTransaction(createEntityRepository(tx), identity, args.id),
+        });
 
         if (!result) {
           // Already-archived and unreadable-namespace collapse to ONE non-error
@@ -393,21 +361,15 @@ function registerArchiveEntity(
           return textResult("Already archived or not found");
         }
 
-        dependencies.logger.info(
-          { tool: "archive_entity", ...result },
-          "tool_result",
-        );
+        dependencies.logger.info({ tool: "archive_entity", ...result }, "tool_result");
         return textResult(result);
       } catch (error) {
-        await client.query("ROLLBACK");
         const message = error instanceof Error ? error.message : String(error);
         dependencies.logger.error(
           { tool: "archive_entity", id: args.id, error: message },
           "tool_error",
         );
         return errorResult(`Transaction failed: ${message}`);
-      } finally {
-        client.release();
       }
     },
   );

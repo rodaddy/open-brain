@@ -1,16 +1,18 @@
 /**
- * REST write routes for thoughts and decisions (issue 864 split of
- * `src/rest-api.ts`). Route paths, status codes, response shapes, error strings
+ * REST write routes for thoughts and decisions (split of the REST router in
+ * the L5 move, issue 864). Route paths, status codes, response shapes, error strings
  * and zod schemas are unchanged from the pre-split router.
  */
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { toSql } from "pgvector/pg";
-import { canWrite } from "../security/permissions.ts";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
+import { canWrite } from "../auth/permissions.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
 import { decisionCanonicalText } from "../embedding/embedding-canonical.ts";
-import { backgroundExtract } from "../../src/extraction.ts";
+import { backgroundExtract } from "../domain/extraction.ts";
 import { writeThoughtChunks, chunkReceiptFields } from "../capture/chunk-write.ts";
+import { createChunkRepository } from "../db/chunk-repository.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
 import {
   embeddingColumns,
   getAuth,
@@ -37,30 +39,6 @@ export const decisionSchema = z.object({
   namespace: namespaceSchema.optional(),
 });
 
-const THOUGHT_INSERT_SQL = `INSERT INTO thoughts (content, tags, source, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-       VALUES ($1, $2, 'rest', $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-       DO UPDATE SET
-         tags = (
-           SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-           FROM unnest(thoughts.tags || EXCLUDED.tags) AS tag
-           WHERE tag IS NOT NULL
-         ),
-         updated_at = NOW()
-       RETURNING id, (xmax = 0) AS is_new`;
-
-const DECISION_INSERT_SQL = `INSERT INTO decisions (title, rationale, alternatives, tags, context, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-       DO UPDATE SET
-         tags = (
-           SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-           FROM unnest(decisions.tags || EXCLUDED.tags) AS tag
-           WHERE tag IS NOT NULL
-         ),
-         updated_at = NOW()
-       RETURNING id, (xmax = 0) AS is_new`;
-
 interface ThoughtRowContext {
   deps: RestDeps;
   entryId: string;
@@ -77,7 +55,7 @@ interface ThoughtRowContext {
  * parent plus per-section rows. Extraction follows for a genuinely new row.
  */
 async function writeThoughtBody(ctx: ThoughtRowContext) {
-  const chunks = await writeThoughtChunks(ctx.deps.pool, {
+  const chunks = await writeThoughtChunks(createChunkRepository(ctx.deps.pool), {
     parentId: ctx.entryId,
     namespace: ctx.ns,
     createdBy: ctx.clientId,
@@ -90,14 +68,12 @@ async function writeThoughtBody(ctx: ThoughtRowContext) {
   });
 
   if (ctx.isNew) {
-    backgroundExtract(
-      ctx.deps.pool,
-      "thoughts",
-      ctx.entryId,
-      ctx.ns,
-      ctx.content,
-      ctx.tags,
-    );
+    backgroundExtract(ctx.deps.pool, "thoughts", {
+      entryId: ctx.entryId,
+      namespace: ctx.ns,
+      text: ctx.content,
+      existingTags: ctx.tags,
+    });
   }
 
   return chunks;
@@ -121,21 +97,24 @@ export async function postThought(
   const ns = resolveWriteNamespace(auth, namespace, res);
   if (ns === null) return;
 
-  const hash = contentHash(content);
+  const hash = normalizedContentHash(content);
   const textToEmbed = tags?.length ? `${content}\n${tags.join(" ")}` : content;
   const embedding = await deps.embedFn(textToEmbed);
 
-  const cols = embeddingColumns(embedding, toSql, EMBEDDING_MODEL);
-  const { rows } = await deps.pool.query(THOUGHT_INSERT_SQL, [
-    content,
-    tags ?? [],
-    auth.clientId,
-    ns,
-    cols.vector,
-    hash,
-    cols.embeddedAt,
-    cols.model,
-  ]);
+  const cols = embeddingColumns(embedding, toSql, embeddingModel());
+  const repository = createEntryReadRepository(deps.pool);
+  const rows = await repository.insertThought({
+    params: [
+      content,
+      tags ?? [],
+      auth.clientId,
+      ns,
+      cols.vector,
+      hash,
+      cols.embeddedAt,
+      cols.model,
+    ],
+  });
 
   const entryId = rows[0].id as string;
   const isNew = rows[0].is_new as boolean;
@@ -186,29 +165,37 @@ export async function postDecision(
     alternatives,
     tags,
   });
-  const hash = contentHash(textToEmbed);
+  const hash = normalizedContentHash(textToEmbed);
   const embedding = await deps.embedFn(textToEmbed);
 
-  const cols = embeddingColumns(embedding, toSql, EMBEDDING_MODEL);
-  const { rows } = await deps.pool.query(DECISION_INSERT_SQL, [
-    title,
-    rationale,
-    JSON.stringify(alternatives ?? []),
-    tags ?? [],
-    orNull(context),
-    auth.clientId,
-    ns,
-    cols.vector,
-    hash,
-    cols.embeddedAt,
-    cols.model,
-  ]);
+  const cols = embeddingColumns(embedding, toSql, embeddingModel());
+  const repository = createEntryReadRepository(deps.pool);
+  const rows = await repository.insertDecision({
+    params: [
+      title,
+      rationale,
+      JSON.stringify(alternatives ?? []),
+      tags ?? [],
+      orNull(context),
+      auth.clientId,
+      ns,
+      cols.vector,
+      hash,
+      cols.embeddedAt,
+      cols.model,
+    ],
+  });
 
   const entryId = rows[0].id as string;
   const isNew = rows[0].is_new as boolean;
 
   if (isNew) {
-    backgroundExtract(deps.pool, "decisions", entryId, ns, textToEmbed, tags ?? []);
+    backgroundExtract(deps.pool, "decisions", {
+      entryId,
+      namespace: ns,
+      text: textToEmbed,
+      existingTags: tags ?? [],
+    });
   }
 
   res.status(isNew ? 201 : 200).json({

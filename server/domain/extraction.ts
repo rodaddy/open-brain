@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type pg from "pg";
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 export interface ExtractedMetadata {
   topics: string[];
@@ -21,7 +21,7 @@ export interface ExtractedMetadata {
 // canonicalization or digest changes, so a stored hash's provenance is
 // unambiguous. Kept local to the extraction path; the source-registry envelope
 // carries its own independently-versioned tag.
-export const CONTENT_HASH_VERSION = "sha256.v1" as const;
+const CONTENT_HASH_VERSION = "sha256.v1" as const;
 
 // Minimum text length worth extracting from. Below this, extraction is skipped
 // (returns null) rather than run against a fragment.
@@ -54,16 +54,16 @@ const extractionOutputSchema = z
 // single bounded seam for any future model- or heuristic-backed extractor. A
 // provider may return null (no metadata) and MUST NOT throw for control flow;
 // extraction fails open regardless. Providers must never log source text.
-export interface MetadataProvider {
-  extract(text: string): Promise<unknown> | unknown;
+interface MetadataProvider {
+  extract(text: string): unknown;
 }
 
 // Default provider for the model-ish fields (topics/people/action_items/dates).
 // These genuinely need a model or heuristic, so the DEFAULT contributes none of
 // them -- it returns an empty object, not null, so the deterministic structural
 // pass (content_hash/dates below) still runs and produces stable metadata.
-// A real semantic extractor is injected via setMetadataProvider; its output is
-// always re-validated and capped here and can never assert the structural
+// This module ships no injection seam: the default is the only provider, and
+// its output is always re-validated here and can never assert the structural
 // fields. Deterministic, zero-network, no source-text logging.
 const defaultProvider: MetadataProvider = {
   extract(): Record<string, never> {
@@ -71,19 +71,7 @@ const defaultProvider: MetadataProvider = {
   },
 };
 
-let activeProvider: MetadataProvider = defaultProvider;
-
-// Inject a bounded provider (e.g. in a collector or a test). The provider's
-// output is always re-validated and normalized here, so an injected provider
-// can never bypass the strict schema, the caps, or the fail-open guarantee, and
-// can never set the deterministic structural fields (those are computed here).
-export function setMetadataProvider(provider: MetadataProvider): void {
-  activeProvider = provider;
-}
-
-export function resetMetadataProvider(): void {
-  activeProvider = defaultProvider;
-}
+const activeProvider: MetadataProvider = defaultProvider;
 
 // Deterministic, content-free digest envelope of the exact text. Zero-network,
 // stable across processes/machines. Never logs or returns the content itself.
@@ -241,7 +229,7 @@ export function mergeTags(
  * against the LIVE row) now happens in SQL so a concurrent tag write is not
  * clobbered.
  */
-export function extractedTagCandidates(extracted: ExtractedMetadata | null): string[] {
+function extractedTagCandidates(extracted: ExtractedMetadata | null): string[] {
   if (!extracted) return [];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -270,7 +258,7 @@ const EXTRACTION_TABLES = new Set(["thoughts", "decisions"]);
  * The row background extraction enriches, plus the text it reads. Grouping the
  * per-row fields into one object keeps the function to three parameters.
  */
-export interface BackgroundExtractTarget {
+interface BackgroundExtractTarget {
   entryId: string;
   namespace: string;
   text: string;

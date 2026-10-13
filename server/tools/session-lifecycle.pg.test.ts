@@ -13,7 +13,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -28,6 +28,15 @@ const NAMESPACE = `session-lifecycle-pg-${process.pid}`;
 const SESSION_KEY = `${NAMESPACE}-lane`;
 const EVENT_COUNT = 55;
 
+/**
+ * Hook allowance for this suite's fixture. The serial per-event insert loop it
+ * replaced took 5000.98 ms on <your-host> in CI run 2123 (issue 634, 2026-09-03) and
+ * bun aborted the hook at its default 5000 ms, then ran afterAll into the
+ * loop's still-in-flight insert. The seed is now a single statement -- one
+ * round trip -- so 60 s is a hang backstop, not a working figure.
+ */
+const LIFECYCLE_FIXTURE_HOOK_MS = 60_000;
+
 interface ContextEnvelope {
   lane: { id: string; session_key: string } | null;
   events: Array<{ event_type: string; content: string }>;
@@ -41,10 +50,7 @@ interface StartEnvelope {
   is_new: boolean;
 }
 
-async function callTool(
-  name: string,
-  args: Record<string, unknown>,
-): Promise<unknown> {
+async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   return JSON.parse(await callToolText(name, args));
 }
 
@@ -62,8 +68,7 @@ async function callToolText(
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -78,13 +83,9 @@ async function callToolText(
     name: "session-lifecycle-test",
     version: "1.0.0",
   });
-  await Promise.all([
-    client.connect(clientTransport),
-    server.connect(serverTransport),
-  ]);
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   const result = await client.callTool({ name, arguments: args });
-  const text =
-    (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
   await client.close();
   return text;
 }
@@ -101,26 +102,29 @@ describe("session lifecycle event bounds (#515)", () => {
       [SESSION_KEY, NAMESPACE, NAMESPACE],
     );
     laneId = lane.rows[0].id;
-    for (let i = 0; i < EVENT_COUNT; i++) {
-      await pool.query(
-        `INSERT INTO ob_session_events
-           (lane_id, event_type, content, importance, metadata, created_by, created_at)
-         VALUES ($1, $2, $3, 'warm', '{}'::jsonb, $4, now() + make_interval(secs => $5))`,
-        [laneId, i % 5 === 0 ? "decision" : "fact", `event ${i}`, NAMESPACE, i],
-      );
-    }
-  });
+    await pool.query(
+      `INSERT INTO ob_session_events
+         (lane_id, event_type, content, importance, metadata, created_by, created_at)
+       SELECT $1,
+              CASE WHEN i % 5 = 0 THEN 'decision' ELSE 'fact' END,
+              'event ' || i,
+              'warm',
+              '{}'::jsonb,
+              $3,
+              now() + make_interval(secs => i)
+         FROM generate_series(0, $2::int - 1) AS i`,
+      [laneId, EVENT_COUNT, NAMESPACE],
+    );
+  }, LIFECYCLE_FIXTURE_HOOK_MS);
 
   afterAll(async () => {
-    await pool.query(`DELETE FROM ob_session_events WHERE lane_id = $1`, [
-      laneId,
-    ]);
+    await pool.query(`DELETE FROM ob_session_events WHERE lane_id = $1`, [laneId]);
     await pool.query(`DELETE FROM ob_session_lanes WHERE id = $1`, [laneId]);
     // `pool` is module-level and shared by every suite's callTool(); closing it
     // here made the #646 suite fail with "Cannot use a pool after calling end",
     // which reads exactly like a real red. It is closed once, at the bottom of
     // the file, after the last suite.
-  });
+  }, LIFECYCLE_FIXTURE_HOOK_MS);
 
   test("session_context honors event_limit", async () => {
     const ctx = (await callTool("session_context", {
@@ -186,10 +190,7 @@ describe("session_start exact-scope establishment (#646)", () => {
   const conflictKey = `${NAMESPACE}-646-conflict`;
   const scopePool = new Pool({ connectionString: requireTestDatabaseUrl() });
 
-  const seed = async (
-    sessionKey: string,
-    agent: string | null,
-  ): Promise<void> => {
+  const seed = async (sessionKey: string, agent: string | null): Promise<void> => {
     await scopePool.query(
       `INSERT INTO ob_session_lanes
          (session_key, namespace, status, agent, metadata, created_by)

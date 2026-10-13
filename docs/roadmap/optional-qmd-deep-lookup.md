@@ -9,7 +9,7 @@ Disposition: defer implementation; keep qmd optional and non-fatal.
 Do not build a remote qmd deep-lookup wrapper in the local Open Brain issue
 burn-down. The required memory path is Open Brain plus curated qmd-derived repo
 facts. A remote qmd wrapper may be added later as an operator-approved,
-best-effort escape hatch, but it is not part of the Open Brain or Hermes memory
+best-effort escape hatch, but it is not part of the Open Brain memory
 contract.
 
 ## Boundary
@@ -27,14 +27,14 @@ Open Brain does not own:
 - exposing raw remote qmd access to arbitrary agents;
 - SSH or host routing to the qmd machine;
 - mcp2cli qmd bridge credentials or operator identity policy;
-- Hermes startup, recall, writes, current memory, or repo-fact correctness
+- Client startup, recall, writes, current memory, or repo-fact correctness
   depending on qmd availability.
 
 ## Required Behavior
 
 Normal agent memory must work when qmd is unavailable:
 
-- Hermes startup must not fail because qmd is down or unreachable.
+- Client startup must not fail because qmd is down or unreachable.
 - Recall and writes must continue through Open Brain.
 - Current memory and session lanes must not depend on qmd.
 - Required repo facts must be promoted into Open Brain before agents rely on
@@ -52,7 +52,7 @@ issue in the owning repo or host workflow and prove:
 - no raw qmd chunks or private source bodies are stored in Open Brain by
   default;
 - Open Brain remains the required distributed memory/fact layer;
-- Hermes and mcp2cli canaries prove normal memory behavior without qmd.
+- mcp2cli canaries prove normal memory behavior without qmd.
 
 ## Local Validation
 
@@ -65,5 +65,3 @@ bunx tsc --noEmit
 
 This validation does not prove a remote qmd-unavailable runtime fallback. That
 runtime canary belongs with a future approved wrapper implementation.
-
-No core01 deploy is required for this decision.

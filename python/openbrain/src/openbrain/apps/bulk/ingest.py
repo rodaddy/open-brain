@@ -17,6 +17,7 @@ EXISTS). It never touches the live adapter's watermark or hook path.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +29,8 @@ from openbrain.apps.bulk.formats import (
     MalformedCodexRecordError,
     MalformedHermesRecordError,
     adapter_for,
+    codex_raw_turn_from_line,
+    codex_session_ref_if_present,
 )
 from openbrain.apps.bulk.staging import StagingStore
 from openbrain.models.turn import RawTurn
@@ -42,9 +45,32 @@ class BulkLane(Protocol):
     ``deliver.RawLane`` -- not a second write implementation.
     """
 
-    def ingest_raw_turns(self, turns: Sequence[Mapping[str, Any]]) -> object:
+    def ingest_raw_turns(self, turns: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
         """Full-send a batch of raw turns; the server owns every judgment."""
         ...
+
+
+class RawIngestReceiptError(ValueError):
+    """The server result cannot prove one durable raw-turn outcome."""
+
+    _MESSAGES = {
+        "counts": "raw ingest receipt is missing integer result counts",
+        "accounting": "raw ingest receipt does not account for one turn",
+        "namespace": "raw ingest receipt namespace mismatch",
+        "filtered": "raw ingest receipt filtered the eligible turn",
+    }
+
+    def __init__(self, reason: str) -> None:
+        """Build a fixed content-free diagnostic for one validation branch."""
+        super().__init__(self._MESSAGES[reason])
+
+
+class ServerFilteredTurnError(RawIngestReceiptError):
+    """The server deliberately filtered an otherwise eligible parsed turn."""
+
+    def __init__(self) -> None:
+        """Build the fixed content-free filtered receipt diagnostic."""
+        super().__init__("filtered")
 
 
 class StageResult(BaseModel):
@@ -72,7 +98,10 @@ class IngestResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     sent: int
+    duplicates: int = 0
+    filtered: int = 0
     quarantined: int
+    namespace: str | None = None
 
 
 def stage_file(
@@ -95,12 +124,44 @@ def stage_file(
     declined (``None``) exactly as the live path declines it, and never dropped
     for its size. Content is carried whole into the store.
     """
-    adapter = adapter_for(input_format)
-    staged = store.stage(_parsed_turns(path, adapter))
+    staged = store.stage(parse_file(path, input_format))
     return StageResult(staged=staged, input_format=input_format)
 
 
-def ingest(store: StagingStore, lane: BulkLane) -> IngestResult:
+def parse_file(path: Path, input_format: InputFormat) -> Iterator[RawTurn]:
+    """Parse one physical source through the canonical format adapter.
+
+    This is the side-effect-free half of :func:`stage_file`. Batch discovery and
+    dry-run use it so they share the exact parser without opening SQLite or a
+    client.
+    """
+    return _parsed_turns(path, _adapter_for_file(path, input_format))
+
+
+def _adapter_for_file(path: Path, input_format: InputFormat) -> LineAdapter:
+    """Bind source-level context when the accepted format carries it."""
+    adapter = adapter_for(input_format)
+    if input_format is not InputFormat.CODEX:
+        return adapter
+
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        first_line = handle.readline()
+    if not first_line:
+        return adapter
+    try:
+        session_ref = codex_session_ref_if_present(first_line)
+    except MalformedCodexRecordError as error:
+        raise MalformedCodexRecordError(
+            error.record, error.fields, f"{path}:1"
+        ) from error
+    if session_ref is None:
+        return adapter
+    return partial(codex_raw_turn_from_line, session_ref=session_ref)
+
+
+def ingest(
+    store: StagingStore, lane: BulkLane, *, expected_namespace: str | None = None
+) -> IngestResult:
     """Yield each staged, unsent turn to the raw lane; resume, and quarantine.
 
     Args:
@@ -109,6 +170,8 @@ def ingest(store: StagingStore, lane: BulkLane) -> IngestResult:
             re-sends -- the operator's interrupted-run recovery.
         lane: The raw-lane write path (the real ``AgentMemory`` in production, a
             fake in tests).
+        expected_namespace: Namespace the server receipt must confirm. ``None``
+            preserves legacy callers that do not bind an expected namespace.
 
     Returns:
         An :class:`IngestResult` counting what this run delivered and set aside.
@@ -120,10 +183,12 @@ def ingest(store: StagingStore, lane: BulkLane) -> IngestResult:
     server's ``UNIQUE(namespace, turn_uuid)`` dedupe is the second line of that
     defence, not the first).
     """
-    return _drive(store, lane)
+    return _drive(store, lane, expected_namespace)
 
 
-def _drive(store: StagingStore, lane: BulkLane) -> IngestResult:
+def _drive(
+    store: StagingStore, lane: BulkLane, expected_namespace: str | None
+) -> IngestResult:
     """Send every pending turn one at a time, marking or quarantining each.
 
     One turn per send, not a batch, because the operator failure mode is
@@ -131,15 +196,34 @@ def _drive(store: StagingStore, lane: BulkLane) -> IngestResult:
     where a batched send would fail the whole remainder on one bad row.
     """
     sent = 0
+    duplicates = 0
+    filtered = 0
     quarantined = 0
+    receipt_namespace = expected_namespace
     for turn in store.pending():
-        outcome = _send_one(store, lane, turn)
-        sent += outcome
-        quarantined += 1 - outcome
-    return IngestResult(sent=sent, quarantined=quarantined)
+        delivered, duplicate, server_filtered, failed, namespace = _send_one(
+            store, lane, turn, receipt_namespace
+        )
+        receipt_namespace = namespace or receipt_namespace
+        sent += delivered
+        duplicates += duplicate
+        filtered += server_filtered
+        quarantined += failed
+    return IngestResult(
+        sent=sent,
+        duplicates=duplicates,
+        filtered=filtered,
+        quarantined=quarantined,
+        namespace=receipt_namespace,
+    )
 
 
-def _send_one(store: StagingStore, lane: BulkLane, turn: RawTurn) -> int:
+def _send_one(
+    store: StagingStore,
+    lane: BulkLane,
+    turn: RawTurn,
+    expected_namespace: str | None,
+) -> tuple[int, int, int, int, str | None]:
     """Deliver one turn; mark it sent, or quarantine it and carry on.
 
     Returns:
@@ -153,15 +237,49 @@ def _send_one(store: StagingStore, lane: BulkLane, turn: RawTurn) -> int:
     """
     payload = [{**turn.model_dump(exclude_none=True), "turn_index": 0}]
     try:
-        lane.ingest_raw_turns(payload)
+        receipt = lane.ingest_raw_turns(payload)
+        delivered, duplicate, namespace = _validated_receipt(
+            receipt, expected_namespace
+        )
     except Exception as error:  # noqa: BLE001 -- quarantine any lane rejection, loudly
         # Content-free BY CONSTRUCTION: only the error CLASS name is recorded,
         # never the exception object, so no turn text or token reaches the
         # quarantine store -- the same discipline the live swallow keeps.
         store.quarantine(turn, type(error).__name__)
-        return 0
+        if isinstance(error, ServerFilteredTurnError):
+            return 0, 0, 1, 0, None
+        return 0, 0, 0, 1, None
     store.mark_sent(turn.turn_uuid)
-    return 1
+    return delivered, duplicate, 0, 0, namespace
+
+
+def _validated_receipt(
+    receipt: Mapping[str, Any], expected_namespace: str | None
+) -> tuple[int, int, str]:
+    """Validate the server's durable one-turn result before marking it sent."""
+    ingested = receipt.get("ingested")
+    duplicates = receipt.get("duplicates")
+    filtered = receipt.get("filtered")
+    values = (ingested, duplicates, filtered)
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) for value in values
+    ):
+        raise RawIngestReceiptError("counts")
+    assert isinstance(ingested, int)
+    assert isinstance(duplicates, int)
+    assert isinstance(filtered, int)
+    if min(ingested, duplicates, filtered) < 0:
+        raise RawIngestReceiptError("counts")
+    if ingested + duplicates + filtered != 1:
+        raise RawIngestReceiptError("accounting")
+    namespace = receipt.get("namespace")
+    if not isinstance(namespace, str) or (
+        expected_namespace is not None and namespace != expected_namespace
+    ):
+        raise RawIngestReceiptError("namespace")
+    if filtered:
+        raise ServerFilteredTurnError
+    return ingested, duplicates, namespace
 
 
 def _parsed_turns(path: Path, adapter: LineAdapter) -> Iterator[RawTurn]:

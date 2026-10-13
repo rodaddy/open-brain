@@ -31,11 +31,8 @@ import {
   canReadNamespace,
   namespaceFilterFor,
   type NamespaceFilter,
-} from "./read-scope.ts";
-import {
-  isSharedNamespace,
-  type SharedNamespaceConfig,
-} from "./shared-namespace.ts";
+} from "../domain/read-scope.ts";
+import { isSharedNamespace, type SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { Tier } from "./search-constants.ts";
 import { setActiveMcpTraceMetadata } from "../observability/langfuse-tracing.ts";
 import {
@@ -52,10 +49,7 @@ import {
   uncertaintyFor,
   type Evidence,
 } from "./answer-evidence.ts";
-import {
-  retrieveAnswerRows,
-  selectCitableEvidence,
-} from "./answer-retrieval.ts";
+import { retrieveAnswerRows, selectCitableEvidence } from "./answer-retrieval.ts";
 
 const NAMESPACE_DENIED = "Permission denied: namespace read access denied";
 const NOT_AUTHENTICATED = "Permission denied: not authenticated";
@@ -210,10 +204,7 @@ function resolveRequest(
   if (!identity) return { denial: NOT_AUTHENTICATED };
 
   const requestedNamespace = args.namespace;
-  if (
-    requestedNamespace &&
-    !canReadNamespace(identity, requestedNamespace, names)
-  ) {
+  if (requestedNamespace && !canReadNamespace(identity, requestedNamespace, names)) {
     return { denial: NAMESPACE_DENIED };
   }
 

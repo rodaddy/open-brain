@@ -45,9 +45,7 @@ export function boundedInt(
     throw new ValidationError(`${name} must be an integer`);
   }
   if (value < minimum || value > maximum) {
-    throw new ValidationError(
-      `${name} must be between ${minimum} and ${maximum}`,
-    );
+    throw new ValidationError(`${name} must be between ${minimum} and ${maximum}`);
   }
   return value;
 }
@@ -101,9 +99,7 @@ export function validateExactFields(
   label: string,
 ): void {
   const mismatches = Object.entries(expected)
-    .filter(
-      ([name, value]) => !(name in candidate) || candidate[name] !== value,
-    )
+    .filter(([name, value]) => !(name in candidate) || candidate[name] !== value)
     .map(([name]) => name)
     .sort();
   if (mismatches.length > 0) {
@@ -147,6 +143,42 @@ export function validateStartedLane(
   expected["source"] = expected["platform"];
   delete expected["platform"];
   validateExactFields(candidate, expected, "session_start result");
+}
+
+/**
+ * Require an ADOPTED lane to prove only the coordinates the caller owns.
+ *
+ * Peer of `validate_adopted_lane` in
+ * `python/openbrain-memory/src/openbrain_memory/_runtime_validation.py`
+ * (issue 736, porting PR 732 / ledger item 33). A manual wrap or checkpoint
+ * claims no exact scope, so there is no requested exact scope for the response
+ * to prove. What the caller does own is its `session_key` and, through its
+ * token or the delegation header, its `namespace` — so those, and only those,
+ * bind here. Every other `session_start` still goes through
+ * `validateStartedLane`, and the server namespace predicate remains the
+ * isolation boundary.
+ */
+export function validateAdoptedLane(
+  result: unknown,
+  namespace: string,
+  sessionKey: string,
+): void {
+  if (!isRecord(result)) {
+    throw new ValidationError("session_start result missing lane object");
+  }
+  const lane = result["lane"];
+  if (!isRecord(lane)) {
+    throw new ValidationError("session_start result missing lane object");
+  }
+  const candidate: Json = { namespace: lane["namespace"] ?? null };
+  validateExactFields(candidate, { namespace }, "session_start result");
+  if (lane["session_key"] !== sessionKey) {
+    throw new ValidationError(
+      `session_start returned a lane for session_key ` +
+        `'${String(lane["session_key"])}', not the requested '${sessionKey}'. ` +
+        `Nothing was written.`,
+    );
+  }
 }
 
 /** Require a context-pack result to prove the requested exact scope. */

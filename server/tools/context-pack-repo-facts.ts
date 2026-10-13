@@ -23,6 +23,8 @@ import {
   type SectionReaderDeps,
 } from "./context-pack-sections.ts";
 import { asError, errorIdentityFields } from "./context-pack-shared.ts";
+import { createEntityReportRepository } from "../db/entity-report-repository.ts";
+import type { QuerySurface } from "../db/transaction.ts";
 
 /**
  * Read-side mirror of the write-side `staleness_policy` enum.
@@ -256,9 +258,7 @@ function collectRepoFacts(options: {
 }
 
 /** The defined empty state for a pack that carries no active repo. */
-function noActiveRepoFragment(
-  budget: Record<string, unknown>,
-): SectionFragment {
+function noActiveRepoFragment(budget: Record<string, unknown>): SectionFragment {
   return {
     section: {
       label: "repo_facts",
@@ -284,17 +284,12 @@ async function queryRepoFactRows(
   repo: string,
 ): Promise<Array<Record<string, unknown>>> {
   // Exact repo bind, archived rows excluded, no legacy fallback.
-  const { rows } = await deps.query(
-    `SELECT id, namespace, metadata, updated_at
-         FROM ob_entities
-        WHERE entity_type = 'repo_fact'
-          AND archived_at IS NULL
-          AND namespace = $1
-          AND metadata->>'repo' = $2
-        ORDER BY updated_at DESC, id DESC`,
-    [namespace, repo],
-  );
-  return rows;
+  // The section reader is handed a narrow query callback rather than a Pool,
+  // so the port is built over that callback; it satisfies the same contract.
+  const repository = createEntityReportRepository({
+    query: deps.query,
+  } as unknown as QuerySurface);
+  return await repository.repoFactRowsForRepo({ namespace, repo });
 }
 
 /**

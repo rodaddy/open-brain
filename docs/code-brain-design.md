@@ -84,7 +84,7 @@ the agent. Those are the highest-value rows in the system.
 
 | Stays put | Bleeds everywhere |
 |---|---|
-| "in king-signals we use X pattern" | "never use `/bin/bash` on macOS" |
+| "in acme-signals we use X pattern" | "never use `/bin/bash` on macOS" |
 | "OB's dedupe threshold is 0.91" | "test varied inputs, not SQL shape" |
 
 gbrain does **not** solve this — its scoping is `source_id` plus a slug path
@@ -158,7 +158,7 @@ epic → issue → PR/commit → session
 
 Forge-neutral: model issue / hierarchy / state / link, with GitHub as one
 adapter behind `source_kind` + `external_id`. Never GitHub-shaped columns.
-`git.rodaddy.live` (forg) is already live.
+`git.example.internal` (forg) is already live.
 
 ### R4 — File citation in answers (closed-brain only)
 
@@ -229,7 +229,7 @@ and board upkeep is a tool call an agent must **remember** — the same defect a
 all eight findings. Observed this session: 15 issues filed, then a compaction,
 then Project #8 never touched again.
 
-**Board maintenance is service work.** `rodaddy-watcher` is live on CT219 with
+**Board maintenance is service work.** `board-watcher` is live on <your-host> with
 its own Postgres, systemd, backups, an authoritative 15-minute sweep, forg
 reviewed, `rodaddy/open-brain` configured, and runner boxes that cannot select
 arbitrary commands from repository content. A service does not compact.
@@ -237,7 +237,7 @@ arbitrary commands from repository content. A service does not compact.
 ⚠️ **The agent swarm doing all the git/board work is not real yet.** OB must not
 be based on it.
 
-| | rodaddy-watcher | Open Brain |
+| | board-watcher | Open Brain |
 |---|---|---|
 | owns | forge state, jobs, dispatch, publication | memory, recall, distillation |
 | knows | what issues **say** | what sessions **did** |
@@ -246,7 +246,7 @@ Neither sees the gap alone. Watcher knows #395 closed; OB knows
 `discarded_entries` is still 0. The assertion check needs both, and today they
 do not talk.
 
-Measured: `rodaddy-watcher` appears **28 times** in `ob_session_events` and
+Measured: `board-watcher` appears **28 times** in `ob_session_events` and
 **zero** times in `thoughts` or `decisions`.
 
 **Standalone-useful step:** OB records observed system facts durably on a
@@ -335,7 +335,7 @@ the tiers exist.
 
 ## 6. Prior art
 
-Clones: `/Volumes/ThunderBolt/_tmp/open-brain/research/` — gbrain, honcho,
+Clones: `/srv/_tmp/open-brain/research/` — gbrain, honcho,
 cognee, cognee-integrations, mem0, graphiti. cognee / mem0 / graphiti are
 Apache-2.0. **All credit given where taken.**
 

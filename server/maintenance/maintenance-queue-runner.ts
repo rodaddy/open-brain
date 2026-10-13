@@ -4,6 +4,7 @@ import {
   LEASE_RENEW_DIVISOR,
   MAX_CONCURRENCY,
   safeMaintenanceErrorCategory,
+  safeMaintenanceErrorIdentity,
 } from "./maintenance-job.ts";
 import type { MaintenanceJob, MaintenanceQueuePort } from "./maintenance-job.ts";
 
@@ -66,7 +67,10 @@ export class MaintenanceQueueRunner {
   private ticks = 0;
   private lastIdleLogAt = 0;
 
-  constructor(private readonly options: MaintenanceQueueRunnerOptions) {
+  private readonly options: MaintenanceQueueRunnerOptions;
+
+  constructor(options: MaintenanceQueueRunnerOptions) {
+    this.options = options;
     this.concurrency = Math.min(Math.max(options.concurrency ?? 2, 1), MAX_CONCURRENCY);
     this.pollIntervalMs = Math.max(options.pollIntervalMs ?? 5_000, 1);
     this.leaseMs = Math.max(options.leaseMs ?? 30_000, 1);
@@ -258,10 +262,12 @@ export class MaintenanceQueueRunner {
     // A null lease token means the claim carried no lease to renew (defensive;
     // claimDueJobs always mints one for a running row). And a queue without a
     // `renew` capability cannot heartbeat. Either way: no heartbeat at all.
-    const renew = this.options.queue.renew;
-    if (claim.leaseToken === null || typeof renew !== "function") {
+    if (claim.leaseToken === null || typeof this.options.queue.renew !== "function") {
       return null;
     }
+    // Bound at the read site: the receiver travels with the capability, so the
+    // later call needs no `.call(this.options.queue, ...)` to restore it.
+    const renew = this.options.queue.renew.bind(this.options.queue);
     const leaseToken = claim.leaseToken;
     let inFlight: Promise<void> | null = null;
     let stopped = false;
@@ -271,13 +277,7 @@ export class MaintenanceQueueRunner {
       if (inFlight || stopped) return;
       const run = (async () => {
         try {
-          const held = await renew.call(
-            this.options.queue,
-            claim.id,
-            leaseToken,
-            this.leaseMs,
-            this.now(),
-          );
+          const held = await renew(claim.id, leaseToken, this.leaseMs, this.now());
           if (!held) {
             // We no longer own the lease (reclaimed/completed/failed elsewhere).
             // Stop heartbeating; the terminal transition is owned elsewhere.
@@ -357,6 +357,12 @@ export class MaintenanceQueueRunner {
         job_kind: claim.kind,
         status: failed?.state ?? "stale_lease",
         error_category: errorCategory,
+        // The logger takes string|number fields, so an unknown name/code is omitted.
+        ...Object.fromEntries(
+          Object.entries(safeMaintenanceErrorIdentity(error)).filter(
+            (entry): entry is [string, string] => entry[1] !== null,
+          ),
+        ),
         duration_ms: this.now().getTime() - startedAt,
       });
     } catch (recordingError) {

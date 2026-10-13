@@ -1,9 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Bulk import markdown files into Open Brain.
  *
  * Usage:
- *   bun run scripts/bulk-import.ts <source-dir> [options]
+ *   node scripts/bulk-import.ts <source-dir> [options]
  *
  * Options:
  *   --table <name>      Target: thoughts (default) | decisions | sessions
@@ -14,23 +14,23 @@
  *   --dry-run           Show what would be imported
  *   --pattern <glob>    File glob (default: "**\/*.md")
  */
-import { Glob } from "bun";
+import { glob, readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
-import { createPool } from "../src/db/pool.ts";
 import {
-  contentHash,
+  createPool,
+  normalizedContentHash,
   generateEmbedding,
   EMBEDDING_MODEL,
-} from "../src/embedding.ts";
-import {
   decisionCanonicalText,
   sessionEmbedText,
   sessionSourceHashInput,
-} from "../src/embedding-canonical.ts";
-import { extractMetadata, mergeTags } from "../src/extraction.ts";
-import { logger } from "../src/logger.ts";
-import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
+  extractMetadata,
+  mergeTags,
+  logger,
+  sharedNamespaceConfig,
+} from "./settings.ts";
 
 const DELAY_MS = 200;
 const DEFAULT_IMPORT_NAMESPACE = sharedNamespaceConfig().sharedNamespace;
@@ -43,6 +43,18 @@ export interface ParsedFile {
   body: string;
 }
 
+/** The parsed command line, as every importer and the run loop see it. */
+export interface ImportOptions {
+  sourceDir: string;
+  table: ImportTable;
+  extraTags: string[];
+  sourceLabel: string;
+  embed: boolean;
+  extract: boolean;
+  dryRun: boolean;
+  pattern: string;
+}
+
 export interface ImportStats {
   imported: number;
   skipped: number;
@@ -50,52 +62,93 @@ export interface ImportStats {
   errors: number;
 }
 
+const QUOTES = /^["']|["']$/g;
+
+/**
+ * One frontmatter value: a simple `[a, b]` list becomes a string array, a
+ * quoted scalar loses its quotes, anything else stays the raw trimmed string.
+ */
+function parseScalar(raw: string): unknown {
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    return raw
+      .slice(1, -1)
+      .split(",")
+      .map((s) => s.trim().replace(QUOTES, ""));
+  }
+  if (raw.startsWith('"') || raw.startsWith("'")) return raw.replace(QUOTES, "");
+  return raw;
+}
+
 export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, unknown>;
   body: string;
 } {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) return { frontmatter: {}, body: raw.trim() };
-
-  const fm: Record<string, unknown> = {};
-  for (const line of match[1]!.split("\n")) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    let val: unknown = line.slice(colon + 1).trim();
-    // Handle simple YAML arrays like [a, b] or quoted strings
-    if (typeof val === "string" && val.startsWith("[") && val.endsWith("]")) {
-      val = val
-        .slice(1, -1)
-        .split(",")
-        .map((s) => s.trim().replace(/^["']|["']$/g, ""));
-    } else if (
-      typeof val === "string" &&
-      (val.startsWith('"') || val.startsWith("'"))
-    ) {
-      val = val.replace(/^["']|["']$/g, "");
-    }
-    fm[key] = val;
+  const head = match?.[1];
+  const rest = match?.[2];
+  if (head === undefined || rest === undefined) {
+    return { frontmatter: {}, body: raw.trim() };
   }
 
-  return { frontmatter: fm, body: match[2]!.trim() };
+  const fm: Record<string, unknown> = {};
+  for (const line of head.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    fm[line.slice(0, colon).trim()] = parseScalar(line.slice(colon + 1).trim());
+  }
+
+  return { frontmatter: fm, body: rest.trim() };
 }
 
 export async function readFiles(
   sourceDir: string,
   pattern: string,
 ): Promise<ParsedFile[]> {
-  const glob = new Glob(pattern);
   const files: ParsedFile[] = [];
 
-  for await (const path of glob.scan({ cwd: sourceDir, absolute: true })) {
-    const raw = await Bun.file(path).text();
+  for await (const path of glob(pattern, { cwd: sourceDir })) {
+    const absolutePath = resolve(sourceDir, path);
+    if ((await stat(absolutePath)).isDirectory()) continue;
+    const raw = await readFile(absolutePath, "utf8");
     const { frontmatter, body } = parseFrontmatter(raw);
     if (!body || body.length < 10) continue;
-    files.push({ filePath: path, frontmatter, body });
+    files.push({ filePath: absolutePath, frontmatter, body });
   }
 
   return files;
+}
+
+/** Frontmatter `tags` when it is a list, plus the caller's extra tags. */
+function startingTags(file: ParsedFile, extraTags: string[]): string[] {
+  const fmTags = Array.isArray(file.frontmatter.tags)
+    ? (file.frontmatter.tags as string[])
+    : [];
+  return [...fmTags, ...extraTags];
+}
+
+/**
+ * The four embedding-derived insert values, which every importer writes in the
+ * same order and leaves null together when nothing was embedded.
+ */
+function embeddingColumns(
+  embedding: number[] | null,
+): [string | null, string | null, string | null] {
+  if (!embedding) return [null, null, null];
+  return [toSql(embedding), new Date().toISOString(), EMBEDDING_MODEL];
+}
+
+/** Insert outcome from a dedupe-guarded `INSERT ... WHERE NOT EXISTS`. */
+function insertOutcome(rowCount: number | null): "imported" | "duplicate" {
+  return rowCount !== null && rowCount > 0 ? "imported" : "duplicate";
+}
+
+/** One import failure, logged with its file and reported as an error result. */
+function reportImportError(file: ParsedFile, err: unknown): "error" {
+  logger.warn("Import error", {
+    file: file.filePath,
+    error: err instanceof Error ? err.message : String(err),
+  });
+  return "error";
 }
 
 export async function importThought(
@@ -109,12 +162,9 @@ export async function importThought(
   },
 ): Promise<"imported" | "duplicate" | "error"> {
   const content = file.body;
-  const hash = contentHash(content);
+  const hash = normalizedContentHash(content);
 
-  const fmTags = Array.isArray(file.frontmatter.tags)
-    ? (file.frontmatter.tags as string[])
-    : [];
-  let tags = [...fmTags, ...opts.extraTags];
+  let tags = startingTags(file, opts.extraTags);
 
   let embedding: number[] | null = null;
   let extracted: Awaited<ReturnType<typeof extractMetadata>> = null;
@@ -132,6 +182,8 @@ export async function importThought(
     await new Promise((r) => setTimeout(r, DELAY_MS));
   }
 
+  const [vector, embeddedAt, embeddingModel] = embeddingColumns(embedding);
+
   try {
     const { rowCount } = await pool.query(
       `INSERT INTO thoughts (content, tags, source, created_by, namespace, embedding, content_hash, embedded_at, embedding_model, extracted_metadata)
@@ -143,20 +195,16 @@ export async function importThought(
         opts.sourceLabel,
         "bulk-import",
         DEFAULT_IMPORT_NAMESPACE,
-        embedding ? toSql(embedding) : null,
+        vector,
         hash,
-        embedding ? new Date().toISOString() : null,
-        embedding ? EMBEDDING_MODEL : null,
+        embeddedAt,
+        embeddingModel,
         extracted ? JSON.stringify(extracted) : null,
       ],
     );
-    return rowCount && rowCount > 0 ? "imported" : "duplicate";
+    return insertOutcome(rowCount);
   } catch (err) {
-    logger.warn("Import error", {
-      file: file.filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return "error";
+    return reportImportError(file, err);
   }
 }
 
@@ -177,10 +225,7 @@ export async function importDecision(
   const rationale = file.body;
   const context = `Imported from: ${file.filePath}`;
 
-  const fmTags = Array.isArray(file.frontmatter.tags)
-    ? (file.frontmatter.tags as string[])
-    : [];
-  let tags = [...fmTags, ...opts.extraTags];
+  let tags = startingTags(file, opts.extraTags);
 
   let embedding: number[] | null = null;
   let extracted: Awaited<ReturnType<typeof extractMetadata>> = null;
@@ -202,7 +247,7 @@ export async function importDecision(
     context,
     tags,
   });
-  const hash = contentHash(textToEmbed);
+  const hash = normalizedContentHash(textToEmbed);
 
   if (opts.embed) {
     embedding = await generateEmbedding(textToEmbed);
@@ -210,6 +255,8 @@ export async function importDecision(
   if (opts.embed || opts.extract) {
     await new Promise((r) => setTimeout(r, DELAY_MS));
   }
+
+  const [vector, embeddedAt, embeddingModel] = embeddingColumns(embedding);
 
   try {
     const { rowCount } = await pool.query(
@@ -223,20 +270,16 @@ export async function importDecision(
         context,
         "bulk-import",
         DEFAULT_IMPORT_NAMESPACE,
-        embedding ? toSql(embedding) : null,
+        vector,
         hash,
-        embedding ? new Date().toISOString() : null,
-        embedding ? EMBEDDING_MODEL : null,
+        embeddedAt,
+        embeddingModel,
         extracted ? JSON.stringify(extracted) : null,
       ],
     );
-    return rowCount && rowCount > 0 ? "imported" : "duplicate";
+    return insertOutcome(rowCount);
   } catch (err) {
-    logger.warn("Import error", {
-      file: file.filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return "error";
+    return reportImportError(file, err);
   }
 }
 
@@ -257,18 +300,17 @@ export async function importSession(
   // produced a content_hash the registry can never reproduce, so every imported
   // session was permanently source_drift; hash the summary|project source
   // instead and dedup on it like the other importers.
-  const hash = contentHash(sessionSourceHashInput({ summary, project }));
+  const hash = normalizedContentHash(sessionSourceHashInput({ summary, project }));
 
-  const fmTags = Array.isArray(file.frontmatter.tags)
-    ? (file.frontmatter.tags as string[])
-    : [];
-  const tags = [...fmTags, ...opts.extraTags];
+  const tags = startingTags(file, opts.extraTags);
 
   let embedding: number[] | null = null;
   if (opts.embed) {
     embedding = await generateEmbedding(sessionEmbedText({ summary, project }));
     await new Promise((r) => setTimeout(r, DELAY_MS));
   }
+
+  const [vector, embeddedAt, embeddingModel] = embeddingColumns(embedding);
 
   try {
     const { rowCount } = await pool.query(
@@ -281,83 +323,115 @@ export async function importSession(
         tags,
         "bulk-import",
         DEFAULT_IMPORT_NAMESPACE,
-        embedding ? toSql(embedding) : null,
+        vector,
         hash,
-        embedding ? new Date().toISOString() : null,
-        embedding ? EMBEDDING_MODEL : null,
+        embeddedAt,
+        embeddingModel,
       ],
     );
-    return rowCount && rowCount > 0 ? "imported" : "duplicate";
+    return insertOutcome(rowCount);
   } catch (err) {
-    logger.warn("Import error", {
-      file: file.filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return "error";
+    return reportImportError(file, err);
   }
 }
 
-export function parseArgs(argv: string[]): {
+/** Everything one import pass over the parsed files needs. */
+interface ImportRun {
+  pool: pg.Pool;
+  files: ParsedFile[];
+  opts: ImportOptions;
+  importer: (
+    p: pg.Pool,
+    f: ParsedFile,
+    o: ImportOptions,
+  ) => Promise<"imported" | "duplicate" | "error">;
+  stats: ImportStats;
+}
+
+/**
+ * Run every parsed file through the selected importer, tallying results and
+ * printing progress every ten files and once at the end.
+ */
+async function runImport(run: ImportRun): Promise<void> {
+  const { pool, files, opts, importer, stats } = run;
+  let done = 0;
+  for (const file of files) {
+    recordResult(stats, await importer(pool, file, opts));
+    done++;
+    if (done % 10 !== 0 && done !== files.length) continue;
+    console.log(
+      `  [${done}/${files.length}] imported=${stats.imported} dupes=${stats.duplicates} errors=${stats.errors}`,
+    );
+  }
+}
+
+/** Tally one importer outcome into the running totals. */
+function recordResult(
+  stats: ImportStats,
+  result: "imported" | "duplicate" | "error",
+): void {
+  if (result === "imported") stats.imported++;
+  else if (result === "duplicate") stats.duplicates++;
+  else stats.errors++;
+}
+
+/** Options that consume the next argv entry as their value. */
+const VALUE_OPTIONS = new Set(["--table", "--tags", "--source", "--pattern"]);
+/** Options that are present-or-absent and consume nothing. */
+const BOOLEAN_OPTIONS = new Set(["--embed", "--extract", "--dry-run"]);
+
+/** The raw argv scan: option values, present flags, and the positional dir. */
+interface ScannedArgs {
+  values: Map<string, string>;
+  flags: Set<string>;
   sourceDir: string;
-  table: ImportTable;
-  extraTags: string[];
-  sourceLabel: string;
-  embed: boolean;
-  extract: boolean;
-  dryRun: boolean;
-  pattern: string;
-} {
-  const args = argv.slice(2);
+}
+
+/**
+ * Walk argv once, sorting each entry into its option value, its flag, or the
+ * single positional source directory.
+ */
+function scanArgs(args: string[]): ScannedArgs {
+  const values = new Map<string, string>();
+  const flags = new Set<string>();
   let sourceDir = "";
-  let table = "thoughts";
-  let extraTags: string[] = [];
-  let sourceLabel = "bulk-import";
-  let embed = false;
-  let extract = false;
-  let dryRun = false;
-  let pattern = "**/*.md";
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    switch (arg) {
-      case "--table":
-        table = args[++i]!;
-        break;
-      case "--tags":
-        extraTags = args[++i]!.split(",").map((t) => t.trim());
-        break;
-      case "--source":
-        sourceLabel = args[++i]!;
-        break;
-      case "--pattern":
-        pattern = args[++i]!;
-        break;
-      case "--embed":
-        embed = true;
-        break;
-      case "--extract":
-        extract = true;
-        break;
-      case "--dry-run":
-        dryRun = true;
-        break;
-      default:
-        if (!arg.startsWith("--") && !sourceDir) sourceDir = arg;
+    const arg = args[i] ?? "";
+    if (VALUE_OPTIONS.has(arg)) {
+      values.set(arg, args[++i] ?? "");
+    } else if (BOOLEAN_OPTIONS.has(arg)) {
+      flags.add(arg);
+    } else if (!arg.startsWith("--") && !sourceDir) {
+      sourceDir = arg;
     }
   }
 
+  return { values, flags, sourceDir };
+}
+
+export function parseArgs(argv: string[]): ImportOptions {
+  const { values, flags, sourceDir } = scanArgs(argv.slice(2));
+
+  const table = values.get("--table") ?? "thoughts";
+  const rawTags = values.get("--tags");
+  const extraTags = rawTags ? rawTags.split(",").map((t) => t.trim()) : [];
+  const sourceLabel = values.get("--source") ?? "bulk-import";
+  const pattern = values.get("--pattern") ?? "**/*.md";
+  const embed = flags.has("--embed");
+  const extract = flags.has("--extract");
+  const dryRun = flags.has("--dry-run");
+
   if (!sourceDir) {
     console.error(
-      "Usage: bun run scripts/bulk-import.ts <source-dir> [--table thoughts|decisions|sessions] [--tags t1,t2] [--embed] [--extract] [--dry-run]",
+      "Usage: node scripts/bulk-import.ts <source-dir> [--table thoughts|decisions|sessions] [--tags t1,t2] [--embed] [--extract] [--dry-run]",
     );
     process.exit(1);
   }
 
   const validTables = new Set(["thoughts", "decisions", "sessions"] as const);
   if (!validTables.has(table as ImportTable)) {
-    console.error(
-      `Invalid table: ${table}. Must be thoughts, decisions, or sessions.`,
-    );
+    console.error(`Invalid table: ${table}. Must be thoughts, decisions, or sessions.`);
     process.exit(1);
   }
 
@@ -421,32 +495,9 @@ if (import.meta.main) {
     };
     const importer = importers[opts.table];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]!;
-      const result = await importer(pool, file, opts);
+    await runImport({ pool, files, opts, importer, stats });
 
-      switch (result) {
-        case "imported":
-          stats.imported++;
-          break;
-        case "duplicate":
-          stats.duplicates++;
-          break;
-        case "error":
-          stats.errors++;
-          break;
-      }
-
-      if ((i + 1) % 10 === 0 || i === files.length - 1) {
-        console.log(
-          `  [${i + 1}/${files.length}] imported=${stats.imported} dupes=${stats.duplicates} errors=${stats.errors}`,
-        );
-      }
-    }
-
-    const suffix = opts.embed
-      ? ""
-      : " -- run 'bun run backfill' for embeddings";
+    const suffix = opts.embed ? "" : " -- run 'npm run backfill' for embeddings";
     logger.info(
       `Import complete${suffix}`,
       stats as unknown as Record<string, unknown>,

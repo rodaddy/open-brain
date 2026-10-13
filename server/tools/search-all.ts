@@ -36,14 +36,9 @@ import {
   canReadNamespace,
   type NamespaceFilter,
   namespaceFilterFor,
-} from "./read-scope.ts";
+} from "../domain/read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
-import {
-  ALL_TABLES,
-  RRF_K,
-  TIER_BOOST,
-  type Tier,
-} from "./search-constants.ts";
+import { ALL_TABLES, RRF_K, TIER_BOOST, type Tier } from "./search-constants.ts";
 import {
   setActiveMcpTraceMetadata,
   traceRetrievalSpan,
@@ -56,6 +51,36 @@ import {
   type SourceRef,
 } from "./search-engine.ts";
 import { normalizeSearchArgs } from "./search-request.ts";
+import {
+  raceWithTimeout,
+  spawnQmd,
+  type QmdChild,
+  type QmdSpawn,
+} from "./qmd-spawn.ts";
+
+/**
+ * How the qmd child is created, as a mutable module binding.
+ *
+ * A binding rather than a threaded dependency because the qmd arm is reached
+ * through the registered MCP tool, several call frames below any caller that
+ * could pass one in. `setQmdSpawn` is the seam the tracing fixtures assign a
+ * double over; production never calls it.
+ */
+let qmdSpawn: QmdSpawn = spawnQmd;
+
+/**
+ * Replace the qmd spawn used by `search_all`, returning the previous one.
+ *
+ * Test-support only. Callers restore the returned value in a `finally`, the
+ * same shape the previous `Bun.spawn` monkeypatch used.
+ */
+export function setQmdSpawn(next: QmdSpawn): QmdSpawn {
+  const previous = qmdSpawn;
+  qmdSpawn = next;
+  return previous;
+}
+
+export type { QmdChild, QmdSpawn };
 
 const NOT_AUTHENTICATED = "Permission denied: not authenticated";
 const NAMESPACE_DENIED = "Permission denied: namespace read access denied";
@@ -147,13 +172,11 @@ interface QmdSearchOptions {
  * merely quiet — the design's R4 objection is to SILENT staleness, not to
  * degradation itself.
  */
-async function searchQmdInternal(
-  options: QmdSearchOptions,
-): Promise<UnifiedResult[]> {
+async function searchQmdInternal(options: QmdSearchOptions): Promise<UnifiedResult[]> {
   const { dependencies, qmdPath, query, limit, collection } = options;
   try {
     const command = [
-      "bun",
+      process.execPath,
       qmdPath,
       "search",
       query,
@@ -163,50 +186,24 @@ async function searchQmdInternal(
     ];
     if (collection) command.push("-c", collection);
 
-    const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
-    // The timer handle is held outside the race so the winner can cancel the
-    // loser. Without the clearTimeout below, a subprocess that finishes first
-    // leaves the timer armed and it fires later, against an already-settled
-    // race -- after the test that started it has ended. That is how #608/#632
-    // surfaced: `Unhandled error between tests` with `0 fail`, exit 1.
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await Promise.race([
-      (async () => {
-        const stdout = await new Response(proc.stdout).text();
-        const exitCode = await proc.exited;
-        return { stdout, exitCode, timedOut: false };
-      })(),
-      new Promise<{ stdout: string; exitCode: number; timedOut: boolean }>(
-        (resolve) => {
-          timeoutHandle = setTimeout(() => {
-            // Kill before resolving: an abandoned subprocess would hold its file
-            // handles and its share of the box for the life of the server.
-            // `kill` is guarded rather than called outright: a test double
-            // for `Bun.spawn` returns a plain object carrying only the fields
-            // the happy path reads (stdout/stderr/exited), so `.kill()` on it
-            // throws `TypeError: proc.kill is not a function` -- the exact
-            // error in #632. Guarding keeps the timeout path honest under a
-            // partial spawn handle.
-            if (typeof proc.kill === "function") proc.kill();
-            resolve({ stdout: "", exitCode: -1, timedOut: true });
-          }, QMD_TIMEOUT_MS);
-        },
-      ),
-    ]);
-    clearTimeout(timeoutHandle);
+    // The spawn and the race both live behind `qmd-spawn.ts`, which owns
+    // cancelling BOTH arms: the timer when the child wins, and the child-exit
+    // listeners when the timeout wins. The timer half is the original #608/#632
+    // post-mortem -- "a subprocess that finishes first leaves the timer armed
+    // and it fires later, against an already-settled race, after the test that
+    // started it has ended: `Unhandled error between tests` with `0 fail`, exit
+    // 1". The listener half is the same incident by the route Node's
+    // event-based child exit opens up. That module carries both, so the
+    // property is proven in one place rather than restated here.
+    const proc = qmdSpawn(command);
+    const outcome = await raceWithTimeout(proc, QMD_TIMEOUT_MS);
 
     if (outcome.timedOut) {
-      dependencies.logger.warn(
-        { timeout_ms: QMD_TIMEOUT_MS },
-        "qmd_search_timeout",
-      );
+      dependencies.logger.warn({ timeout_ms: QMD_TIMEOUT_MS }, "qmd_search_timeout");
       return [];
     }
     if (outcome.exitCode !== 0) {
-      dependencies.logger.warn(
-        { exit_code: outcome.exitCode },
-        "qmd_search_failed",
-      );
+      dependencies.logger.warn({ exit_code: outcome.exitCode }, "qmd_search_failed");
       return [];
     }
 
@@ -218,13 +215,10 @@ async function searchQmdInternal(
       return {
         source: "qmd" as const,
         type: "file",
-        content: (
-          doc.content ??
-          doc.text ??
-          doc.preview ??
-          doc.snippet ??
-          ""
-        ).slice(0, MAX_CONTENT_CHARS),
+        content: (doc.content ?? doc.text ?? doc.preview ?? doc.snippet ?? "").slice(
+          0,
+          MAX_CONTENT_CHARS,
+        ),
         score: doc.score ?? doc.similarity ?? 0.5,
         path,
         collection: doc.collection,
@@ -392,11 +386,8 @@ interface BrainSearchOptions {
  * because `search_all` returns whatever federation could reach. The failure is
  * logged as `search_all_brain_failed` so the degradation stays visible.
  */
-async function searchBrainArm(
-  options: BrainSearchOptions,
-): Promise<UnifiedResult[]> {
-  const { dependencies, role, query, totalNeeded, mode, tier, namespace } =
-    options;
+async function searchBrainArm(options: BrainSearchOptions): Promise<UnifiedResult[]> {
+  const { dependencies, role, query, totalNeeded, mode, tier, namespace } = options;
   const tables = ALL_TABLES.filter((table) => canRead(role, table));
   if (tables.length === 0) return [];
   try {

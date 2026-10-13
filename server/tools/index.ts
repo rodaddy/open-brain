@@ -22,6 +22,7 @@ import { registerOperatorDoctorTool } from "./operator-doctor.ts";
 import { registerPeopleTools } from "./people.ts";
 import { registerPromoteEntryTool } from "./promote-entry.ts";
 import { registerPromotionTools } from "./promotion.ts";
+import { registerReviewedCandidatePromotionTool } from "./reviewed-candidate-promotion.ts";
 import { registerRealtimeAppendTools } from "./realtime-append.ts";
 import { registerReportingTools } from "./reporting.ts";
 import { registerRepoFactTools } from "./repo-facts.ts";
@@ -90,14 +91,10 @@ export function registerMemoryTools(
   // lane family because what it produces is durable memory, not lane state.
   registerTierLaneTool(server, dependencies);
   registerReportingTools(server, dependencies);
-  // Skill/canon usage telemetry (#469). Registered on the REWRITE registry
-  // only, not on `src/tools`: the operator placed this on the rewrite path
-  // ("We're rewriting it, so this seems like a good place to add new
-  // functionality"), so adding it to the stack being replaced would build new
-  // surface on the retiring one. It registers next to `reporting.ts` because it
-  // is the same kind of thing -- a read-only aggregate over a log table, scoped
-  // by joining back to the owning row -- and reuses that module's scoping rule
-  // rather than inventing a second one.
+  // Skill/canon usage telemetry (#469). It registers next to `reporting.ts`
+  // because it is the same kind of thing -- a read-only aggregate over a log
+  // table, scoped by joining back to the owning row -- and reuses that module's
+  // scoping rule rather than inventing a second one.
   registerSkillUsageTools(server, dependencies);
   registerEntityTools(server, dependencies);
   registerPeopleTools(server, dependencies);
@@ -112,6 +109,10 @@ export function registerMemoryTools(
   // have a single owner. Both mutating paths are dry-run by default.
   registerScanNamespaceTool(server, dependencies);
   registerPromoteEntryTool(server, dependencies);
+  // Candidate promotion is a separate explicit bridge from the DREAM review
+  // queue into own durable thoughts. It is dry-run by default and accepts only
+  // the human `review_action='promoted'` label; REM never invokes it.
+  registerReviewedCandidatePromotionTool(server, dependencies);
   // The search/recall family. `search_brain` was previously a namespace-denial
   // stub registered by this wave's predecessor so the isolation boundary stayed
   // observable while the body was unowned; the real handler replaces it here.

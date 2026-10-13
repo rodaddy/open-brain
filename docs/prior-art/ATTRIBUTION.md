@@ -23,7 +23,7 @@ Open Brain takes **no code** from any of these projects and depends on none of
 them. Verified 2026-07-27: no import, require, or dependency on honcho, cognee,
 graphiti, mem0, or gbrain anywhere in `src/`, `python/`, or `scripts/`, and none
 in `package.json` or `pyproject.toml`. The only reference in the codebase is a
-comment in `src/db/migrations/032_raw_turns.test.ts:282` crediting Graphiti for
+comment in `server/db/migrations/032_raw_turns.test.ts:282` crediting Graphiti for
 the bi-temporal concept — credit for an idea, which is the practice this file
 exists to keep.
 

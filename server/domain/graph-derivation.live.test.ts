@@ -1,8 +1,9 @@
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { requireTestDatabaseUrl } from "../../scripts/test-support/require-test-database.ts";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import { createGraphDerivationRepository } from "../db/graph-derivation-repository.ts";
+import type { AuthInfo } from "../types.ts";
 
 /**
  * Live-Postgres regression for the #346 P2 anchor-rename bug.
@@ -29,9 +30,10 @@ const auth: AuthInfo = {
   namespaceSource: "token",
 };
 
-/** The derivation store handle
-, which is the shared pool in every suite. */
-const store = { query: pool.query.bind(pool) };
+/** The derivation repository, built over the shared pool every suite uses. */
+const repository = createGraphDerivationRepository({
+  query: pool.query.bind(pool),
+} as Pick<Pool, "query">);
 
 /** Clears both graph tables for one namespace. */
 async function clearNamespace(ns: string): Promise<void> {
@@ -52,7 +54,7 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     await clearNamespace(ns);
 
     // First derivation: create the anchor under its original display name.
-    const first = await deriveGraphFromMetadata(store, auth, {
+    const first = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "release plan",
@@ -76,7 +78,7 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     // Second derivation: SAME anchor and derived terms, NEW display name only.
     // The derivation remains structurally `unchanged`, but the anchor's readable
     // storage name and exact display_name must still refresh in place.
-    const renamed = await deriveGraphFromMetadata(store, auth, {
+    const renamed = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "Release Plan v2",
@@ -100,7 +102,7 @@ describe("deriveGraphFromMetadata anchor rename (live Postgres)", () => {
     expect(afterRes.rows[0].display_name).toBe("Release Plan v2");
 
     // Re-running the exact same (renamed) input is idempotent and content-free.
-    const again = await deriveGraphFromMetadata(store, auth, {
+    const again = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "Release Plan v2",
@@ -133,7 +135,7 @@ describe("deriveGraphFromMetadata duplicate source titles (live Postgres)", () =
     const sharedTitle = "Q3 Release Plan";
 
     // First anchor: title T under canonical source:idA.
-    const a = await deriveGraphFromMetadata(store, auth, {
+    const a = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId: idA,
       anchorName: sharedTitle,
@@ -145,7 +147,7 @@ describe("deriveGraphFromMetadata duplicate source titles (live Postgres)", () =
     // Second anchor: SAME title T under a DIFFERENT canonical source:idB.
     // Pre-fix this raised "duplicate key value violates unique constraint
     // idx_ob_entities_lookup_unique".
-    const b = await deriveGraphFromMetadata(store, auth, {
+    const b = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId: idB,
       anchorName: sharedTitle,
@@ -174,14 +176,14 @@ describe("deriveGraphFromMetadata duplicate source titles (live Postgres)", () =
   it("renames an anchor onto a sibling's title without a lower(name) collision", async () => {
     await clearNamespace(ns);
 
-    await deriveGraphFromMetadata(store, auth, {
+    await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId: idA,
       anchorName: "Existing Title",
       namespace: ns,
       metadata: { topics: ["Migrations"], people: [] },
     });
-    await deriveGraphFromMetadata(store, auth, {
+    await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId: idB,
       anchorName: "Different Title",
@@ -192,7 +194,7 @@ describe("deriveGraphFromMetadata duplicate source titles (live Postgres)", () =
     // Rename B onto A's exact title, adding a term so the run takes the write
     // path. Pre-fix the rename would set name = "Existing Title" and collide
     // with A's row on lower(name).
-    const renamed = await deriveGraphFromMetadata(store, auth, {
+    const renamed = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId: idB,
       anchorName: "Existing Title",
@@ -261,7 +263,7 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     await clearNamespace(ns);
 
     // Initial: topics [migrations, indexing] -> two live anchor->term edges.
-    const first = await deriveGraphFromMetadata(store, auth, {
+    const first = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "release plan",
@@ -285,7 +287,7 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(liveBefore.rows[0].n).toBe(2);
 
     // Changed: topics [migrations] -> the indexing edge is now stale.
-    const changed = await deriveGraphFromMetadata(store, auth, {
+    const changed = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "release plan",
@@ -319,7 +321,7 @@ describe("deriveGraphFromMetadata stale-edge prune (live Postgres)", () => {
     expect(indexingStillLive).toBe(indexingId);
 
     // Rerun the SAME shrunk set: unchanged content, nothing new to prune.
-    const again = await deriveGraphFromMetadata(store, auth, {
+    const again = await deriveGraphFromMetadata(repository, auth, {
       anchorType,
       anchorId,
       anchorName: "release plan",

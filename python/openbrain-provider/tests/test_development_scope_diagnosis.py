@@ -111,17 +111,17 @@ def test_rendered_text_prints_the_measured_cwd_not_the_default() -> None:
     diagnosis = ScopeDiagnosis(
         configured_root=Path("/workspace"),
         source="default",
-        cwd=Path("/Users/rico/somewhere-real"),
+        cwd=Path("/home/user/somewhere-real"),
     )
 
     text = render_scope_diagnosis(diagnosis)
 
-    assert "/Users/rico/somewhere-real" in text
+    assert "/home/user/somewhere-real" in text
     assert "OPENBRAIN_DEVELOPMENT_ROOT" in text
     assert "/workspace" in text
     # The measured cwd is quoted after the word that introduces it, so the
     # default cannot be read as the session's directory.
-    assert "cwd: /Users/rico/somewhere-real" in text
+    assert "cwd: /home/user/somewhere-real" in text
 
 
 def test_rendered_text_distinguishes_override_from_default() -> None:

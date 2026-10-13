@@ -242,8 +242,8 @@ def render_pack(
 
     Returns:
         One header line, a blank line, then every selected item on its own line.
-        Rule text is copied in full from ``guidance`` or ``fact`` and is never
-        shortened or split.
+        Rule text is copied in full from ``guidance``, ``fact``, or ``content``
+        and is never shortened or split.
     """
     if not isinstance(pack, dict):
         return ""
@@ -301,6 +301,8 @@ def _render_rule_text(_label: str, item: Any) -> str:
     text = item.get("guidance")
     if text is None:
         text = item.get("fact")
+    if text is None:
+        text = item.get("content")
     return "" if text is None else str(text)
 
 
@@ -310,9 +312,10 @@ def _render_item(label: str, item: Any) -> str:
     Two item shapes reach here from ``agent_context_pack``: guidance items
     (``profile_guidance``/``process_guidance``) carry ``scope_key``,
     ``guidance``, and ``candidate_type``; fact items (``repo_facts``) carry
-    ``subject``, ``fact``, and ``fact_type``. The lane falls back to the section
-    ``label`` when an item names no type, and the key falls back to empty; the
-    rule TEXT is whatever the item carries, in full, and is never dropped.
+    ``subject``, ``fact``, and ``fact_type``; durable items carry ``content``.
+    The lane falls back to the section ``label`` when an item names no type, and
+    the key falls back to empty; the rule TEXT is whatever the item carries, in
+    full, and is never dropped.
     """
     if not isinstance(item, dict):
         return f"[{label}] {item}"
@@ -320,6 +323,8 @@ def _render_item(label: str, item: Any) -> str:
     text = item.get("guidance")
     if text is None:
         text = item.get("fact")
+    if text is None:
+        text = item.get("content")
     text = "" if text is None else str(text)
 
     key = item.get("scope_key")

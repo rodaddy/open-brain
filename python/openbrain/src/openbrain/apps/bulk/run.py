@@ -178,14 +178,18 @@ def run(argv: Sequence[str] | None = None) -> int:
     session_key = f"bulk:{args.file.name}"
     result = ingest(store, _lane(settings, session_key))
     logger.info(
-        "bulk ingest sent {} turns, quarantined {}",
+        "bulk ingest sent {} turns, deduped {}, filtered {}, quarantined {}",
         result.sent,
+        result.duplicates,
+        result.filtered,
         result.quarantined,
     )
 
-    if result.quarantined:
+    if result.filtered or result.quarantined:
         logger.warning(
-            "bulk ingest quarantined {} turns -- inspect the staging store at {}",
+            "bulk ingest filtered {} turns and quarantined {} turns -- "
+            "inspect the staging store at {}",
+            result.filtered,
             result.quarantined,
             _staging_path(args),
         )

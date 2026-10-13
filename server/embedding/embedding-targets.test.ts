@@ -1,11 +1,11 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import {
   EMBEDDING_TARGETS,
   EMBEDDING_TARGET_NAMES,
   getEmbeddingTarget,
 } from "./embedding-targets.ts";
-import { contentHash } from "../../src/embedding.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { normalizedContentHash } from "./provider.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
 
 describe("embedding-targets registry", () => {
   it("covers every current embedding-bearing table", () => {
@@ -92,7 +92,7 @@ describe("embedding-targets canonical text", () => {
     const row = { id: "t1", content: "a thought", tags: ["x", "y"] };
     expect(t.embedText(row)).toBe("a thought\nx y");
     // Write path (log-thought.ts) hashes args.content, NOT the embed text.
-    expect(t.sourceHash(row)).toBe(contentHash("a thought"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("a thought"));
     expect(t.canonicalText(row)).toBe("a thought");
   });
 
@@ -108,7 +108,7 @@ describe("embedding-targets canonical text", () => {
     expect(t.embedText(row)).toBe("Use Bun\nIt is fast");
     // Decisions embed and hash the SAME canonical string.
     expect(t.canonicalText(row)).toBe("Use Bun\nIt is fast");
-    expect(t.sourceHash(row)).toBe(contentHash("Use Bun\nIt is fast"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("Use Bun\nIt is fast"));
   });
 
   it("decisions: folds context, alternatives (', '), tags (' ') — tags deduped+sorted (#345/#356)", () => {
@@ -130,7 +130,7 @@ describe("embedding-targets canonical text", () => {
       "Use Bun\nIt is fast\ngreenfield service\nNode, Deno\nperf runtime";
     expect(t.embedText(row)).toBe(expected);
     expect(t.canonicalText(row)).toBe(expected);
-    expect(t.sourceHash(row)).toBe(contentHash(expected));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash(expected));
     // And any permutation of the same tag set folds to the identical string.
     const reordered = { ...row, tags: ["perf", "runtime"] };
     expect(t.canonicalText(reordered)).toBe(expected);
@@ -172,7 +172,7 @@ describe("embedding-targets canonical text for sessions, lanes, and entities", (
     expect(t.embedText(row)).toBe("session summary text");
     // Hash input is summary|project, NOT the embed text -- matches every writer.
     expect(t.canonicalText(row)).toBe("session summary text|ob");
-    expect(t.sourceHash(row)).toBe(contentHash("session summary text|ob"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("session summary text|ob"));
   });
 
   it("sessions: embed folds key_decisions/next_steps/blockers (join '. '), hash stays summary|project", () => {
@@ -190,14 +190,14 @@ describe("embedding-targets canonical text for sessions, lanes, and entities", (
     );
     // Hash ignores the structured fields entirely.
     expect(t.canonicalText(row)).toBe("did work|ob");
-    expect(t.sourceHash(row)).toBe(contentHash("did work|ob"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("did work|ob"));
   });
 
   it("sessions: null project hashes summary|'' (matches writers' project ?? '')", () => {
     const t = getEmbeddingTarget("sessions");
     const row = { id: "s3", summary: "s", project: null };
     expect(t.canonicalText(row)).toBe("s|");
-    expect(t.sourceHash(row)).toBe(contentHash("s|"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("s|"));
   });
 
   it("lanes: embed text is topic[+project], hash is session_key|topic (matches write path)", () => {
@@ -210,15 +210,15 @@ describe("embedding-targets canonical text for sessions, lanes, and entities", (
     };
     expect(t.embedText(row)).toBe("the topic\nproj");
     // firstWriteLaneContentHash: session_key + "|" + topic, NOT the embed text.
-    expect(t.sourceHash(row)).toBe(contentHash("sk-1|the topic"));
-    expect(t.sourceHash(row)).not.toBe(contentHash("the topic\nproj"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("sk-1|the topic"));
+    expect(t.sourceHash(row)).not.toBe(normalizedContentHash("the topic\nproj"));
   });
 
   it("session events: content only, hashed directly", () => {
     const t = getEmbeddingTarget("ob_session_events");
     const row = { id: "e1", content: "an event", lane_id: "l1" };
     expect(t.embedText(row)).toBe("an event");
-    expect(t.sourceHash(row)).toBe(contentHash("an event"));
+    expect(t.sourceHash(row)).toBe(normalizedContentHash("an event"));
   });
 
   it("entities: entity_type: name (matches hydrate-entities.ts)", () => {

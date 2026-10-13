@@ -1,0 +1,641 @@
+{
+  "schema": "openbrain.recall_base_current_comparison.v1",
+  "status": "PASS",
+  "pins": {
+    "fixture": "b614dd7d72e54bc7faf1ec97f2a72f5edfe67238825c934704c9930048439a7a",
+    "cache": "3dead372e3c079f968979908c9bb5434fa68298b1cf75814de30f706a1ae1699",
+    "backup": "0eed3412ef3b065616908675ea2b25d9363f6091a874679a5e3f13ddf72003c2",
+    "base": {
+      "source": "6ecd002aa6ee86a55c44f103d5e4805a1481f7df",
+      "archive": "5adb6f784d87521f78a111d2f5982a8d51c9a7c2",
+      "file": "30405de08182b2dc2bd892edc82a154fd93051e726d2e9b3ba02242ea08a8e0b",
+      "backup_sha256": "0eed3412ef3b065616908675ea2b25d9363f6091a874679a5e3f13ddf72003c2"
+    },
+    "current": {
+      "source": "4eb1810316c68b711df9b6cbeec68c50db73f2ee",
+      "archive": "bb91c93dcb22b5f0825ab4b8eacf97563ec2a643",
+      "file": "1c2986fa0a9e7f90966f7f8e87c9cb363472151988d1ea6dbc9ce1097f49a1db",
+      "backup_sha256": "0eed3412ef3b065616908675ea2b25d9363f6091a874679a5e3f13ddf72003c2"
+    },
+    "base_file": "30405de08182b2dc2bd892edc82a154fd93051e726d2e9b3ba02242ea08a8e0b",
+    "current_file": "1c2986fa0a9e7f90966f7f8e87c9cb363472151988d1ea6dbc9ce1097f49a1db"
+  },
+  "errors": [],
+  "acceptance": {
+    "all_24_present": true,
+    "no_pass_to_miss": true,
+    "vector_parity": true,
+    "namespaces_bound": true,
+    "no_forbidden": true,
+    "isolation_evidence_nonempty": true,
+    "focus_within_10": true
+  },
+  "focus": [
+    {
+      "fixture_id": "dirty-paths-are-owned",
+      "key": "session_event:75d29b27-2a3c-400e-b6a2-7c3c218e4681",
+      "rank": 2
+    },
+    {
+      "fixture_id": "wave-sizing-for-head-sessions",
+      "key": "session_event:71da1b6f-d213-4514-960a-825ee44e37fb",
+      "rank": 4
+    }
+  ],
+  "cases": [
+    {
+      "fixture_id": "claude-hook-payload-case",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:b7f4c528-f72a-4b85-a07e-2041ce99b8d6",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:b7f4c528-f72a-4b85-a07e-2041ce99b8d6",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "cliproxyapi-credential-cooldown",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:34472e4c-e719-4453-a4f1-f01a1cb58843",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:34472e4c-e719-4453-a4f1-f01a1cb58843",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "codex-checkpoint-blocked-on-main",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session:0baa9761-4a4b-4d7e-8cf1-5ff58882bcfa",
+          "rank": 10
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session:0baa9761-4a4b-4d7e-8cf1-5ff58882bcfa",
+          "rank": 10
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "dap-raw-ids-only",
+      "base_pass": false,
+      "current_pass": false,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:1e069878-8ae9-4f00-8560-74b203669548",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:1e069878-8ae9-4f00-8560-74b203669548",
+          "rank": null
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "dirty-paths-are-owned",
+      "base_pass": false,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session_event:75d29b27-2a3c-400e-b6a2-7c3c218e4681",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session_event:75d29b27-2a3c-400e-b6a2-7c3c218e4681",
+          "rank": 2
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "dolibarr-not-twenty",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:914860e9-de1e-4b42-99d7-d3120dccd550",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:914860e9-de1e-4b42-99d7-d3120dccd550",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "durable-corrections-into-open-brain",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:ba598a83-51be-4069-a49f-be145aec5fe8",
+          "rank": 10
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:ba598a83-51be-4069-a49f-be145aec5fe8",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "embedding-watchdog-host",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:32c44822-b0b7-441c-9841-90b9111eb526",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:32c44822-b0b7-441c-9841-90b9111eb526",
+          "rank": 2
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "sam-fail-closed",
+      "base_pass": false,
+      "current_pass": false,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:fa13473c-f481-429f-bcad-7bb05a2068f7",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:fa13473c-f481-429f-bcad-7bb05a2068f7",
+          "rank": null
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "goal-run-closeout-clean-wip",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:a9834ad2-bc8a-4faf-9015-27339e72574e",
+          "rank": 2
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:a9834ad2-bc8a-4faf-9015-27339e72574e",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "handover-git-guard-literal-path",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session_event:99370b47-3d3f-4f29-8ce9-f5b81dd315a1",
+          "rank": 9
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session_event:99370b47-3d3f-4f29-8ce9-f5b81dd315a1",
+          "rank": 5
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "isolation-bilby-query-cannot-reach-rico",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [],
+      "current_expected_ranks": [],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "isolation-shared-kb-query-cannot-reach-skippy",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [],
+      "current_expected_ranks": [],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "isolation-skippy-query-cannot-reach-bilby",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [],
+      "current_expected_ranks": [],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "keybase-volume-unmounted",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:8c15ec6d-b682-4998-92f5-559a0c59f550",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:8c15ec6d-b682-4998-92f5-559a0c59f550",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "mcp2cli-hosted-by-default",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:cbf8285d-d433-4ebe-acb4-f44ad703405e",
+          "rank": 4
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:cbf8285d-d433-4ebe-acb4-f44ad703405e",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "openbrain-access-python-module",
+      "base_pass": false,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:edb0630e-c3a5-4ffd-9159-7ef0c1e83de7",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:edb0630e-c3a5-4ffd-9159-7ef0c1e83de7",
+          "rank": 2
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "promotion-covers-codex-and-user",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:440b05dc-4dc1-4071-806a-af4eaf85b7ee",
+          "rank": 2
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:440b05dc-4dc1-4071-806a-af4eaf85b7ee",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "runner-hub-github-auth",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:722c7d11-25d5-46f7-bbee-2df4d47c9f08",
+          "rank": 4
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:722c7d11-25d5-46f7-bbee-2df4d47c9f08",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "tax-obligation-is-a-json-row",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session_event:471c2c16-5489-4c1b-8ccc-fdadbd65fd81",
+          "rank": 1
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session_event:471c2c16-5489-4c1b-8ccc-fdadbd65fd81",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "wave-sizing-for-head-sessions",
+      "base_pass": false,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session_event:71da1b6f-d213-4514-960a-825ee44e37fb",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session_event:71da1b6f-d213-4514-960a-825ee44e37fb",
+          "rank": 4
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "workflow-evaluator-no-imports",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "thought:a4c5c025-c0e1-45a0-b398-63f79376e610",
+          "rank": 2
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "thought:a4c5c025-c0e1-45a0-b398-63f79376e610",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "workflow-first-inline-runner",
+      "base_pass": true,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "decision:21331f8d-642d-424f-8097-916a3554066a",
+          "rank": 3
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "decision:21331f8d-642d-424f-8097-916a3554066a",
+          "rank": 1
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    },
+    {
+      "fixture_id": "zip-as-ownership-artifact",
+      "base_pass": false,
+      "current_pass": true,
+      "pass_to_miss": false,
+      "base_expected_ranks": [
+        {
+          "key": "session:983dfe21-6f55-4318-8049-51e68f5c5c44",
+          "rank": null
+        }
+      ],
+      "current_expected_ranks": [
+        {
+          "key": "session:983dfe21-6f55-4318-8049-51e68f5c5c44",
+          "rank": 5
+        }
+      ],
+      "base_namespace_ok": true,
+      "current_namespace_ok": true,
+      "base_forbidden": [],
+      "current_forbidden": [],
+      "base_isolation_evidence_nonempty": true,
+      "current_isolation_evidence_nonempty": true,
+      "vector_equal": true,
+      "vector_changes": []
+    }
+  ]
+}

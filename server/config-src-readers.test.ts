@@ -10,7 +10,7 @@
  * expression is written out beside its coordinates instead of being called —
  * an edit to either side then fails a test rather than drifting apart quietly.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { parseServerConfig } from "./config.ts";
 
 const REQUIRED = {
@@ -251,4 +251,40 @@ describe("drop-folder scan bounds — src/drop-folder-collector.ts:19-42", () =>
       expect("scanEntries" in bounds).toBe(false);
     }
   });
+});
+
+describe("logger identity keys — src/logger.ts:16", () => {
+  // The reader is `HOSTNAME?.trim() || HOST?.trim()`, written out here because
+  // `server/` may not import `src/`. An edit to either side fails this test
+  // rather than drifting apart quietly.
+  const readerAnswer = (environment: Record<string, string | undefined>) =>
+    environment.HOSTNAME?.trim() || environment.HOST?.trim();
+
+  const cases: ReadonlyArray<readonly [string, Record<string, string | undefined>]> = [
+    ["both absent", {}],
+    ["HOSTNAME wins over HOST", { HOSTNAME: "alpha", HOST: "beta" }],
+    ["HOST alone", { HOST: "beta" }],
+    // The inputs where the mirror could diverge: an OR on the stripped value
+    // falls THROUGH a whitespace-only or empty preferred name, where a plain
+    // `??` would return the empty string and stop.
+    ["blank HOSTNAME falls through to HOST", { HOSTNAME: "", HOST: "beta" }],
+    ["whitespace HOSTNAME falls through to HOST", { HOSTNAME: "   ", HOST: "beta" }],
+    ["whitespace around a value is stripped", { HOSTNAME: "  alpha  " }],
+    ["both blank is absent", { HOSTNAME: " ", HOST: "" }],
+  ];
+
+  for (const [label, environment] of cases) {
+    it(`agrees with the reader: ${label}`, () => {
+      // Compared on the IDENTITY, not the raw slot. The reader's `||` chain
+      // ends on the last operand, so both-blank answers `""` there while the
+      // group answers `undefined`. Those are the same statement — no
+      // `HOSTNAME`/`HOST` identity was configured — and `undefined` is the one
+      // that lets `server/main.ts` fall back to the transport identity, where
+      // `""` would win the `??` and stamp an empty host on every envelope.
+      const expected = readerAnswer(environment);
+      expect(configFrom(environment).loggerIdentity.hostName).toBe(
+        expected === "" ? undefined : expected,
+      );
+    });
+  }
 });

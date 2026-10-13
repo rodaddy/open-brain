@@ -3,23 +3,22 @@
  * embedding-repair registry can reproduce, so a freshly imported row is NOT
  * immediately flagged as `source_drift`.
  *
- * These use the REAL contentHash / canonical builders / registry (no embedding
+ * These use the REAL normalizedContentHash / canonical builders / registry (no embedding
  * mock) so the equality being asserted is the exact one repair checks:
  *   stored content_hash === EMBEDDING_TARGETS[table].sourceHash(importedRow)
  *
  * Each test also pins the OLD divergent formula and asserts the writer no longer
  * produces it, so a regression back to the pre-fix hash fails loudly.
  */
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import type pg from "pg";
 import { importDecision, importSession } from "../bulk-import.ts";
-import { contentHash } from "../../src/embedding.ts";
-import { EMBEDDING_TARGETS } from "../../src/embedding-targets.ts";
+import { normalizedContentHash } from "../../server/embedding/provider.ts";
+import { EMBEDDING_TARGETS } from "../../server/embedding/embedding-targets.ts";
+import { expectDefined } from "../test-support/expect-defined.ts";
 
 function createMockPool(
-  queryImpl?: (
-    ...args: unknown[]
-  ) => Promise<{ rows: unknown[]; rowCount: number }>,
+  queryImpl?: (...args: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>,
 ) {
   const impl = queryImpl ?? (async () => ({ rows: [], rowCount: 1 }));
   const calls: unknown[][] = [];
@@ -83,12 +82,15 @@ describe("bulk-import importDecision -> canonical, no source_drift", () => {
       tags,
       alternatives: [] as string[],
     };
-    const registryHash = EMBEDDING_TARGETS.decisions!.sourceHash(importedRow);
+    const registryHash = expectDefined(
+      EMBEDDING_TARGETS.decisions,
+      "EMBEDDING_TARGETS.decisions",
+    ).sourceHash(importedRow);
     expect(storedHash).toBe(registryHash);
 
     // Old divergent formula (title\nrationale, dropping context+tags) must no
     // longer be what we store.
-    const oldHash = contentHash(`${title}\n${rationale}`);
+    const oldHash = normalizedContentHash(`${title}\n${rationale}`);
     expect(storedHash).not.toBe(oldHash);
   });
 });
@@ -118,13 +120,16 @@ describe("bulk-import importSession -> canonical, no source_drift", () => {
       next_steps: [] as string[],
       blockers: [] as string[],
     };
-    const registryHash = EMBEDDING_TARGETS.sessions!.sourceHash(importedRow);
+    const registryHash = expectDefined(
+      EMBEDDING_TARGETS.sessions,
+      "EMBEDDING_TARGETS.sessions",
+    ).sourceHash(importedRow);
     expect(storedHash).toBe(registryHash);
 
     // Old formula folded a live timestamp into the hash -- unreproducible by the
     // registry. A hash of summary|<any ISO timestamp> must not equal what we now
     // store, and (proxy) the stored hash must equal summary|project.
-    const canonicalHash = contentHash(`${summary}|${project}`);
+    const canonicalHash = normalizedContentHash(`${summary}|${project}`);
     expect(storedHash).toBe(canonicalHash);
   });
 

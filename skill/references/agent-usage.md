@@ -19,11 +19,11 @@ CWD_BASE=$(basename "$PWD")
 if [[ "$HOST" == cc-* ]]; then
   # LXC -- default shared-kb
   NS="shared-kb"
-elif [[ "$CWD_BASE" == king* ]] || [[ "$CWD_BASE" == King* ]]; then
-  # Personal machine + king directory
+elif [[ "$CWD_BASE" == acme* ]] || [[ "$CWD_BASE" == Acme* ]]; then
+  # Personal machine + acme directory
   NS="shared-kb"
 else
-  # Personal machine + non-king directory
+  # Personal machine + non-acme directory
   # Use your authenticated identity (from your auth token)
   NS="<your_client_id>"
 fi
@@ -31,13 +31,13 @@ fi
 
 ### For Skippy OC Specifically
 
-- You run on `rodaddy-air-2.local` (Air) or `Mini-M4-Pro.local` (local)
+- You run on `laptop.local` (Air) or `mini.local` (local)
 - Your `clientId` is `skippy`
-- Default: `namespace = "skippy"` (unless in a king dir -> "shared-kb")
+- Default: `namespace = "skippy"` (unless in a acme dir -> "shared-kb")
 - If a user explicitly tells you "this is for the team" or "push to shared-kb" -> use "shared-kb"
 - If a user says "save this to Rico's brain" or "this is personal for me" -> use that user's identity, NOT "skippy"
 
-### For LXC Agents (cc-king, cc-kevin, cc-geetesh)
+### For LXC Agents (cc-team, cc-alex, cc-sam)
 
 - Default: `namespace = "shared-kb"` (you're doing team work)
 - Only switch to personal namespace if the user explicitly asks
@@ -60,7 +60,7 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 
 | Working On | Tags to Include |
 |-----------|-----------------|
-| King Capital code | `["king", "<repo-name>"]` |
+| Acme Co code | `["acme", "<repo-name>"]` |
 | Infrastructure | `["infra", "<service>"]` |
 | PAI system itself | `["pai", "<component>"]` |
 | Agent/OC work | `["oc", "<task-domain>"]` |
@@ -74,13 +74,13 @@ Never omit namespace. Never omit tags. Empty tags array `[]` is acceptable if ge
 3. **Ignoring user intent** -- "save this to my brain" means THEIR namespace, not yours
 4. **No tags** -- always tag with at least the project context for traceability
 
-## Example: Skippy OC Logging a Thought from King Work
+## Example: Skippy OC Logging a Thought from Acme Work
 
 ```bash
-# On rodaddy-air-2.local, in ~/Development/king-trading
+# On laptop.local, in ~/Development/acme-trading
 mcp2cli open-brain log_thought --params '{
   "content": "The RRF fusion weights need tuning -- k=60 is too aggressive for short queries",
-  "tags": ["king", "king-trading", "search", "rrf"],
+  "tags": ["acme", "acme-trading", "search", "rrf"],
   "namespace": "shared-kb"
 }'
 ```
@@ -88,7 +88,7 @@ mcp2cli open-brain log_thought --params '{
 ## Example: Skippy OC Logging a Personal Observation
 
 ```bash
-# On rodaddy-air-2.local, in ~/Development/pai-skills
+# On laptop.local, in ~/Development/pai-skills
 mcp2cli open-brain log_thought --params '{
   "content": "Skill enforcement hooks should check recent messages deeper than 20",
   "tags": ["pai", "hooks", "skills"],

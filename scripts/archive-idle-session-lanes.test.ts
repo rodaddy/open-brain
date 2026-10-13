@@ -1,8 +1,6 @@
-import { describe, expect, it } from "bun:test";
-import {
-  archiveIdleSessionLanes,
-  parseArgs,
-} from "./archive-idle-session-lanes.ts";
+import { describe, expect, it } from "vitest";
+import type pg from "pg";
+import { archiveIdleSessionLanes, parseArgs } from "./archive-idle-session-lanes.ts";
 
 describe("archive-idle-session-lanes args", () => {
   it("defaults to dry-run Discord lanes older than 30 days", () => {
@@ -26,35 +24,57 @@ describe("archive-idle-session-lanes args", () => {
   });
 });
 
+/** The one call the module under test makes on its `Queryable` argument. */
+interface RecordedCall {
+  sql: string;
+  params?: unknown[];
+}
+
+/**
+ * The shape `archiveIdleSessionLanes` consumes. The module's own `Queryable`
+ * is `Pick<pg.Pool | pg.PoolClient, "query">` and is not exported, so this
+ * restates it from `pg` directly. `pg.Pool["query"]` is an overload set that a
+ * plain `(sql, params) => Promise<...>` cannot satisfy structurally, so the
+ * fake's single implementation is narrowed to that member at construction —
+ * which is what makes the three `as any` call-site casts unnecessary.
+ */
+type FakeDb = Pick<pg.Pool, "query">;
+
+const CANDIDATE_ROW = {
+  id: "00000000-0000-0000-0000-000000000001",
+  namespace: "nagatha",
+  session_key: "discord:guild:channel:nagatha",
+  source: "discord",
+  last_event_at: "2026-01-01T00:00:00.000Z",
+  lane_created_at: "2026-01-01T00:00:00.000Z",
+  lane_updated_at: "2026-01-01T00:00:00.000Z",
+};
+
+/**
+ * A fake pool that answers the select with one idle candidate and reports
+ * `updateRowCount` rows affected by the archiving UPDATE, recording every call
+ * into `calls` so a test can assert the exact SQL and parameters.
+ */
+function fakeDb(calls: RecordedCall[], updateRowCount: number): FakeDb {
+  const query = async (sql: string, params?: unknown[]) => {
+    calls.push({ sql, params });
+    if (sql.includes("UPDATE ob_session_lanes")) {
+      return { rows: [], rowCount: updateRowCount };
+    }
+    if (sql.includes("SELECT l.id")) {
+      return { rows: [CANDIDATE_ROW] };
+    }
+    throw new Error("unexpected query");
+  };
+
+  return { query } as unknown as FakeDb;
+}
+
 describe("archiveIdleSessionLanes", () => {
   it("dry-run lists idle candidates without mutating", async () => {
-    const calls: Array<{ sql: string; params?: unknown[] }> = [];
-    const db = {
-      query: async (sql: string, params?: unknown[]) => {
-        calls.push({ sql, params });
-        if (sql.includes("UPDATE ob_session_lanes")) {
-          return { rows: [], rowCount: 1 };
-        }
-        if (sql.includes("SELECT l.id")) {
-          return {
-            rows: [
-              {
-                id: "00000000-0000-0000-0000-000000000001",
-                namespace: "nagatha",
-                session_key: "discord:guild:channel:nagatha",
-                source: "discord",
-                last_event_at: "2026-01-01T00:00:00.000Z",
-                lane_created_at: "2026-01-01T00:00:00.000Z",
-                lane_updated_at: "2026-01-01T00:00:00.000Z",
-              },
-            ],
-          };
-        }
-        throw new Error("unexpected query");
-      },
-    };
+    const calls: RecordedCall[] = [];
 
-    const report = await archiveIdleSessionLanes(db as any, {
+    const report = await archiveIdleSessionLanes(fakeDb(calls, 1), {
       execute: false,
       olderThanDays: 7,
       limit: 100,
@@ -74,33 +94,9 @@ describe("archiveIdleSessionLanes", () => {
   });
 
   it("execute rechecks idle predicates while archiving selected candidate ids", async () => {
-    const calls: Array<{ sql: string; params?: unknown[] }> = [];
-    const db = {
-      query: async (sql: string, params?: unknown[]) => {
-        calls.push({ sql, params });
-        if (sql.includes("UPDATE ob_session_lanes")) {
-          return { rows: [], rowCount: 1 };
-        }
-        if (sql.includes("SELECT l.id")) {
-          return {
-            rows: [
-              {
-                id: "00000000-0000-0000-0000-000000000001",
-                namespace: "nagatha",
-                session_key: "discord:guild:channel:nagatha",
-                source: "discord",
-                last_event_at: "2026-01-01T00:00:00.000Z",
-                lane_created_at: "2026-01-01T00:00:00.000Z",
-                lane_updated_at: "2026-01-01T00:00:00.000Z",
-              },
-            ],
-          };
-        }
-        throw new Error("unexpected query");
-      },
-    };
+    const calls: RecordedCall[] = [];
 
-    const report = await archiveIdleSessionLanes(db as any, {
+    const report = await archiveIdleSessionLanes(fakeDb(calls, 1), {
       execute: true,
       olderThanDays: 14,
       limit: 10,
@@ -120,7 +116,9 @@ describe("archiveIdleSessionLanes", () => {
     expect(updateCall.sql).toContain("status = 'archived'");
     expect(updateCall.sql).toContain("WITH eligible AS");
     expect(updateCall.sql).toContain("LEFT JOIN LATERAL");
-    expect(updateCall.sql).toContain("COALESCE(last_event.last_event_at, l.created_at)");
+    expect(updateCall.sql).toContain(
+      "COALESCE(last_event.last_event_at, l.created_at)",
+    );
     expect(updateCall.sql).toContain("l.source = $3");
     expect(updateCall.sql).toContain("l.session_key LIKE $4");
     expect(updateCall.sql).toContain("l.id = ANY($5::uuid[])");
@@ -134,33 +132,9 @@ describe("archiveIdleSessionLanes", () => {
   });
 
   it("reports zero archived rows when the execute-time recheck no longer matches", async () => {
-    const calls: Array<{ sql: string; params?: unknown[] }> = [];
-    const db = {
-      query: async (sql: string, params?: unknown[]) => {
-        calls.push({ sql, params });
-        if (sql.includes("UPDATE ob_session_lanes")) {
-          return { rows: [], rowCount: 0 };
-        }
-        if (sql.includes("SELECT l.id")) {
-          return {
-            rows: [
-              {
-                id: "00000000-0000-0000-0000-000000000001",
-                namespace: "nagatha",
-                session_key: "discord:guild:channel:nagatha",
-                source: "discord",
-                last_event_at: "2026-01-01T00:00:00.000Z",
-                lane_created_at: "2026-01-01T00:00:00.000Z",
-                lane_updated_at: "2026-01-01T00:00:00.000Z",
-              },
-            ],
-          };
-        }
-        throw new Error("unexpected query");
-      },
-    };
+    const calls: RecordedCall[] = [];
 
-    const report = await archiveIdleSessionLanes(db as any, {
+    const report = await archiveIdleSessionLanes(fakeDb(calls, 0), {
       execute: true,
       olderThanDays: 14,
       limit: 10,

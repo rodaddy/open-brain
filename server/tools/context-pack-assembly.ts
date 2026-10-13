@@ -11,10 +11,7 @@
 import type { AuthIdentity } from "../auth/types.ts";
 import type { RecoveryWalContextPackFragment } from "../realtime/recovery-wal.ts";
 import type { WorkingSetContextPackFragment } from "../realtime/working-set.ts";
-import {
-  sectionServing,
-  type PackAllocator,
-} from "./context-pack-allocator.ts";
+import { sectionServing, type PackAllocator } from "./context-pack-allocator.ts";
 import type { AgentContextPackArgs } from "./context-pack-args.ts";
 import type {
   DurableLaneSection,
@@ -59,7 +56,7 @@ interface RecallSection<TSection> {
 }
 
 /** Everything the two recall sections contribute to the finished pack. */
-export interface RecallSectionsResult {
+interface RecallSectionsResult {
   laneContext: DurableLaneContext | null;
   laneSection: DurableLaneSection | null;
   laneCitations: Array<Record<string, unknown>>;
@@ -278,9 +275,7 @@ function laneWarnings(recall: RecallSectionsResult): WarningSource {
   return {
     scopeDenials: recall.laneContext?.scopeDenials ?? [],
     degradedSources: recall.laneContext?.degradedSources ?? [],
-    truncation: recall.laneSection
-      ? (recall.laneContext?.truncation ?? [])
-      : [],
+    truncation: recall.laneSection ? (recall.laneContext?.truncation ?? []) : [],
   };
 }
 
@@ -302,9 +297,7 @@ function memoryWarnings(
     degradedSources: selection.durableMemorySection
       ? (recall.memoryContext?.degradedSources ?? [])
       : [],
-    truncation: recall.memorySection
-      ? (recall.memoryContext?.truncation ?? [])
-      : [],
+    truncation: recall.memorySection ? (recall.memoryContext?.truncation ?? []) : [],
   };
 }
 
@@ -317,8 +310,7 @@ export function assemblePackWarnings(options: {
   allocator: PackAllocator;
   structured: StructuredSectionAccumulator;
 }): Record<string, unknown> {
-  const { selection, workingSet, recovery, recall, allocator, structured } =
-    options;
+  const { selection, workingSet, recovery, recall, allocator, structured } = options;
   return assembleWarnings([
     { scopeDenials: workingSet ? workingSet.warnings.scope_denials : [] },
     { scopeDenials: recovery ? recovery.warnings.scope_denials : [] },

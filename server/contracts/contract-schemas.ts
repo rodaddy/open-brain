@@ -1,10 +1,10 @@
 /**
  * Barrel for the hand-maintained tool-contract mirror.
  *
- * The declarations were one 1671-line module at `src/contract-schemas.ts`;
- * issue 864 split them by tool group into the sibling `schemas-*.ts` files and
- * re-joins them here, so `TOOL_CONTRACTS` presents the identical surface and
- * the contract hash is unchanged.
+ * The declarations were one 1671-line module before issue 864 split them by
+ * tool group into the sibling `schemas-*.ts` files; this barrel re-joins them,
+ * so `TOOL_CONTRACTS` presents the identical surface and the contract hash is
+ * unchanged.
  */
 import { AGENT_TOOL_CONTRACTS } from "./schemas-agent-surface.ts";
 import { EVENT_TOOL_CONTRACTS } from "./schemas-events.ts";

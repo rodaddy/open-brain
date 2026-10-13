@@ -1,3 +1,11 @@
+import {
+  assertFlaggedPriorKnownAreDeclared,
+  assertNetNewIdsResolve,
+  assertPriorKnownIdsResolve,
+  assertReflexAbForbiddenIdsResolve,
+  indexReflexAbCorpusById,
+} from "./reflex-ab-fixtures-parse.ts";
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { ReflexAbFixture } from "./reflex-ab-types.ts";
 
@@ -43,80 +51,27 @@ export const reflexAbFixtureSchema: z.ZodType<ReflexAbFixture> = z.object({
 export function parseReflexAbFixture(raw: unknown): ReflexAbFixture {
   const fixture = reflexAbFixtureSchema.parse(raw);
 
-  const byId = new Map<string, (typeof fixture.corpus)[number]>();
-  for (const entry of fixture.corpus) {
-    if (byId.has(entry.id)) {
-      throw new Error(`duplicate corpus id: ${entry.id}`);
-    }
-    byId.set(entry.id, entry);
-  }
+  // The individual checks live in ./reflex-ab-fixtures-parse.ts (issue 752);
+  // the order here is unchanged, so the first gap in a malformed fixture is
+  // still the one reported.
+  const byId = indexReflexAbCorpusById(fixture.corpus);
 
   const priorKnownSet = new Set(fixture.prior_known_ids);
   const netNewSet = new Set(fixture.net_new_ids);
 
-  for (const id of fixture.prior_known_ids) {
-    const entry = byId.get(id);
-    if (!entry) {
-      throw new Error(`prior_known_ids references unknown id ${id}`);
-    }
-    if (entry.namespace_role !== "primary") {
-      throw new Error(`prior_known id ${id} must be a primary-role entry`);
-    }
-    if (entry.prior_known !== true) {
-      throw new Error(
-        `prior_known id ${id} must carry prior_known: true on its corpus entry`,
-      );
-    }
-    if (netNewSet.has(id)) {
-      throw new Error(`id ${id} cannot be both prior_known and net_new`);
-    }
-  }
-
-  for (const id of fixture.net_new_ids) {
-    const entry = byId.get(id);
-    if (!entry) {
-      throw new Error(`net_new_ids references unknown id ${id}`);
-    }
-    if (entry.namespace_role !== "primary") {
-      throw new Error(`net_new id ${id} must be a primary-role entry`);
-    }
-    if (entry.prior_known === true || priorKnownSet.has(id)) {
-      throw new Error(`net_new id ${id} must not be prior_known`);
-    }
-  }
-
-  for (const id of fixture.forbidden_ids) {
-    const entry = byId.get(id);
-    if (!entry) {
-      throw new Error(`forbidden_ids references unknown id ${id}`);
-    }
-    if (entry.namespace_role !== "negative") {
-      throw new Error(`forbidden id ${id} must be a negative-role entry`);
-    }
-  }
-
-  // Every corpus entry flagged prior_known must be declared in prior_known_ids,
-  // so the gate always sends a prior_context reference for it. A silently-flagged
-  // seed the gate never suppresses would let the ON arm resurface it and the gate
-  // would not even know it was supposed to be suppressed.
-  for (const entry of fixture.corpus) {
-    if (entry.prior_known === true && !priorKnownSet.has(entry.id)) {
-      throw new Error(
-        `corpus entry ${entry.id} is prior_known but missing from prior_known_ids`,
-      );
-    }
-  }
+  assertPriorKnownIdsResolve(fixture, byId, netNewSet);
+  assertNetNewIdsResolve(fixture, byId, priorKnownSet);
+  assertReflexAbForbiddenIdsResolve(fixture, byId);
+  assertFlaggedPriorKnownAreDeclared(fixture, priorKnownSet);
 
   return fixture;
 }
 
 /** Load and validate a reflex A/B fixture from disk. */
-export async function loadReflexAbFixture(
-  path: string,
-): Promise<ReflexAbFixture> {
+export async function loadReflexAbFixture(path: string): Promise<ReflexAbFixture> {
   let raw: unknown;
   try {
-    raw = await Bun.file(path).json();
+    raw = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to read reflex A/B fixture ${path}: ${message}`);

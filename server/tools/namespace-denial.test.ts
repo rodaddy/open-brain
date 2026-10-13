@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -26,8 +26,7 @@ async function clientForAgent(): Promise<Client> {
     logger: pino({ level: "silent" }),
     sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const send = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     send(message, {
@@ -68,9 +67,7 @@ describe("memory tools preserve namespace denial envelopes", () => {
         session_key: "denied",
         namespace: "attacker",
       }),
-    ).toBe(
-      "Permission denied: agent role cannot write to namespace 'attacker'",
-    );
+    ).toBe("Permission denied: agent role cannot write to namespace 'attacker'");
   });
 
   test("session reads preserve the named namespace denial", async () => {

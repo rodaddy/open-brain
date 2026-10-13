@@ -49,7 +49,7 @@ from openbrain.receipts.scope import DEVELOPMENT_ROOT_ENV_VAR, development_root
 
 #: A root that is not the shipped default, so a test asserting the override
 #: took effect cannot pass by accidentally matching the built-in value.
-OTHER_ROOT = "/Volumes/Elsewhere/Development"
+OTHER_ROOT = "/mnt/elsewhere/Development"
 
 #: The environment a #557-installed hook process actually carries: the endpoint
 #: and token the wrapper always passed, plus the lane root it now adds.

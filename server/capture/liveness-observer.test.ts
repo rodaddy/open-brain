@@ -11,7 +11,7 @@
  * Postgres's grouping — and a fake is what lets the no-rows and query-throws
  * cases be driven at all.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import { silentLogger } from "../transport/testing/silent-logger.ts";
 import {
@@ -187,8 +187,14 @@ describe("capture liveness observer", () => {
 
   it("publishes nothing when the window holds no arrivals at all", async () => {
     // A fresh process or a quiet night is not a dead lane. Absence of evidence
-    // must publish absence, not a verdict in either direction.
-    const subject = observer(poolReturning([]));
+    // must publish absence, not a verdict in either direction. The namespace
+    // itself is KNOWN (issue 682): the ever-existed lookup answers true.
+    const pool = {
+      query: async (sql: string) => ({
+        rows: sql.includes("exists(") ? [{ exists: true }] : [],
+      }),
+    } as unknown as Pool;
+    const subject = observer(pool);
     await subject.refresh();
 
     expect(subject.reading()).toBeUndefined();
@@ -202,7 +208,9 @@ describe("capture liveness observer", () => {
 
     expect(subject.reading()).toBeUndefined();
   });
+});
 
+describe("capture liveness reading", () => {
   it("does not call a single quiet session a dead lane", () => {
     const reading = readCaptureLiveness({
       sessionsObserved: 1,

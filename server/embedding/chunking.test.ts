@@ -14,9 +14,9 @@
  * Asserting only the first is what let the defect through; asserting only the
  * second would let a chunker "pass" by dropping the tail.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { chunkText, shouldChunk, CHUNK_THRESHOLD } from "./chunking.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
 
 /**
  * Every non-whitespace character of `text` must appear inside some chunk.

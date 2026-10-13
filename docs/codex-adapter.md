@@ -13,7 +13,7 @@ Claude sessions on this box reach Open Brain through wrapper-invoked console
 scripts from the installed `openbrain` / `openbrain-provider` packages:
 
 ```
-sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env <console-script>
+sh /home/user/.local/share/openbrain-memory/env/openbrain-hook-env <console-script>
 ```
 
 Codex's route, per `docs/memory-contract.md`, is daemon-mode
@@ -46,7 +46,7 @@ Codex emits **snake_case payload fields identical to Claude's**. Captured live
 from a real `codex exec` run:
 
 ```json
-{"session_id":"...","transcript_path":"/Users/rico/.codex/sessions/.../rollout-....jsonl",
+{"session_id":"...","transcript_path":"/home/user/.codex/sessions/.../rollout-....jsonl",
  "cwd":"...","hook_event_name":"SessionStart","model":"...",
  "permission_mode":"bypassPermissions","source":"startup"}
 ```
@@ -162,9 +162,9 @@ mirror Claude's one-for-one, using the same wrapper so the environment contract
     "SessionStart": [
       { "matcher": "*", "hooks": [
         { "type": "command", "timeout": 10,
-          "command": "sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start" },
+          "command": "sh /home/user/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start" },
         { "type": "command", "timeout": 10,
-          "command": "sh /Users/rico/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start-remaining" }
+          "command": "sh /home/user/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-session-start-remaining" }
       ]}
     ]
   }
@@ -176,5 +176,28 @@ The wrapper is required, not optional: the Python config rejects any
 rejection by design, and the result is a silent zero capture with exit 0. The
 wrapper's own header documents this at length.
 
-Do **not** point Codex at core01 or hardcode a host: endpoint and token come
-from `$OPENBRAIN_BASE_URL` / `$OPENBRAIN_TOKEN` in `claudex-observation.env`.
+Do **not** point Codex at the retired host or hardcode a host: endpoint and token come
+from `$OPENBRAIN_BASE_URL` / `$OPENBRAIN_TOKEN` in `openbrain.env`.
+
+## 2026-09-16: native TUI Stop timing
+
+A local interactive Codex Stop fired the installed hook, but yielded no raw
+turns. Its rollout had the operator's `response_item/message:user` and the
+assistant's `response_item/message:assistant` with `phase: final_answer` before
+Stop. The `event_msg/task_complete` record arrived only after Stop, while
+`event_msg/user_message` was absent. The old reader advanced its watermark
+past the two existing messages without delivering them.
+
+The shared Codex format reader now accepts the observed `response_item` records.
+It accepts a user message only when metadata marks `content_item_kinds` as
+`["user.text"]`; injected AGENTS and environment messages use the user role but
+have different kinds. It accepts an assistant message only at `final_answer`.
+The final response uses the metadata `turn_id` as its raw-turn identity, matching
+the later `task_complete`, so a replay is idempotent at the raw-turn store. The
+existing `event_msg` path and its identities remain supported for exec rollouts.
+The same format reader serves live Stop capture and bulk Codex import.
+
+The fixture and focused checker prove the parser and Stop delivery path. Native
+automatic capture on the newly built package remains to be verified after
+review, merge, and local reinstall; a direct wrapper invocation is only a
+component receipt.

@@ -1,7 +1,7 @@
 /**
  * `lane_upsert` and `lane_load` — the durable session-lane surface.
  *
- * Design authority: `src/db/migrations/012_session_lanes.sql` (the row shape and
+ * Design authority: `server/db/migrations/012_session_lanes.sql` (the row shape and
  * the `(namespace, session_key)` conflict target), `docs/memory-contract.md`
  * (lanes are the durable half of Codex session memory), and
  * `docs/decisions/channel-scoped-recall.md` (lane filters are the direct-field
@@ -20,12 +20,9 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  authIdentity,
-  textResult,
-  type MemoryToolDependencies,
-} from "./types.ts";
+import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import { authorize, contentHash, embeddingFields } from "./memory-helpers.ts";
+import { createSessionRepository } from "../db/session-repository.ts";
 
 const laneFields = `id, session_key, namespace, status, agent, source, channel_id,
   thread_id, project, topic, current_context_md, metadata, created_by,
@@ -71,40 +68,14 @@ const laneLoadAnnotations = {
   destructiveHint: false,
   idempotentHint: true,
 };
-
-const LANE_UPSERT_SQL = `INSERT INTO ob_session_lanes
-           (session_key, namespace, status, agent, source, channel_id, thread_id,
-            project, topic, current_context_md, metadata, embedding, content_hash,
-            embedded_at, embedding_model, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16)
-         ON CONFLICT (namespace, session_key)
-         DO UPDATE SET status = COALESCE(EXCLUDED.status, ob_session_lanes.status),
-           agent = COALESCE(EXCLUDED.agent, ob_session_lanes.agent),
-           source = COALESCE(EXCLUDED.source, ob_session_lanes.source),
-           channel_id = COALESCE(EXCLUDED.channel_id, ob_session_lanes.channel_id),
-           thread_id = COALESCE(EXCLUDED.thread_id, ob_session_lanes.thread_id),
-           project = COALESCE(EXCLUDED.project, ob_session_lanes.project),
-           topic = COALESCE(EXCLUDED.topic, ob_session_lanes.topic),
-           current_context_md = COALESCE(EXCLUDED.current_context_md, ob_session_lanes.current_context_md),
-           metadata = ob_session_lanes.metadata || EXCLUDED.metadata,
-           embedding = COALESCE(EXCLUDED.embedding, ob_session_lanes.embedding),
-           content_hash = COALESCE(EXCLUDED.content_hash, ob_session_lanes.content_hash),
-           embedded_at = COALESCE(EXCLUDED.embedded_at, ob_session_lanes.embedded_at),
-           embedding_model = COALESCE(EXCLUDED.embedding_model, ob_session_lanes.embedding_model)
-         RETURNING id, (xmax = 0) AS is_new, status, updated_at`;
-
 /** The `lane_upsert` arguments after the tool schema has parsed them. */
 type LaneUpsertArgs = {
-  [K in keyof typeof laneUpsertInputSchema]: z.infer<
-    (typeof laneUpsertInputSchema)[K]
-  >;
+  [K in keyof typeof laneUpsertInputSchema]: z.infer<(typeof laneUpsertInputSchema)[K]>;
 };
 
 /** The `lane_load` arguments after the tool schema has parsed them. */
 type LaneLoadArgs = {
-  [K in keyof typeof laneLoadInputSchema]: z.infer<
-    (typeof laneLoadInputSchema)[K]
-  >;
+  [K in keyof typeof laneLoadInputSchema]: z.infer<(typeof laneLoadInputSchema)[K]>;
 };
 
 /** The embedding columns as `embeddingFields` returns them. */
@@ -148,7 +119,7 @@ function laneNullableValues(args: LaneUpsertArgs): unknown[] {
 /**
  * Build the positional parameters for the upsert, in the order the SQL names them.
  *
- * @returns The 16 bind values for `LANE_UPSERT_SQL`.
+ * @returns The 16 bind values for the repository's `upsertLane` statement.
  */
 function laneUpsertValues(options: {
   args: LaneUpsertArgs;
@@ -187,10 +158,7 @@ interface LaneQueryPredicate {
  *
  * @returns The conditions and their positional values, index-aligned.
  */
-function laneLoadPredicate(
-  args: LaneLoadArgs,
-  namespace: string,
-): LaneQueryPredicate {
+function laneLoadPredicate(args: LaneLoadArgs, namespace: string): LaneQueryPredicate {
   const values: unknown[] = [namespace, args.status ?? "active"];
   const conditions = ["namespace = $1", "status = $2"];
   const filters: Array<[unknown, string]> = [
@@ -227,17 +195,16 @@ async function handleLaneUpsert(
   if (!auth.ok) return auth.response;
   const context = laneEmbedContext(args);
   const embedded = await embeddingFields(dependencies, context);
-  const rows = await dependencies.pool.query(
-    LANE_UPSERT_SQL,
-    laneUpsertValues({
+  const repository = createSessionRepository(dependencies.pool);
+  const row = await repository.upsertLane({
+    values: laneUpsertValues({
       args,
       namespace: auth.namespace,
       clientId: auth.identity.clientId,
       context,
       embedded,
     }),
-  );
-  const row = rows.rows[0];
+  });
   dependencies.logger.info(
     { tool: "lane_upsert", namespace: auth.namespace },
     "tool_result",
@@ -272,19 +239,19 @@ async function handleLaneLoad(
   });
   if (!auth.ok) return auth.response;
   const { conditions, values } = laneLoadPredicate(args, auth.namespace);
-  const rows = await dependencies.pool.query(
-    `SELECT ${laneFields} FROM ob_session_lanes
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY updated_at DESC`,
+  const repository = createSessionRepository(dependencies.pool);
+  const lanes = await repository.selectLanesByPredicate({
+    fields: laneFields,
+    conditions,
     values,
-  );
-  if (rows.rows.length === 0) {
+  });
+  if (lanes.length === 0) {
     return textResult({
       lanes: [],
       message: "No lanes found matching filters",
     });
   }
-  return textResult({ lanes: rows.rows, count: rows.rows.length });
+  return textResult({ lanes, count: lanes.length });
 }
 
 export function registerLaneTools(

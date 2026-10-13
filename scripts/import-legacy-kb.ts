@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Import legacy KB JSON files into Open Brain.
  * Reads decisions-v2.json, learnings-v2.json, patterns-v2.json
@@ -6,12 +6,13 @@
  * Inserts into decisions and thoughts tables (without embeddings).
  * Run `bun run backfill` afterward to generate embeddings.
  */
+import { readFile } from "node:fs/promises";
 import type pg from "pg";
-import { createPool } from "../src/db/pool.ts";
-import { contentHash } from "../src/embedding.ts";
-import { decisionCanonicalText } from "../src/embedding-canonical.ts";
-import { logger } from "../src/logger.ts";
-import { sharedNamespaceConfig } from "../src/shared-namespace.ts";
+import { createPool } from "./settings.ts";
+import { normalizedContentHash } from "./settings.ts";
+import { decisionCanonicalText } from "./settings.ts";
+import { logger } from "./settings.ts";
+import { sharedNamespaceConfig } from "./settings.ts";
 
 interface LegacyEntry {
   date: string;
@@ -58,7 +59,7 @@ export async function importDecisions(
   pool: pg.Pool,
   filePath: string = `${KB_DIR}/decisions-v2.json`,
 ): Promise<{ imported: number; skipped: number }> {
-  const raw = await Bun.file(filePath).text();
+  const raw = await readFile(filePath, "utf8");
   const entries: LegacyEntry[] = JSON.parse(raw);
   let imported = 0;
   let skipped = 0;
@@ -69,9 +70,7 @@ export async function importDecisions(
       continue;
     }
     const rationale =
-      entry.summary && entry.summary !== entry.title
-        ? entry.summary
-        : entry.title;
+      entry.summary && entry.summary !== entry.title ? entry.summary : entry.title;
     if (!rationale) {
       skipped++;
       continue;
@@ -84,7 +83,7 @@ export async function importDecisions(
     // so backfill/repair would recompute a different hash and flag every legacy
     // decision as source_drift. Hash the full canonical text over the exact
     // fields inserted.
-    const hash = contentHash(
+    const hash = normalizedContentHash(
       decisionCanonicalText({
         title: entry.title,
         rationale,
@@ -120,7 +119,7 @@ async function importThoughts(
   filePath: string,
   source: string,
 ): Promise<{ imported: number; skipped: number }> {
-  const raw = await Bun.file(filePath).text();
+  const raw = await readFile(filePath, "utf8");
   const entries: LegacyEntry[] = JSON.parse(raw);
   let imported = 0;
   let skipped = 0;
@@ -131,7 +130,7 @@ async function importThoughts(
       continue;
     }
     const content = buildThoughtContent(entry);
-    const hash = contentHash(content);
+    const hash = normalizedContentHash(content);
 
     const { rowCount } = await pool.query(
       `INSERT INTO thoughts (content, tags, source, created_by, created_at, namespace, content_hash)
@@ -180,10 +179,7 @@ if (import.meta.main) {
       imported: decisions.imported + learnings.imported + patterns.imported,
       skipped: decisions.skipped + learnings.skipped + patterns.skipped,
     };
-    logger.info(
-      "Import complete -- run 'bun run backfill' for embeddings",
-      total,
-    );
+    logger.info("Import complete -- run 'bun run backfill' for embeddings", total);
   } catch (err) {
     logger.error("Import failed", {
       error: err instanceof Error ? err.message : String(err),

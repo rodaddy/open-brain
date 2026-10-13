@@ -23,8 +23,8 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 
-export const WORKING_SET_LABEL = "working_context" as const;
-export const WORKING_SET_SCHEMA = "openbrain.working_set.v1" as const;
+const WORKING_SET_LABEL = "working_context" as const;
+const WORKING_SET_SCHEMA = "openbrain.working_set.v1" as const;
 
 export const WORKING_SET_ITEM_KINDS = [
   "recent_event",
@@ -36,7 +36,7 @@ export const WORKING_SET_ITEM_KINDS = [
   "next_turn_guidance",
 ] as const;
 
-export type WorkingSetItemKind = (typeof WORKING_SET_ITEM_KINDS)[number];
+type WorkingSetItemKind = (typeof WORKING_SET_ITEM_KINDS)[number];
 
 /** The seven exact scope coordinates; `thread_id` is the only nullable one. */
 export interface WorkingSetScope {
@@ -59,7 +59,7 @@ export interface NormalizedWorkingSetScope {
   session_key: string;
 }
 
-export interface WorkingSetBudget {
+interface WorkingSetBudget {
   ttl_ms: number;
   max_sessions: number;
   max_items_per_session: number;
@@ -68,13 +68,13 @@ export interface WorkingSetBudget {
   max_metadata_chars: number;
 }
 
-export interface WorkingSetCounters {
+interface WorkingSetCounters {
   dropped: number;
   expired: number;
   trimmed: number;
 }
 
-export interface WorkingSetItemInput {
+interface WorkingSetItemInput {
   id?: string;
   kind: WorkingSetItemKind;
   content: string;
@@ -86,7 +86,7 @@ export interface WorkingSetItemInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface WorkingSetItem {
+interface WorkingSetItem {
   id: string;
   kind: WorkingSetItemKind;
   label: typeof WORKING_SET_LABEL;
@@ -101,13 +101,10 @@ export interface WorkingSetItem {
   expires_at: string;
 }
 
-export interface WorkingSetAppendResult {
+interface WorkingSetAppendResult {
   accepted: boolean;
   reason?:
-    | "content_too_large"
-    | "empty_content"
-    | "invalid_kind"
-    | "metadata_too_large";
+    "content_too_large" | "empty_content" | "invalid_kind" | "metadata_too_large";
   item?: WorkingSetItem;
   counters: WorkingSetCounters;
 }
@@ -121,7 +118,7 @@ export interface WorkingSetScopeDenial {
   reasons: Array<keyof NormalizedWorkingSetScope>;
 }
 
-export interface WorkingSetContextSection {
+interface WorkingSetContextSection {
   schema: typeof WORKING_SET_SCHEMA;
   label: typeof WORKING_SET_LABEL;
   exact_scope_required: true;
@@ -143,7 +140,7 @@ export interface WorkingSetContextPackFragment {
   };
 }
 
-export const DEFAULT_WORKING_SET_BUDGET: WorkingSetBudget = {
+const DEFAULT_WORKING_SET_BUDGET: WorkingSetBudget = {
   ttl_ms: 30 * 60 * 1000,
   max_sessions: 128,
   max_items_per_session: 24,
@@ -259,7 +256,7 @@ function serializedJsonLength(
   }
 }
 
-export interface WorkingSetStoreOptions {
+interface WorkingSetStoreOptions {
   budget?: Partial<WorkingSetBudget>;
   /** Optional; absent means the shape-fault warning above is simply not emitted. */
   logger?: Logger;
@@ -324,9 +321,7 @@ interface BuildWorkingSetItemOptions {
 }
 
 /** Field-for-field materialization of the stored item; no policy lives here. */
-function buildWorkingSetItem(
-  options: BuildWorkingSetItemOptions,
-): WorkingSetItem {
+function buildWorkingSetItem(options: BuildWorkingSetItemOptions): WorkingSetItem {
   const { input, accepted, id, now, ttlMs } = options;
   return {
     id,
@@ -445,9 +440,7 @@ export class WorkingSetStore {
   private purgeExpired(now: Date): void {
     const nowMs = now.getTime();
     for (const [key, session] of this.sessions.entries()) {
-      const kept = session.items.filter(
-        (item) => Date.parse(item.expires_at) > nowMs,
-      );
+      const kept = session.items.filter((item) => Date.parse(item.expires_at) > nowMs);
       const expired = session.items.length - kept.length;
       if (expired > 0) {
         this.counters.expired += expired;

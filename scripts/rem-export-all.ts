@@ -24,9 +24,11 @@
  * extractor. Grading them would measure a pipeline that no longer runs.
  */
 
-import { createPool } from "../src/db/pool.ts";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { createPool } from "./settings.ts";
 
-const OUT = "/Volumes/collab/rem-all-exchanges.json";
+const OUT = "/srv/shared/rem-all-exchanges.json";
 
 const pool = createPool();
 try {
@@ -54,14 +56,14 @@ try {
       ORDER BY c.first_said_at NULLS LAST, c.id`,
   );
 
-  await Bun.write(OUT, JSON.stringify(rows, null, 2));
+  await mkdir(dirname(OUT), { recursive: true });
+  await writeFile(OUT, JSON.stringify(rows, null, 2));
 
   const chars = rows.reduce((n, r) => n + (r.content_len ?? 0), 0);
   const truncated = rows.filter((r) => (r.content_len ?? 0) >= 3990).length;
   const byKind: Record<string, number> = {};
   for (const r of rows)
-    byKind[r.anchor_kind ?? "null"] =
-      (byKind[r.anchor_kind ?? "null"] ?? 0) + 1;
+    byKind[r.anchor_kind ?? "null"] = (byKind[r.anchor_kind ?? "null"] ?? 0) + 1;
   const corroborated = rows.filter((r) => Number(r.session_count) > 1).length;
 
   console.log(`wrote ${rows.length} exchanges to ${OUT}`);
@@ -74,9 +76,7 @@ try {
       .join(" ")}`,
   );
   console.log(`  corroborated (session_count > 1): ${corroborated}`);
-  console.log(
-    `  at/near the 4000-char cap: ${truncated}  <-- truncated at source`,
-  );
+  console.log(`  at/near the 4000-char cap: ${truncated}  <-- truncated at source`);
 } finally {
   await pool.end();
 }

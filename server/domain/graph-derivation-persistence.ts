@@ -1,16 +1,16 @@
-import { canWriteNamespace } from "../../src/namespace-policy.ts";
-import type { AuthInfo, LinkRelation } from "../../src/types.ts";
+import { canWriteNamespace } from "../security/namespace-policy.ts";
+import type { AuthInfo, LinkRelation } from "../types.ts";
 import type {
   DerivationMetadata,
   DerivedEntity,
-  GraphDerivationPool,
+  GraphDerivationRepository,
 } from "./graph-derivation-model.ts";
 import {
   CrossNamespaceEndpointError,
   anchorStorageName,
 } from "./graph-derivation-model.ts";
 
-export const ANCHOR_RELATION: LinkRelation = "mentions";
+const ANCHOR_RELATION: LinkRelation = "mentions";
 
 /**
  * Defense in depth: the SQL already binds namespace as a parameter, but we
@@ -18,11 +18,7 @@ export const ANCHOR_RELATION: LinkRelation = "mentions";
  * namespace so a schema drift (e.g. a default or trigger rewriting namespace)
  * can never let a cross-namespace endpoint slip through undetected.
  */
-export function assertSameNamespace(
-  returned: unknown,
-  expected: string,
-  what: string,
-): void {
+function assertSameNamespace(returned: unknown, expected: string, what: string): void {
   if (returned !== expected) {
     throw new CrossNamespaceEndpointError(
       `${what} persisted into namespace '${String(returned)}' but derivation namespace is '${expected}'`,
@@ -45,7 +41,7 @@ export function assertNamespaceWritable(auth: AuthInfo, namespace: string): void
 }
 
 /** The anchor node state a prior derivation left behind, if any. */
-export interface PriorAnchorState {
+interface PriorAnchorState {
   derivationHash?: string;
   contentHash?: string;
   storedName?: string;
@@ -62,24 +58,12 @@ export interface PriorAnchorState {
  * anchor's stamped content_hash — would re-select that source forever.
  */
 export async function readPriorAnchorState(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   namespace: string,
   anchorType: string,
   anchorCanonical: string,
 ): Promise<PriorAnchorState> {
-  const prior = await pool.query(
-    `SELECT name,
-            metadata ->> 'display_name'    AS display_name,
-            metadata ->> 'derivation_hash' AS derivation_hash,
-            metadata ->> 'content_hash'    AS content_hash
-       FROM ob_entities
-      WHERE namespace = $1
-        AND entity_type = $2
-        AND canonical_id = $3
-        AND archived_at IS NULL`,
-    [namespace, anchorType, anchorCanonical],
-  );
-  const row = prior.rows[0];
+  const row = await repository.readPriorAnchor(namespace, anchorType, anchorCanonical);
   return {
     derivationHash: row?.derivation_hash ?? undefined,
     contentHash: row?.content_hash ?? undefined,
@@ -103,7 +87,7 @@ export interface AnchorIdentity {
  * behind.
  */
 export async function refreshUnchangedAnchor(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   identity: AnchorIdentity,
   anchorContentHash: string | undefined,
 ): Promise<void> {
@@ -113,23 +97,13 @@ export async function refreshUnchangedAnchor(
   if (anchorContentHash !== undefined) {
     metadataPatch.content_hash = anchorContentHash;
   }
-  await pool.query(
-    `UPDATE ob_entities
-        SET name = $4,
-            metadata = metadata || $5::jsonb,
-            updated_at = NOW()
-      WHERE namespace = $1
-        AND entity_type = $2
-        AND canonical_id = $3
-        AND archived_at IS NULL`,
-    [
-      identity.namespace,
-      identity.anchorType,
-      identity.anchorCanonical,
-      identity.anchorStoredName,
-      JSON.stringify(metadataPatch),
-    ],
-  );
+  await repository.refreshAnchor({
+    namespace: identity.namespace,
+    anchorType: identity.anchorType,
+    anchorCanonical: identity.anchorCanonical,
+    storedName: identity.anchorStoredName,
+    metadataPatch: JSON.stringify(metadataPatch),
+  });
 }
 
 /** Decide whether an unchanged derivation still needs an anchor row refresh. */
@@ -146,7 +120,7 @@ export function unchangedAnchorNeedsRefresh(
   return contentHashChanged || nameChanged;
 }
 
-export interface UpsertedNode {
+interface UpsertedNode {
   id: string;
   isNew: boolean;
 }
@@ -180,7 +154,7 @@ export interface UpsertedNode {
  * display_name in place.
  */
 export async function upsertAnchorEntity(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   auth: AuthInfo,
   identity: AnchorIdentity,
   hashes: { derivationHash: string; anchorContentHash?: string },
@@ -194,78 +168,51 @@ export async function upsertAnchorEntity(
           display_name: identity.anchorLabel,
         },
   );
-  const anchorRow = await pool.query(
-    `INSERT INTO ob_entities
-       (entity_type, name, canonical_id, namespace, metadata, created_by)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-     ON CONFLICT (namespace, entity_type, canonical_id)
-     WHERE canonical_id IS NOT NULL AND archived_at IS NULL
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       metadata = ob_entities.metadata || EXCLUDED.metadata,
-       archived_at = NULL,
-       updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, namespace`,
-    [
-      identity.anchorType,
-      identity.anchorStoredName,
-      identity.anchorCanonical,
-      identity.namespace,
-      anchorMeta,
-      auth.clientId,
-    ],
-  );
-  const anchorNode = anchorRow.rows[0];
+  const anchorNode = await repository.upsertAnchorEntity({
+    anchorType: identity.anchorType,
+    storedName: identity.anchorStoredName,
+    anchorCanonical: identity.anchorCanonical,
+    namespace: identity.namespace,
+    metadata: anchorMeta,
+    createdBy: auth.clientId,
+  });
   assertSameNamespace(anchorNode.namespace, identity.namespace, "anchor");
   return { id: anchorNode.id, isNew: Boolean(anchorNode.is_new) };
 }
 
 /** Upsert one derived term node, re-verifying its persisted namespace. */
 export async function upsertDerivedEntity(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   auth: AuthInfo,
   namespace: string,
   entity: DerivedEntity,
 ): Promise<UpsertedNode> {
-  const nodeRow = await pool.query(
-    `INSERT INTO ob_entities
-       (entity_type, name, canonical_id, namespace, metadata, created_by)
-     VALUES ($1, $2, $3, $4, '{}'::jsonb, $5)
-     ON CONFLICT (namespace, entity_type, lower(name))
-     WHERE archived_at IS NULL
-     DO UPDATE SET
-       canonical_id = COALESCE(EXCLUDED.canonical_id, ob_entities.canonical_id),
-       archived_at = NULL,
-       updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, namespace`,
-    [entity.entity_type, entity.name, entity.canonical_id, namespace, auth.clientId],
-  );
-  const node = nodeRow.rows[0];
+  const node = await repository.upsertDerivedEntity({
+    entityType: entity.entity_type,
+    name: entity.name,
+    canonicalId: entity.canonical_id,
+    namespace,
+    createdBy: auth.clientId,
+  });
   assertSameNamespace(node.namespace, namespace, "derived entity");
   return { id: node.id, isNew: Boolean(node.is_new) };
 }
 
 /** Upsert the anchor->term edge, re-verifying its persisted namespace. */
 export async function upsertAnchorLink(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   auth: AuthInfo,
   namespace: string,
   edge: { anchorEntityId: string; nodeId: string },
 ): Promise<UpsertedNode> {
   const { anchorEntityId, nodeId } = edge;
-  const linkRow = await pool.query(
-    `INSERT INTO ob_links
-       (from_type, from_id, to_type, to_id, relation, weight, namespace, metadata, created_by)
-     VALUES ('entity', $1, 'entity', $2, $3, 1.0, $4, '{}'::jsonb, $5)
-     ON CONFLICT (namespace, from_type, from_id, to_type, to_id, relation)
-     WHERE archived_at IS NULL
-     DO UPDATE SET
-       archived_at = NULL,
-       updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, namespace`,
-    [anchorEntityId, nodeId, ANCHOR_RELATION, namespace, auth.clientId],
-  );
-  const link = linkRow.rows[0];
+  const link = await repository.upsertAnchorLink({
+    anchorEntityId,
+    nodeId,
+    relation: ANCHOR_RELATION,
+    namespace,
+    createdBy: auth.clientId,
+  });
   assertSameNamespace(link.namespace, namespace, "derived link");
   return { id: link.id, isNew: Boolean(link.is_new) };
 }
@@ -288,29 +235,23 @@ export async function upsertAnchorLink(
  * rerun with no newly-stale edges a no-op.
  */
 export async function pruneObsoleteAnchorLinks(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   namespace: string,
   anchorEntityId: string,
   liveTargetIds: Iterable<string>,
 ): Promise<number> {
-  const pruneRes = await pool.query(
-    `UPDATE ob_links
-        SET archived_at = NOW(), updated_at = NOW()
-      WHERE namespace = $1
-        AND from_type = 'entity'
-        AND from_id = $2
-        AND relation = $3
-        AND archived_at IS NULL
-        AND NOT (to_id = ANY($4::uuid[]))
-      RETURNING namespace`,
-    [namespace, anchorEntityId, ANCHOR_RELATION, [...liveTargetIds]],
-  );
-  for (const row of pruneRes.rows) {
+  const pruneRows = await repository.archiveObsoleteAnchorLinks({
+    namespace,
+    anchorEntityId,
+    relation: ANCHOR_RELATION,
+    liveTargetIds: [...liveTargetIds],
+  });
+  for (const row of pruneRows) {
     // Defense in depth: a soft-deleted edge must belong to the derivation
     // namespace, mirroring the same-namespace guard on every persisted write.
     assertSameNamespace(row.namespace, namespace, "pruned link");
   }
-  return pruneRes.rows.length;
+  return pruneRows.length;
 }
 
 /** The anchor identity a derivation writes under, derived from its input. */

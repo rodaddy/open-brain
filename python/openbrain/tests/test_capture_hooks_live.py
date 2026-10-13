@@ -25,7 +25,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from conftest import append_lines, operator_line, write_lines
+from conftest import (
+    Secret,
+    append_lines,
+    operator_line,
+    scoped_capture_key,
+    write_lines,
+)
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks.session import StopHook, run_stop
 from openbrain.config import CaptureSettings
@@ -43,7 +49,7 @@ REQUIRED_ENV = (
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -56,7 +62,7 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
 def fetch_content(database_url: str, turn_uuid: str) -> str | None:
@@ -75,7 +81,7 @@ class TestRunStopLandsATurnThroughTheRealClient:
     """run_stop with the default factory builds a real client and delivers."""
 
     async def test_a_stop_payload_reaches_ob_raw_turns(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         session = f"stop-live-{uuid.uuid4()}"
         turn_id = f"u-{uuid.uuid4()}"
@@ -83,8 +89,8 @@ class TestRunStopLandsATurnThroughTheRealClient:
         write_lines(transcript, [operator_line(turn_id, "stop hook end to end", session=session)])
 
         settings = CaptureSettings(
-            base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-            token=live_env["OPENBRAIN_TEST_TOKEN"],
+            base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+            token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
             watermark_path=tmp_path / "wm.sqlite",
         )
         payload = StopHook(transcript_path=transcript, session_id=session)
@@ -94,11 +100,11 @@ class TestRunStopLandsATurnThroughTheRealClient:
 
         assert result is not None
         assert result.delivered == 1
-        stored = fetch_content(live_env["OPENBRAIN_TEST_DATABASE_URL"], turn_id)
+        stored = fetch_content(live_env["OPENBRAIN_TEST_DATABASE_URL"].get(), turn_id)
         assert stored == "stop hook end to end"
         # The watermark advanced only after the real send returned.
         assert await WatermarkStore(settings.watermark_path).offset_for(
-            session
+            scoped_capture_key(settings, session)
         ) == result.next_offset
 
 
@@ -116,7 +122,7 @@ class TestRunStopResumesFromTheWatermarkLive:
     """
 
     async def test_a_second_stop_delivers_only_the_appended_turns(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         session = f"stop-resume-live-{uuid.uuid4()}"
         first_id = f"u-{uuid.uuid4()}"
@@ -124,12 +130,12 @@ class TestRunStopResumesFromTheWatermarkLive:
         write_lines(transcript, [operator_line(first_id, "the first turn", session=session)])
 
         settings = CaptureSettings(
-            base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-            token=live_env["OPENBRAIN_TEST_TOKEN"],
+            base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+            token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
             watermark_path=tmp_path / "wm.sqlite",
         )
         payload = StopHook(transcript_path=transcript, session_id=session)
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
 
         # First Stop: reads from offset 0, delivers the one turn, advances the
         # watermark to EOF.
@@ -137,7 +143,9 @@ class TestRunStopResumesFromTheWatermarkLive:
         assert first is not None
         assert first.delivered == 1
         assert fetch_content(database_url, first_id) == "the first turn"
-        after_first = await WatermarkStore(settings.watermark_path).offset_for(session)
+        after_first = await WatermarkStore(settings.watermark_path).offset_for(
+            scoped_capture_key(settings, session)
+        )
         assert after_first == first.next_offset
 
         # Append two NEW turns to the SAME transcript, then Stop again. The resume
@@ -162,12 +170,14 @@ class TestRunStopResumesFromTheWatermarkLive:
         assert fetch_content(database_url, second_id) == "appended two"
         assert fetch_content(database_url, third_id) == "appended three"
         # The watermark moved forward past the appended bytes to the new EOF.
-        after_second = await WatermarkStore(settings.watermark_path).offset_for(session)
+        after_second = await WatermarkStore(settings.watermark_path).offset_for(
+            scoped_capture_key(settings, session)
+        )
         assert after_second == second.next_offset
         assert after_second > after_first
 
     async def test_a_stop_with_no_new_turns_is_a_noop_resume(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # The skipped-hook self-heal, live: a Stop fired with nothing new past the
         # watermark delivers zero and leaves the cursor where it was -- no turn
@@ -178,8 +188,8 @@ class TestRunStopResumesFromTheWatermarkLive:
         write_lines(transcript, [operator_line(turn_id, "only turn", session=session)])
 
         settings = CaptureSettings(
-            base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-            token=live_env["OPENBRAIN_TEST_TOKEN"],
+            base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+            token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
             watermark_path=tmp_path / "wm.sqlite",
         )
         payload = StopHook(transcript_path=transcript, session_id=session)
@@ -187,12 +197,14 @@ class TestRunStopResumesFromTheWatermarkLive:
         first = await run_stop(payload, settings)
         assert first is not None
         assert first.delivered == 1
-        at_eof = await WatermarkStore(settings.watermark_path).offset_for(session)
+        at_eof = await WatermarkStore(settings.watermark_path).offset_for(
+            scoped_capture_key(settings, session)
+        )
 
         # No append. A second Stop reads from EOF and finds nothing.
         second = await run_stop(payload, settings)
         assert second is not None
         assert second.delivered == 0
         assert await WatermarkStore(settings.watermark_path).offset_for(
-            session
+            scoped_capture_key(settings, session)
         ) == at_eof

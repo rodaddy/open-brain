@@ -395,7 +395,7 @@ def _stale_block_reason(gate: _Gate) -> str:
     # -specific, hence the override; the fallback stays a real location rather
     # than a neutral placeholder for that reason.
     gate_script = os.environ.get("OPENBRAIN_POLICY_REFRESH_GATE", "").strip() or (
-        "/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts"
+        "/srv/dev/_ob/scripts/policy-refresh-gate.ts"
     )
     command = (
         f"bun {gate_script} "

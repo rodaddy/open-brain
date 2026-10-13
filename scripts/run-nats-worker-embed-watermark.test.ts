@@ -9,10 +9,11 @@
  * newest embedded-row age against newest raw-row age — would have caught it in
  * about an hour instead of three days.
  *
- * WHY THIS SURFACE, ON THIS PORT. `docs/core01-nats-worker-runbook.md`
- * ("What `/health` on 3100 does and does NOT show") is explicit that the HTTP
- * service derives its blocks from its OWN process environment and deliberately
- * never observes the separate worker process. The runbook forbids "fixing"
+ * WHY THIS SURFACE, ON THIS PORT. The local NATS worker guide
+ * (`docs/local-nats-worker.md`, "What `/health` on 3100 does and does NOT
+ * show") is explicit that the HTTP service derives its blocks from its OWN
+ * process environment and deliberately never observes the separate worker
+ * process. The guide forbids "fixing"
  * 3100 by putting the worker back in the HTTP service's business. The worker's
  * own health is on `OPEN_BRAIN_NATS_WORKER_HEALTH_PORT` (3110), composed by
  * `startHealthServer` in `scripts/run-nats-worker.ts:83-113` and reachable only
@@ -50,13 +51,20 @@
  * payload. This file asserts the DESIRED behavior and is expected to fail until
  * that surface exists. It does not implement it.
  */
-import { describe, expect, it } from "bun:test";
-import { createNatsBridgeHealth } from "../src/nats-bridge.ts";
+import { describe, expect, it } from "vitest";
+import { createNatsBridgeHealth } from "../server/application/nats-bridge.ts";
 import {
   readNatsWorkerBoundary,
   type NatsWorkerRuntime,
-} from "../src/nats-worker.ts";
-import { startNatsWorkerProcess } from "./run-nats-worker.ts";
+} from "../server/application/nats-worker.ts";
+import {
+  startNatsWorkerProcess,
+  type StartNatsWorkerProcessOptions,
+} from "./run-nats-worker.ts";
+
+type CreateDbPoolFn = NonNullable<StartNatsWorkerProcessOptions["createDbPool"]>;
+type ServeFn = NonNullable<StartNatsWorkerProcessOptions["serve"]>;
+type HealthHandler = (request: Request) => Response | Promise<Response>;
 
 /**
  * The block this lane's fix must add to the worker health payload.
@@ -103,28 +111,26 @@ async function readWorkerHealth(
     OPENBRAIN_NATS_URL: NATS_URL,
     OPEN_BRAIN_NATS_WORKER_HEALTH_PORT: "3110",
   };
-  let handler: ((request: Request) => Response | Promise<Response>) | null =
-    null;
+  let handler: HealthHandler | null = null;
 
   const processRuntime = await startNatsWorkerProcess({
     env,
     log: { info: () => undefined, error: () => undefined },
-    buildTokens: () =>
-      new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
-    createDbPool: () => ({ end: async () => undefined }) as any,
+    buildTokens: () => new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+    // `pg.Pool` is far wider than this test exercises; narrowed once, here.
+    createDbPool: () =>
+      ({ end: async () => undefined }) as unknown as ReturnType<CreateDbPoolFn>,
     startWorker: async () => workerRuntime(env),
-    serve: ((options: {
-      fetch: (request: Request) => Response | Promise<Response>;
-    }) => {
+    serve: ((options: { fetch: HealthHandler }) => {
       handler = options.fetch;
       return { stop: () => undefined };
-    }) as any,
+    }) as unknown as ServeFn,
     // Injected the same way `natsHealth`, `producerHealth`, and `captureHealth`
     // are on the HTTP side (`server/transport/health.ts:118-138`): the live
     // component knows its own counters and the health composer must not guess
     // them. `undefined` composes no block.
     embedWatermarkHealth: () => embedWatermark,
-  } as any);
+  });
 
   try {
     if (!handler) throw new Error("worker health server was never composed");
@@ -185,9 +191,7 @@ describe("nats worker /health embed watermark (#724 item 3)", () => {
 
     expect(body.status).toBe("healthy");
     expect(status).toBe(200);
-    expect((body.embed_watermark as EmbedWatermarkHealthShape).stale).toBe(
-      false,
-    );
+    expect((body.embed_watermark as EmbedWatermarkHealthShape).stale).toBe(false);
   });
 
   it("flips off healthy when the embed watermark lags raw past the threshold", async () => {
@@ -223,9 +227,7 @@ describe("nats worker /health embed watermark (#724 item 3)", () => {
 
     expect(body.status).toBe("healthy");
     expect(status).toBe(200);
-    expect((body.embed_watermark as EmbedWatermarkHealthShape).stale).toBe(
-      false,
-    );
+    expect((body.embed_watermark as EmbedWatermarkHealthShape).stale).toBe(false);
   });
 
   it("ABSENCE IS NOT STALENESS — no observer composes no block and stays healthy", async () => {

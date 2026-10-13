@@ -1,6 +1,6 @@
 // Single source of truth for qmd entrypoint path resolution.
 //
-// Both the real qmd caller (src/tools/search-all.ts) and the operator doctor
+// Both the real qmd caller (server/tools/search-all.ts) and the operator doctor
 // (server/application/operator-doctor-probes.ts) MUST consume resolveQmdPath()
 // so their view of the qmd binary location can never diverge. The default
 // matches the documented prod layout on production-host.
@@ -10,8 +10,7 @@
 // deliberately NOT `QmdConfigGroup` from `./env-groups.ts`: `qmdGroup` folds a
 // blank `QMD_PATH` to absent, while this resolver branches on `=== undefined`
 // and passes a blank value through as an empty path. Reusing that group would
-// change what `QMD_PATH=""` resolves to. The zero-argument call form lives on
-// in the `src/qmd-path.ts` L5 adapter.
+// change what `QMD_PATH=""` resolves to.
 export const DEFAULT_QMD_PATH = "/opt/qmd/src/qmd.ts";
 
 export interface ResolvedQmdPath {

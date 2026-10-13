@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Open Brain restore CLI (issue #298).
  *
@@ -42,17 +42,17 @@
  * source backup set is never mutated.
  */
 import pg from "pg";
-import { runMigrations } from "../src/db/migrate.ts";
-import { CONTRACT_VERSION } from "../src/contract.ts";
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/embedding.ts";
+import { runMigrations } from "../server/db/migrate.ts";
+import { CONTRACT_VERSION } from "../server/contracts/contract.ts";
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "./settings.ts";
+import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import {
-  ARCHIVED_AT_TABLE_ALLOWLIST,
-  COUNT_TABLE_ALLOWLIST,
   DUMP_FILENAME,
   EXIT_FAILED,
   EXIT_USAGE,
-  NAMESPACE_TABLE_ALLOWLIST,
   RESTORE_RECEIPT_SCHEMA,
   compareMigrationSets,
   listRepoMigrations,
@@ -60,7 +60,6 @@ import {
   resolvePgTool,
   summarizeChildStderr,
   verifyBackupSet,
-  type BackupManifestV1,
   type CurrentRuntime,
   type Queryable,
 } from "./backup-lib.ts";
@@ -70,8 +69,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export const RESTORE_WIPE_APPROVAL_ENV = "OPENBRAIN_RESTORE_WIPE_APPROVED";
-export const RESTORE_WIPE_APPROVAL_VALUE =
-  "wipe-target-database-after-verified-backup";
+export const RESTORE_WIPE_APPROVAL_VALUE = "wipe-target-database-after-verified-backup";
 export const RESTORE_REMOTE_APPROVAL_ENV = "OPENBRAIN_RESTORE_REMOTE_APPROVED";
 export const RESTORE_REMOTE_APPROVAL_VALUE = "restore-remote-target-approved";
 
@@ -135,7 +133,7 @@ export interface RestoreArgs {
 function usage(exitCode: number = EXIT_USAGE): never {
   console.error(
     [
-      "Usage: bun run scripts/restore.ts --dir <backup-set-dir>",
+      "Usage: node scripts/restore.ts --dir <backup-set-dir>",
       "       (--target-db-url postgres://user[:pass]@host:port/dbname",
       "        | --target-db <dbname>)",
       "       [--wipe-target] [--allow-embedding-mismatch]",
@@ -181,318 +179,119 @@ export function parseTargetDbUrl(url: string): RestoreTarget {
   };
 }
 
-export function parseRestoreArgs(
-  argv: string[],
-  env: Record<string, string | undefined> = process.env,
-): RestoreArgs {
-  let dir: string | undefined;
-  let targetDbUrl: string | undefined;
-  let targetDb: string | undefined;
-  let wipeTarget = false;
-  let allowEmbeddingMismatch = false;
+/** The raw flags, before either target form is resolved to a RestoreTarget. */
+interface RestoreFlags {
+  dir: string | undefined;
+  targetDbUrl: string | undefined;
+  targetDb: string | undefined;
+  wipeTarget: boolean;
+  allowEmbeddingMismatch: boolean;
+}
+
+/** Flags that take a value; each maps to its RestoreFlags key. */
+const VALUE_FLAGS: Record<string, "dir" | "targetDbUrl" | "targetDb"> = {
+  "--dir": "dir",
+  "--target-db-url": "targetDbUrl",
+  "--target-db": "targetDb",
+};
+
+function parseRestoreFlags(argv: string[]): RestoreFlags {
+  const flags: RestoreFlags = {
+    dir: undefined,
+    targetDbUrl: undefined,
+    targetDb: undefined,
+    wipeTarget: false,
+    allowEmbeddingMismatch: false,
+  };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "--dir") {
-      dir = argv[++i];
-      if (!dir) usage();
-    } else if (arg === "--target-db-url") {
-      targetDbUrl = argv[++i];
-      if (!targetDbUrl) usage();
-    } else if (arg === "--target-db") {
-      targetDb = argv[++i];
-      if (!targetDb) usage();
-    } else if (arg === "--wipe-target") wipeTarget = true;
-    else if (arg === "--allow-embedding-mismatch")
-      allowEmbeddingMismatch = true;
+    const arg = argv[i] ?? "";
+    const valueKey = VALUE_FLAGS[arg];
+    if (valueKey) {
+      const value = argv[++i];
+      if (!value) usage();
+      flags[valueKey] = value;
+      continue;
+    }
+    if (arg === "--wipe-target") flags.wipeTarget = true;
+    else if (arg === "--allow-embedding-mismatch") flags.allowEmbeddingMismatch = true;
     else if (arg === "--help" || arg === "-h") usage(0);
     else {
       console.error(`Unknown argument: ${arg}`);
       usage();
     }
   }
-  if (!dir) {
-    console.error("--dir <backup-set-dir> is required");
-    usage();
-  }
-  if (targetDbUrl && targetDb) {
-    console.error("Pass either --target-db-url or --target-db, not both");
-    usage();
-  }
-  let target: RestoreTarget;
-  if (targetDbUrl) {
-    target = parseTargetDbUrl(targetDbUrl);
+  return flags;
+}
+
+function resolveRestoreTarget(
+  flags: RestoreFlags,
+  env: Record<string, string | undefined>,
+): RestoreTarget {
+  if (flags.targetDbUrl) {
+    const target = parseTargetDbUrl(flags.targetDbUrl);
     // Preferred credential path: passwordless URL + DB_PASSWORD env (keeps
     // the secret out of argv/shell history). Inline URL passwords are still
     // accepted for scratch/CI targets.
     if (target.password === undefined && env.DB_PASSWORD) {
-      target = { ...target, password: env.DB_PASSWORD };
+      return { ...target, password: env.DB_PASSWORD };
     }
-  } else if (targetDb) {
+    return target;
+  }
+  if (flags.targetDb) {
     if (!env.DB_HOST || !env.DB_USER) {
       console.error("--target-db requires DB_HOST and DB_USER in the env");
       usage();
     }
-    target = {
+    return {
       host: env.DB_HOST,
       port: parseInt(env.DB_PORT || "5432", 10),
       user: env.DB_USER,
       password: env.DB_PASSWORD,
-      dbName: targetDb,
+      dbName: flags.targetDb,
     };
-  } else {
-    console.error(
-      "An explicit restore target is required (--target-db-url or --target-db)",
-    );
+  }
+  console.error(
+    "An explicit restore target is required (--target-db-url or --target-db)",
+  );
+  usage();
+}
+
+export function parseRestoreArgs(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+): RestoreArgs {
+  const flags = parseRestoreFlags(argv);
+  const { dir } = flags;
+  if (!dir) {
+    console.error("--dir <backup-set-dir> is required");
     usage();
   }
-  return { dir, target, wipeTarget, allowEmbeddingMismatch };
+  if (flags.targetDbUrl && flags.targetDb) {
+    console.error("Pass either --target-db-url or --target-db, not both");
+    usage();
+  }
+  return {
+    dir,
+    target: resolveRestoreTarget(flags, env),
+    wipeTarget: flags.wipeTarget,
+    allowEmbeddingMismatch: flags.allowEmbeddingMismatch,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Post-restore validation (exported for unit tests and the live drill)
 // ---------------------------------------------------------------------------
 
-export interface ValidationResult {
-  name: string;
-  verdict: "ok" | "fail";
-  detail: string;
-}
+// The six manifest checks live in ./restore-validation.ts (issue 864 lane):
+// one function per check instead of one long body. Re-exported here so the
+// CLI's own module stays the single import surface for its tests.
+import {
+  errorClassOf,
+  validatePostRestore,
+  type ValidationResult,
+} from "./restore-validation.ts";
 
-/**
- * Content-free error identifier for validation details (post-#316
- * bulk_archive shape): pg error CODE when present, otherwise the error NAME.
- * Never err.message — driver messages embed literal row/namespace/constraint
- * content and the restore receipt certifies content-freedom.
- */
-function errorClassOf(err: unknown): string {
-  return (
-    (err as { code?: string }).code ??
-    (err instanceof Error ? err.name : "unknown")
-  );
-}
-
-/**
- * Validate the restored database against the manifest, BEFORE any forward
- * migration (forward migrations may legitimately rewrite rows; the manifest
- * counts describe the database as dumped).
- */
-export async function validatePostRestore(
-  db: Queryable,
-  manifest: BackupManifestV1,
-): Promise<ValidationResult[]> {
-  const results: ValidationResult[] = [];
-
-  // 1. Applied migrations exactly match the manifest.
-  try {
-    const { rows } = await db.query(
-      "SELECT filename FROM _migrations ORDER BY filename",
-    );
-    const applied = rows.map((r) => String(r.filename));
-    const expected = [...manifest.migrations.applied].sort();
-    const matches =
-      applied.length === expected.length &&
-      applied.every((f, i) => f === expected[i]);
-    results.push({
-      name: "applied_migrations_match_manifest",
-      verdict: matches ? "ok" : "fail",
-      detail: matches
-        ? `applied=${applied.length}`
-        : `applied=${applied.length} expected=${expected.length} or ordering mismatch`,
-    });
-  } catch (err) {
-    results.push({
-      name: "applied_migrations_match_manifest",
-      verdict: "fail",
-      detail: `query failed: ${errorClassOf(err)}`,
-    });
-  }
-
-  // 2. Row counts per table: exact match only (restore is offline).
-  // FAIL CLOSED on tampered manifests: only table names in the fixed
-  // allowlists (backup-lib.ts) are ever validated or interpolated — an
-  // unknown key fails its validation instead of being skipped. The identRe
-  // check is defense-in-depth BEHIND the allowlist intersection.
-  const identRe = /^[a-z_][a-z0-9_]*$/;
-  const countAllowlist = new Set<string>(COUNT_TABLE_ALLOWLIST);
-  const archivedAllowlist = new Set<string>(ARCHIVED_AT_TABLE_ALLOWLIST);
-  for (const [table, expectedCount] of Object.entries(manifest.row_counts)) {
-    if (!countAllowlist.has(table) || !identRe.test(table)) {
-      results.push({
-        name: `row_count:${table}`,
-        verdict: "fail",
-        detail: "manifest table name is not an allowlisted identifier",
-      });
-      continue;
-    }
-    try {
-      const { rows: existsRows } = await db.query(
-        `SELECT 1 FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = $1`,
-        [table],
-      );
-      if (existsRows.length === 0) {
-        results.push({
-          name: `row_count:${table}`,
-          verdict: "fail",
-          detail: "table missing after restore",
-        });
-        continue;
-      }
-      const { rows } = await db.query(
-        `SELECT COUNT(*)::bigint AS count FROM ${table}`,
-      );
-      const actual = Number(rows[0]?.count ?? 0);
-      results.push({
-        name: `row_count:${table}`,
-        verdict: actual === expectedCount ? "ok" : "fail",
-        detail: `actual=${actual} expected=${expectedCount}`,
-      });
-    } catch (err) {
-      results.push({
-        name: `row_count:${table}`,
-        verdict: "fail",
-        detail: `query failed: ${errorClassOf(err)}`,
-      });
-    }
-  }
-
-  // 3. Archived (soft-deleted) rows survive AS archived: exact count match,
-  // and if any archived rows existed, at least one is still archived (the
-  // count equality already proves it; the explicit >0 check keeps the
-  // assertion honest if counts drift to 0=0).
-  for (const [table, expectedArchived] of Object.entries(
-    manifest.archived_row_counts,
-  )) {
-    if (!archivedAllowlist.has(table) || !identRe.test(table)) {
-      results.push({
-        name: `archived_count:${table}`,
-        verdict: "fail",
-        detail: "manifest table name is not an allowlisted identifier",
-      });
-      continue;
-    }
-    try {
-      const { rows } = await db.query(
-        `SELECT COUNT(*)::bigint AS count FROM ${table} WHERE archived_at IS NOT NULL`,
-      );
-      const actual = Number(rows[0]?.count ?? 0);
-      const ok =
-        actual === expectedArchived && (expectedArchived === 0 || actual > 0);
-      results.push({
-        name: `archived_count:${table}`,
-        verdict: ok ? "ok" : "fail",
-        detail: `actual=${actual} expected=${expectedArchived}`,
-      });
-    } catch (err) {
-      results.push({
-        name: `archived_count:${table}`,
-        verdict: "fail",
-        detail: `query failed: ${errorClassOf(err)}`,
-      });
-    }
-  }
-
-  // 4. Distinct-namespace count matches the manifest inventory (count only —
-  // namespace names never enter this process's output).
-  try {
-    const parts: string[] = [];
-    for (const table of NAMESPACE_TABLE_ALLOWLIST) {
-      const { rows } = await db.query(
-        `SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = $1
-            AND column_name = 'namespace'`,
-        [table],
-      );
-      if (rows.length > 0) parts.push(`SELECT namespace FROM ${table}`);
-    }
-    let actual = 0;
-    if (parts.length > 0) {
-      const { rows } = await db.query(
-        `SELECT COUNT(*)::int AS count FROM (${parts.join(" UNION ")}) AS ns`,
-      );
-      actual = Number(rows[0]?.count ?? 0);
-    }
-    const expected = manifest.namespace_inventory.distinct_namespaces;
-    results.push({
-      name: "distinct_namespace_count",
-      verdict: actual === expected ? "ok" : "fail",
-      detail: `actual=${actual} expected=${expected}`,
-    });
-  } catch (err) {
-    results.push({
-      name: "distinct_namespace_count",
-      verdict: "fail",
-      detail: `query failed: ${errorClassOf(err)}`,
-    });
-  }
-
-  // 5. Namespace predicate columns exist (parameterized spot check on the
-  // two highest-traffic predicate surfaces).
-  try {
-    const { rows } = await db.query(
-      `SELECT COUNT(*)::int AS count FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND ((table_name = $1 AND column_name = $2)
-            OR (table_name = $3 AND column_name = $4))`,
-      ["thoughts", "namespace", "ob_session_lanes", "namespace"],
-    );
-    const count = Number(rows[0]?.count ?? 0);
-    results.push({
-      name: "namespace_predicate_columns",
-      verdict: count === 2 ? "ok" : "fail",
-      detail: `present=${count} expected=2`,
-    });
-  } catch (err) {
-    results.push({
-      name: "namespace_predicate_columns",
-      verdict: "fail",
-      detail: `query failed: ${errorClassOf(err)}`,
-    });
-  }
-
-  // 6. pgvector extension + embedding column dimension usable for retrieval.
-  try {
-    const { rows: extRows } = await db.query(
-      "SELECT extversion FROM pg_extension WHERE extname = 'vector'",
-    );
-    if (extRows.length === 0) {
-      results.push({
-        name: "pgvector_extension",
-        verdict: "fail",
-        detail: "vector extension missing after restore",
-      });
-    } else {
-      results.push({
-        name: "pgvector_extension",
-        verdict: "ok",
-        detail: `version=${String(extRows[0]!.extversion)}`,
-      });
-    }
-    const { rows: colRows } = await db.query(
-      `SELECT format_type(a.atttypid, a.atttypmod) AS col_type
-         FROM pg_attribute a
-         JOIN pg_class c ON c.oid = a.attrelid
-         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public' AND c.relname = $1 AND a.attname = $2`,
-      ["thoughts", "embedding"],
-    );
-    const colType = colRows.length > 0 ? String(colRows[0]!.col_type) : null;
-    const expectedType = `halfvec(${manifest.embedding.dimensions})`;
-    results.push({
-      name: "embedding_column_dimension",
-      verdict: colType === expectedType ? "ok" : "fail",
-      detail: `actual=${colType ?? "missing"} expected=${expectedType}`,
-    });
-  } catch (err) {
-    results.push({
-      name: "embedding_column_dimension",
-      verdict: "fail",
-      detail: `query failed: ${errorClassOf(err)}`,
-    });
-  }
-
-  return results;
-}
+export { validatePostRestore, type ValidationResult };
 
 /** After forward migration, applied history must equal the repo after approved legacy normalization. */
 export async function validateMigrationsMatchRepo(
@@ -527,9 +326,7 @@ export async function writabilityProbe(client: {
 }): Promise<ValidationResult> {
   try {
     await client.query("BEGIN");
-    await client.query(
-      "CREATE TEMP TABLE ob_restore_probe (id INT) ON COMMIT DROP",
-    );
+    await client.query("CREATE TEMP TABLE ob_restore_probe (id INT) ON COMMIT DROP");
     await client.query("INSERT INTO ob_restore_probe (id) VALUES ($1)", [1]);
     await client.query("ROLLBACK");
     return {
@@ -635,19 +432,43 @@ export async function runPgRestore(
     "-d",
     target.dbName,
   ];
-  const proc = Bun.spawn([...tool, ...args], {
+  const [command, ...toolArgs] = tool;
+  if (command === undefined) throw new Error("resolvePgTool returned an empty command");
+  const proc = spawn(command, [...toolArgs, ...args], {
     // Only override PGPASSWORD when a password was resolved; a passwordless
     // target keeps the operator's own PGPASSWORD intact.
     env: {
       ...process.env,
       ...(target.password !== undefined ? { PGPASSWORD: target.password } : {}),
     },
-    stdin: Bun.file(dumpPath),
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["pipe", "pipe", "pipe"],
   });
-  const stderrText = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
+
+  // Node's spawn does not accept a file handle as an stdio VALUE the way
+  // Bun.file() was passed here, so the dump is streamed in explicitly.
+  // pipeline applies backpressure and closes the child's stdin on EOF, which
+  // is what makes pg_restore terminate.
+  const fed = pipeline(createReadStream(dumpPath), proc.stdin);
+
+  // Drained CONCURRENTLY with the feed: pg_restore writes to stderr while it
+  // is still consuming stdin, so waiting until after the feed to read it can
+  // fill the stderr pipe buffer and deadlock both directions.
+  let stderrText = "";
+  proc.stderr.setEncoding("utf8");
+  proc.stderr.on("data", (chunk: string) => {
+    stderrText += chunk;
+  });
+  proc.stdout.resume();
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    proc.on("error", reject);
+    // null when killed by a signal; -1 keeps the failure branch reachable.
+    proc.on("close", (code) => resolve(code ?? -1));
+  });
+  // A failing pg_restore closes stdin early, so the feed rejects with EPIPE.
+  // That is a SYMPTOM of the child's failure, not the diagnosis: swallow it
+  // here so the exit-code branch below reports the real, redacted reason.
+  await fed.catch(() => {});
   if (exitCode !== 0) {
     // NEVER pass raw stderr through: a mid-COPY failure embeds literal row
     // content in CONTEXT/COPY/DETAIL lines. Only the sanitized error class
@@ -659,12 +480,30 @@ export async function runPgRestore(
   }
 }
 
+/**
+ * Run the repo's migrations forward when the backup head is older than the
+ * repo head AND every manifest check passed, appending the head-match result.
+ * Returns the number of migrations applied (0 when the step is skipped).
+ */
+async function maybeMigrateForward(
+  pool: pg.Pool,
+  migrationCompat: string | null,
+  repoMigrations: string[],
+  validations: ValidationResult[],
+): Promise<number> {
+  if (migrationCompat !== "restorable_with_migrations") return 0;
+  if (!validations.every((v) => v.verdict === "ok")) return 0;
+  const applied = await runMigrations(pool);
+  validations.push(await validateMigrationsMatchRepo(pool, repoMigrations));
+  return applied.length;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const args = parseRestoreArgs(Bun.argv.slice(2));
+  const args = parseRestoreArgs(process.argv.slice(2));
   const startedAt = Date.now();
   const validations: ValidationResult[] = [];
   let verifyStatus: string | null = null;
@@ -749,16 +588,12 @@ async function main(): Promise<void> {
     validations.push(...(await validatePostRestore(pool, manifest)));
 
     // 5. Forward migration when the backup head is older than the repo head.
-    if (
-      verifyResult.migration_compat === "restorable_with_migrations" &&
-      validations.every((v) => v.verdict === "ok")
-    ) {
-      const applied = await runMigrations(pool);
-      migratedForward = applied.length;
-      validations.push(
-        await validateMigrationsMatchRepo(pool, runtime.repoMigrations),
-      );
-    }
+    migratedForward = await maybeMigrateForward(
+      pool,
+      verifyResult.migration_compat,
+      runtime.repoMigrations,
+      validations,
+    );
 
     // 6. Writability probe on a single client connection.
     const client = await pool.connect();

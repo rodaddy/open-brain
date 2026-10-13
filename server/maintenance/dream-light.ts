@@ -1,67 +1,28 @@
 /**
  * DREAM Stage 1 — Light. Issue #390.
  *
- * The always-on, MODEL-FREE stage. Its rule, verbatim from #390:
+ * The always-on, MODEL-FREE stage: no model call, no embedding call, no
+ * inference — SQL over facts the ingest path already established. It maintains
+ * the corroboration count that promotion (#394) and supersession (#396) read.
  *
- *   Records only what is already KNOWN at write time [...] If light needs a
- *   model to infer what capture already told it, the capture is broken.
- *
- * So this module contains no model call, no embedding call, and no inference.
- * It is SQL over facts the ingest path already established. If a future change
- * needs a model here, the change belongs in REM or Deep, not in Light.
- *
- * WHAT IT PRODUCES, and why it is the load-bearing stage:
- *
- *   The occurrence count light maintains IS the corroboration signal that
- *   promotion (#394) and supersession (#396) depend on. Things that actually
- *   mattered get said more than once, across sessions. That is evidence the
- *   model does not generate — it just gets measured.
- *
- * That matters because the alternative — trusting a small model's own
- * confidence — is already measured as unreliable: in the 2026-07-24
- * Qwen3.5-4B-4bit run, 112 of 214 candidates were mislabelled `preference`,
- * including an OAuth redirect URI and a Caddyfile procedure. A count is not an
- * opinion, and it is free.
- *
- * CORROBORATION IS CROSS-SESSION, NOT REPETITION. `occurrence_count` rises when
- * anyone says a thing again; `session_count` rises only when a DIFFERENT
- * session does. Promotion reads `session_count`. One chatty session restating
- * itself ten times must never read as ten independent confirmations, so the two
- * are tracked separately and never conflated.
- *
- * WHY NOT A COLUMN ON ob_raw_turns: `content_hash` is deliberately not an
- * identity key there (032_raw_turns.sql:119-126) — keying on it would merge
- * 3,495 turns and destroy the reply chain, since each copy has a different
- * parent. Counts therefore live in `content_occurrences`, alongside the turns
- * rather than inside them.
- *
- * HARNESS NOISE is excluded using `isHarnessNoise` imported from the ingest
- * path — the same predicate, not a copy. If the two ever disagreed, the counts
- * would drift from what was actually stored. Without it,
- * "[Request interrupted by user]" (270 occurrences across 51 sessions) would be
- * the single best-corroborated "fact" in the system.
- *
- * IDEMPOTENCY: the sweep claims a bounded batch of turns, counts them, and
- * stamps `light_swept_at`. A replayed job re-selects on `light_swept_at IS
- * NULL`, finds the same turns already stamped, and resolves as a no-op. The
- * queue is at-least-once, so this is required, not a nicety.
- *
- * TIME: every timestamp written here comes from the turn's `occurred_at`, never
- * `now()`. #396 makes that a hard constraint — a backfill keyed on write time
- * would collapse months of history onto the import moment.
+ * Why the count rather than a model's confidence, why cross-session rather than
+ * repetition, why counts live in `content_occurrences` rather than on
+ * `ob_raw_turns`, why harness noise is excluded with the ingest predicate
+ * itself, and why every timestamp comes from `occurred_at` and never `now()`:
+ * See docs/decisions/dream-light-corroboration-is-counted-not-inferred.md
  */
 
 import type { Pool } from "pg";
+import { createDreamLightRepository } from "../db/dream-light-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 import {
   BackgroundTraceRecorder,
   backgroundSessionId,
   type BackgroundTraceEmitter,
-} from "../application/background-tracing.ts";
-import {
-  MaintenanceTerminalError,
-  type MaintenanceJob,
-} from "../../src/maintenance-queue.ts";
-import { recordTurnOccurrence, type SweepRow } from "./dream-light-occurrences.ts";
+} from "../observability/background-tracing.ts";
+import { MaintenanceTerminalError, type MaintenanceJob } from "./maintenance-job.ts";
+import { NON_SPEECH_ROLES } from "../domain/raw-turn-roles.ts";
+import { recordTurnOccurrence } from "./dream-light-occurrences.ts";
 
 /** Job kind this stage registers under in the maintenance queue. */
 export const DREAM_LIGHT_JOB_KIND = "dream.light";
@@ -74,6 +35,16 @@ export const DREAM_LIGHT_JOB_VERSION = 1;
  */
 export const DEFAULT_LIGHT_BATCH_SIZE = 500;
 
+/** Build the single bounded global Light queue request. */
+export function buildDreamLightEnqueue() {
+  return {
+    kind: DREAM_LIGHT_JOB_KIND,
+    version: DREAM_LIGHT_JOB_VERSION,
+    payload: {},
+    idempotencyKey: DREAM_LIGHT_JOB_KIND,
+  };
+}
+
 /**
  * Cap on retained session refs per occurrence row. The count is authoritative;
  * this is an audit sample. Unbounded, it would turn one row into a log.
@@ -82,22 +53,14 @@ export const MAX_SESSION_REFS = 20;
 
 /**
  * Content that is real (so ingest correctly stores it) but carries no claim, so
- * counting it as corroboration is meaningless.
- *
- * `[tool_use: Bash]` and friends are flattening artifacts: `raw-turns.ts`
- * records that a tool was called and discards the input, so ~35% of the corpus
- * is these stubs. They are legitimately stored — the fact a tool ran is part of
- * the reply chain — but they are identical across thousands of unrelated turns.
- *
- * MEASURED, not theorised: the very first Light sweep over 50 real turns ranked
- * `[tool_use: Bash]` as the single best-corroborated content in the database
- * (occurrence 15, 3 distinct sessions) before this filter existed. Promotion
- * reads `session_count`, so without this the strongest "evidence" in the system
- * would be the string "[tool_use: Bash]".
+ * counting it as corroboration is meaningless — the `[tool_use: ...]` and
+ * `[tool_result ...]` stubs transcript flattening leaves behind.
  *
  * Deliberately SEPARATE from `isHarnessNoise`: that predicate decides what
  * ingest refuses to STORE, and these must stay stored. This one decides what
  * Light refuses to COUNT. Same shape, different question.
+ *
+ * See docs/decisions/dream-light-corroboration-is-counted-not-inferred.md
  */
 const UNCOUNTABLE: readonly RegExp[] = [
   // Tool-call stubs left by transcript flattening.
@@ -106,58 +69,6 @@ const UNCOUNTABLE: readonly RegExp[] = [
   // Bare structural markers with no claim in them.
   /^\[(?:image|attachment|file)[^\]]*\]$/i,
 ];
-
-/**
- * Roles whose content is SPEECH — something a person or an agent actually said.
- *
- * Corroboration is a claim being made again, so only speech can corroborate.
- * `role='tool'` is machine output: it recurs constantly across unrelated
- * sessions and means nothing when it does.
- *
- * MEASURED on the full 3,549-turn corpus, 2026-07-27. Counting every role, the
- * top "corroborated facts" in the database were:
- *
- *   {"receipt":{"schema":"openbrain.runtime_receipt.v1", ...}}   10 sessions
- *   (Bash completed with no output)                               5 sessions
- *   The file <path> has been updated successfully                 2-3 sessions
- *
- * All 99 such turns are `role='tool'`, and ZERO leak into user/assistant — the
- * separation the corpus already carried, unused. Restricting to speech and
- * dropping the tool-call stubs leaves exactly one real cross-session result:
- * "are we at a good stop point, this box needs to reboot", said in 5 distinct
- * sessions. One survivor out of 3,549 turns is not a bug; corroboration is
- * genuinely rare, which is what makes it evidence.
- *
- * BOTH filters are required — role alone is not enough. `[tool_use: Bash]` is
- * stored as `role='assistant'` (it is the assistant's ACTION, not its speech)
- * and appears in 26 sessions. Role removes tool results; UNCOUNTABLE removes
- * tool calls.
- */
-/**
- * Roles known NOT to be speech. This is a DENYLIST, deliberately, not an
- * allowlist of speech roles.
- *
- * An allowlist rejects every role it has not heard of, so the day a new runtime
- * writes turns under an unfamiliar role, all of its content is dropped -- and
- * dropped invisibly, because a turn that was never counted leaves no trace of
- * having been skipped. A denylist fails the other way: an unrecognised role is
- * treated as speech and over-counts a little until someone notices.
- *
- * That asymmetry is the whole point. Over-counting is self-correcting -- an
- * entry nothing ever references drifts cold through the tiers and ages out on
- * its own evidence (`code-brain-design.md` §4). Under-counting is permanent:
- * content that never entered has no usage history to be judged by and no path
- * back. The tier system is the precision filter; the write path must not try to
- * be one.
- *
- * EXPORTED so DISTILL consumes this exact set rather than declaring its own
- * (src/distill-window.ts isSpeech). Two stages deciding "is this speech?" from
- * two private lists is how the direction silently drifts: Distill originally
- * had an allowlist, which inverted the failure above -- an unknown role there
- * produced no candidate at all, the invisible drop this comment exists to
- * forbid. One shared denylist makes that class of divergence unrepresentable.
- */
-export const NON_SPEECH_ROLES: ReadonlySet<string> = new Set(["tool", "system"]);
 
 /**
  * Should Light count this content toward corroboration?
@@ -224,7 +135,7 @@ export interface DreamLightDeps {
   pool: Pool;
   /**
    * Content-free logger. `meta` is REQUIRED rather than optional so a
-   * MaintenanceQueueLogger (src/maintenance-queue.ts) satisfies this shape --
+   * MaintenanceQueueLogger (./maintenance-queue.ts) satisfies this shape --
    * that logger's `fields` parameter is non-optional, and an optional parameter
    * here would make it structurally incompatible, which is what kept Light from
    * being registrable in composeMaintenanceHandlers. Every call site in this
@@ -256,56 +167,49 @@ export async function runLightSweep(deps: DreamLightDeps): Promise<DreamLightSum
     corroborated: 0,
   };
 
-  const client = await deps.pool.connect();
-  try {
-    await client.query("BEGIN");
+  const swept = await withTransaction({
+    pool: deps.pool,
+    run: async (tx) => {
+      const repository = createDreamLightRepository(tx);
 
-    // FOR UPDATE SKIP LOCKED so two concurrent sweeps take disjoint batches
-    // rather than serialising or double-counting. Same primitive the
-    // maintenance queue uses to claim jobs (maintenance-queue.ts).
-    const claimed = await client.query<SweepRow>(
-      `SELECT id, namespace, content, content_hash, session_ref, role, occurred_at
-         FROM ob_raw_turns
-        WHERE light_swept_at IS NULL
-        ORDER BY occurred_at ASC
-        LIMIT $1
-          FOR UPDATE SKIP LOCKED`,
-      [batchSize],
-    );
+      const claimed = await repository.claimUnsweptTurns({ batchSize });
 
-    summary.scanned = claimed.rows.length;
-    if (claimed.rows.length === 0) {
-      await client.query("COMMIT");
-      return summary;
-    }
-
-    const sweptIds: string[] = [];
-
-    for (const row of claimed.rows) {
-      sweptIds.push(row.id);
-
-      const outcome = await recordTurnOccurrence(client, row);
-      if (outcome === "skipped_noise") summary.skipped_noise++;
-      else if (outcome === "created") summary.created++;
-      else if (outcome === "updated") summary.updated++;
-      else {
-        summary.updated++;
-        summary.corroborated++;
+      summary.scanned = claimed.length;
+      if (claimed.length === 0) {
+        return summary;
       }
-    }
 
-    await client.query(
-      `UPDATE ob_raw_turns SET light_swept_at = now() WHERE id = ANY($1::uuid[])`,
-      [sweptIds],
-    );
+      const sweptIds: string[] = [];
 
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+      for (const row of claimed) {
+        sweptIds.push(row.id);
+
+        const outcome = await recordTurnOccurrence(repository, row);
+        if (outcome === "skipped_noise") summary.skipped_noise++;
+        else if (outcome === "created") summary.created++;
+        else if (outcome === "updated") summary.updated++;
+        else {
+          summary.updated++;
+          summary.corroborated++;
+        }
+      }
+
+      await repository.markSwept({ ids: sweptIds });
+
+      return undefined;
+    },
+    onRollbackFailure: (rollbackErr: unknown) => {
+      // The rollback itself failed. The original error still propagates; name
+      // the degraded path so a failed rollback is not silent.
+      deps.logger.warn("dream_light_rollback_failed", {
+        reason: rollbackErr instanceof Error ? rollbackErr.name : "non_error",
+      });
+    },
+  });
+  // The empty-batch path returned early inside the old transaction, before the
+  // telemetry below. Preserved: run returns the summary in exactly that case
+  // and undefined otherwise.
+  if (swept !== undefined) return swept;
 
   // Content-free telemetry: counts only, no content, no hashes.
   deps.logger.info("dream light sweep complete", {
@@ -357,55 +261,20 @@ export function makeDreamLightHandler(deps: DreamLightDeps) {
 
 /**
  * MEASURED DELTA AGAINST docs/dream-design.md:230-239 -- Light counts, it does
- * NOT gate.
+ * NOT gate. The doc's premise that corroborated content is common was measured
+ * false on this corpus, so nothing anywhere filters on the count.
  *
- * THE DOC'S PREMISE, verbatim (dream-design.md:232-234):
+ * This function is the queue Light publishes downstream, and its predicate is
+ * deliberately blind to occurrence data -- if a future change adds an
+ * occurrence predicate here, it is reintroducing the gate that delta removed.
  *
- *     The occurrence count light maintains IS the corroboration signal that
- *     promotion (#394) and supersession (#396) depend on. Things that actually
- *     mattered get said more than once, across sessions.
- *
- * THAT PREMISE IS FALSE ON THIS CORPUS, and the measurement is not marginal.
- * Over the full 3,558-turn sweep (2026-07-27, recorded at dream-light.ts:106-119
- * and re-confirmed 2026-07-28 at 3,795 turns / 1,018 occurrence rows): after
- * excluding tool output and tool-call stubs, exactly ONE piece of content
- * appeared in more than one session -- "are we at a good stop point, this box
- * needs to reboot", in 5 sessions. One in 3,558.
- *
- * The cause is not a bug in the counting. It is that the operator does not
- * repeat himself: a decision is stated once, acted on, and never restated. The
- * corpus is dense with exactly the content the doc's premise predicts would be
- * repeated, and it is not repeated even once.
- *
- * WHAT THAT CHANGES, AND WHAT IT DOES NOT.
- *
- * It does NOT make the count worthless. When corroboration fires it is real
- * evidence a model cannot manufacture, it costs nothing to maintain, and REM
- * reads it as its strongest positive signal (src/dream-rem.ts, heuristicRemGrader).
- * Light keeps counting exactly as before -- runLightSweep is unchanged.
- *
- * It DOES disqualify the count as a GATE. If REM only saw corroborated content,
- * REM would see one item and the other 1,103 candidates would never reach the
- * operator -- a 99.9% suppression rate produced by a premise that measurement
- * has already falsified. That is precisely the failure the 2026-07-28 governing
- * decision names (037:1-30): a filter tuned before there is graded data is
- * tuned on nothing, and it destroys the evidence needed to tune it.
- *
- * So the ordering across stages is: Light COUNTS, REM READS THE COUNT AS ONE
- * SIGNAL AMONG OTHERS, and nothing anywhere filters on it. This function is the
- * queue Light publishes downstream, and its predicate is deliberately blind to
- * occurrence data -- if a future change adds an occurrence predicate here, it
- * is reintroducing the gate this delta exists to remove.
- *
- * This is recorded rather than silently contradicted, per dream-design.md:1363
- * ("Do not invent answers to these during implementation -- if implementation
- * forces a choice, record it as a decision with its reasoning"). The open
- * question it touches is #1 in that table: how a genuine one-off gets promoted.
- * No rule is invented here; the one-off simply is not suppressed.
+ * See docs/decisions/dream-light-counts-never-gate.md
  */
 export interface LightQueueDepth {
-  /** Turns Light has not yet counted. */
+  /** All turns Light has not yet counted, including deferred undated turns. */
   unswept: number;
+  /** Unswept turns awaiting a real source timestamp; not eligible for Light. */
+  deferred_missing_timestamp: number;
   /** Turns not yet distilled -- the backlog REM's trigger actually watches. */
   undistilled: number;
   /** Distinct content rows Light has counted. */
@@ -427,34 +296,16 @@ export async function readLightQueueDepth(
   pool: Pool,
   namespace?: string,
 ): Promise<LightQueueDepth> {
-  const q = await pool.query<{
-    unswept: string;
-    undistilled: string;
-    occurrence_rows: string;
-    corroborated_rows: string;
-  }>(
-    `SELECT
-       (SELECT count(*) FROM ob_raw_turns
-         WHERE light_swept_at IS NULL
-           AND ($1::text IS NULL OR namespace = $1))::text AS unswept,
-       (SELECT count(*) FROM ob_raw_turns
-         WHERE distilled_at IS NULL
-           AND ($1::text IS NULL OR namespace = $1))::text AS undistilled,
-       (SELECT count(*) FROM content_occurrences
-         WHERE ($1::text IS NULL OR namespace = $1))::text AS occurrence_rows,
-       (SELECT count(*) FROM content_occurrences
-         WHERE session_count > 1
-           AND ($1::text IS NULL OR namespace = $1))::text AS corroborated_rows`,
-    [namespace ?? null],
-  );
-  // Four scalar sub-selects: Postgres always returns exactly one row. The
+  const rows = await createDreamLightRepository(pool).readQueueDepth({ namespace });
+  // Five scalar sub-selects: Postgres always returns exactly one row. The
   // guard replaces a non-null assertion and cannot fire in practice.
-  const r = q.rows[0];
+  const r = rows[0];
   if (r === undefined) {
     throw new Error("light queue depth query returned no row");
   }
   return {
     unswept: Number(r.unswept),
+    deferred_missing_timestamp: Number(r.deferred_missing_timestamp),
     undistilled: Number(r.undistilled),
     occurrence_rows: Number(r.occurrence_rows),
     corroborated_rows: Number(r.corroborated_rows),
