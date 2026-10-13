@@ -3,7 +3,7 @@
 // Split out of repo-facts.ts so the schema and tool layers stay under the
 // server/ file rule (issue 864).
 
-import { logger } from "../../src/logger.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 function isPrivateOrLocalHost(hostname: string): boolean {
   const host = hostname.toLowerCase();

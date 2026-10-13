@@ -1,6 +1,7 @@
-// Origin: src/types.ts. Copied here so no server module imports from src/ (L5, #864).
-export type Role =
-  "admin" | "agent" | "discord" | "ob-admin" | "promoter" | "readonly";
+// The shared type vocabulary for the server, declared once here (L5 move,
+// issue 864). These declarations are the only ones; the pre-rewrite copy is now
+// a re-export shim over this file, so the two cannot drift apart.
+export type Role = "admin" | "agent" | "discord" | "ob-admin" | "promoter" | "readonly";
 export type Table =
   "thoughts" | "decisions" | "relationships" | "projects" | "sessions";
 // Keep in sync with CHECK (relation IN (...)) in 010_entity_links.sql

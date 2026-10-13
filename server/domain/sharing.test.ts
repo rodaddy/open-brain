@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   classifyShareCandidate,
   containsSecret,
@@ -9,7 +9,7 @@ import {
 } from "./sharing.ts";
 
 // Clearly-fake / documentation example values, split where needed so the repo's
-// own secret scanner (ggshield) does not flag the test fixtures themselves.
+// own secret scanner (gitleaks) does not flag the test fixtures themselves.
 const FAKE_AWS_ACCESS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 const FAKE_JWT = "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZXN0In0." + "abcdefghijklmnop";
 const FAKE_GH_PAT = "github" + "_pat_" + "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ";
@@ -17,6 +17,13 @@ const FAKE_SK = "sk" + "-" + "abcdefghijklmnopqrstuvwxyz0123456789";
 const FAKE_SLACK = "xoxb-" + "1234567890-abcdefghij";
 const LONG_FACT =
   "The open-brain promotion runner graduates lane facts into shared-kb after classification.";
+
+// ReDoS growth probe: the small side; the large side is 4x this.
+const REDOS_SMALL_N = 20_000;
+// A 4x input scanned linearly stays well under 8x; quadratic would be about 16x.
+const REDOS_GROWTH_RATIO_MAX = 8;
+// Per-test allowance, the hang backstop only -- not a performance deadline.
+const REDOS_SCAN_ALLOWANCE_MS = 10_000;
 
 describe("containsSecret", () => {
   it("detects a fake AWS access key", () => {
@@ -89,15 +96,29 @@ describe("containsSecret", () => {
     expect(containsSecret("wss://user:pass@host/socket")).toBe(true);
   });
 
-  it("scans large input in linear time (ReDoS regression)", () => {
-    // The URL credential pattern once had an unanchored `[a-z][a-z0-9+.-]*://`
-    // prefix that backtracked O(n^2) on long input with no `://`. A fixed scheme
-    // alternation fixed it. Guard: 80k chars must scan well under a second.
-    const t = performance.now();
-    containsSecret("a".repeat(80_000));
-    containsSecret("http" + ":x".repeat(40_000));
-    expect(performance.now() - t).toBeLessThan(500);
-  });
+  it(
+    "scans large input in linear time (ReDoS regression)",
+    () => {
+      // The URL credential pattern once had an unanchored `[a-z][a-z0-9+.-]*://`
+      // prefix that backtracked O(n^2) on long input with no `://`. A fixed scheme
+      // alternation fixed it. Guard: the scan grows about linearly with input.
+      // Issue 634: this asserted a fixed 500ms wall clock, which measured the
+      // runner's load rather than the code; a same-run 4x ratio does not.
+      const smallStart = performance.now();
+      expect(containsSecret("a".repeat(REDOS_SMALL_N))).toBe(false);
+      expect(containsSecret("http" + ":x".repeat(REDOS_SMALL_N / 2))).toBe(false);
+      const smallMs = performance.now() - smallStart;
+
+      const largeStart = performance.now();
+      expect(containsSecret("a".repeat(REDOS_SMALL_N * 4))).toBe(false);
+      expect(containsSecret("http" + ":x".repeat(REDOS_SMALL_N * 2))).toBe(false);
+      const largeMs = performance.now() - largeStart;
+
+      const ratio = largeMs / Math.max(smallMs, 1);
+      expect(ratio).toBeLessThan(REDOS_GROWTH_RATIO_MAX);
+    },
+    REDOS_SCAN_ALLOWANCE_MS,
+  );
 
   it("detects a labeled long secret value", () => {
     expect(containsSecret("client_secret=" + "Ab9".repeat(8) + "xyz")).toBe(true);

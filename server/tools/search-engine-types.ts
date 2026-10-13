@@ -15,8 +15,10 @@
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { ResourceTable } from "../auth/types.ts";
+import type { LinkRelation } from "../types.ts";
 import type { FtsConfig } from "./fts-config.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
+import type { JevConfig, JevFetch } from "../integrations/jev.ts";
 
 export type SearchMode = "hybrid" | "vector" | "keyword";
 
@@ -29,6 +31,30 @@ export const DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS = 3000;
 export const VECTOR_WEIGHT = 0.7;
 export const USEFULNESS_WEIGHT = 0.15;
 export const AGE_WEIGHT = 0.0001;
+
+/**
+ * One `ob_links` edge as a search result carries it.
+ *
+ * Direction is relative to the ROW that owns the field: a link appears twice in
+ * a result set that contains both of its ends, once `outgoing` from the source
+ * and once `incoming` on the target, so a caller reading a single row never has
+ * to know which end it happened to be stored on.
+ *
+ * Kept on the modern engine by operator ruling 2026-09-01 (issue 841 D3): the
+ * transplant carries the field rather than dropping it.
+ */
+export interface ExplicitLink {
+  id: string;
+  direction: "outgoing" | "incoming";
+  relation: LinkRelation;
+  weight: number;
+  linked_type: string;
+  linked_id: string;
+  linked_name?: string | null;
+  canonical_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
 
 export interface SourceRef {
   source: "brain";
@@ -55,7 +81,12 @@ export interface SearchRow {
   tier?: string;
   distance?: number;
   fts_rank?: number;
+  /** Internal hybrid lexical metadata; removed before public results are returned. */
+  lexical_coverage?: number;
+  /** Internal count of normalized query lexemes; paired with lexical_coverage. */
+  query_lexeme_count?: number;
   access_count?: number;
+  explicit_links?: ExplicitLink[];
   source_ref?: SourceRef;
   extracted_metadata?: Record<string, unknown>;
 }
@@ -74,6 +105,8 @@ export interface SearchDependencies {
   readonly searchEmbeddingTimeoutMs?: number;
   /** Validated shared-namespace names; env-derived when absent. */
   readonly sharedNamespaceNames?: SharedNamespaceConfig;
+  /** Optional external reranker. Disabled config performs no network I/O. */
+  readonly jev?: { config: JevConfig; fetchFn?: JevFetch };
 }
 
 export interface ExecuteSearchOptions {
@@ -107,9 +140,7 @@ export function rowEvidence(row: SearchRow): Record<string, unknown> {
   };
 }
 
-export function rowsEvidence(
-  rows: readonly SearchRow[],
-): Record<string, unknown> {
+export function rowsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
   return {
     count: rows.length,
     row_ids: rows.map((row) => row.id),
@@ -117,8 +148,6 @@ export function rowsEvidence(
   };
 }
 
-export function rowIdsEvidence(
-  rows: readonly SearchRow[],
-): Record<string, unknown> {
+export function rowIdsEvidence(rows: readonly SearchRow[]): Record<string, unknown> {
   return { count: rows.length, row_ids: rows.map((row) => row.id) };
 }

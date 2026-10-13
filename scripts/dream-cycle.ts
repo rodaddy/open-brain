@@ -35,26 +35,27 @@
  *   bun scripts/dream-cycle.ts --dry           # counts before/after only, no writes
  */
 
-import { Pool } from "pg";
-import { runDistillSweep } from "../src/distill-handler.ts";
-import { runLightSweep, readLightQueueDepth } from "../src/dream-light.ts";
-import { runRemPass } from "../src/dream-rem.ts";
-import { buildReviewBundles, DEFAULT_BUNDLE_LIMIT } from "../src/dream-deep.ts";
+import type { Pool } from "pg";
+import { runDistillSweep } from "../server/maintenance/distill-handler.ts";
+import {
+  runLightSweep,
+  readLightQueueDepth,
+} from "../server/maintenance/dream-light.ts";
+import { runRemPass } from "../server/maintenance/dream-rem.ts";
+import { createDreamRemRepository } from "../server/db/dream-rem-repository.ts";
+import { createDreamRemGradingRepository } from "../server/db/dream-rem-grading-repository.ts";
+import { createDreamDeepRepository } from "../server/db/dream-deep-repository.ts";
+import {
+  buildReviewBundles,
+  DEFAULT_BUNDLE_LIMIT,
+} from "../server/maintenance/dream-deep.ts";
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
-
-const logger = {
-  info: (msg: string, fields: Record<string, string | number>) =>
-    console.log(`  · ${msg}`, JSON.stringify(fields)),
-  warn: (msg: string, fields: Record<string, string | number>) =>
-    console.warn(`  ! ${msg}`, JSON.stringify(fields)),
-  error: (msg: string, fields: Record<string, string | number>) =>
-    console.error(`  ✗ ${msg}`, JSON.stringify(fields)),
-};
+// Stage output is indented and marked so it reads beneath its stage heading.
+const logger = createConsoleLogger({
+  prefix: { info: "  · ", warn: "  ! ", error: "  ✗ " },
+});
 
 interface Snapshot {
   turns: number;
@@ -83,7 +84,7 @@ async function snapshot(pool: Pool): Promise<Snapshot> {
        (SELECT count(*) FROM candidate_reinforcement) AS reinforcements,
        (SELECT count(*) FROM thoughts WHERE tier = 'hot') AS hot_thoughts`,
   );
-  const r = q.rows[0]!;
+  const r = q.rows[0] ?? {};
   return {
     turns: Number(r.turns),
     undistilled: Number(r.undistilled),
@@ -103,56 +104,142 @@ function delta(before: number, after: number): string {
   return d === 0 ? `${after}` : `${after} (${d > 0 ? "+" : ""}${d})`;
 }
 
+/** Every snapshot row printed, in display order, with its indented label. */
+const SNAPSHOT_ROWS: ReadonlyArray<readonly [string, keyof Snapshot]> = [
+  ["raw turns        ", "turns"],
+  ["  undistilled    ", "undistilled"],
+  ["  unswept (light)", "unswept"],
+  ["occurrence rows  ", "occurrences"],
+  ["  cross-session  ", "corroborated"],
+  ["candidates       ", "candidates"],
+  ["  unreviewed     ", "unreviewed"],
+  ["  machine graded ", "machine_graded"],
+  ["reinforcements   ", "reinforcements"],
+  ["hot thoughts     ", "hot_thoughts"],
+];
+
 function printSnapshot(label: string, s: Snapshot, prev?: Snapshot): void {
   console.log(`\n=== ${label} ===`);
-  const p = prev;
-  console.log("raw turns        :", p ? delta(p.turns, s.turns) : s.turns);
+  for (const [rowLabel, key] of SNAPSHOT_ROWS) {
+    const value = prev ? delta(prev[key], s[key]) : s[key];
+    console.log(`${rowLabel}:`, value);
+  }
+}
+
+/** Stage 0: DISTILL (#382). Turns into candidates. */
+async function runDistillStage(pool: Pool): Promise<void> {
+  console.log("\n### distill (#382)");
+  let sweeps = 0;
+  const totals = { units: 0, stamped: 0, extracted: 0, written: 0, dup: 0 };
+  for (;;) {
+    const s = await runDistillSweep({
+      pool,
+      logger,
+      ...(has("--no-embeddings") ? { skipEmbeddings: true } : {}),
+    });
+    sweeps++;
+    totals.units += s.units;
+    totals.stamped += s.turns_stamped;
+    totals.extracted += s.candidates_extracted;
+    totals.written += s.candidates_written;
+    totals.dup += s.candidates_duplicate;
+    if (s.turns_stamped === 0 || !has("--drain")) break;
+  }
   console.log(
-    "  undistilled    :",
-    p ? delta(p.undistilled, s.undistilled) : s.undistilled,
-  );
-  console.log(
-    "  unswept (light):",
-    p ? delta(p.unswept, s.unswept) : s.unswept,
-  );
-  console.log(
-    "occurrence rows  :",
-    p ? delta(p.occurrences, s.occurrences) : s.occurrences,
-  );
-  console.log(
-    "  cross-session  :",
-    p ? delta(p.corroborated, s.corroborated) : s.corroborated,
-  );
-  console.log(
-    "candidates       :",
-    p ? delta(p.candidates, s.candidates) : s.candidates,
-  );
-  console.log(
-    "  unreviewed     :",
-    p ? delta(p.unreviewed, s.unreviewed) : s.unreviewed,
-  );
-  console.log(
-    "  machine graded :",
-    p ? delta(p.machine_graded, s.machine_graded) : s.machine_graded,
-  );
-  console.log(
-    "reinforcements   :",
-    p ? delta(p.reinforcements, s.reinforcements) : s.reinforcements,
-  );
-  console.log(
-    "hot thoughts     :",
-    p ? delta(p.hot_thoughts, s.hot_thoughts) : s.hot_thoughts,
+    `  sweeps=${sweeps} units=${totals.units} turns_stamped=${totals.stamped} ` +
+      `extracted=${totals.extracted} written=${totals.written} duplicate=${totals.dup}`,
   );
 }
 
-async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
+/**
+ * Stage 1: LIGHT (#390). Counts occurrences.
+ *
+ * It does NOT gate what REM sees -- see the measured delta at
+ * src/dream-light.ts (readLightQueueDepth's doc comment): exactly one piece of
+ * content in 3,558 turns had cross-session support, so using the count as a
+ * gate would suppress 99.9% of the corpus.
+ */
+async function runLightStage(pool: Pool): Promise<void> {
+  console.log("\n### light (#390)");
+  let sweeps = 0;
+  const totals = { scanned: 0, noise: 0, created: 0, updated: 0, corrob: 0 };
+  for (;;) {
+    const s = await runLightSweep({ pool, logger });
+    sweeps++;
+    totals.scanned += s.scanned;
+    totals.noise += s.skipped_noise;
+    totals.created += s.created;
+    totals.updated += s.updated;
+    totals.corrob += s.corroborated;
+    if (s.scanned === 0 || !has("--drain")) break;
+  }
+  console.log(
+    `  sweeps=${sweeps} scanned=${totals.scanned} skipped_noise=${totals.noise} ` +
+      `created=${totals.created} updated=${totals.updated} corroborated=${totals.corrob}`,
+  );
+  const depth = await readLightQueueDepth(pool);
+  console.log(
+    `  queue: unswept=${depth.unswept} deferred_missing_timestamp=${depth.deferred_missing_timestamp} ` +
+      `undistilled=${depth.undistilled} ` +
+      `occurrence_rows=${depth.occurrence_rows} corroborated_rows=${depth.corroborated_rows}`,
+  );
+}
+
+/** Stage 2: REM (#391/#392/#398). Dedupe, grade, re-warm. */
+async function runRemStage(pool: Pool): Promise<void> {
+  console.log("\n### rem (#391/#392/#398)");
+  const rem = await runRemPass({
+    pool,
+    rem: createDreamRemRepository(pool),
+    grading: createDreamRemGradingRepository(pool),
+    logger,
   });
+  console.log(
+    `  dedupe: examined=${rem.dedupe.examined} merged=${rem.dedupe.merged} ` +
+      `reinforced=${rem.dedupe.reinforced} no_embedding=${rem.dedupe.skipped_no_embedding}`,
+  );
+  console.log(
+    `  grading: examined=${rem.grading.examined} graded=${rem.grading.graded} ` +
+      `corroborated=${rem.grading.corroborated} ` +
+      `[promoted=${rem.grading.by_grade.promoted} rejected=${rem.grading.by_grade.rejected} ` +
+      `duplicate=${rem.grading.by_grade.duplicate} inconclusive=${rem.grading.by_grade.inconclusive}]`,
+  );
+  console.log(
+    `  rewarm: projects=${rem.rewarm.projects_seen} noticed_only=${rem.rewarm.noticed_only} ` +
+      `warmed=${rem.rewarm.warmed}`,
+  );
+}
+
+/**
+ * Stage 3: DEEP (#394). Builds the review page.
+ *
+ * Read-only. Produces the page; commits nothing (dream-design.md:116).
+ */
+async function runDeepStage(pool: Pool): Promise<void> {
+  console.log("\n### deep (#394)");
+  const deep = await buildReviewBundles({
+    pool,
+    deep: createDreamDeepRepository(pool),
+    logger,
+    limit: Number(arg("--limit") ?? DEFAULT_BUNDLE_LIMIT),
+  });
+  console.log(
+    `  bundles=${deep.summary.bundles} queue_depth=${deep.summary.queue_depth} ` +
+      `machine_graded=${deep.summary.machine_graded} corroborated=${deep.summary.corroborated} ` +
+      `reinforced=${deep.summary.reinforced} missing_turns=${deep.summary.missing_turns}`,
+  );
+  const turnCounts = deep.bundles.map((b) => b.turns.length);
+  if (turnCounts.length > 0) {
+    const total = turnCounts.reduce((a, b) => a + b, 0);
+    console.log(
+      `  context: ${total} turns across ${turnCounts.length} bundles ` +
+        `(min=${Math.min(...turnCounts)} max=${Math.max(...turnCounts)})`,
+    );
+  }
+}
+
+async function main(): Promise<void> {
+  const pool = createPool();
 
   const started = Date.now();
   try {
@@ -164,112 +251,14 @@ async function main(): Promise<void> {
       return;
     }
 
-    // ---- Stage 0: DISTILL (#382) -------------------------------------------
-    if (!has("--no-distill")) {
-      console.log("\n### distill (#382)");
-      let sweeps = 0;
-      const totals = { units: 0, stamped: 0, extracted: 0, written: 0, dup: 0 };
-      for (;;) {
-        const s = await runDistillSweep({
-          pool,
-          logger,
-          ...(has("--no-embeddings") ? { skipEmbeddings: true } : {}),
-        });
-        sweeps++;
-        totals.units += s.units;
-        totals.stamped += s.turns_stamped;
-        totals.extracted += s.candidates_extracted;
-        totals.written += s.candidates_written;
-        totals.dup += s.candidates_duplicate;
-        if (s.turns_stamped === 0 || !has("--drain")) break;
-      }
-      console.log(
-        `  sweeps=${sweeps} units=${totals.units} turns_stamped=${totals.stamped} ` +
-          `extracted=${totals.extracted} written=${totals.written} duplicate=${totals.dup}`,
-      );
-    }
-
-    // ---- Stage 1: LIGHT (#390) ---------------------------------------------
-    // Counts occurrences. It does NOT gate what REM sees -- see the measured
-    // delta at src/dream-light.ts (readLightQueueDepth's doc comment): exactly
-    // one piece of content in 3,558 turns had cross-session support, so using
-    // the count as a gate would suppress 99.9% of the corpus.
-    console.log("\n### light (#390)");
-    {
-      let sweeps = 0;
-      const totals = {
-        scanned: 0,
-        noise: 0,
-        created: 0,
-        updated: 0,
-        corrob: 0,
-      };
-      for (;;) {
-        const s = await runLightSweep({ pool, logger });
-        sweeps++;
-        totals.scanned += s.scanned;
-        totals.noise += s.skipped_noise;
-        totals.created += s.created;
-        totals.updated += s.updated;
-        totals.corrob += s.corroborated;
-        if (s.scanned === 0 || !has("--drain")) break;
-      }
-      console.log(
-        `  sweeps=${sweeps} scanned=${totals.scanned} skipped_noise=${totals.noise} ` +
-          `created=${totals.created} updated=${totals.updated} corroborated=${totals.corrob}`,
-      );
-      const depth = await readLightQueueDepth(pool);
-      console.log(
-        `  queue: unswept=${depth.unswept} undistilled=${depth.undistilled} ` +
-          `occurrence_rows=${depth.occurrence_rows} corroborated_rows=${depth.corroborated_rows}`,
-      );
-    }
-
-    // ---- Stage 2: REM (#391/#392/#398) -------------------------------------
-    console.log("\n### rem (#391/#392/#398)");
-    const rem = await runRemPass({ pool, logger });
-    console.log(
-      `  dedupe: examined=${rem.dedupe.examined} merged=${rem.dedupe.merged} ` +
-        `reinforced=${rem.dedupe.reinforced} no_embedding=${rem.dedupe.skipped_no_embedding}`,
-    );
-    console.log(
-      `  grading: examined=${rem.grading.examined} graded=${rem.grading.graded} ` +
-        `corroborated=${rem.grading.corroborated} ` +
-        `[promoted=${rem.grading.by_grade.promoted} rejected=${rem.grading.by_grade.rejected} ` +
-        `duplicate=${rem.grading.by_grade.duplicate} inconclusive=${rem.grading.by_grade.inconclusive}]`,
-    );
-    console.log(
-      `  rewarm: projects=${rem.rewarm.projects_seen} noticed_only=${rem.rewarm.noticed_only} ` +
-        `warmed=${rem.rewarm.warmed}`,
-    );
-
-    // ---- Stage 3: DEEP (#394) ----------------------------------------------
-    // Read-only. Produces the page; commits nothing (dream-design.md:116).
-    console.log("\n### deep (#394)");
-    const deep = await buildReviewBundles({
-      pool,
-      logger,
-      limit: Number(arg("--limit") ?? DEFAULT_BUNDLE_LIMIT),
-    });
-    console.log(
-      `  bundles=${deep.summary.bundles} queue_depth=${deep.summary.queue_depth} ` +
-        `machine_graded=${deep.summary.machine_graded} corroborated=${deep.summary.corroborated} ` +
-        `reinforced=${deep.summary.reinforced} missing_turns=${deep.summary.missing_turns}`,
-    );
-    const turnCounts = deep.bundles.map((b) => b.turns.length);
-    if (turnCounts.length > 0) {
-      const total = turnCounts.reduce((a, b) => a + b, 0);
-      console.log(
-        `  context: ${total} turns across ${turnCounts.length} bundles ` +
-          `(min=${Math.min(...turnCounts)} max=${Math.max(...turnCounts)})`,
-      );
-    }
+    if (!has("--no-distill")) await runDistillStage(pool);
+    await runLightStage(pool);
+    await runRemStage(pool);
+    await runDeepStage(pool);
 
     const after = await snapshot(pool);
     printSnapshot("after", after, before);
-    console.log(
-      `\ncycle wall time: ${((Date.now() - started) / 1000).toFixed(1)}s`,
-    );
+    console.log(`\ncycle wall time: ${((Date.now() - started) / 1000).toFixed(1)}s`);
   } finally {
     await pool.end();
   }

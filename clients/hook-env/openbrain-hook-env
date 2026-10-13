@@ -1,0 +1,167 @@
+#!/bin/sh
+#
+# SOURCE OF TRUTH: this file. The installed copy at
+#   ~/.local/share/openbrain-memory/env/openbrain-hook-env
+# is generated from this file by scripts/client-bundle.sh + setup-client.sh --
+# edit it HERE, never in place on an installed machine (issue 1375).
+# openbrain-hook-env — run an openbrain Python hook with EXACTLY the environment
+# variables its config accepts, and nothing else.
+#
+# Why this exists (measured 2026-08-01, issue #420 cutover):
+#   The Python `openbrain` config (config.py:unknown_prefixed_variables) REJECTS
+#   any `OPENBRAIN_*` variable that matches no declared setting and raises
+#   UnknownEnvironmentVariableError. The hook entrypoints swallow every exception
+#   (fail-open observer contract), so that rejection is a SILENT ZERO CAPTURE /
+#   ZERO INJECTION with a clean exit 0 — receipts, no rows.
+#   The shared env file `openbrain.env` carries variables
+#   (OPENBRAIN_NAMESPACE) that the TS adapter tolerated but the Python config
+#   forbids. Sourcing the whole file therefore breaks the hooks. This wrapper
+#   sources the file, then passes the child ONLY the variables the installed
+#   Python package declares:
+#     OPENBRAIN_BASE_URL, OPENBRAIN_TOKEN, OPENBRAIN_OBSERVATION_*,
+#     OPENBRAIN_ALLOW_INSECURE_HTTP
+#
+#   OPENBRAIN_ALLOW_INSECURE_HTTP was added 2026-08-04 for the #525 LAN opt-in,
+#   TOGETHER with installing the package version that declares it on
+#   CaptureSettings and CanonSettings. It used to be STRIPPED here, and that was
+#   correct at the time: the config declared no such field, so passing it made
+#   unknown_prefixed_variables reject the whole environment and every hook became
+#   a silent zero capture / zero injection. Now that the field is declared,
+#   stripping it is the bug instead -- a LAN host (base URL on a private address,
+#   not 127.0.0.1) needs it to reach the brain at all, because
+#   openbrain_memory.client._validate_base_url permits plain http only for
+#   loopback without the flag. 127.0.0.1 stays auto-permitted, so a local session
+#   behaves identically whether or not the variable is set.
+#
+#   Verified 2026-08-04, in this order: the OLD installed package raised
+#   UnknownEnvironmentVariableError with the variable present; the reinstalled
+#   package accepted it and resolved allow_insecure_http=True on both sections.
+#
+#   AND IT IS PASSED ONLY WHEN NON-EMPTY (2026-08-04, PR #544). The
+#   VAR="${VAR:-}" pass-through style below cannot express "absent" -- it turns
+#   an unset variable into an EMPTY STRING in the child. For a bool field that
+#   is not the same thing: pydantic's parser rejected "" with a ValidationError
+#   ("Input should be a valid boolean ... input_value=''"), both
+#   load_capture_settings and load_canon_settings raised, the entrypoints
+#   swallowed it, and every hook on a host that never opted in became a silent
+#   zero capture / zero injection with a clean exit 0 -- the #525 defect class,
+#   re-armed by the fix for #525. The owning fix is a validator in config.py
+#   mapping "" to the default False, matching how spool_path and
+#   XDG_STATE_HOME already read an empty variable as unset. This conditional is
+#   the second layer, and it is the one that protects an OLDER installed
+#   package that predates that validator.
+#
+#   Do NOT collapse this back into the env -i list. A string variable tolerates
+#   the empty spelling; a bool, an int, or an enum does not. Any future
+#   non-string pass-through belongs in the conditional block, not the list.
+#
+#   The OPENBRAIN_OBSERVATION_* pass-throughs were added 2026-08-03 for the
+#   #523 Langfuse observation sink, TOGETHER with installing the package
+#   version that declares ObservationSettings (merge 01bb35e). Do not add a
+#   pass-through here before the installed package declares the variable:
+#   unknown_prefixed_variables rejects it, the hooks swallow the rejection,
+#   and every Stop becomes a silent zero capture. docs/CONFIG_REFERENCE.md
+#   ("Observation sink") records this coupling.
+#
+# The token stays in openbrain.env — it is never written into
+# settings.json and never printed here. `exec env -i` starts a clean child so no
+# other OPENBRAIN_* variable already in the parent environment leaks in either.
+#
+# Usage (from settings.json hook commands):
+#   /home/user/.local/share/openbrain-memory/env/openbrain-hook-env openbrain-capture-stop
+set -eu
+
+# >>> openbrain: hook env file (managed) >>>
+if [ -n "${BASH_SOURCE:-}" ]; then
+  WRAPPER_SOURCE="${BASH_SOURCE[0]}"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+  eval 'WRAPPER_SOURCE=${(%):-%x}'
+else
+  WRAPPER_SOURCE="$0"
+fi
+if [ -z "$WRAPPER_SOURCE" ]; then
+  printf '%s\n' "openbrain-hook-env: could not resolve wrapper source: shell reported an empty path" >&2
+  exit 1
+fi
+case "$WRAPPER_SOURCE" in
+  */*) ;;
+  *)
+    RESOLVED_SOURCE="$(command -v -- "$WRAPPER_SOURCE" 2>/dev/null || :)"
+    if [ -z "$RESOLVED_SOURCE" ]; then
+      printf '%s\n' "openbrain-hook-env: could not resolve wrapper source via PATH: $WRAPPER_SOURCE" >&2
+      exit 1
+    fi
+    WRAPPER_SOURCE="$RESOLVED_SOURCE"
+    ;;
+esac
+if RESOLVED_SOURCE="$(readlink -f -- "$WRAPPER_SOURCE" 2>/dev/null)" && [ -n "$RESOLVED_SOURCE" ]; then
+  WRAPPER_SOURCE="$RESOLVED_SOURCE"
+else
+  while [ -L "$WRAPPER_SOURCE" ]; do
+    WRAPPER_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {
+      printf '%s\n' "openbrain-hook-env: could not resolve symlink directory: $WRAPPER_SOURCE" >&2
+      exit 1
+    }
+    LINK_TARGET="$(readlink "$WRAPPER_SOURCE" 2>/dev/null)" || {
+      printf '%s\n' "openbrain-hook-env: could not read symlink target: $WRAPPER_SOURCE" >&2
+      exit 1
+    }
+    case "$LINK_TARGET" in
+      /*) WRAPPER_SOURCE="$LINK_TARGET" ;;
+      *) WRAPPER_SOURCE="$WRAPPER_DIR/$LINK_TARGET" ;;
+    esac
+  done
+fi
+ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)" || {
+  printf '%s\n' "openbrain-hook-env: could not resolve wrapper directory: $WRAPPER_SOURCE" >&2
+  exit 1
+}
+ENV_FILE="$ENV_DIR/openbrain.env"
+if [ ! -r "$ENV_FILE" ]; then
+  printf '%s\n' "openbrain-hook-env: env file missing or unreadable: $ENV_FILE (wrapper source: $WRAPPER_SOURCE)" >&2
+  exit 1
+fi
+# <<< openbrain: hook env file (managed) <<<
+
+# Per-agent override (2026-08-03, Buzz multi-agent): a parent environment that
+# already carries OPENBRAIN_TOKEN / OPENBRAIN_BASE_URL wins over the shared env
+# file, so a Buzz-launched agent session (per-agent env_vars in
+# managed-agents.json) hydrates and captures under ITS OWN namespace instead of
+# rico's. Captured BEFORE sourcing, because sourcing overwrites; sessions with
+# no override see exactly the old behavior.
+PARENT_OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}"
+PARENT_OPENBRAIN_BASE_URL="${OPENBRAIN_BASE_URL:-}"
+
+# Load the shared env file into THIS process only.
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+OPENBRAIN_TOKEN="${PARENT_OPENBRAIN_TOKEN:-${OPENBRAIN_TOKEN:-}}"
+OPENBRAIN_BASE_URL="${PARENT_OPENBRAIN_BASE_URL:-${OPENBRAIN_BASE_URL:-}}"
+
+# Start a clean child with only PATH/HOME plus the two accepted OPENBRAIN vars,
+# then exec the requested console script with the hook's stdin/stdout intact.
+# Non-string pass-throughs are conditional: unset must reach the child as
+# ABSENT, not as "". See the OPENBRAIN_ALLOW_INSECURE_HTTP note in the header.
+# The assignment is prepended to the positional list, BEFORE "$@", so an unset
+# variable contributes no argument at all -- which `env -i VAR="${VAR:-}"`
+# cannot express. `env` reads leading NAME=VALUE operands and treats the first
+# non-assignment word as the command, so the console script still runs.
+if [ -n "${OPENBRAIN_ALLOW_INSECURE_HTTP:-}" ]; then
+  set -- "OPENBRAIN_ALLOW_INSECURE_HTTP=$OPENBRAIN_ALLOW_INSECURE_HTTP" "$@"
+fi
+
+exec env -i \
+  PATH="$PATH" \
+  HOME="$HOME" \
+  OPENBRAIN_BASE_URL="${OPENBRAIN_BASE_URL:-}" \
+  OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}" \
+  OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \
+  OPENBRAIN_OBSERVATION_ENABLED="${OPENBRAIN_OBSERVATION_ENABLED:-}" \
+  OPENBRAIN_OBSERVATION_ENDPOINT="${OPENBRAIN_OBSERVATION_ENDPOINT:-}" \
+  OPENBRAIN_OBSERVATION_PUBLIC_KEY="${OPENBRAIN_OBSERVATION_PUBLIC_KEY:-}" \
+  OPENBRAIN_OBSERVATION_SECRET_KEY="${OPENBRAIN_OBSERVATION_SECRET_KEY:-}" \
+  OPENBRAIN_OBSERVATION_HMAC_SECRET="${OPENBRAIN_OBSERVATION_HMAC_SECRET:-}" \
+  "$@"

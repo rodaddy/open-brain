@@ -37,6 +37,7 @@ import {
   qualifyNamespacePredicate,
   tableEnum,
 } from "./curation-helpers.ts";
+import { createPromotionRepository } from "../db/promotion-repository.ts";
 
 interface CurateResult {
   mode: string;
@@ -72,10 +73,11 @@ async function archiveRow(
   id: string,
 ): Promise<void> {
   const predicate = namespacePredicate(identity, "write", 2);
-  await dependencies.pool.query(
-    `UPDATE ${table} SET archived_at = NOW() WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-    [id, ...predicate.values],
-  );
+  await createPromotionRepository(dependencies.pool).archiveRow({
+    table,
+    predicateClause: predicate.clause,
+    params: [id, ...predicate.values],
+  });
 }
 
 /** One scan mode's query and the shape it turns a row into. */
@@ -104,9 +106,10 @@ interface ScanSpec<Finding> {
 async function collectScan<Finding>(
   spec: ScanSpec<Finding>,
 ): Promise<{ findings: Finding[]; archived: number; scanned: number }> {
-  const { rows } = await spec.dependencies.pool.query(spec.query.text, [
-    ...spec.query.values,
-  ]);
+  const rows = await createPromotionRepository(spec.dependencies.pool).runScan({
+    text: spec.query.text,
+    params: [...spec.query.values],
+  });
   const findings: Finding[] = [];
   let archived = 0;
   for (const row of rows) {
@@ -152,11 +155,7 @@ async function scanDuplicates(context: ScanContext): Promise<{
                 ${qualifyNamespacePredicate(readPredicate, "a.namespace", 3)}
               ORDER BY distance ASC
               FETCH FIRST $2 ROWS ONLY`,
-      values: [
-        DUPLICATE_THRESHOLD,
-        context.rowsPerTable,
-        ...readPredicate.values,
-      ],
+      values: [DUPLICATE_THRESHOLD, context.rowsPerTable, ...readPredicate.values],
     },
     archiveId: (row) => String(row.id_a),
     onArchive: context.archive,
@@ -295,11 +294,7 @@ function registerCurateEntries(
       const rowsPerTable = args.rows_per_table ?? 20;
 
       // The mutating wrapper is admin-only. Planning callers never reach here.
-      if (
-        !dryRun &&
-        identity.role !== "admin" &&
-        identity.role !== "ob-admin"
-      ) {
+      if (!dryRun && identity.role !== "admin" && identity.role !== "ob-admin") {
         return errorResult(
           "Permission denied: admin permission required for dry_run=false",
         );
@@ -308,9 +303,7 @@ function registerCurateEntries(
       const requested: readonly ResourceTable[] = args.table
         ? [args.table]
         : ALL_TABLES;
-      const accessible = requested.filter((table) =>
-        canRead(identity.role, table),
-      );
+      const accessible = requested.filter((table) => canRead(identity.role, table));
       if (accessible.length === 0)
         return errorResult("Permission denied: no readable tables");
 
@@ -383,13 +376,15 @@ function registerArchiveEntry(
         return errorResult("Permission denied: cannot archive entries");
       }
       const predicate = namespacePredicate(identity, "delete", 2);
-      const { rows } = await dependencies.pool.query(
-        `UPDATE ${args.table} SET archived_at = NOW()
-          WHERE id = $1 AND archived_at IS NULL${predicate.clause}
-        RETURNING id`,
-        [args.id, ...predicate.values],
-      );
-      if (rows.length === 0) {
+      const rows = await createPromotionRepository(
+        dependencies.pool,
+      ).archiveEntryReturningId({
+        table: args.table,
+        predicateClause: predicate.clause,
+        params: [args.id, ...predicate.values],
+      });
+      const archived = rows[0];
+      if (archived === undefined) {
         dependencies.logger.info(
           { tool: "archive_entry", table: args.table },
           "tool_noop",
@@ -397,10 +392,10 @@ function registerArchiveEntry(
         return textResult("Already archived or not found");
       }
       dependencies.logger.info(
-        { tool: "archive_entry", table: args.table, id: rows[0].id },
+        { tool: "archive_entry", table: args.table, id: archived.id },
         "tool_result",
       );
-      return textResult({ id: rows[0].id, table: args.table, archived: true });
+      return textResult({ id: archived.id, table: args.table, archived: true });
     },
   );
 }
@@ -436,13 +431,13 @@ function registerRateEntry(
       });
       if (!auth.ok) return auth.response;
       const predicate = namespacePredicate(auth.identity, "write", 3);
-      const { rows } = await dependencies.pool.query(
-        `UPDATE ${args.table} SET usefulness_score = $1
-          WHERE id = $2 AND archived_at IS NULL${predicate.clause}
-        RETURNING id, usefulness_score`,
-        [args.score, args.id, ...predicate.values],
-      );
-      if (rows.length === 0) {
+      const rows = await createPromotionRepository(dependencies.pool).rateEntry({
+        table: args.table,
+        predicateClause: predicate.clause,
+        params: [args.score, args.id, ...predicate.values],
+      });
+      const rated = rows[0];
+      if (rated === undefined) {
         dependencies.logger.info(
           { tool: "rate_entry", table: args.table },
           "tool_noop",
@@ -450,13 +445,13 @@ function registerRateEntry(
         return errorResult("Cannot rate archived entry");
       }
       dependencies.logger.info(
-        { tool: "rate_entry", table: args.table, id: rows[0].id },
+        { tool: "rate_entry", table: args.table, id: rated.id },
         "tool_result",
       );
       return textResult({
-        id: rows[0].id,
+        id: rated.id,
         table: args.table,
-        usefulness_score: rows[0].usefulness_score,
+        usefulness_score: rated.usefulness_score,
       });
     },
   );

@@ -12,11 +12,9 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
+import { createEntityRepository } from "../db/entity-repository.ts";
 import {
   authIdentity,
   errorResult,
@@ -53,10 +51,7 @@ async function selectHydrationTargets(
     filters.add((placeholder) => `id = ${placeholder}`, args.id);
   }
   if (args.entity_type) {
-    filters.add(
-      (placeholder) => `entity_type = ${placeholder}`,
-      args.entity_type,
-    );
+    filters.add((placeholder) => `entity_type = ${placeholder}`, args.entity_type);
   }
   applyNamespaceScope(filters, identity, "write", args.namespace);
   if (args.only_missing_embedding ?? true) {
@@ -64,15 +59,12 @@ async function selectHydrationTargets(
   }
   const limitPlaceholder = filters.push(args.limit ?? 100);
 
-  const { rows } = await dependencies.pool.query<HydrateSelection>(
-    `SELECT id, entity_type, name, namespace
-       FROM ob_entities
-      WHERE ${filters.where()}
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT ${limitPlaceholder}`,
-    filters.values,
-  );
-  return rows;
+  const repository = createEntityRepository(dependencies.pool);
+  return repository.selectHydrationTargets({
+    where: filters.where(),
+    limitPlaceholder,
+    filterValues: filters.values,
+  });
 }
 
 /**
@@ -97,13 +89,8 @@ async function writeHydratedEmbedding(
     updateValues.push(...writePredicate.values);
     scoped = ` AND namespace = ANY($${updateValues.length}::text[])`;
   }
-  const { rowCount } = await dependencies.pool.query(
-    `UPDATE ob_entities
-        SET embedding = $2, updated_at = NOW()
-      WHERE id = $1 AND archived_at IS NULL${scoped}`,
-    updateValues,
-  );
-  return rowCount ?? 0;
+  const repository = createEntityRepository(dependencies.pool);
+  return repository.updateEntityEmbedding({ scoped, updateValues });
 }
 
 export function registerHydrateEntities(
@@ -141,9 +128,7 @@ export function registerHydrateEntities(
           .min(1)
           .max(500)
           .optional()
-          .describe(
-            "Maximum entities to hydrate in one call (default 100, max 500)",
-          ),
+          .describe("Maximum entities to hydrate in one call (default 100, max 500)"),
       },
       annotations: {
         title: "Hydrate Entities",
@@ -157,10 +142,7 @@ export function registerHydrateEntities(
       if (!identity || !canWrite(identity.role, "sessions")) {
         return errorResult("Permission denied: cannot hydrate entities");
       }
-      if (
-        args.namespace &&
-        !canTargetNamespace(identity, "write", args.namespace)
-      ) {
+      if (args.namespace && !canTargetNamespace(identity, "write", args.namespace)) {
         return errorResult("Permission denied: namespace write denied");
       }
 

@@ -1,4 +1,4 @@
-import type { Table } from "../../src/types.ts";
+import type { Table } from "../types.ts";
 
 /** Valid cognitive tier values, shared across search-brain and list-recent */
 export const VALID_TIERS: Set<string> = new Set<string>(["hot", "warm", "cold"]);

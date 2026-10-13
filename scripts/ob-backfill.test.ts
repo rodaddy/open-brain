@@ -1,6 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 
-import { containsSecret, SECRET_PATTERNS } from "../src/sharing.ts";
+import { containsSecret, SECRET_PATTERNS } from "../server/domain/sharing.ts";
 import { buildDecisionLogParams, sanitize } from "./ob-backfill.ts";
 
 const FAKE_SK = "sk" + "-" + "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -38,12 +38,12 @@ const SECRET_CASES = [
   `access_token=${FAKE_LONG_LABELED_SECRET}`,
 ] as const;
 
-// The sanitize scans are held to their GROWTH SHAPE, not to a wall-clock
-// count: an absolute millisecond assertion fails on a slow shared runner with
-// no regression anywhere (#916, #834). Each scan is measured at N and at 4N of
-// the same input shape and the quotient is asserted, so the machine's speed
-// that minute cancels out. Quadratic work would land near 16, linear near 4;
-// 8 sits between them with room for noise.
+// The sanitize scans are held to their CPU GROWTH SHAPE, not to a wall-clock
+// count: wall time includes descheduling and can fail on a busy shared runner
+// with no regression anywhere (#916, #834). Because sanitize is synchronous,
+// current-thread CPU isolates its work. Each scan is measured at N and at 4N
+// of the same input shape and the quotient is asserted. Quadratic work would
+// land near 16, linear near 4; 8 sits between them with room for noise.
 const GROWTH_RATIO_MAX = 8;
 const TOKEN_DENSE_N = 12_000;
 const URL_DENSE_N = 4_000;
@@ -63,9 +63,10 @@ const urlDenseInput = (size: number): string =>
 // The denominator is guarded by Math.max at the call site, so a sub-millisecond
 // small run cannot inflate the quotient.
 const measureSanitize = (input: string): { sanitized: string; elapsedMs: number } => {
-  const startedAt = performance.now();
+  const startedAt = process.threadCpuUsage();
   const sanitized = sanitize(input);
-  return { sanitized, elapsedMs: performance.now() - startedAt };
+  const elapsed = process.threadCpuUsage(startedAt);
+  return { sanitized, elapsedMs: (elapsed.user + elapsed.system) / 1_000 };
 };
 
 // Hoisted out of the describe body: the suite's assertions live in named

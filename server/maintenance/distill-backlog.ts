@@ -15,13 +15,13 @@
  * here would fail a job whose own behaviour was correct.
  */
 
-import type pg from "pg";
-import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
+import type { DistillBacklogRepository } from "../db/distill-backlog-repository.ts";
+import type { MaintenanceQueueLogger } from "./maintenance-queue-runner.ts";
 import type { DistillSweepSummary } from "./distill-handler.ts";
 
 /** What the classification needs, as one parameter. */
 export interface EmptyClaimInput {
-  pool: pg.Pool;
+  backlog: DistillBacklogRepository;
   logger: MaintenanceQueueLogger;
   namespace?: string;
   laneId?: string | null;
@@ -43,20 +43,7 @@ function laneLabel(laneId: string | null | undefined): string {
  */
 async function countOutstandingTurns(input: EmptyClaimInput): Promise<number | null> {
   try {
-    const params: unknown[] = [];
-    let nsPredicate = "";
-    if (input.namespace !== undefined) {
-      params.push(input.namespace);
-      nsPredicate = ` AND namespace = $${params.length}`;
-    }
-    const { rows } = await input.pool.query(
-      `SELECT count(*)::bigint AS due
-         FROM ob_raw_turns
-        WHERE distilled_at IS NULL
-          AND retention_tier = 'live'${nsPredicate}`,
-      params,
-    );
-    return Number((rows[0] as { due?: unknown } | undefined)?.due ?? 0);
+    return await input.backlog.countOutstandingTurns({ namespace: input.namespace });
   } catch (error: unknown) {
     input.logger.warn("distill_backlog_probe_failed", {
       namespace: input.namespace ?? "(all)",

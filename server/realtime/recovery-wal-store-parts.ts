@@ -10,10 +10,7 @@
  * "mutate, then journal" stays visible in one place.
  */
 import type { Logger } from "pino";
-import {
-  workingSetScopeKey,
-  type NormalizedWorkingSetScope,
-} from "./working-set.ts";
+import { workingSetScopeKey, type NormalizedWorkingSetScope } from "./working-set.ts";
 import type {
   RecoveryWalBudget,
   RecoveryWalContextItem,
@@ -30,15 +27,10 @@ export interface RecoveryWalSession {
 export type RecoveryWalSessions = Map<string, RecoveryWalSession>;
 
 /** Only these two statuses are "still awaiting review" and therefore emitted. */
-const PENDING_STATUSES = new Set<RecoveryWalStatus>([
-  "active",
-  "recovery_pending",
-]);
+const PENDING_STATUSES = new Set<RecoveryWalStatus>(["active", "recovery_pending"]);
 
 export function isPendingAt(item: RecoveryWalItem, nowMs: number): boolean {
-  return (
-    PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs
-  );
+  return PENDING_STATUSES.has(item.status) && Date.parse(item.expires_at) > nowMs;
 }
 
 export function oldestSession(

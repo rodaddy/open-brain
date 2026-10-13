@@ -29,8 +29,8 @@ import {
   resolveItemBudget,
   type SectionBudget,
   type SectionFragment,
-  type SectionReaderDeps,
 } from "./context-pack-sections.ts";
+import type { ContextPackRepository } from "../db/context-pack-repository.ts";
 
 export const GUIDANCE_CANDIDATE_TYPE = {
   profile_guidance: "user_preference",
@@ -86,7 +86,7 @@ function scopeKeyOf(row: Record<string, unknown>): string | null {
 
 function normalizeRow(row: Record<string, unknown>): LifecycleRow {
   return {
-    id: String(row.id ?? ""),
+    id: asText(row.id) ?? "",
     content: asText(row.content),
     action: asText(row.memory_lifecycle_action),
     candidateType: asText(row.candidate_type),
@@ -137,27 +137,6 @@ export type GuidanceReaderArgs = {
 };
 
 /**
- * Bind by LANE namespace — the isolation boundary for session events. The
- * candidate_type discriminator is an explicit typed metadata field, not a
- * content match. promote/relegate/discard are all pulled so supersession is
- * reconciled deterministically in-process.
- */
-const GUIDANCE_ROWS_SQL = `SELECT e.id,
-              e.content,
-              e.created_at,
-              e.metadata->>'memory_lifecycle_action' AS memory_lifecycle_action,
-              e.metadata->>'candidate_type' AS candidate_type,
-              e.metadata->>'candidate_reason' AS candidate_reason,
-              (e.metadata->>'candidate_confidence')::float8 AS candidate_confidence,
-              e.metadata->'candidate_scope' AS candidate_scope
-         FROM ob_session_events e
-         JOIN ob_session_lanes l ON l.id = e.lane_id
-        WHERE l.namespace = $1
-          AND e.metadata->>'candidate_type' = $2
-          AND e.metadata->>'memory_lifecycle_action' IN ('promote', 'relegate', 'discard')
-        ORDER BY e.created_at DESC, e.id DESC`;
-
-/**
  * Is this row a promote that is still standing for its own candidate type?
  *
  * Flattens what was nested selection logic: a row survives only if it is a
@@ -201,8 +180,7 @@ function selectGuidanceItems(options: {
   maxItems: number;
   maxItemChars: number;
 }): GuidanceSelection {
-  const { normalized, candidateType, retired, maxItems, maxItemChars } =
-    options;
+  const { normalized, candidateType, retired, maxItems, maxItemChars } = options;
   const citations: Array<Record<string, unknown>> = [];
   const items: Array<Record<string, unknown>> = [];
   const seenScopeKeys = new Set<string>();
@@ -314,7 +292,7 @@ function logGuidanceFailure(options: {
  */
 export async function loadGuidanceSection(
   args: GuidanceReaderArgs,
-  deps: SectionReaderDeps,
+  deps: { repository: ContextPackRepository },
   logger?: Logger,
 ): Promise<SectionFragment> {
   const candidateType = GUIDANCE_CANDIDATE_TYPE[args.section];
@@ -330,10 +308,10 @@ export async function loadGuidanceSection(
   };
 
   try {
-    const { rows } = await deps.query(GUIDANCE_ROWS_SQL, [
-      args.namespace,
+    const { rows } = await deps.repository.selectGuidanceRows({
+      namespace: args.namespace,
       candidateType,
-    ]);
+    });
 
     const normalized = rows.map(normalizeRow);
     const retired = retiredScopeKeys(normalized);

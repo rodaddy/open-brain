@@ -40,7 +40,8 @@ export function namespacePredicate(
   operation: NamespaceOperation,
   startParameter = 1,
 ): NamespacePredicate {
-  const namespaces = operation === "read" ? readNamespaces(identity) : mutationNamespaces(identity);
+  const namespaces =
+    operation === "read" ? readNamespaces(identity) : mutationNamespaces(identity);
   if (namespaces === undefined) return { clause: "", values: [] };
   return {
     clause: ` AND namespace = ANY($${startParameter}::text[])`,
@@ -56,7 +57,8 @@ export function canTargetNamespace(
 ): boolean {
   if (requestedNamespace === "all") return isGlobal(identity) && operation === "read";
   if (requestedNamespace === LEGACY_SHARED_NAMESPACE) return false;
-  if (operation === "read") return readNamespaces(identity)?.includes(requestedNamespace) ?? true;
+  if (operation === "read")
+    return readNamespaces(identity)?.includes(requestedNamespace) ?? true;
   if (requestedNamespace === SHARED_NAMESPACE) return identity.role === "promoter";
   if (identity.role === "promoter") return true;
   if (isGlobal(identity)) return requestedNamespace !== SHARED_NAMESPACE;
@@ -69,6 +71,7 @@ export function delegateNamespace(
   requestedNamespace: string,
 ): AuthIdentity | undefined {
   if (!GLOBAL_ROLES.has(identity.role)) return undefined;
-  if (requestedNamespace === "all" || requestedNamespace === LEGACY_SHARED_NAMESPACE) return undefined;
+  if (requestedNamespace === "all" || requestedNamespace === LEGACY_SHARED_NAMESPACE)
+    return undefined;
   return { ...identity, clientId: requestedNamespace, namespaceSource: "delegated" };
 }

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { describe, expect, test } from "vitest";
+import { expectDefined } from "../testing/expect-defined.ts";
 import {
   BackgroundTraceRecorder,
   backgroundSessionId,

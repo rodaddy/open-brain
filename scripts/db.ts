@@ -1,5 +1,5 @@
 /**
- * Ad-hoc SQL against the configured database. `bun run db "<sql>"`.
+ * Ad-hoc SQL against the configured database. `npm run db -- "<sql>"`.
  *
  * WHY THIS EXISTS. There was no way to run a one-off query, so every ad-hoc
  * look at live state meant re-deriving the connection from .env at the shell.
@@ -28,7 +28,7 @@
  * Mutations require --write, which is a typed acknowledgement, not a safety net.
  */
 
-import { createPool } from "../src/db/pool.ts";
+import { createPool } from "./settings.ts";
 
 // NOISE, KNOWN AND LEFT ALONE: every run prints a pg DeprecationWarning stack
 // about querying a client that is "already executing a query". It comes from
@@ -45,14 +45,14 @@ const MUTATING =
 function usage(): never {
   console.error(
     [
-      'Usage: bun run db "<sql>" [--write] [--json]',
+      'Usage: npm run db -- "<sql>" [--write] [--json]',
       "",
       "  --write   allow a mutating statement (refused otherwise)",
       "  --json    emit rows as JSON instead of a table",
       "",
       "Examples:",
-      '  bun run db "select count(*) from candidate_memory"',
-      '  bun run db "select action, count(*) from candidate_grade',
+      '  npm run db -- "select count(*) from candidate_memory"',
+      '  npm run db -- "select action, count(*) from candidate_grade',
       '              where superseded_at is null group by 1"',
     ].join("\n"),
   );
@@ -73,9 +73,7 @@ if (!sql) usage();
 // parsing: this is a guard against reflex, not against a determined caller, and
 // a partial SQL parser would be more confident and less correct.
 if (MUTATING.test(sql) && !write) {
-  console.error(
-    "Refused: that statement mutates. Re-run with --write if you mean it.",
-  );
+  console.error("Refused: that statement mutates. Re-run with --write if you mean it.");
   process.exit(1);
 }
 
@@ -90,9 +88,7 @@ try {
     console.log(`(no rows) rowCount=${result.rowCount ?? 0}`);
   } else {
     console.table(result.rows);
-    console.log(
-      `(${result.rows.length} row${result.rows.length === 1 ? "" : "s"})`,
-    );
+    console.log(`(${result.rows.length} row${result.rows.length === 1 ? "" : "s"})`);
   }
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));

@@ -9,10 +9,7 @@
  */
 import { z } from "zod";
 import { toSql } from "pgvector/pg";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 
@@ -61,8 +58,7 @@ export const metadataSchema = z
   .refine(
     (value) =>
       !value ||
-      (Object.keys(value).length <= 50 &&
-        JSON.stringify(value).length <= 100_000),
+      (Object.keys(value).length <= 50 && JSON.stringify(value).length <= 100_000),
     { message: "metadata: max 50 keys, max 100KB total" },
   )
   .describe("Arbitrary JSON metadata; max 50 keys, max 100KB total");
@@ -146,10 +142,7 @@ export class SqlFilters {
   }
 
   /** Append several values at once and build one fragment from the last. */
-  addAll(
-    build: (placeholder: string) => string,
-    values: readonly unknown[],
-  ): void {
+  addAll(build: (placeholder: string) => string, values: readonly unknown[]): void {
     this.values.push(...values);
     this.clauses.push(build(`$${this.values.length}`));
   }

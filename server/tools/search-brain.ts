@@ -34,14 +34,16 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { respondToSearchFailure } from "./tool-failure.ts";
-import { canReadNamespace, namespaceFilterFor } from "./read-scope.ts";
+import { canReadNamespace, namespaceFilterFor } from "../domain/read-scope.ts";
 import { isSharedNamespace } from "./shared-namespace.ts";
-import { ALL_TABLES } from "./search-constants.ts";
-import { normalizeSearchArgs } from "./search-request.ts";
+import { ALL_TABLES, SOURCE_LABELS } from "./search-constants.ts";
+import type { SearchRow } from "./search-engine-types.ts";
 import {
-  executeSearchWithSharedFallback,
-  type SearchMode,
-} from "./search-engine.ts";
+  type AccessedEntry,
+  insertEntryAccessLog,
+} from "../db/access-log-repository.ts";
+import { normalizeSearchArgs } from "./search-request.ts";
+import { executeSearchWithSharedFallback, type SearchMode } from "./search-engine.ts";
 import { setActiveMcpTraceMetadata } from "../observability/langfuse-tracing.ts";
 import {
   DEFAULT_FTS_CONFIG,
@@ -135,6 +137,44 @@ const searchBrainInputSchema = {
     ),
 };
 
+/** Singular wire label -> table; the inverse of {@link SOURCE_LABELS}. */
+const TABLE_BY_LABEL: ReadonlyMap<string, ResourceTable> = new Map(
+  ALL_TABLES.map((table) => [SOURCE_LABELS[table], table]),
+);
+
+/**
+ * Log every returned entry to `entry_access_log` with context 'search' (issue
+ * 1486), restoring the write the legacy `trackUsage` made.
+ *
+ * Fire-and-forget, as the removed writer was: the insert never delays or fails
+ * the search. A failure is logged without content and swallowed. Rows from a
+ * source the log cannot hold (`session_event`) are skipped, as before.
+ */
+function logSearchAccess(options: {
+  dependencies: MemoryToolDependencies;
+  rows: readonly SearchRow[];
+  queryText: string;
+  accessedBy: string;
+}): void {
+  const { dependencies, rows, queryText, accessedBy } = options;
+  const entries: AccessedEntry[] = [];
+  for (const row of rows) {
+    const table = TABLE_BY_LABEL.get(row.source_type);
+    if (table) entries.push({ id: row.id, table });
+  }
+  insertEntryAccessLog(dependencies.pool, {
+    entries,
+    queryText,
+    context: "search",
+    accessedBy,
+  }).catch((error: unknown) => {
+    dependencies.logger.warn(
+      { error_code: (error as { code?: unknown }).code ?? null },
+      "search_tracking_error",
+    );
+  });
+}
+
 /** Tool annotations; `search_brain` reads and never mutates. */
 const searchBrainAnnotations = {
   title: "Search Brain",
@@ -197,14 +237,8 @@ export function registerSearchBrainTool(
       );
       if ("denial" in resolved) return errorResult(resolved.denial);
 
-      const {
-        limit,
-        offset,
-        mode,
-        tier,
-        requestedNamespace,
-        requestedFtsConfig,
-      } = normalizeSearchArgs(args);
+      const { limit, offset, mode, tier, requestedNamespace, requestedFtsConfig } =
+        normalizeSearchArgs(args);
 
       const fts = resolveCallerFtsConfig({
         role: identity.role,
@@ -245,11 +279,14 @@ export function registerSearchBrainTool(
           namespace,
           { ftsConfig },
           requestedNamespace !== undefined &&
-            isSharedNamespace(
-              requestedNamespace,
-              dependencies.sharedNamespaceNames,
-            ),
+            isSharedNamespace(requestedNamespace, dependencies.sharedNamespaceNames),
         );
+        logSearchAccess({
+          dependencies,
+          rows,
+          queryText: args.query,
+          accessedBy: identity.clientId,
+        });
         return textResult(rows);
       } catch (error) {
         // The one place the driver's diagnostic fields still exist. By the time

@@ -40,6 +40,17 @@
  *   bun run scripts/issue-graph.ts --chart --write   # actually write edges
  */
 
+import { forgeGet, forgeListPaged, forgePost } from "./forge-api.ts";
+
+/**
+ * One issue, in the shape this script reasons about.
+ *
+ * `blockedBy` and `parent` are DERIVED from Forgejo, not returned by it.
+ * Forgejo has no `blockedBy`/`parent` field on an issue: dependencies live on
+ * their own endpoint (`GET /issues/{n}/dependencies`, which returns plain issue
+ * rows), and hierarchy is not modelled natively at all. Both are filled in
+ * after the list walk so the rest of the script reads unchanged.
+ */
 type IssueRow = {
   number: number;
   title: string;
@@ -49,6 +60,17 @@ type IssueRow = {
   parent: { number: number } | null;
   blockedBy: { totalCount: number; nodes: { number: number }[] };
   blocking: { totalCount: number; nodes: { number: number }[] };
+};
+
+/** An issue exactly as the Forgejo list endpoint returns it. */
+type ForgeIssue = {
+  id: number;
+  number: number;
+  title: string;
+  body: string | null;
+  state: string;
+  labels: { name: string }[] | null;
+  pull_request?: unknown;
 };
 
 type Edge = {
@@ -72,17 +94,38 @@ type Edge = {
   source: "field" | "prose";
 };
 
-const REPO = "rodaddy/open-brain";
+/**
+ * Every issue in the repo, both states, walked page by page.
+ *
+ * Pull requests share the issue number space on Forgejo and come back from the
+ * same endpoint, so they are dropped here: a pull request is not a node in the
+ * dependency graph and its body would be parsed for declarations it never made.
+ */
+async function listAllIssues(): Promise<ForgeIssue[]> {
+  const rows = await forgeListPaged<ForgeIssue>(
+    "/issues?state=all&type=issues",
+    (row) => row.number,
+  );
+  return rows.filter(
+    (row) => row.pull_request === undefined || row.pull_request === null,
+  );
+}
 
-async function gh(args: string[]): Promise<string> {
-  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) throw new Error(`gh ${args[0]} failed: ${err.trim()}`);
-  return out;
+/**
+ * The issues one issue declares a native dependency on.
+ *
+ * Forgejo answers `GET /issues/{n}/dependencies` with plain ISSUE rows — the
+ * blockers themselves — not GitHub's `dependencies/blocked_by` envelope. So the
+ * numbers come straight off the returned rows rather than out of a nested
+ * `nodes` array.
+ */
+async function nativeBlockersOf(n: number): Promise<number[]> {
+  try {
+    const rows = await forgeGet<ForgeIssue[]>(`/issues/${n}/dependencies`);
+    return Array.isArray(rows) ? rows.map((row) => row.number) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -101,12 +144,28 @@ const DECLARATIONS: { re: RegExp; kind: Edge["kind"]; source: Edge["source"] }[]
   // line-anchoring alone cannot distinguish a declaration from prose that
   // happened to wrap there. `Depends on:` is a field the author wrote as a
   // declaration; `depends on the capture path ...` is English.
-  { re: /^\s*\*{0,2}Depends on\*{0,2}\s*:\s*(.+)$/gim, kind: "depends", source: "field" },
-  { re: /^\s*\*{0,2}Blocked by\*{0,2}\s*:\s*(.+)$/gim, kind: "depends", source: "field" },
+  {
+    re: /^\s*\*{0,2}Depends on\*{0,2}\s*:\s*(.+)$/gim,
+    kind: "depends",
+    source: "field",
+  },
+  {
+    re: /^\s*\*{0,2}Blocked by\*{0,2}\s*:\s*(.+)$/gim,
+    kind: "depends",
+    source: "field",
+  },
   // #437 writes "**Blocked by #435** (verify ...)" — bolded, no colon, but the
   // bold markers around the label ARE the authorial declaration marker.
-  { re: /^\s*\*\*Blocked by\s+((?:#\d{2,4}[^*]*?)+)\*\*/gim, kind: "depends", source: "field" },
-  { re: /^\s*\*{0,2}Parent(?:\s+epic)?\*{0,2}:?\s*(.+)$/gim, kind: "hierarchy", source: "field" },
+  {
+    re: /^\s*\*\*Blocked by\s+((?:#\d{2,4}[^*]*?)+)\*\*/gim,
+    kind: "depends",
+    source: "field",
+  },
+  {
+    re: /^\s*\*{0,2}Parent(?:\s+epic)?\*{0,2}:?\s*(.+)$/gim,
+    kind: "hierarchy",
+    source: "field",
+  },
   { re: /^\s*\*{0,2}Program\*{0,2}:?\s*(.+)$/gim, kind: "hierarchy", source: "field" },
   { re: /^\s*\*{0,2}Part of\*{0,2}\s*(.+)$/gim, kind: "hierarchy", source: "field" },
   // Mid-sentence prose forms. #437 writes "Blocked by #435 and #436." inside a
@@ -120,8 +179,16 @@ const DECLARATIONS: { re: RegExp; kind: Edge["kind"]; source: Edge["source"] }[]
   // "blocked by the current 1GB storage ..." — neither yields a reference).
   //
   // These are `prose`, so they REPORT and never chart without confirmation.
-  { re: /\bBlocked by\s+((?:#\d{2,4}(?:\s*(?:,|and)\s*)?)+)/gi, kind: "depends", source: "prose" },
-  { re: /\bdepends on\b[^.\n]*?\(?((?:#\d{2,4}(?:\s*(?:,|and)\s*)?)+)\)?/gi, kind: "depends", source: "prose" },
+  {
+    re: /\bBlocked by\s+((?:#\d{2,4}(?:\s*(?:,|and)\s*)?)+)/gi,
+    kind: "depends",
+    source: "prose",
+  },
+  {
+    re: /\bdepends on\b[^.\n]*?\(?((?:#\d{2,4}(?:\s*(?:,|and)\s*)?)+)\)?/gi,
+    kind: "depends",
+    source: "prose",
+  },
 ];
 
 /** "#435 and #436", "#344, #345, #346" -> [435, 436] / [344, 345, 346] */
@@ -146,42 +213,72 @@ function parkedReason(issue: IssueRow): string | null {
   return null;
 }
 
-const args = new Set(Bun.argv.slice(2));
+const args = new Set(process.argv.slice(2));
 const doChart = args.has("--chart");
 const doWrite = args.has("--write");
 
-const open: IssueRow[] = JSON.parse(
-  await gh([
-    "issue", "list", "--state", "open", "-L", "500", "--json",
-    "number,title,body,state,labels,parent,blockedBy,blocking",
-  ]),
-);
-const allStates: { number: number; state: string }[] = JSON.parse(
-  await gh(["issue", "list", "--state", "all", "-L", "1000", "--json", "number,state"]),
-);
+const allIssues = await listAllIssues();
 
 const state = new Map<number, string>();
-for (const row of allStates) state.set(row.number, row.state);
+for (const row of allIssues) state.set(row.number, row.state.toUpperCase());
+
+const openRaw = allIssues.filter((row) => row.state.toLowerCase() === "open");
+
+// Hierarchy is not a native Forgejo concept, so `parent` is always null here
+// and the declared `Parent:`/`Program:` fields parsed below are the only
+// source of belonging. `blocking` is likewise not read back from the forge.
+const open: IssueRow[] = await Promise.all(
+  openRaw.map(async (row): Promise<IssueRow> => {
+    const blockers = await nativeBlockersOf(row.number);
+    return {
+      number: row.number,
+      title: row.title,
+      body: row.body,
+      state: row.state.toUpperCase(),
+      labels: row.labels ?? [],
+      parent: null,
+      blockedBy: {
+        totalCount: blockers.length,
+        nodes: blockers.map((number) => ({ number })),
+      },
+      blocking: { totalCount: 0, nodes: [] },
+    };
+  }),
+);
 
 const openByNumber = new Map(open.map((i) => [i.number, i]));
 
 // --- parse declared edges -------------------------------------------------
 
+/**
+ * Every edge one declaration pattern yields against one issue body.
+ *
+ * Extracted from the collection loop below so neither nests four deep. A
+ * self-reference is dropped: `#437` naming itself is not a dependency.
+ */
+function edgesFromPattern(
+  from: number,
+  body: string,
+  declaration: (typeof DECLARATIONS)[number],
+): Edge[] {
+  const { re, kind, source } = declaration;
+  re.lastIndex = 0;
+  const found: Edge[] = [];
+  for (const match of body.matchAll(re)) {
+    const literal = match[0].trim().replace(/\s+/g, " ");
+    for (const to of refsIn(match[1] ?? "")) {
+      if (to === from) continue;
+      found.push({ from, to, kind, source, literal });
+    }
+  }
+  return found;
+}
+
 const declared: Edge[] = [];
 for (const issue of open) {
   const body = issue.body ?? "";
-  for (const { re, kind, source } of DECLARATIONS) {
-    re.lastIndex = 0;
-    for (const match of body.matchAll(re)) {
-      const line = match[1] ?? "";
-      for (const to of refsIn(line)) {
-        if (to === issue.number) continue;
-        declared.push({
-          from: issue.number, to, kind, source,
-          literal: match[0].trim().replace(/\s+/g, " "),
-        });
-      }
-    }
+  for (const declaration of DECLARATIONS) {
+    declared.push(...edgesFromPattern(issue.number, body, declaration));
   }
 }
 
@@ -238,11 +335,15 @@ const containmentFrontier = rows.filter((r) => r.containmentBlockers.length === 
 const log = (s = "") => console.log(s);
 
 log(`Open issues: ${open.length}`);
-log(`Declared edges parsed: ${edges.length}  (depends=${dependsEdges.length} hierarchy=${hierarchyEdges.length})`);
+log(
+  `Declared edges parsed: ${edges.length}  (depends=${dependsEdges.length} hierarchy=${hierarchyEdges.length})`,
+);
 
 const nativeBlockedBy = open.filter((i) => i.blockedBy.totalCount > 0).length;
 const nativeParent = open.filter((i) => i.parent !== null).length;
-log(`Native graph today: ${nativeBlockedBy} issue(s) with blocked_by, ${nativeParent} with a parent`);
+log(
+  `Native graph today: ${nativeBlockedBy} issue(s) with blocked_by, ${nativeParent} with a parent`,
+);
 log();
 
 /**
@@ -259,7 +360,9 @@ function belongsTo(n: number): string {
   const owner = native ?? declaredParent;
   if (owner === undefined) return "";
   const title = openByNumber.get(owner)?.title ?? "";
-  const short = title.replace(/^\[(Epic|Program)\]\s*/i, "").split(/[:—-]/)[0]!.trim();
+  const short = (
+    title.replace(/^\[(Epic|Program)\]\s*/i, "").split(/[:—-]/)[0] ?? ""
+  ).trim();
   return `  [in #${owner}${short ? ` ${short.slice(0, 22)}` : ""}]`;
 }
 
@@ -277,7 +380,9 @@ for (const r of strictFrontier) log(frontierLine(r));
 log();
 
 log("=== FRONTIER B — hierarchy ALSO blocks (parent/program count) ===");
-log(`${containmentFrontier.length} of ${open.length} open issues have no open dependency or open parent.`);
+log(
+  `${containmentFrontier.length} of ${open.length} open issues have no open dependency or open parent.`,
+);
 log();
 for (const r of containmentFrontier) log(frontierLine(r));
 log();
@@ -286,14 +391,18 @@ const blocked = rows.filter((r) => r.strictBlockers.length > 0);
 if (blocked.length) {
   log("=== BLOCKED (real `Depends on:` / `Blocked by:` with an OPEN blocker) ===");
   for (const r of blocked) {
-    log(`  #${r.issue.number} blocked by ${r.strictBlockers.map((n) => `#${n}`).join(" ")}`);
+    log(
+      `  #${r.issue.number} blocked by ${r.strictBlockers.map((n) => `#${n}`).join(" ")}`,
+    );
   }
   log();
 }
 
 const parkedRows = rows.filter((r) => r.parked);
 if (parkedRows.length) {
-  log("=== PARKED BY DESIGN — included on purpose, gated by a DECISION not a dependency ===");
+  log(
+    "=== PARKED BY DESIGN — included on purpose, gated by a DECISION not a dependency ===",
+  );
   for (const r of parkedRows) {
     log(`  #${r.issue.number} ${r.issue.title.slice(0, 70)}  [${r.parked}]`);
   }
@@ -307,14 +416,15 @@ if (!doChart) {
   process.exit(0);
 }
 
-/** Native dependencies need the blocker's numeric DATABASE id, not #number. */
-const dbIdCache = new Map<number, number>();
-async function dbId(n: number): Promise<number> {
-  const cached = dbIdCache.get(n);
-  if (cached !== undefined) return cached;
-  const id = Number(JSON.parse(await gh(["api", `repos/${REPO}/issues/${n}`, "--jq", ".id"])));
-  dbIdCache.set(n, id);
-  return id;
+/**
+ * Add one native dependency edge.
+ *
+ * Forgejo's `POST /issues/{n}/dependencies` takes the BLOCKER'S ISSUE NUMBER in
+ * an `{ index }` body — not GitHub's `dependencies/blocked_by` path with a
+ * numeric database id — so no id lookup is needed at all.
+ */
+function chartBlockedBy(from: number, to: number): Promise<unknown> {
+  return forgePost(`/issues/${from}/dependencies`, { index: to });
 }
 
 const uncharted = dependsEdges.filter((e) => {
@@ -346,7 +456,10 @@ if (loose.length) {
   }
   log();
   log(`To chart one, add a labelled field to the issue body, or write it by hand:`);
-  log(`  gh api --method POST repos/${REPO}/issues/<n>/dependencies/blocked_by -F issue_id=<db-id>`);
+  log(
+    `  curl -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \\`,
+  );
+  log(`    -d '{"index":<blocker-number>}' <forge-api-base>/issues/<n>/dependencies`);
   log();
 }
 
@@ -355,7 +468,9 @@ if (hierarchyEdges.length) {
   for (const e of hierarchyEdges) {
     const nativeParent = openByNumber.get(e.from)?.parent?.number;
     const already = nativeParent === e.to ? "  [already native parent]" : "";
-    log(`  #${e.from} belongs to #${e.to}${already}   (declared: "${e.literal.slice(0, 50)}")`);
+    log(
+      `  #${e.from} belongs to #${e.to}${already}   (declared: "${e.literal.slice(0, 50)}")`,
+    );
   }
   log();
 }
@@ -369,18 +484,17 @@ let written = 0;
 let failed = 0;
 for (const e of missing) {
   try {
-    const blockerId = await dbId(e.to);
-    await gh([
-      "api", "--method", "POST",
-      `repos/${REPO}/issues/${e.from}/dependencies/blocked_by`,
-      "-F", `issue_id=${blockerId}`,
-    ]);
+    await chartBlockedBy(e.from, e.to);
     log(`  wrote #${e.from} blocked_by #${e.to}`);
     written++;
   } catch (err) {
-    log(`  FAILED #${e.from} blocked_by #${e.to}: ${(err as Error).message.slice(0, 120)}`);
+    log(
+      `  FAILED #${e.from} blocked_by #${e.to}: ${(err as Error).message.slice(0, 120)}`,
+    );
     failed++;
   }
 }
 log();
-log(`Wrote ${written} edge(s), ${failed} failure(s). Nothing was closed, merged, or deleted.`);
+log(
+  `Wrote ${written} edge(s), ${failed} failure(s). Nothing was closed, merged, or deleted.`,
+);

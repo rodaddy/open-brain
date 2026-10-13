@@ -24,25 +24,14 @@
  * flag just skips the per-candidate 8s timeout when the outage is known.
  */
 
-import { Pool } from "pg";
-import { runDistillSweep } from "../src/distill-handler.ts";
-import { RULE_BASED_DISTILLER_NAME } from "../src/distiller.ts";
-
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
+import type { Pool } from "pg";
+import { runDistillSweep } from "../server/maintenance/distill-handler.ts";
+import { RULE_BASED_DISTILLER_NAME } from "../server/domain/distiller.ts";
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 
 // The maintenance-queue logger shape: info/warn/error with structured fields.
-const logger = {
-  info: (msg: string, fields: Record<string, string | number>) =>
-    console.log(msg, JSON.stringify(fields)),
-  warn: (msg: string, fields: Record<string, string | number>) =>
-    console.warn(msg, JSON.stringify(fields)),
-  error: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-};
+const logger = createConsoleLogger();
 
 async function stats(pool: Pool): Promise<void> {
   const q = await pool.query(
@@ -93,54 +82,55 @@ async function sample(pool: Pool, n: number): Promise<void> {
   }
 }
 
+/**
+ * Drain sweeps into a running total. `--all` keeps going until a sweep stamps
+ * nothing; a bare run does exactly one sweep. Split out of `main` so each half
+ * reads on its own; the sequence is unchanged.
+ */
+async function accumulateSweeps(pool: Pool) {
+  const maxSessions = Number(arg("--sessions") ?? 4);
+  const totals = {
+    sweeps: 0,
+    units: 0,
+    turns_stamped: 0,
+    candidates_extracted: 0,
+    candidates_written: 0,
+    candidates_duplicate: 0,
+    candidates_uncertain: 0,
+    embeddings_missing: 0,
+    missing_session_seq: 0,
+  };
+
+  for (;;) {
+    const s = await runDistillSweep({
+      pool,
+      logger,
+      maxSessions,
+      ...(has("--no-embed") ? { skipEmbeddings: true } : {}),
+    });
+    totals.sweeps++;
+    totals.units += s.units;
+    totals.turns_stamped += s.turns_stamped;
+    totals.candidates_extracted += s.candidates_extracted;
+    totals.candidates_written += s.candidates_written;
+    totals.candidates_duplicate += s.candidates_duplicate;
+    totals.candidates_uncertain += s.candidates_uncertain;
+    totals.embeddings_missing += s.embeddings_missing;
+    totals.missing_session_seq += s.missing_session_seq;
+    if (s.turns_stamped === 0 || !has("--all")) break;
+  }
+
+  return totals;
+}
+
 async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
-  });
+  const pool = createPool();
 
   try {
     if (has("--stats")) return await stats(pool);
-    if (has("--sample"))
-      return await sample(pool, Number(arg("--sample") ?? 20));
+    if (has("--sample")) return await sample(pool, Number(arg("--sample") ?? 20));
 
-    const maxSessions = Number(arg("--sessions") ?? 4);
-    const totals = {
-      sweeps: 0,
-      units: 0,
-      turns_stamped: 0,
-      candidates_extracted: 0,
-      candidates_written: 0,
-      candidates_duplicate: 0,
-      candidates_uncertain: 0,
-      embeddings_missing: 0,
-      missing_session_seq: 0,
-    };
-
-    // --all drains the backlog; a bare run does exactly one bounded sweep. The
-    // loop exits on a sweep that stamped nothing, which is also the natural
-    // no-op when everything is already distilled.
-    for (;;) {
-      const s = await runDistillSweep({
-        pool,
-        logger,
-        maxSessions,
-        ...(has("--no-embed") ? { skipEmbeddings: true } : {}),
-      });
-      totals.sweeps++;
-      totals.units += s.units;
-      totals.turns_stamped += s.turns_stamped;
-      totals.candidates_extracted += s.candidates_extracted;
-      totals.candidates_written += s.candidates_written;
-      totals.candidates_duplicate += s.candidates_duplicate;
-      totals.candidates_uncertain += s.candidates_uncertain;
-      totals.embeddings_missing += s.embeddings_missing;
-      totals.missing_session_seq += s.missing_session_seq;
-      if (s.turns_stamped === 0 || !has("--all")) break;
-    }
+    const totals = await accumulateSweeps(pool);
 
     console.log("\n=== distill totals ===");
     console.log("model                :", RULE_BASED_DISTILLER_NAME);

@@ -88,10 +88,10 @@ def test_validate_contract_manifest_accepts_representative_contract_shape():
 
 
 def test_package_pins_reviewed_v23_schema_snapshot() -> None:
-    assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v24"
+    assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v25"
     assert CURRENT_CONTRACT_SCHEMA_VERSION == 1
     assert CURRENT_CONTRACT_SCHEMA_HASH == (
-        "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c"
+        "170f3ad8c0eeeb97a33bc2edc7df2f51af635e3500e57d1a783f39a132ede12f"
     )
 
 

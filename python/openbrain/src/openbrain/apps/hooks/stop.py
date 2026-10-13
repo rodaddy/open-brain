@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -88,7 +89,7 @@ from openbrain.apps.capture.outage import (
     spool_pending,
     spool_quarantined,
 )
-from openbrain.apps.hooks.session import StopHook, run_stop
+from openbrain.apps.hooks.session import STOP_HOOK_DEADLINE_SECONDS, StopHook, run_stop
 from openbrain.config import load_capture_settings, load_observation_settings
 
 if TYPE_CHECKING:
@@ -139,13 +140,17 @@ def capture_stop_with(
     """
     session_key: str | None = None
     capture: CaptureSettings | None = None
+    deadline = time.monotonic() + STOP_HOOK_DEADLINE_SECONDS
     try:
         raw = stream.read()
         payload = StopHook.model_validate_json(raw)
         capture = settings if settings is not None else _loaded_capture()
         session_key = payload.session_id
         delivery = asyncio.run(
-            run_stop(payload, capture, observation=loaded_observation())
+            run_stop(
+                payload, capture, observation=loaded_observation(),
+                deadline=deadline,
+            )
         )
     except Exception as error:  # noqa: BLE001 -- an observer must never break its subject
         # Latched FIRST, because the latch is what decides how loud this failure

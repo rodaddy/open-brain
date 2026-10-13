@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 /**
  * Live Langfuse egress verifier for Open Brain (issue #578, phase 1).
@@ -17,22 +17,50 @@
  * child; a hook's normal exit-zero contract cannot prove a capture happened.
  */
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { Database } from "bun:sqlite";
-import { summarizeChildStderr } from "../src/child-stderr.ts";
-import { SECRET_DETECTORS } from "../src/secret-patterns.ts";
+import { promisify } from "node:util";
+import type { DatabaseSync as Database } from "node:sqlite";
+import { runCaptureStop } from "./capture-stop-child.ts";
+import { summarizeChildStderr } from "../server/logging/child-stderr.ts";
+import { SECRET_DETECTORS } from "../server/security/secret-patterns.ts";
+import {
+  DEFAULT_SETTLE_TIMEOUT_SECONDS,
+  fieldPresent,
+  isGeneration,
+  objectValue,
+  queryUntilSettled,
+  secretScan,
+  serializeCliOutcome,
+} from "./eval-langfuse-egress-read.ts";
+import type {
+  CliOutcome,
+  EgressCheck,
+  EgressReceipt,
+  HttpTransport,
+  LangfuseReadConfig,
+  VerificationOptions,
+} from "./eval-langfuse-egress-read.ts";
+
+// The read layer is this gate's own half, split out only to keep each file
+// small; callers and tests still import every name from this entrypoint.
+export { serializeCliOutcome, queryTaggedTraces } from "./eval-langfuse-egress-read.ts";
+export type {
+  CliOutcome,
+  EgressCheck,
+  EgressReceipt,
+  HttpTransport,
+  LangfuseReadConfig,
+  VerificationOptions,
+} from "./eval-langfuse-egress-read.ts";
 
 const OPT_IN_ENV = "OPEN_BRAIN_LANGFUSE_EGRESS";
 const INGESTION_SUFFIX = "/api/public/ingestion";
 const DEFAULT_EVENT_COUNT = 3;
-const DEFAULT_PAGE_LIMIT = 100;
-const DEFAULT_SETTLE_TIMEOUT_SECONDS = 60;
-const DEFAULT_SETTLE_POLL_INTERVAL_MS = 2_000;
-const MAX_TRACE_PAGES = 100;
 const EMIT_FAILURE_MARKER = "observation emit failed";
-const CAPTURE_TRACE_TAG = "open-brain-capture";
 const CAPTURE_OPTION_ENV_KEYS = [
   "OPENBRAIN_CAPTURE_AGENT_ID",
   "OPENBRAIN_CAPTURE_AGENT",
@@ -40,67 +68,9 @@ const CAPTURE_OPTION_ENV_KEYS = [
   "OPENBRAIN_ALLOW_INSECURE_HTTP",
 ] as const;
 
-export interface LangfuseReadConfig {
-  endpoint: string;
-  publicKey: string;
-  secretKey: string;
-}
-
 interface CaptureDriveConfig {
   baseUrl: string;
   token: string;
-}
-
-export type HttpTransport = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
-
-export interface EgressCheck {
-  label:
-    | "arrival_count"
-    | "generation_metadata"
-    | "total_cost"
-    | "secret_scan"
-    | "capture_exit"
-    | "emit_proven";
-  passed: boolean;
-  fatal: boolean;
-  observed: number;
-  expected?: number;
-  detector_counts?: Record<string, number>;
-  content_fields_present?: boolean;
-  emit_failure_detected?: boolean;
-  /**
-   * `skipped-no-data` marks a check that had nothing to examine, which is NOT
-   * the same claim as `pass`. A scan over zero traces found zero secrets
-   * trivially; reporting that as a pass is a vacuous green (issue #583).
-   */
-  status?: "pass" | "fail" | "skipped-no-data";
-}
-
-export interface EgressReceipt {
-  gate: "langfuse_egress";
-  mode: "drive" | "verify";
-  tag: string;
-  passed: boolean;
-  expected: { traces: number; observations: number };
-  observed: { traces: number; observations: number; generations: number };
-  checks: EgressCheck[];
-  settle?: { waited_ms: number; timed_out: boolean; polls: number };
-  /**
-   * Content-free diagnostics from the drive child: error class plus one
-   * redacted stderr line. Without these a drive failure presents as a bare
-   * exit code and has to be recovered by replaying the command (issue #583).
-   */
-  error_class?: string;
-  stderr_first_line?: string;
-}
-
-export interface CliOutcome {
-  exitCode: number;
-  receipt?: EgressReceipt;
-  error?: string;
 }
 
 interface CliOptions {
@@ -109,26 +79,6 @@ interface CliOptions {
   count: number;
   requireCost: boolean;
   settleTimeoutSeconds: number;
-}
-
-interface LangfuseTrace {
-  id: string;
-  observations: unknown[];
-  body: unknown;
-}
-
-interface VerificationOptions {
-  tag: string;
-  expectedObservations: number;
-  expectedGenerations?: number;
-  expectedTraces?: number;
-  requireCost?: boolean;
-  settleTimeoutSeconds?: number;
-  pollIntervalMs?: number;
-  now?: () => number;
-  sleep?: (milliseconds: number) => Promise<void>;
-  config: LangfuseReadConfig;
-  transport?: HttpTransport;
 }
 
 export interface DriveOutcome {
@@ -155,20 +105,46 @@ interface ObservationOffsetOptions {
 
 /** Normalize either a bare Langfuse host or its public ingestion URL. */
 export function langfuseHost(endpoint: string): string {
-  return endpoint
-    .replace(/\/$/, "")
-    .replace(new RegExp(`${INGESTION_SUFFIX}$`), "");
+  return endpoint.replace(/\/$/, "").replace(new RegExp(`${INGESTION_SUFFIX}$`), "");
+}
+
+/**
+ * Read one env var and trim it, collapsing unset and whitespace-only to "".
+ * Hoisted so the config readers below read as a list of coordinates rather
+ * than a chain of optional-chain plus nullish-coalescing branches, each of
+ * which oxlint counts against the function's complexity.
+ */
+function trimmedEnv(env: Record<string, string | undefined>, name: string): string {
+  return env[name]?.trim() ?? "";
+}
+
+/**
+ * First non-empty of the named vars. `||` semantics, not `??`: deployed
+ * hook-env wrappers pass VAR="${VAR:-}", so an unset CAPTURE var arrives as an
+ * empty string and must still fall through to the alias (#525 documented this
+ * exact shape for the Python side; config.py:163-171).
+ */
+function firstTrimmedEnv(
+  env: Record<string, string | undefined>,
+  ...names: string[]
+): string {
+  for (const name of names) {
+    const value = trimmedEnv(env, name);
+    if (value) return value;
+  }
+  return "";
 }
 
 /** Resolve read-side coordinates from the existing tracing environment. */
 export function readLangfuseEgressConfig(
   env: Record<string, string | undefined> = process.env,
 ): LangfuseReadConfig {
-  const enabled = env.OPENBRAIN_TRACING_ENABLED === "1";
-  const endpoint = env.OPENBRAIN_TRACING_ENDPOINT?.trim() ?? "";
-  const publicKey = env.OPENBRAIN_TRACING_PUBLIC_KEY?.trim() ?? "";
-  const secretKey = env.OPENBRAIN_TRACING_SECRET_KEY?.trim() ?? "";
-  if (!enabled) throw new Error("OPENBRAIN_TRACING_ENABLED must equal 1");
+  if (env.OPENBRAIN_TRACING_ENABLED !== "1") {
+    throw new Error("OPENBRAIN_TRACING_ENABLED must equal 1");
+  }
+  const endpoint = trimmedEnv(env, "OPENBRAIN_TRACING_ENDPOINT");
+  const publicKey = trimmedEnv(env, "OPENBRAIN_TRACING_PUBLIC_KEY");
+  const secretKey = trimmedEnv(env, "OPENBRAIN_TRACING_SECRET_KEY");
   if (!endpoint || !publicKey || !secretKey) {
     throw new Error("OPENBRAIN_TRACING_* coordinates are incomplete");
   }
@@ -179,13 +155,12 @@ export function readLangfuseEgressConfig(
 export function readCaptureDriveConfig(
   env: Record<string, string | undefined> = process.env,
 ): CaptureDriveConfig {
-  // `||`, not `??`: deployed hook-env wrappers pass VAR="${VAR:-}", so an unset
-  // CAPTURE var arrives as an empty string and must still reach the alias (#525
-  // documented this exact shape for the Python side; config.py:163-171).
-  const baseUrl =
-    env.OPENBRAIN_CAPTURE_BASE_URL?.trim() || env.OPENBRAIN_BASE_URL?.trim() || "";
-  const token =
-    env.OPENBRAIN_CAPTURE_TOKEN?.trim() || env.OPENBRAIN_TOKEN?.trim() || "";
+  const baseUrl = firstTrimmedEnv(
+    env,
+    "OPENBRAIN_CAPTURE_BASE_URL",
+    "OPENBRAIN_BASE_URL",
+  );
+  const token = firstTrimmedEnv(env, "OPENBRAIN_CAPTURE_TOKEN", "OPENBRAIN_TOKEN");
   if (!baseUrl || !token) {
     throw new Error(
       "OPENBRAIN_CAPTURE_BASE_URL and OPENBRAIN_CAPTURE_TOKEN are required for --drive",
@@ -196,11 +171,8 @@ export function readCaptureDriveConfig(
 
 function assertSafeTag(tag: string): void {
   const validShape = /^[A-Za-z0-9._:-]{1,128}$/.test(tag);
-  const secretShaped = SECRET_DETECTORS.some((detector) =>
-    detector.pattern.test(tag),
-  );
-  if (!validShape || secretShaped)
-    throw new Error("--tag must be a safe identifier");
+  const secretShaped = SECRET_DETECTORS.some((detector) => detector.pattern.test(tag));
+  if (!validShape || secretShaped) throw new Error("--tag must be a safe identifier");
 }
 
 function argumentValue(args: string[], name: string): string | undefined {
@@ -216,16 +188,14 @@ function argumentValue(args: string[], name: string): string | undefined {
 export function parseEgressArgs(args: string[]): CliOptions {
   const drive = args.includes("--drive");
   const verify = args.includes("--verify");
-  if (drive === verify)
-    throw new Error("select exactly one of --drive or --verify");
+  if (drive === verify) throw new Error("select exactly one of --drive or --verify");
   const countText = argumentValue(args, "count") ?? String(DEFAULT_EVENT_COUNT);
   const count = Number.parseInt(countText, 10);
   if (!Number.isSafeInteger(count) || count < 1) {
     throw new Error("--count must be a positive integer");
   }
   const settleTimeoutText =
-    argumentValue(args, "settle-timeout") ??
-    String(DEFAULT_SETTLE_TIMEOUT_SECONDS);
+    argumentValue(args, "settle-timeout") ?? String(DEFAULT_SETTLE_TIMEOUT_SECONDS);
   const settleTimeoutSeconds = Number(settleTimeoutText);
   if (!Number.isFinite(settleTimeoutSeconds) || settleTimeoutSeconds < 0) {
     throw new Error("--settle-timeout must be a non-negative number");
@@ -241,189 +211,6 @@ export function parseEgressArgs(args: string[]): CliOptions {
   };
 }
 
-function basicAuthorization(config: LangfuseReadConfig): string {
-  return `Basic ${Buffer.from(`${config.publicKey}:${config.secretKey}`).toString("base64")}`;
-}
-
-async function fetchJson(
-  url: URL,
-  config: LangfuseReadConfig,
-  transport: HttpTransport,
-): Promise<unknown> {
-  const response = await transport(url, {
-    headers: { authorization: basicAuthorization(config) },
-  });
-  if (!response.ok)
-    throw new Error(`Langfuse API request failed (${response.status})`);
-  return response.json();
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function arrayField(value: unknown, name: string): unknown[] {
-  const object = objectValue(value);
-  return Array.isArray(object?.[name]) ? object[name] : [];
-}
-
-function stringField(value: unknown, ...names: string[]): string | undefined {
-  const object = objectValue(value);
-  const found = names
-    .map((name) => object?.[name])
-    .find((item) => typeof item === "string");
-  return typeof found === "string" ? found : undefined;
-}
-
-function fieldPresent(value: unknown, ...names: string[]): boolean {
-  const object = objectValue(value);
-  return names.some(
-    (name) => object?.[name] !== null && object?.[name] !== undefined,
-  );
-}
-
-function isGeneration(value: unknown): boolean {
-  return stringField(value, "type")?.toUpperCase() === "GENERATION";
-}
-
-function traceFrom(value: unknown): LangfuseTrace | undefined {
-  const id = stringField(value, "id");
-  if (!id) return undefined;
-  const object = objectValue(value) ?? {};
-  const { observations: _observations, ...body } = object;
-  return { id, observations: arrayField(value, "observations"), body };
-}
-
-function isCaptureTrace(trace: LangfuseTrace): boolean {
-  return arrayField(trace.body, "tags").includes(CAPTURE_TRACE_TAG);
-}
-
-function pageData(value: unknown): unknown[] {
-  const direct = arrayField(value, "data");
-  if (direct.length > 0) return direct;
-  return Array.isArray(value) ? value : [];
-}
-
-function hasNextPage(
-  value: unknown,
-  page: number,
-  rowCount: number,
-  pageSize: number,
-): boolean {
-  const meta = objectValue(objectValue(value)?.meta);
-  const totalPages = meta?.totalPages ?? meta?.total_pages;
-  if (typeof totalPages === "number") return page < totalPages;
-  return rowCount === pageSize;
-}
-
-async function queryTaggedTraces(
-  tag: string,
-  config: LangfuseReadConfig,
-  transport: HttpTransport,
-): Promise<LangfuseTrace[]> {
-  const traces: LangfuseTrace[] = [];
-  let page = 1;
-  let more = true;
-  while (more && page <= MAX_TRACE_PAGES) {
-    const url = new URL("/api/public/traces", config.endpoint);
-    url.searchParams.set("sessionId", tag);
-    url.searchParams.set("page", String(page));
-    url.searchParams.set("limit", String(DEFAULT_PAGE_LIMIT));
-    const payload = await fetchJson(url, config, transport);
-    const summaries = pageData(payload);
-    for (const summary of summaries) {
-      const summaryTrace = traceFrom(summary);
-      if (!summaryTrace) continue;
-      const detailUrl = new URL(
-        `/api/public/traces/${encodeURIComponent(summaryTrace.id)}`,
-        config.endpoint,
-      );
-      const detail = await fetchJson(detailUrl, config, transport);
-      const trace = traceFrom(detail) ?? summaryTrace;
-      if (isCaptureTrace(trace)) traces.push(trace);
-    }
-    more = hasNextPage(
-      payload,
-      page,
-      summaries.length,
-      DEFAULT_PAGE_LIMIT,
-    );
-    page += 1;
-  }
-  return traces;
-}
-
-function observationContentPresent(observation: unknown): boolean {
-  const body = objectValue(observation);
-  if (!body) return false;
-  return Object.hasOwn(body, "input") || Object.hasOwn(body, "output");
-}
-
-function secretScan(traces: LangfuseTrace[]): {
-  counts: Record<string, number>;
-  contentFieldsPresent: boolean;
-} {
-  const counts: Record<string, number> = {};
-  let contentFieldsPresent = false;
-  for (const trace of traces) {
-    const observationBodies = trace.observations.map((observation) => {
-      if (observationContentPresent(observation)) contentFieldsPresent = true;
-      return observation;
-    });
-    const serialized = JSON.stringify({
-      trace: trace.body,
-      observations: observationBodies,
-    });
-    for (const detector of SECRET_DETECTORS) {
-      if (!detector.pattern.test(serialized)) continue;
-      counts[detector.kind] = (counts[detector.kind] ?? 0) + 1;
-    }
-  }
-  return { counts, contentFieldsPresent };
-}
-
-interface SettledTraces {
-  traces: LangfuseTrace[];
-  waitedMs: number;
-  timedOut: boolean;
-  polls: number;
-}
-
-async function queryUntilSettled(
-  options: VerificationOptions,
-  transport: HttpTransport,
-  expectedTraces: number,
-): Promise<SettledTraces> {
-  const timeoutMs =
-    (options.settleTimeoutSeconds ?? DEFAULT_SETTLE_TIMEOUT_SECONDS) * 1_000;
-  const pollIntervalMs =
-    options.pollIntervalMs ?? DEFAULT_SETTLE_POLL_INTERVAL_MS;
-  const now = options.now ?? Date.now;
-  const sleep =
-    options.sleep ??
-    ((milliseconds: number) => Bun.sleep(milliseconds));
-  const startedAt = now();
-  let polls = 0;
-  let traces: LangfuseTrace[] = [];
-  while (true) {
-    traces = await queryTaggedTraces(options.tag, options.config, transport);
-    polls += 1;
-    const observations = traces.flatMap((trace) => trace.observations);
-    const arrived =
-      traces.length >= expectedTraces &&
-      observations.length >= options.expectedObservations;
-    const waitedMs = Math.max(0, now() - startedAt);
-    if (arrived) return { traces, waitedMs, timedOut: false, polls };
-    if (waitedMs >= timeoutMs) {
-      return { traces, waitedMs, timedOut: true, polls };
-    }
-    await sleep(Math.min(pollIntervalMs, timeoutMs - waitedMs));
-  }
-}
-
-/** Query Langfuse and evaluate the issue #578 egress assertions. */
 export async function verifyLangfuseEgress(
   options: VerificationOptions,
 ): Promise<EgressReceipt> {
@@ -583,17 +370,26 @@ export async function observationOffset(
   options: ObservationOffsetOptions = {},
 ): Promise<number> {
   const fileExists =
-    options.fileExists ?? ((path) => Bun.file(path).exists());
+    options.fileExists ?? ((path) => Promise.resolve(existsSync(path)));
   if (!(await fileExists(watermarkPath))) return 0;
   const databaseFactory =
     options.databaseFactory ??
-    ((path) => new Database(path, { readonly: true, create: false }));
+    ((path) => {
+      // Lazy: bun 1.3.13 cannot resolve node:sqlite, and this module is
+      // imported (for types alone) by several bun test files. Requiring it
+      // here keeps module load working everywhere and confines the Node
+      // requirement to the code path that truly needs a database.
+      const { DatabaseSync } = require("node:sqlite") as {
+        DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => Database;
+      };
+      return new DatabaseSync(path, { readOnly: true });
+    });
   const sessionKey = `observe:${tag}`;
   try {
     const database = databaseFactory(watermarkPath);
     try {
       const row = database
-        .query("SELECT offset FROM watermark WHERE session_key = ?")
+        .prepare("SELECT offset FROM watermark WHERE session_key = ?")
         .get(sessionKey);
       const offset = objectValue(row)?.offset;
       return typeof offset === "number" && offset > 0 ? offset : 0;
@@ -606,24 +402,32 @@ export async function observationOffset(
   }
 }
 
+/**
+ * Promisified execFile: node's callback spawn exposes no `.exited` promise.
+ * Rejects on a non-zero exit rather than resolving with the code.
+ */
+const execFileAsync = promisify(execFile);
+
 async function sqlite3WatermarkOffset(
   watermarkPath: string,
   sessionKey: string,
 ): Promise<number> {
   const quotedSessionKey = sessionKey.replaceAll("'", "''");
   const statement =
-    "SELECT offset FROM watermark WHERE session_key = '" +
-    `${quotedSessionKey}';`;
-  const child = Bun.spawn(["sqlite3", "-ifexists", watermarkPath, statement], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [exitCode, stdout] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  if (exitCode !== 0) throw new Error("watermark SQLite probe failed");
+    "SELECT offset FROM watermark WHERE session_key = '" + `${quotedSessionKey}';`;
+  // execFileAsync rejects on a non-zero exit, which is exactly the throw this
+  // site already performed; the message is preserved verbatim and still
+  // carries no child output, keeping the probe content-free.
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      "sqlite3",
+      ["-ifexists", watermarkPath, statement],
+      { encoding: "utf8" },
+    ));
+  } catch {
+    throw new Error("watermark SQLite probe failed");
+  }
   const offset = Number.parseInt(stdout.trim(), 10);
   return Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
 }
@@ -680,7 +484,7 @@ export async function driveLangfuseEgress(
   const transcript = Array.from({ length: options.count }, (_, index) =>
     transcriptLine(options.tag, index),
   );
-  await Bun.write(transcriptPath, `${transcript.join("\n")}\n`);
+  await writeFile(transcriptPath, `${transcript.join("\n")}\n`);
   const payload = JSON.stringify({
     session_id: options.tag,
     transcript_path: transcriptPath,
@@ -688,18 +492,15 @@ export async function driveLangfuseEgress(
     hook_event_name: "Stop",
     stop_hook_active: false,
   });
-  const processHandle = Bun.spawn(["uv", "run", "openbrain-capture-stop"], {
+  // spawn, not execFile: this child is FED on stdin, and execFile offers no
+  // way to write to it. The exit code is a VALUE here (it flows into
+  // evaluateDriveOutcome as the capture_exit check), so a rejecting wrapper
+  // would be wrong -- runCaptureStop resolves with the code instead.
+  const { exitCode, stdout, stderr } = await runCaptureStop({
     cwd: path.join(cwd, "python", "openbrain"),
     env: captureEnvironment(options.env, config, capture, watermarkPath),
-    stdin: new Blob([payload]),
-    stdout: "pipe",
-    stderr: "pipe",
+    payload,
   });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    processHandle.exited,
-    new Response(processHandle.stdout).text(),
-    new Response(processHandle.stderr).text(),
-  ]);
   const observeOffset = await observationOffset(watermarkPath, options.tag);
   return evaluateDriveOutcome({
     tag: options.tag,
@@ -746,53 +547,11 @@ export async function runEgressCli(
   }
 }
 
-/** Serialize only the content-free receipt or stable error message. */
-export function serializeCliOutcome(
-  outcome: CliOutcome,
-  json: boolean,
-): string {
-  if (outcome.error) return `Langfuse egress gate error: ${outcome.error}`;
-  const receipt = outcome.receipt;
-  if (!receipt) return "Langfuse egress gate error: no receipt";
-  if (json) return JSON.stringify(receipt, null, 2);
-  const lines = [
-    `Langfuse egress gate: ${receipt.passed ? "PASS" : "FAIL"}`,
-    `mode=${receipt.mode} tag=${receipt.tag}`,
-    `expected traces=${receipt.expected.traces} observations=${receipt.expected.observations}`,
-    `observed traces=${receipt.observed.traces} observations=${receipt.observed.observations} generations=${receipt.observed.generations}`,
-  ];
-  if (receipt.settle) {
-    lines.push(
-      `settle waited_ms=${receipt.settle.waited_ms} timed_out=${receipt.settle.timed_out} polls=${receipt.settle.polls}`,
-    );
-  }
-  for (const check of receipt.checks) {
-    const contentFields =
-      check.content_fields_present === undefined
-        ? ""
-        : ` content_fields_present=${check.content_fields_present}`;
-    const emitFailure =
-      check.emit_failure_detected === undefined
-        ? ""
-        : ` emit_failure_detected=${check.emit_failure_detected}`;
-    const status = check.status ?? (check.passed ? "pass" : "fail");
-    lines.push(
-      `check=${check.label} status=${status.toUpperCase()} fatal=${check.fatal} observed=${check.observed}${check.expected === undefined ? "" : ` expected=${check.expected}`}${contentFields}${emitFailure}`,
-    );
-    for (const [kind, count] of Object.entries(check.detector_counts ?? {})) {
-      lines.push(`detector=${kind} count=${count}`);
-    }
-  }
-  if (receipt.error_class) lines.push(`error_class=${receipt.error_class}`);
-  if (receipt.stderr_first_line) {
-    lines.push(`stderr_first_line=${receipt.stderr_first_line}`);
-  }
-  return lines.join("\n");
-}
-
 if (import.meta.main) {
-  const args = Bun.argv.slice(2);
-  runEgressCli(args).then((outcome) => {
+  const args = process.argv.slice(2);
+  // runEgressCli resolves its own failures into an outcome with a non-zero
+  // exitCode rather than rejecting, so there is no rejection path to handle.
+  void runEgressCli(args).then((outcome) => {
     const output = serializeCliOutcome(outcome, args.includes("--json"));
     const writer = outcome.exitCode === 0 ? console.log : console.error;
     writer(output);

@@ -155,7 +155,7 @@ export const CONTRACT_PAYLOAD_SECTIONS = {
     working_set: {
       status: "local-runtime-boundary" as const,
       parent_issue: 222 as const,
-      implementation: "src/realtime/working-set.ts" as const,
+      implementation: "server/realtime/working-set.ts" as const,
       storage: "ram_first_in_process" as const,
       availability: "mcp_tool_available" as const,
       item_label: "working_context" as const,
@@ -174,7 +174,7 @@ export const CONTRACT_PAYLOAD_SECTIONS = {
     recovery: {
       status: "local-quarantine-boundary" as const,
       parent_issue: 221 as const,
-      implementation: "src/realtime/recovery-wal.ts" as const,
+      implementation: "server/realtime/recovery-wal.ts" as const,
       storage: "env_configured_file_wal_with_in_memory_fallback" as const,
       availability: "mcp_tool_available" as const,
       item_label: "quarantined_recovery" as const,
@@ -212,7 +212,7 @@ export const CONTRACT_PAYLOAD_SECTIONS = {
     },
     durable_lane_context: {
       status: "runtime-available" as const,
-      implementation: "src/tools/agent-context-pack.ts" as const,
+      implementation: "server/tools/agent-context-pack.ts" as const,
       storage: "ob_session_lanes_and_events" as const,
       availability: "mcp_tool_available" as const,
       item_label: "durable_memory" as const,

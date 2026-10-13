@@ -1,48 +1,13 @@
 /**
  * DREAM Stage 2 -- REM. Issues #391 (trigger/scheduler), #392 (re-warming),
- * #398 (near-dupe merge, in src/candidate-dedupe.ts).
+ * #398 (near-dupe merge, in ../domain/candidate-dedupe.ts).
  *
- * REM IS A PREP STAGE, NOT A JUDGE (docs/dream-design.md:274-280): it finds,
- * groups, and packages work so Deep does not have to go looking, "doing the
- * easy 90% itself and handing deep only the hard 10%, pre-bundled. It
- * deliberately over-prescribes at first: better a too-big bundle than a clean
- * one missing the key item, because deep can ignore extra context but cannot
- * recover what was never sent."
+ * REM grades but never reviews: it may write machine_grade and
+ * machine_grade_model, and must NEVER write review_action, reviewed_at, or
+ * graded_by. The rationale, the injected-grader shape, and the rule that
+ * re-warming is tier flips only:
  *
- * THE ONE HARD RULE. REM MAY write machine_grade + machine_grade_model. It MUST
- * NEVER write review_action, reviewed_at, or graded_by. This is structural, not
- * stylistic -- 037:43-57, verbatim:
- *
- *     reviewed_at IS NULL is the operator's queue. Anything that sets
- *     review_action also sets reviewed_at (candidate_memory_review_paired), so
- *     a machine writing there silently removes the item from human review. The
- *     model would be grading its own training data and marking it done.
- *
- * The two columns exist so their DISAGREEMENT RATE is measurable. That number
- * is the only evidence that will ever tell us whether the machine can be
- * trusted with this, and it only exists while the two stay independent. Every
- * UPDATE in this module names its columns explicitly for that reason.
- *
- * EVERYTHING PASSES. Under the 2026-07-28 operator decision, a machine grade of
- * 'rejected' does not remove anything, hide anything, or reorder anything out
- * of reach. It is advisory: the review queue is `WHERE reviewed_at IS NULL`,
- * full stop, and machine_grade only sorts within it. REM has no suppression
- * path and must not grow one.
- *
- * THE MODEL IS INJECTED, WITH A DETERMINISTIC DEFAULT. Same shape as the
- * distiller (src/distiller.ts): {@link heuristicRemGrader} needs no model
- * access, so REM runs tonight against the real corpus. A real model slots in
- * without touching the persistence path. That also keeps the module testable
- * without a provider, and keeps the grade attributable -- machine_grade_model
- * records which grader produced the guess, because grades from different
- * models are not comparable (037 comment on machine_grade_model).
- *
- * RE-WARMING (#392) IS TIER FLIPS ONLY. dream-design.md:400-419: "Both
- * directions are just a tier flip: no model, cheap, reversible. That is what
- * licenses aggression here. A wrong guess costs a tier update and drifts cold
- * again on its own." Nothing in this module deletes, archives, or demotes
- * anything -- dream-design.md:116 makes delete/hard-discard ALWAYS ASK, and a
- * stage with no delete path cannot violate that by accident.
+ * See docs/decisions/dream-rem-is-prep-never-a-judge.md
  */
 
 import type pg from "pg";
@@ -50,13 +15,10 @@ import {
   BackgroundTraceRecorder,
   backgroundSessionId,
   type BackgroundTraceEmitter,
-} from "../application/background-tracing.ts";
-import type { MaintenanceQueueLogger } from "../../src/maintenance-queue.ts";
-import {
-  MaintenanceTerminalError,
-  type MaintenanceJob,
-  type MaintenanceJobHandler,
-} from "../../src/maintenance-queue.ts";
+} from "../observability/background-tracing.ts";
+import type { MaintenanceQueueLogger } from "./maintenance-queue-runner.ts";
+import { MaintenanceTerminalError, type MaintenanceJob } from "./maintenance-job.ts";
+import { type MaintenanceJobHandler } from "./maintenance-queue-runner.ts";
 import {
   runCandidateDedupe,
   type CandidateDedupeSummary,
@@ -65,8 +27,15 @@ import {
   gradeOneCandidate,
   storeMachineGrade,
   toRemCandidate,
-  type RemCandidateRow,
 } from "./dream-rem-grading.ts";
+import {
+  createDreamRemRepository,
+  type DreamRemRepository,
+} from "../db/dream-rem-repository.ts";
+import {
+  createDreamRemGradingRepository,
+  type DreamRemGradingRepository,
+} from "../db/dream-rem-grading-repository.ts";
 
 /** The job kind this stage registers under. Matches the queue's kind regex. */
 export const DREAM_REM_JOB_KIND = "dream.rem" as const;
@@ -114,6 +83,15 @@ export interface RemGrade {
   reason?: string;
   /** Provider-reported usage for an LLM-backed grader. */
   usageDetails?: Record<string, number>;
+  /** Per-verdict attribution, required when a batch grader falls back. */
+  graderName?: string;
+  /** Classification-only REM evidence; it is not a full Terra judgement. */
+  decision?: {
+    label: string;
+    score: number;
+    decisionSource: string;
+    rubricVersion: string;
+  };
 }
 
 /**
@@ -124,36 +102,16 @@ export interface NamedRemGrader {
   readonly name: string;
   /** Set only when grade() itself calls an LLM provider. */
   readonly observationType?: "generation";
+  /** Prime one already-bounded selected slice before per-row guarded writes. */
+  prime?(candidates: readonly RemCandidate[]): Promise<void>;
   grade(candidate: RemCandidate): Promise<RemGrade> | RemGrade;
 }
 
 /**
- * The deterministic default grader. NO MODEL.
+ * The deterministic default grader. NO MODEL. Uses no weights and no
+ * arithmetic, and never emits 'rejected'.
  *
- * WHAT IT IS FOR, and what it is emphatically not: it is a floor that lets REM
- * run end to end tonight and produces a machine_grade column with real values
- * in it, so the disagreement measurement can begin the moment the operator
- * grades anything. It is NOT a claim that these rules are good. The doc is
- * explicit that weights are a fitting problem and must not be invented during
- * implementation (dream-design.md:958-968), so this grader deliberately uses no
- * weights and no arithmetic -- only signals that are already measured facts.
- *
- * THE SIGNALS IT USES, and why each is defensible without fitting:
- *
- *  - CORROBORATION (session_count > 1). Light's cross-session count is measured
- *    evidence, not an opinion (dream-design.md:230-243). When it fires it is
- *    the strongest thing available.
- *  - REINFORCEMENT (absorbed near-dupes, #398). Same argument, semantic rather
- *    than exact.
- *  - THE PRODUCER'S OWN DOUBT (uncertain). Not trusted as truth -- it maps to
- *    'inconclusive', which is precisely the value 037:35-37 added so "I cannot
- *    tell" does not collapse into "rejected".
- *
- * AND THE ONE IT REFUSES TO USE: it never emits 'rejected'. A model measured
- * mislabelling 112 of 214 candidates (dream-design.md:238) has no business
- * asserting a negative, and under "everything passes" a negative guess buys
- * nothing anyway -- it cannot suppress. 'inconclusive' is the honest floor and
- * it is what an ungrounded candidate gets.
+ * See docs/decisions/dream-rem-heuristic-grader-refuses-to-reject.md
  */
 export const heuristicRemGrader: NamedRemGrader = {
   name: "rem-heuristic-v1",
@@ -215,8 +173,12 @@ export interface RemSummary {
   rewarm: RemRewarmSummary;
 }
 
-export interface RemDeps {
+interface RemDeps {
   pool: pg.Pool;
+  /** Owns REM's three statements; see ../db/dream-rem-repository.ts. */
+  rem: DreamRemRepository;
+  /** Owns the machine-grade write-back; see ../db/dream-rem-grading-repository.ts. */
+  grading: DreamRemGradingRepository;
   logger: MaintenanceQueueLogger;
   grader?: NamedRemGrader;
   namespace?: string;
@@ -256,9 +218,9 @@ function emptyGradeSummary(): RemGradeSummary {
  * disagreement measurement.
  *
  * The corroboration join is a LEFT JOIN on content_occurrences by
- * (namespace, content_hash). That works because src/embedding.ts contentHash is
+ * (namespace, content_hash). That works because normalizedContentHash is
  * the SAME function on both sides -- ingest applies it to the turn
- * (src/tools/ingest-raw-turn.ts:125) and the distiller applies it to the
+ * (../capture/ingest-raw-turn.ts:125) and the distiller applies it to the
  * candidate -- so a candidate whose text is verbatim a turn's text lands on that
  * turn's occurrence row. When it does not match, the LEFT JOIN yields 0 and the
  * grader treats the candidate as uncorroborated, which is the correct reading:
@@ -269,26 +231,13 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
   const batchSize = deps.batchSize ?? DEFAULT_REM_BATCH;
   const summary = emptyGradeSummary();
 
-  const rows = await deps.pool.query<RemCandidateRow>(
-    `SELECT c.id, c.namespace, c.candidate_type, c.content, c.content_hash,
-            c.uncertain, c.uncertainty_reason, c.model,
-            o.session_count, o.occurrence_count,
-            (SELECT count(*) FROM candidate_reinforcement r
-              WHERE r.candidate_id = c.id)::text AS reinforcement_count
-       FROM candidate_memory c
-       LEFT JOIN content_occurrences o
-              ON o.namespace = c.namespace
-             AND o.content_hash = c.content_hash
-      WHERE c.machine_grade IS NULL
-        AND c.reviewed_at IS NULL
-        AND ($1::text IS NULL OR c.namespace = $1)
-      ORDER BY c.uncertain DESC, c.created_at ASC
-      LIMIT $2`,
-    [deps.namespace ?? null, batchSize],
-  );
+  const rows = await deps.rem.selectUngradedCandidates({
+    namespace: deps.namespace ?? null,
+    batchSize,
+  });
 
-  summary.examined = rows.rows.length;
-  if (rows.rows.length === 0) {
+  summary.examined = rows.length;
+  if (rows.length === 0) {
     deps.logger.info("dream_rem_grading_complete", {
       grader: grader.name,
       examined: 0,
@@ -297,7 +246,11 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
     return summary;
   }
 
-  for (const row of rows.rows) {
+  if (grader.prime) {
+    await grader.prime(rows.map(toRemCandidate));
+  }
+
+  for (const row of rows) {
     const candidate = toRemCandidate(row);
     if (candidate.session_count > 1) summary.corroborated++;
 
@@ -315,7 +268,12 @@ export async function runRemGrading(deps: RemDeps): Promise<RemGradeSummary> {
       continue;
     }
 
-    await storeMachineGrade(deps, row.id, grader.name, verdict);
+    await storeMachineGrade(deps, {
+      candidateId: row.id,
+      namespace: row.namespace,
+      graderName: verdict.graderName ?? grader.name,
+      verdict,
+    });
 
     summary.graded++;
     summary.by_grade[verdict.grade]++;
@@ -389,32 +347,10 @@ export const REWARM_MAX_PER_PASS = 250;
 export const REWARM_WINDOW_DAYS = 7;
 
 /**
- * Re-warm dormant project clusters. #392.
+ * Re-warm dormant project clusters. #392. The unit is the project, not the
+ * entry; this warms and never cools; projects join on `thoughts.tags`.
  *
- * THE UNIT IS THE PROJECT, NOT THE ENTRY (dream-design.md:381-386): "a single
- * search hit warming a single row is noise -- a stray match should not wake a
- * project. Waking one entry and leaving its siblings cold is worse than
- * useless: you get a fragment without its context." So the trigger is
- * project-level (N distinct recent sessions naming the project) and the action
- * is cluster-level (warm that project's cold entries together).
- *
- * TIER FLIPS ONLY, IN ONE DIRECTION. This warms; it never cools. Cooling on
- * silence is the slow half of the pair (dream-design.md:409-414, "fast to
- * remember, slow to forget") and it is a decay process, not a sweep -- putting
- * it here would make a nightly job the thing that demotes memory, which is a
- * destructive act on a cadence nobody asked for. Warming is additive and
- * self-correcting; that asymmetry is why only one direction lives here.
- *
- * HOW A PROJECT IS IDENTIFIED, and the join this rests on. Raw turns carry the
- * project as `ob_raw_turns.repo`; durable memory carries it as a TAG on
- * `thoughts.tags`. There is no shared foreign key -- verified against the live
- * clone 2026-07-28: `thoughts` has no source_ref column, and its `source_refs`
- * JSONB carries no repo field (5 rows populated, all with a NULL ->>'repo').
- * The tag join is the only linkage that exists, and it is real: joining the 16
- * distinct repos in ob_raw_turns against thoughts.tags matches 3,461 non-hot
- * entries across 12 repos (king-capital 2,314, open-brain 495, taxStrategy
- * 360...). A repo with no matching tag simply warms nothing, which is the
- * correct failure direction for a tier flip.
+ * See docs/decisions/dream-rem-rewarm-is-project-scoped-and-one-way.md
  */
 export async function runRemRewarm(deps: RemDeps): Promise<RemRewarmSummary> {
   const summary: RemRewarmSummary = {
@@ -426,31 +362,19 @@ export async function runRemRewarm(deps: RemDeps): Promise<RemRewarmSummary> {
   // Recent activity by project. Sessions are the unit of "re-engagement" per
   // the doc, so this counts DISTINCT sessions, not turns -- one long session is
   // one engagement, however many turns it produced.
-  const projects = await deps.pool.query<{
-    namespace: string;
-    repo: string;
-    sessions: string;
-  }>(
-    `SELECT namespace, repo, count(DISTINCT session_ref)::text AS sessions
-       FROM ob_raw_turns
-      WHERE repo IS NOT NULL
-        AND session_ref IS NOT NULL
-        AND occurred_at >= now() - ($2 || ' days')::interval
-        AND ($1::text IS NULL OR namespace = $1)
-      GROUP BY namespace, repo`,
-    [deps.namespace ?? null, String(deps.rewarmWindowDays ?? REWARM_WINDOW_DAYS)],
-  );
+  const projects = await deps.rem.selectRecentProjectActivity({
+    namespace: deps.namespace ?? null,
+    windowDays: String(deps.rewarmWindowDays ?? REWARM_WINDOW_DAYS),
+  });
 
-  summary.projects_seen = projects.rows.length;
+  summary.projects_seen = projects.length;
 
   // "Notice, no action" -- the 1-session row of the doc's table. Counted up
   // front, separately from the warming loop: the loop can exit early on the
   // pass ceiling, and a noticed project that went uncounted because the budget
   // ran out would under-report the signal rather than the action.
-  const actionable = projects.rows.filter(
-    (p) => Number(p.sessions) >= REWARM_MIN_SESSIONS,
-  );
-  summary.noticed_only = projects.rows.length - actionable.length;
+  const actionable = projects.filter((p) => Number(p.sessions) >= REWARM_MIN_SESSIONS);
+  summary.noticed_only = projects.length - actionable.length;
 
   // Strongest engagement first, so when the pass ceiling binds it spends the
   // budget on the projects the operator is most active in rather than on
@@ -471,29 +395,11 @@ export async function runRemRewarm(deps: RemDeps): Promise<RemRewarmSummary> {
     // refer to lives in `collab` (measured on the clone -- 1 distinct turn
     // namespace, 10,624 warm collab thoughts). The project tag IS the scope
     // here, which is what #392 asks for ("the unit is the PROJECT").
-    //
-    // COLDEST FIRST. A cold entry is the one the operator cannot currently
-    // reach, so a flip buys the most there; a warm entry already ranks in
-    // results. Ordering by recency alone would spend the budget on entries that
-    // were already easy to find.
-    //
-    // `tier IS DISTINCT FROM 'hot'` means an already-hot entry is not
-    // rewritten, so the pass converges: each run warms the next slice and a run
-    // over a fully-warmed project writes nothing.
-    const warmed = await deps.pool.query(
-      `UPDATE thoughts
-          SET tier = 'hot', updated_at = now()
-        WHERE id IN (
-          SELECT id FROM thoughts
-           WHERE tags @> ARRAY[$1::text]
-             AND tier IS DISTINCT FROM 'hot'
-             AND archived_at IS NULL
-           ORDER BY (tier = 'cold') DESC, updated_at DESC
-           LIMIT $2
-        )`,
-      [project.repo, limit],
-    );
-    summary.warmed += warmed.rowCount ?? 0;
+    const warmed = await deps.rem.warmProjectCluster({
+      repo: project.repo,
+      rowLimit: limit,
+    });
+    summary.warmed += warmed;
   }
 
   deps.logger.info("dream_rem_rewarm_complete", {
@@ -563,6 +469,8 @@ export interface DreamRemHandlerDeps {
   pool: pg.Pool;
   logger: MaintenanceQueueLogger;
   grader?: NamedRemGrader;
+  /** Creates stateful batch graders per job so caches never cross passes. */
+  graderFactory?: (trace: BackgroundTraceRecorder) => NamedRemGrader;
   tracing?: BackgroundTraceEmitter;
 }
 
@@ -570,7 +478,7 @@ export interface DreamRemHandlerDeps {
  * Build the handler for {@link DREAM_REM_JOB_KIND}.
  *
  * The version gate runs BEFORE any payload read, matching
- * src/graph-derivation-handler.ts:406-409 and src/distill-handler.ts:353-357: a
+ * the graph-derivation handler and ./distill-handler.ts:353-357: a
  * job stamped with a different version carries a payload under a different
  * contract, and no retry can change a stamped version, so it is terminal rather
  * than retryable.
@@ -581,7 +489,7 @@ export interface DreamRemHandlerDeps {
  * Hoisted out of the handler body so the handler stays a version check plus a
  * traced call; the optional-field spreads are unchanged.
  */
-function buildRemPassDeps(
+export function buildRemPassDeps(
   deps: DreamRemHandlerDeps,
   job: MaintenanceJob,
   trace: BackgroundTraceRecorder,
@@ -591,9 +499,14 @@ function buildRemPassDeps(
     typeof payload.batch_size === "number" ? payload.batch_size : undefined;
   return {
     pool: deps.pool,
+    rem: createDreamRemRepository(deps.pool),
+    grading: createDreamRemGradingRepository(deps.pool),
     logger: deps.logger,
     trace,
     ...(deps.grader ? { grader: deps.grader } : {}),
+    ...(!deps.grader && deps.graderFactory
+      ? { grader: deps.graderFactory(trace) }
+      : {}),
     ...(job.namespace !== null ? { namespace: job.namespace } : {}),
     ...(batchSize !== undefined ? { batchSize } : {}),
     ...(payload.skip_dedupe === true ? { skipDedupe: true } : {}),
@@ -632,7 +545,7 @@ export function makeDreamRemHandler(deps: DreamRemHandlerDeps): MaintenanceJobHa
  * The idempotency key carries the caller's sweep label for the same reason the
  * distiller's does: a REM pass's unit of work is "whatever is ungraded at time
  * T", which has no stable identity, and re-enqueuing the same key with a
- * different payload throws (src/maintenance-queue.ts:403-407).
+ * different payload throws (./maintenance-queue.ts:403-407).
  */
 export function buildDreamRemEnqueue(input: {
   sweepLabel: string;

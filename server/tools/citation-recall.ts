@@ -22,36 +22,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
 import { canTargetNamespace } from "../auth/namespace-policy.ts";
 import {
+  createSessionRepository,
+  type CitationEventRow,
+} from "../db/session-repository.ts";
+import {
   authIdentity,
   errorResult,
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
 
-interface CitationEventRow {
-  id: string;
-  event_type: string;
-  content: string;
-  source: string | null;
-  transcript_ref: string | null;
-  transcript: string | null;
-  occurred_at: string | Date | null;
-  created_at: string | Date;
-  created_by: string;
-  lane_id: string;
-  session_key: string;
-}
-
 /** Neighboring exchanges returned on each side when unspecified. */
 const DEFAULT_CONTEXT_EXCHANGES = 2;
 /** Transcript characters returned per exchange when unspecified. */
 const DEFAULT_TRANSCRIPT_CHARS = 2_000;
-
-const TARGET_EVENT_COLUMNS = `e.id, e.event_type, e.content, e.source, e.transcript_ref,
-  e.transcript, e.occurred_at, e.created_at, e.created_by`;
-const CANDIDATE_EVENT_COLUMNS = `candidate.id, candidate.event_type, candidate.content,
-  candidate.source, candidate.transcript_ref, candidate.transcript,
-  candidate.occurred_at, candidate.created_at, candidate.created_by`;
 
 /**
  * SQLSTATE codes and error names safe to name in a log line.
@@ -74,16 +58,10 @@ const SAFE_DB_ERROR_NAMES = new Set(["Error", "PostgresError"]);
 function safeErrorLabel(error: unknown): string {
   if (!error || typeof error !== "object") return "unknown";
   const candidate = error as { code?: unknown; name?: unknown };
-  if (
-    typeof candidate.code === "string" &&
-    SAFE_DB_ERROR_CODES.has(candidate.code)
-  ) {
+  if (typeof candidate.code === "string" && SAFE_DB_ERROR_CODES.has(candidate.code)) {
     return candidate.code;
   }
-  if (
-    typeof candidate.name === "string" &&
-    SAFE_DB_ERROR_NAMES.has(candidate.name)
-  ) {
+  if (typeof candidate.name === "string" && SAFE_DB_ERROR_NAMES.has(candidate.name)) {
     return candidate.name;
   }
   return "unknown";
@@ -169,14 +147,11 @@ async function fetchCitedEvent(
   dependencies: MemoryToolDependencies,
   request: CitationRequest,
 ): Promise<CitationEventRow | undefined> {
-  const { rows } = await dependencies.pool.query<CitationEventRow>(
-    `SELECT ${TARGET_EVENT_COLUMNS}, e.lane_id, l.session_key
-             FROM ob_session_events e
-             JOIN ob_session_lanes l ON l.id = e.lane_id
-            WHERE l.namespace = $1 AND e.id = $2`,
-    [request.namespace, request.eventId],
-  );
-  return rows[0];
+  const repository = createSessionRepository(dependencies.pool);
+  return repository.selectCitedEvent({
+    namespace: request.namespace,
+    eventId: request.eventId,
+  });
 }
 
 /** Both neighbor queries, each carrying one extra row purely as a "more exists" probe. */
@@ -196,50 +171,20 @@ async function fetchNeighbors(
   event: CitationEventRow,
   contextLimit: number,
 ): Promise<NeighborRows> {
-  const contextValues = [
-    event.lane_id,
-    event.transcript_ref,
-    event.id,
-    contextLimit + 1,
-  ];
-  const ascending =
-    "COALESCE(candidate.occurred_at, candidate.created_at), candidate.created_at, candidate.id";
-  const descending =
-    "COALESCE(candidate.occurred_at, candidate.created_at) DESC, " +
-    "candidate.created_at DESC, candidate.id DESC";
-  // Ordering by the row tuple rather than the timestamp alone keeps
-  // same-instant events in one stable order, so `before` and `after`
-  // cannot both claim the same neighbor.
-  const contextSource = `FROM ob_session_events candidate
-             JOIN ob_session_events target ON target.id = $3::uuid
-            WHERE candidate.lane_id = $1
-              AND candidate.transcript_ref = $2
-              AND candidate.transcript IS NOT NULL`;
+  const repository = createSessionRepository(dependencies.pool);
+  const neighborInput = {
+    laneId: event.lane_id,
+    transcriptRef: event.transcript_ref,
+    eventId: event.id,
+    limitPlusOne: contextLimit + 1,
+  };
 
-  const [beforeResult, afterResult] = await Promise.all([
-    dependencies.pool.query<CitationEventRow>(
-      `SELECT ${CANDIDATE_EVENT_COLUMNS}
-             ${contextSource}
-              AND (${ascending}) < (
-                COALESCE(target.occurred_at, target.created_at), target.created_at, target.id
-              )
-            ORDER BY ${descending}
-            LIMIT $4`,
-      contextValues,
-    ),
-    dependencies.pool.query<CitationEventRow>(
-      `SELECT ${CANDIDATE_EVENT_COLUMNS}
-             ${contextSource}
-              AND (${ascending}) > (
-                COALESCE(target.occurred_at, target.created_at), target.created_at, target.id
-              )
-            ORDER BY ${ascending} ASC
-            LIMIT $4`,
-      contextValues,
-    ),
+  const [before, after] = await Promise.all([
+    repository.selectCitationNeighbors({ ...neighborInput, side: "before" }),
+    repository.selectCitationNeighbors({ ...neighborInput, side: "after" }),
   ]);
 
-  return { before: beforeResult.rows, after: afterResult.rows };
+  return { before, after };
 }
 
 /**
@@ -360,11 +305,7 @@ async function recallCitation(
       return sourceNotStoredResult(dependencies, event);
     }
 
-    const neighbors = await fetchNeighbors(
-      dependencies,
-      event,
-      request.contextLimit,
-    );
+    const neighbors = await fetchNeighbors(dependencies, event, request.contextLimit);
     return storedCitationResult(dependencies, event, neighbors, request);
   } catch (error) {
     dependencies.logger.error(
@@ -402,9 +343,7 @@ export function registerCitationRecallTool(
 
       const namespace = args.namespace ?? identity.clientId;
       if (!canTargetNamespace(identity, "read", namespace)) {
-        return errorResult(
-          `Permission denied: cannot read namespace '${namespace}'`,
-        );
+        return errorResult(`Permission denied: cannot read namespace '${namespace}'`);
       }
 
       return await recallCitation(dependencies, {

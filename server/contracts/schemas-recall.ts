@@ -2,7 +2,7 @@
  * Contract entries for recovery WAL handling and the entry/thought/search
  * read surface.
  */
-import { SOURCE_REFS_CONTRACT, SOURCE_SCOPE_CONTRACT } from "../../src/source-refs.ts";
+import { SOURCE_REFS_CONTRACT, SOURCE_SCOPE_CONTRACT } from "../domain/source-refs.ts";
 import type { ToolContract } from "./tool-contract.ts";
 
 export const RECALL_TOOL_CONTRACTS: Record<string, ToolContract> = {

@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 /**
  * The composition-root fill for the drop-folder scan bounds.
  *
@@ -13,7 +15,7 @@
  */
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { parseServerConfig } from "../config.ts";
 import type { MemoryToolDependencies } from "../tools/types.ts";
 import { discoverFiles } from "./drop-folder-discovery.ts";
@@ -52,7 +54,7 @@ async function treeWithDepth(): Promise<string> {
   // Under the repo, not a system temp directory: a sandbox and the host see
   // different ones, so a scratch tree written there is invisible to whoever
   // reads the failure.
-  const scratch = join(import.meta.dir, "..", "..", "_scratch");
+  const scratch = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "_scratch");
   await mkdir(scratch, { recursive: true });
   const root = await mkdtemp(join(scratch, "ob-drop-bounds-"));
   await writeFile(join(root, "a.md"), "top");

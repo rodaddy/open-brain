@@ -1,7 +1,5 @@
 # Open Brain
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/rodaddy)
-
 A semantic knowledge base and memory system built as an [MCP](https://modelcontextprotocol.io/) server. Store thoughts, decisions, contacts, sessions, and projects in PostgreSQL with pgvector — then search across all of them with hybrid vector + keyword retrieval.
 
 Built for AI agents that need persistent, searchable memory across conversations.
@@ -32,7 +30,7 @@ Major tool groups include search and synthesis (`search_brain`, `search_all`,
 
 ## Prerequisites
 
-- [Bun](https://bun.sh/) runtime
+- Node.js 24 (native TypeScript type stripping) and npm
 - PostgreSQL 13+ with [pgvector](https://github.com/pgvector/pgvector) extension
 - An OpenAI-compatible embedding endpoint
 
@@ -43,7 +41,7 @@ Major tool groups include search and synthesis (`search_brain`, `search_all`,
 ```bash
 git clone https://github.com/rodaddy/open-brain.git
 cd open-brain
-bun install
+npm ci
 ```
 
 ### 2. Configure environment
@@ -87,15 +85,7 @@ AUTH_TOKEN_PROMOTER=
 AUTH_TOKEN_READONLY=
 ```
 
-A helper script is also available for the standard admin, agent, discord,
-ob-admin, and readonly token set. Manage `AUTH_TOKEN_PROMOTER` explicitly until the
-helper supports promoter rotation:
-
-```bash
-./scripts/generate-tokens.sh           # show all tokens
-./scripts/generate-tokens.sh --verify  # verify tokens are set
-./scripts/generate-tokens.sh --rotate  # generate new tokens
-```
+Generate each token with `openssl rand -hex 32`.
 
 ### 3. Set up the database
 
@@ -106,13 +96,13 @@ CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 ```bash
-bun run migrate
+npm run migrate
 ```
 
 ### 4. Start the server
 
 ```bash
-bun run start
+npm run start
 ```
 
 The MCP server listens on `http://localhost:3100` with Streamable HTTP transport.
@@ -133,115 +123,30 @@ Defaults:
 mechanism. Prefer client retry/backoff behavior and explicit session cleanup
 before raising it.
 
-### Mini two-worker mode
+### Deploy And qmd Runtime
 
-For the Mini deployment, run two local Open Brain workers behind one stable
-entrypoint:
-
-```bash
-bun run start:two-worker
-```
-
-Defaults:
-
-- Public entrypoint: `http://localhost:3100`
-- Worker ports: `3101,3102`
-- Worker count: `2`
-- DB pool per worker: `5`
-- Migrations: only worker 1 runs migrations; worker 2 starts with
-  `OPEN_BRAIN_RUN_MIGRATIONS=0`
-
-Useful overrides:
-
-```bash
-OPEN_BRAIN_PUBLIC_PORT=3100 \
-OPEN_BRAIN_WORKERS=2 \
-OPEN_BRAIN_WORKER_PORTS=3101,3102 \
-OPEN_BRAIN_WORKER_DB_POOL_MAX=5 \
-bun run start:two-worker
-```
-
-The public `/health` endpoint aggregates both workers. MCP and REST traffic are
-round-robin proxied to the workers.
-
-### production-host Deploy And qmd Runtime
-
-The active production service runs on production-host (`192.0.2.21`) through launchd.
-Keep the boundaries explicit:
-
-- source checkout: `/workspace/open-brain`
-- running app: `/opt/open-brain/app`
-- database data/backups: `/opt/open-brain/pgdata18` and
-  `/opt/open-brain/backups`
-- qmd runtime/index/models: `/opt/qmd`
-
-Deploys should be owned by this repository, not by hand-copying files. Merging
-reviewed changes to `main` validates the repo, but production deploy is a
-separate release gate. Before installing a new Open Brain version on production-host,
-follow [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md):
-run the full local release-candidate test from a clean `main`, create a version
-tag whose commit is already reachable from `origin/main` or run a manual
-workflow dispatch from the current `origin/main` tip, and watch the deploy.
-
-The same repo-owned deploy command can be run on production-host only from the clean
-release-candidate worktree named in the SOP, after the same recorded release
-gate has passed:
-
-```bash
-bun run deploy:core01
-```
-
-That command installs the checked-out repo version into
-`/opt/open-brain/app`. Do not install Open Brain into
-`/workspace`; that is the source/mirror area, not the
-runtime. Do not install qmd or Postgres data under the source checkout either.
-
-On GitHub, the `deploy` job targets a macOS self-hosted runner whose label set
-comes from the repository variable `OPENBRAIN_DEPLOY_RUNNER_LABELS` — a JSON
-array, for example `["self-hosted","macOS","<deploy-host>","open-brain-deploy"]`.
-The variable is REQUIRED and has no fallback: a default that dropped the
-host-identifying label would still match some other macOS runner, which is a
-production deploy landing on an unintended machine, so an unset variable fails
-to schedule instead. It runs only for a `v*` tag push whose
-commit is reachable from `origin/main`, or a manual workflow dispatch from
-the current `origin/main` tip with `deploy_production=true`. The deploy script is
-the authoritative deploy-ref guard: tag deploys must be reachable from
-`origin/main`, and manual dispatches must match the current `origin/main` tip
-before staging files or restarting production-host. The job stages the checked-out repo
-with `tar`, installs runtime dependencies there, bootstraps the pinned qmd
-runtime, runs migrations, swaps the staged directory into place, restarts
-`com.rico.open-brain`, and checks `/health`.
+The one live Open Brain is the Mini's launchd service
+`com.rico.open-brain-local-clone`, deployed from a clean `main` at a release tag
+with `scripts/local-clone-deploy.sh`. The procedure and the installed release are
+in [`docs/local-clone-dogfood.md`](local-clone-dogfood.md) ("Installed release")
+and [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md). Deploys
+are owned by this repository, not by hand-copying files; merging to `main`
+validates the repo, and the deploy is a separate release gate.
 
 macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
-Homebrew bash path explicitly in automation:
+Homebrew bash path explicitly in automation.
 
-```bash
-/opt/homebrew/bin/bash scripts/core01-deploy-local.sh
-```
+The Open Brain runtime reads qmd through `QMD_PATH`. Do not put qmd indexes,
+qmd models, Postgres data, or required production `node_modules` under the
+source checkout.
 
-qmd is pinned and bootstrapped by:
-
-```bash
-bun run qmd:core01:bootstrap
-```
-
-The Open Brain runtime reads qmd through `QMD_PATH`, normally:
-
-```bash
-QMD_PATH=/opt/qmd/open-brain-qmd.ts
-```
-
-Do not put qmd indexes, qmd models, Postgres data, or required production
-`node_modules` under `/workspace`.
-
-NATS transport rollout is separate from the HTTP deploy. The broker label is
-`com.rico.open-brain-nats`; the Open Brain NATS request/reply worker label is
-`com.rico.open-brain-nats-worker`. Keep HTTP workers in HTTP mode and follow
-[`docs/core01-nats-worker-runbook.md`](core01-nats-worker-runbook.md)
-before installing or restarting the dedicated NATS worker service.
+NATS transport rollout is separate from the HTTP deploy. The local NATS
+request/reply worker label is `com.rico.open-brain-local-nats-worker`; install
+or check it with `scripts/install-nats-worker-launchagent.sh --local` (`--check` for
+the liveness assertion).
 
 qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
-required distributed memory layer for Hermes or other agents. Required qmd-
+required distributed memory layer for agents. Required qmd-
 derived facts must be promoted into Open Brain; remote qmd access remains a
 future best-effort escape hatch unless a separate approved wrapper ships.
 See [`docs/roadmap/optional-qmd-deep-lookup.md`](roadmap/optional-qmd-deep-lookup.md).
@@ -252,7 +157,7 @@ Smoke after startup:
 curl -fsS http://127.0.0.1:3100/health
 mcp2cli cache warm open-brain
 mcp2cli cache diff open-brain
-OPEN_BRAIN_CODEX_SMOKE_WRITE=1 bun run codex-memory-smoke
+OPEN_BRAIN_CODEX_SMOKE_WRITE=1 npm run codex-memory-smoke
 ```
 
 ## Python Client Package
@@ -306,7 +211,7 @@ developing, and production-host when the dev work is done. A retired host may st
 answer and still hold old Open Brain data — a successful connection is not
 evidence it is in scope.
 
-For full package usage, schema helper, live canary, and Hermes integration
+For full package usage, schema helper, and live canary
 guidance, see [`python/openbrain-memory/README.md`](../python/openbrain-memory/README.md).
 
 ## Auth & Permissions
@@ -371,18 +276,17 @@ Search modes: `hybrid` (default), `vector`, `keyword`.
 
 | Script | Description |
 |--------|-------------|
-| `bun run start` | Start the MCP server |
-| `bun run migrate` | Run pending database migrations |
-| `bun run test` | Run test suite |
-| `bun run typecheck` | Type-check without emit |
-| `bun run backfill` | Backfill NULL embeddings across all tables (`-- --all` re-embeds every row for model migrations) |
-| `bun run curate` | Automated curation: dedup, staleness, quality scoring (`--dry-run` supported) |
+| `npm run start` | Start the MCP server |
+| `npm run migrate` | Run pending database migrations |
+| `npm run test` | Run test suite |
+| `npm run typecheck` | Type-check without emit |
+| `npm run backfill` | Backfill NULL embeddings across all tables (`-- --all` re-embeds every row for model migrations) |
+| `npm run curate` | Automated curation: dedup, staleness, quality scoring (`--dry-run` supported) |
 
 Additional utility scripts in `scripts/`:
 
 | Script | Description |
 |--------|-------------|
-| `generate-tokens.sh` | Auth token generation, verification, and rotation via secret store |
 | `bulk-import.ts` | Batch import entries from JSON/CSV with deduplication |
 | `obsidian-sync.ts` | Sync entries with an Obsidian vault |
 | `ob-backfill.ts` | Extract and backfill session data from Claude Code transcripts |
@@ -402,8 +306,8 @@ Tier transitions can be manual (`set_tier` tool) or automated via the curation s
 ## Testing
 
 ```bash
-bun run test        # run test suite
-bun run typecheck   # type-check without emit
+npm run test        # run test suite
+npm run typecheck   # type-check without emit
 ```
 
 Tests live alongside source files and cover auth, embedding, search, migrations, and tool behavior. Coverage threshold: 80% for lines, functions, and statements (configured in `bunfig.toml`).
@@ -411,9 +315,9 @@ Tests live alongside source files and cover auth, embedding, search, migrations,
 ## Identity and Shared Knowledge Boundary
 
 Open Brain treats `shared-kb` as the canonical shared knowledge namespace, not
-as a caller identity. Person identities such as `rico` and `kevin`, agent lane
+as a caller identity. Person identities such as `rico` and `alex`, agent lane
 identities such as `bilby` and `skippy`, and promoter service identities such as
-`openbrain-promoter` or `hermes-promoter` are bearer-token identities.
+`openbrain-promoter` is the bearer-token identity.
 
 Normal agents write their own lane and read their lane plus shared knowledge
 through server read policy. Direct `shared-kb` writes require an explicit
@@ -469,7 +373,7 @@ To connect from an MCP client (e.g., Claude Desktop, Claude Code):
 }
 ```
 
-Hermes and Python package consumers normally use direct HTTP through
+Python package consumers normally use direct HTTP through
 `openbrain-memory`, not a local mcp2cli daemon. Configure them with
 `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, `OPENBRAIN_NAMESPACE`, and
 `OPENBRAIN_AGENT_ID`; use `OPENBRAIN_ALLOW_INSECURE_HTTP=1` only for trusted

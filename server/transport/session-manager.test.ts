@@ -13,9 +13,11 @@
  * true. These handlers are now the ones behind the serving process, so the
  * frozen behavior above is a production contract rather than a candidate's.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Request, Response } from "express";
+import { expectDefined } from "../testing/expect-defined.ts";
 import { createSessionTransportHandlers } from "./index.ts";
 import type {
   McpServerFactory,
@@ -86,7 +88,10 @@ function initializeRequest(identity: SessionIdentity = IDENTITY): Request {
   } as unknown as Request;
 }
 
-function sessionRequest(sessionId: string, identity: SessionIdentity | undefined): Request {
+function sessionRequest(
+  sessionId: string,
+  identity: SessionIdentity | undefined,
+): Request {
   return {
     headers: { "mcp-session-id": sessionId },
     body: { jsonrpc: "2.0", id: 2, method: "tools/list" },
@@ -162,281 +167,360 @@ function makeHandlers(overrides?: {
   });
 }
 
-describe("mcp session transport boundary", () => {
-  it("builds a fresh MCP server for every initialized session", async () => {
-    const { factory } = stubTransportFactory();
-    const server = countingServerFactory();
-    const handlers = makeHandlers({
-      transportFactory: factory,
-      serverFactory: server.factory,
-    });
+/** Reads the session id the stub transport recorded during initialization. */
+function firstSessionId(transports: StubTransport[]): string {
+  return expectDefined(
+    expectDefined(transports[0], "first transport").sessionId,
+    "session id",
+  );
+}
 
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-
-    expect(server.created()).toBe(2);
-    expect(handlers.sessionCount()).toBe(2);
-    await handlers.close();
+async function buildsFreshServerPerSession(): Promise<void> {
+  const { factory } = stubTransportFactory();
+  const server = countingServerFactory();
+  const handlers = makeHandlers({
+    transportFactory: factory,
+    serverFactory: server.factory,
   });
 
-  it("binds the session to its initializing identity and refuses another token", async () => {
-    const { factory, transports } = stubTransportFactory();
-    const handlers = makeHandlers({ transportFactory: factory });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
 
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    const sessionId = transports[0]?.sessionId;
-    expect(sessionId).toBeDefined();
+  expect(server.created()).toBe(2);
+  expect(handlers.sessionCount()).toBe(2);
+  await handlers.close();
+}
 
-    const owner = fakeResponse();
-    await handlers.handlePost(sessionRequest(sessionId!, IDENTITY), owner.response);
-    expect(owner.recorded.status).toBeUndefined();
-    expect(transports[0]?.handled).toBe(2);
+async function bindsSessionToInitializingIdentity(): Promise<void> {
+  const { factory, transports } = stubTransportFactory();
+  const handlers = makeHandlers({ transportFactory: factory });
 
-    const intruder = fakeResponse();
-    await handlers.handlePost(
-      sessionRequest(sessionId!, { ...IDENTITY, tokenClientId: "discord" }),
-      intruder.response,
-    );
-    expect(intruder.recorded.status).toBe(403);
-    expect(intruder.recorded.body).toEqual({
-      error: "Request identity does not match session",
-    });
-    expect(transports[0]?.handled).toBe(2);
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  const sessionId = firstSessionId(transports);
 
-    await handlers.close();
+  const owner = fakeResponse();
+  await handlers.handlePost(sessionRequest(sessionId, IDENTITY), owner.response);
+  expect(owner.recorded.status).toBeUndefined();
+  expect(transports[0]?.handled).toBe(2);
+
+  const intruder = fakeResponse();
+  await handlers.handlePost(
+    sessionRequest(sessionId, { ...IDENTITY, tokenClientId: "discord" }),
+    intruder.response,
+  );
+  expect(intruder.recorded.status).toBe(403);
+  expect(intruder.recorded.body).toEqual({
+    error: "Request identity does not match session",
+  });
+  expect(transports[0]?.handled).toBe(2);
+
+  await handlers.close();
+}
+
+async function refusesForeignIdentityOnGetAndDelete(): Promise<void> {
+  const { factory, transports } = stubTransportFactory();
+  const handlers = makeHandlers({ transportFactory: factory });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  const sessionId = firstSessionId(transports);
+
+  const get = fakeResponse();
+  await handlers.handleGet(
+    sessionRequest(sessionId, { ...IDENTITY, role: "admin" }),
+    get.response,
+  );
+  expect(get.recorded.status).toBe(403);
+
+  const del = fakeResponse();
+  await handlers.handleDelete(
+    sessionRequest(sessionId, { ...IDENTITY, clientId: "someone-else" }),
+    del.response,
+  );
+  expect(del.recorded.status).toBe(403);
+  expect(handlers.sessionCount()).toBe(1);
+
+  await handlers.close();
+}
+
+async function countsPendingInitializeAgainstAdmission(): Promise<void> {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { factory } = stubTransportFactory({ onHandle: () => gate });
+  const handlers = makeHandlers({
+    config: { maxSessions: 1 },
+    transportFactory: factory,
   });
 
-  it("refuses a session-bearing GET and DELETE from a different identity", async () => {
-    const { factory, transports } = stubTransportFactory();
-    const handlers = makeHandlers({ transportFactory: factory });
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    const sessionId = transports[0]!.sessionId!;
+  const slow = handlers.handlePost(initializeRequest(), fakeResponse().response);
+  expect(handlers.pendingInitializeCount()).toBe(1);
 
-    const get = fakeResponse();
-    await handlers.handleGet(
-      sessionRequest(sessionId, { ...IDENTITY, role: "admin" }),
-      get.response,
-    );
-    expect(get.recorded.status).toBe(403);
+  const rejected = fakeResponse();
+  await handlers.handlePost(initializeRequest(), rejected.response);
+  expect(rejected.recorded.status).toBe(429);
 
-    const del = fakeResponse();
-    await handlers.handleDelete(
-      sessionRequest(sessionId, { ...IDENTITY, clientId: "someone-else" }),
-      del.response,
-    );
-    expect(del.recorded.status).toBe(403);
-    expect(handlers.sessionCount()).toBe(1);
+  expectDefined(release, "gate release")();
+  await slow;
+  await handlers.close();
+}
 
-    await handlers.close();
+async function answersExhaustedAdmissionWithRetryMetadata(): Promise<void> {
+  const { factory } = stubTransportFactory();
+  const handlers = makeHandlers({
+    config: { maxSessions: 1, retryAfterSeconds: 7 },
+    transportFactory: factory,
+  });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+
+  const rejected = fakeResponse();
+  await handlers.handlePost(initializeRequest(), rejected.response);
+
+  expect(rejected.recorded.status).toBe(429);
+  expect(rejected.recorded.headers["Retry-After"]).toBe("7");
+  expect(rejected.recorded.body).toEqual({
+    error: "Too many active sessions",
+    code: "session_cap_exceeded",
+    active_sessions: 1,
+    max_sessions: 1,
+    retry_after_seconds: 7,
   });
 
-  it("counts a pending initialize against admission before its session exists", async () => {
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { factory } = stubTransportFactory({ onHandle: () => gate });
-    const handlers = makeHandlers({
-      config: { maxSessions: 1 },
-      transportFactory: factory,
-    });
+  await handlers.close();
+}
 
-    const slow = handlers.handlePost(initializeRequest(), fakeResponse().response);
-    expect(handlers.pendingInitializeCount()).toBe(1);
-
-    const rejected = fakeResponse();
-    await handlers.handlePost(initializeRequest(), rejected.response);
-    expect(rejected.recorded.status).toBe(429);
-
-    release!();
-    await slow;
-    await handlers.close();
+async function doesNotExpireDuringInFlightRequest(): Promise<void> {
+  let release: (() => void) | undefined;
+  let seenClosedDuringRequest: boolean | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { factory, transports } = stubTransportFactory({
+    onHandle: async (transport) => {
+      if (transport.handled < 2) return;
+      await gate;
+      seenClosedDuringRequest = transport.closed;
+    },
+  });
+  const handlers = makeHandlers({
+    config: { sessionTtlMs: 5 },
+    transportFactory: factory,
   });
 
-  it("answers an exhausted admission with 429, Retry-After, and retry metadata", async () => {
-    const { factory } = stubTransportFactory();
-    const handlers = makeHandlers({
-      config: { maxSessions: 1, retryAfterSeconds: 7 },
-      transportFactory: factory,
-    });
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  const sessionId = firstSessionId(transports);
 
-    const rejected = fakeResponse();
-    await handlers.handlePost(initializeRequest(), rejected.response);
+  const inFlight = handlers.handlePost(
+    sessionRequest(sessionId, IDENTITY),
+    fakeResponse().response,
+  );
+  // Let the 5 ms idle timer fire while the request is still executing.
+  await delay(40);
+  expect(transports[0]?.closed).toBe(false);
+  expect(handlers.sessionCount()).toBe(1);
 
-    expect(rejected.recorded.status).toBe(429);
-    expect(rejected.recorded.headers["Retry-After"]).toBe("7");
-    expect(rejected.recorded.body).toEqual({
-      error: "Too many active sessions",
-      code: "session_cap_exceeded",
-      active_sessions: 1,
-      max_sessions: 1,
-      retry_after_seconds: 7,
-    });
+  expectDefined(release, "gate release")();
+  await inFlight;
+  expect(seenClosedDuringRequest).toBe(false);
 
-    await handlers.close();
+  await handlers.close();
+}
+
+async function expiresIdleSession(): Promise<void> {
+  const { factory, transports } = stubTransportFactory();
+  const handlers = makeHandlers({
+    config: { sessionTtlMs: 5 },
+    transportFactory: factory,
   });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  expect(handlers.sessionCount()).toBe(1);
 
-  it("does not expire a session while a request is still in flight", async () => {
-    let release: (() => void) | undefined;
-    let seenClosedDuringRequest: boolean | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { factory, transports } = stubTransportFactory({
-      onHandle: async (transport) => {
-        if (transport.handled < 2) return;
-        await gate;
-        seenClosedDuringRequest = transport.closed;
-      },
-    });
-    const handlers = makeHandlers({
-      config: { sessionTtlMs: 5 },
-      transportFactory: factory,
-    });
+  await delay(60);
 
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    const sessionId = transports[0]!.sessionId!;
+  expect(handlers.sessionCount()).toBe(0);
+  expect(transports[0]?.closed).toBe(true);
+  await handlers.close();
+}
 
-    const inFlight = handlers.handlePost(
-      sessionRequest(sessionId, IDENTITY),
-      fakeResponse().response,
-    );
-    // Let the 5 ms idle timer fire while the request is still executing.
-    await Bun.sleep(40);
-    expect(transports[0]?.closed).toBe(false);
-    expect(handlers.sessionCount()).toBe(1);
-
-    release!();
-    await inFlight;
-    expect(seenClosedDuringRequest).toBe(false);
-
-    await handlers.close();
+async function closesSessionOnClientDelete(): Promise<void> {
+  const { factory, transports } = stubTransportFactory();
+  const handlers = makeHandlers({
+    config: { maxSessions: 1 },
+    transportFactory: factory,
   });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  const sessionId = firstSessionId(transports);
 
-  it("expires an idle session once no request is in flight", async () => {
-    const { factory, transports } = stubTransportFactory();
-    const handlers = makeHandlers({
-      config: { sessionTtlMs: 5 },
-      transportFactory: factory,
-    });
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    expect(handlers.sessionCount()).toBe(1);
+  const deleted = fakeResponse();
+  await handlers.handleDelete(sessionRequest(sessionId, IDENTITY), deleted.response);
+  expect(deleted.recorded.status).toBe(200);
+  expect(deleted.recorded.body).toEqual({ status: "session closed" });
+  expect(handlers.sessionCount()).toBe(0);
+  expect(transports[0]?.closed).toBe(true);
 
-    await Bun.sleep(60);
+  const readmitted = fakeResponse();
+  await handlers.handlePost(initializeRequest(), readmitted.response);
+  expect(readmitted.recorded.status).toBeUndefined();
+  expect(handlers.sessionCount()).toBe(1);
 
-    expect(handlers.sessionCount()).toBe(0);
-    expect(transports[0]?.closed).toBe(true);
-    await handlers.close();
-  });
+  await handlers.close();
+}
 
-  it("closes a session on client DELETE and frees its admission slot", async () => {
-    const { factory, transports } = stubTransportFactory();
-    const handlers = makeHandlers({
-      config: { maxSessions: 1 },
-      transportFactory: factory,
-    });
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    const sessionId = transports[0]!.sessionId!;
+async function rejectsSessionlessNonInitializePost(): Promise<void> {
+  const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
+  const recorded = fakeResponse();
+  await handlers.handlePost(
+    {
+      headers: {},
+      body: { jsonrpc: "2.0", id: 3, method: "tools/list" },
+      auth: IDENTITY,
+    } as unknown as Request,
+    recorded.response,
+  );
+  expect(recorded.recorded.status).toBe(400);
+  await handlers.close();
+}
 
-    const deleted = fakeResponse();
-    await handlers.handleDelete(sessionRequest(sessionId, IDENTITY), deleted.response);
-    expect(deleted.recorded.status).toBe(200);
-    expect(deleted.recorded.body).toEqual({ status: "session closed" });
-    expect(handlers.sessionCount()).toBe(0);
-    expect(transports[0]?.closed).toBe(true);
+async function rejectsUnknownSessionId(): Promise<void> {
+  const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
+  const unknown = randomUUID();
 
-    const readmitted = fakeResponse();
-    await handlers.handlePost(initializeRequest(), readmitted.response);
-    expect(readmitted.recorded.status).toBeUndefined();
-    expect(handlers.sessionCount()).toBe(1);
+  const get = fakeResponse();
+  await handlers.handleGet(sessionRequest(unknown, IDENTITY), get.response);
+  expect(get.recorded.status).toBe(400);
 
-    await handlers.close();
-  });
+  const del = fakeResponse();
+  await handlers.handleDelete(sessionRequest(unknown, IDENTITY), del.response);
+  expect(del.recorded.status).toBe(400);
 
-  it("rejects a non-initialize POST that carries no session", async () => {
-    const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
-    const recorded = fakeResponse();
-    await handlers.handlePost(
-      { headers: {}, body: { jsonrpc: "2.0", id: 3, method: "tools/list" }, auth: IDENTITY } as unknown as Request,
-      recorded.response,
-    );
-    expect(recorded.recorded.status).toBe(400);
-    await handlers.close();
-  });
+  await handlers.close();
+}
 
-  it("rejects an unknown session id on GET and DELETE", async () => {
-    const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
-    const unknown = randomUUID();
+async function refusesUnauthenticatedInitialize(): Promise<void> {
+  const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
+  const recorded = fakeResponse();
+  const unauthenticated = initializeRequest();
+  delete (unauthenticated as { auth?: SessionIdentity }).auth;
 
-    const get = fakeResponse();
-    await handlers.handleGet(sessionRequest(unknown, IDENTITY), get.response);
-    expect(get.recorded.status).toBe(400);
+  await handlers.handlePost(unauthenticated, recorded.response);
 
-    const del = fakeResponse();
-    await handlers.handleDelete(sessionRequest(unknown, IDENTITY), del.response);
-    expect(del.recorded.status).toBe(400);
+  expect(recorded.recorded.status).toBe(401);
+  expect(recorded.recorded.body).toEqual({ error: "Auth info missing" });
+  expect(handlers.sessionCount()).toBe(0);
+  await handlers.close();
+}
 
-    await handlers.close();
-  });
+async function ignoresMalformedSessionHeader(): Promise<void> {
+  const { factory } = stubTransportFactory();
+  const handlers = makeHandlers({ transportFactory: factory });
+  const recorded = fakeResponse();
+  await handlers.handleGet(
+    {
+      headers: { "mcp-session-id": "not-a-uuid" },
+      auth: IDENTITY,
+    } as unknown as Request,
+    recorded.response,
+  );
+  expect(recorded.recorded.status).toBe(400);
+  await handlers.close();
+}
 
-  it("refuses an initialize that arrives without authenticated identity", async () => {
-    const handlers = makeHandlers({ transportFactory: stubTransportFactory().factory });
-    const recorded = fakeResponse();
-    const unauthenticated = initializeRequest();
-    delete (unauthenticated as { auth?: SessionIdentity }).auth;
-
-    await handlers.handlePost(unauthenticated, recorded.response);
-
-    expect(recorded.recorded.status).toBe(401);
-    expect(recorded.recorded.body).toEqual({ error: "Auth info missing" });
-    expect(handlers.sessionCount()).toBe(0);
-    await handlers.close();
-  });
-
-  it("ignores a malformed session header instead of trusting it", async () => {
-    const { factory } = stubTransportFactory();
-    const handlers = makeHandlers({ transportFactory: factory });
-    const recorded = fakeResponse();
-    await handlers.handleGet(
-      { headers: { "mcp-session-id": "not-a-uuid" }, auth: IDENTITY } as unknown as Request,
-      recorded.response,
-    );
-    expect(recorded.recorded.status).toBe(400);
-    await handlers.close();
-  });
-
-  it("releases the pending initialize slot when the handshake throws", async () => {
-    const failing: McpServerFactory = () => ({
+async function releasesPendingSlotWhenHandshakeThrows(): Promise<void> {
+  const failing: McpServerFactory = () =>
+    ({
       connect: async () => {
         throw new Error("connect_failed");
       },
     }) as ReturnType<McpServerFactory>;
-    const handlers = makeHandlers({
-      config: { maxSessions: 1 },
-      transportFactory: stubTransportFactory().factory,
-      serverFactory: failing,
-    });
-
-    await expect(
-      handlers.handlePost(initializeRequest(), fakeResponse().response),
-    ).rejects.toThrow("connect_failed");
-    expect(handlers.pendingInitializeCount()).toBe(0);
-    expect(handlers.sessionCount()).toBe(0);
-
-    await handlers.close();
+  const handlers = makeHandlers({
+    config: { maxSessions: 1 },
+    transportFactory: stubTransportFactory().factory,
+    serverFactory: failing,
   });
 
-  it("closes every live session when the manager shuts down", async () => {
-    const { factory, transports } = stubTransportFactory();
-    const handlers = makeHandlers({ transportFactory: factory });
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    await handlers.handlePost(initializeRequest(), fakeResponse().response);
-    expect(handlers.sessionCount()).toBe(2);
+  await expect(
+    handlers.handlePost(initializeRequest(), fakeResponse().response),
+  ).rejects.toThrow("connect_failed");
+  expect(handlers.pendingInitializeCount()).toBe(0);
+  expect(handlers.sessionCount()).toBe(0);
 
-    await handlers.close();
+  await handlers.close();
+}
 
-    expect(handlers.sessionCount()).toBe(0);
-    expect(transports.every((transport) => transport.closed)).toBe(true);
-  });
+async function closesEveryLiveSessionOnShutdown(): Promise<void> {
+  const { factory, transports } = stubTransportFactory();
+  const handlers = makeHandlers({ transportFactory: factory });
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  await handlers.handlePost(initializeRequest(), fakeResponse().response);
+  expect(handlers.sessionCount()).toBe(2);
+
+  await handlers.close();
+
+  expect(handlers.sessionCount()).toBe(0);
+  expect(transports.every((transport) => transport.closed)).toBe(true);
+}
+
+describe("mcp session transport boundary", () => {
+  it(
+    "builds a fresh MCP server for every initialized session",
+    buildsFreshServerPerSession,
+  );
+
+  it(
+    "binds the session to its initializing identity and refuses another token",
+    bindsSessionToInitializingIdentity,
+  );
+
+  it(
+    "refuses a session-bearing GET and DELETE from a different identity",
+    refusesForeignIdentityOnGetAndDelete,
+  );
+
+  it(
+    "counts a pending initialize against admission before its session exists",
+    countsPendingInitializeAgainstAdmission,
+  );
+
+  it(
+    "answers an exhausted admission with 429, Retry-After, and retry metadata",
+    answersExhaustedAdmissionWithRetryMetadata,
+  );
+
+  it(
+    "does not expire a session while a request is still in flight",
+    doesNotExpireDuringInFlightRequest,
+  );
+
+  it("expires an idle session once no request is in flight", expiresIdleSession);
+
+  it(
+    "closes a session on client DELETE and frees its admission slot",
+    closesSessionOnClientDelete,
+  );
+
+  it(
+    "rejects a non-initialize POST that carries no session",
+    rejectsSessionlessNonInitializePost,
+  );
+
+  it("rejects an unknown session id on GET and DELETE", rejectsUnknownSessionId);
+
+  it(
+    "refuses an initialize that arrives without authenticated identity",
+    refusesUnauthenticatedInitialize,
+  );
+
+  it(
+    "ignores a malformed session header instead of trusting it",
+    ignoresMalformedSessionHeader,
+  );
+
+  it(
+    "releases the pending initialize slot when the handshake throws",
+    releasesPendingSlotWhenHandshakeThrows,
+  );
+
+  it(
+    "closes every live session when the manager shuts down",
+    closesEveryLiveSessionOnShutdown,
+  );
 });

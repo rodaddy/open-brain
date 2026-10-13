@@ -8,6 +8,7 @@ import {
 } from "./types.ts";
 import { authorize, contentHash } from "./memory-helpers.ts";
 import { RAW_TURN_ROLES } from "../domain/raw-turn-roles.ts";
+import { createEntryWriteRepository } from "../db/entry-write-repository.ts";
 
 const harnessNoise = [
   /^\[Request interrupted by user[^\]]*\]$/,
@@ -42,10 +43,7 @@ const rawTurnSchema = z.object({
 type RawTurn = z.infer<typeof rawTurnSchema>;
 
 function isHarnessNoise(content: string): boolean {
-  return (
-    /^\s*$/.test(content) ||
-    harnessNoise.some((pattern) => pattern.test(content))
-  );
+  return /^\s*$/.test(content) || harnessNoise.some((pattern) => pattern.test(content));
 }
 
 export function registerIngestRawTurnTool(
@@ -89,27 +87,13 @@ export function registerIngestRawTurnTool(
       try {
         const values: unknown[] = [];
         const tuples = kept.map((turn, index) => {
-          appendTurnValues(
-            values,
-            auth.namespace,
-            auth.identity.clientId,
-            turn,
-          );
+          appendTurnValues(values, auth.namespace, auth.identity.clientId, turn);
           const first = index * 19 + 1;
           return `(${Array.from({ length: 19 }, (_, offset) => `$${first + offset}`).join(",")})`;
         });
-        const rows = await dependencies.pool.query(
-          `INSERT INTO ob_raw_turns
-             (namespace, turn_uuid, parent_turn_uuid, logical_parent_turn_uuid,
-              prompt_id, session_ref, repo, git_branch, turn_index, role,
-              is_human_prompt, content, content_hash, runtime, token_estimate,
-              metadata, redaction_applied, created_by, occurred_at)
-           VALUES ${tuples.join(",")}
-           ON CONFLICT (namespace, turn_uuid) DO NOTHING
-           RETURNING id`,
-          values,
-        );
-        const ingested = rows.rows.length;
+        const repository = createEntryWriteRepository(dependencies.pool);
+        const rows = await repository.insertRawTurns({ tuples, values });
+        const ingested = rows.length;
         dependencies.logger.info(
           {
             tool: "ingest_raw_turn",

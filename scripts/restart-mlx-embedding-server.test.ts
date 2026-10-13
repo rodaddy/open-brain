@@ -1,21 +1,19 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { testScratchDir } from "./test-support/scratch-dir.ts";
 import { spawnSync } from "node:child_process";
 
-const scriptPath = join(import.meta.dir, "restart-mlx-embedding-server.sh");
+const scriptPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "restart-mlx-embedding-server.sh",
+);
 const tempRoots: string[] = [];
 
 function makeTempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "ob-mlx-restart-"));
+  const root = testScratchDir("ob-mlx-restart-");
   tempRoots.push(root);
   return root;
 }
@@ -81,8 +79,8 @@ describe("restart-mlx-embedding-server.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.error).toBeUndefined();
-    expect(readFileSync(join(root, "runtime", "mlx-embedding-server.err.log"), "utf8")).toContain(
-      "curl not found or not executable",
-    );
+    expect(
+      readFileSync(join(root, "runtime", "mlx-embedding-server.err.log"), "utf8"),
+    ).toContain("curl not found or not executable");
   });
 });

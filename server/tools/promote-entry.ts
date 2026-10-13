@@ -24,8 +24,8 @@
  * ## Dry-run is the default
  *
  * `dry_run` defaults to TRUE, so a promotion happens only when a caller asks
- * for it in as many words. Current-src defaults this to `false`; the rewrite
- * flips it, exactly as the ported `promote_shared` already does
+ * for it in as many words. The pre-transplant tool defaulted this to `false`;
+ * this one flips it, exactly as `promote_shared` already does
  * (`promotion.ts`, `{ dryRun: args.dry_run ?? true }`). Writing into another
  * namespace on a caller's first exploratory call is the failure mode the
  * repo's mutation-is-opt-in standard exists to stop, and the report shape is

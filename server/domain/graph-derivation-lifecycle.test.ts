@@ -5,16 +5,21 @@
  * readable size; the anchor-identity and prune coverage live in
  * graph-derivation-anchor-identity.test.ts and graph-derivation-prune.test.ts.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { deriveGraphFromMetadata } from "./graph-derivation.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
-import { auth, baseInput, FakeGraph } from "./graph-derivation-test-helpers.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
+import {
+  auth,
+  baseInput,
+  asRepository,
+  FakeGraph,
+} from "./graph-derivation-test-helpers.ts";
 
 const ANCHOR_CANONICAL = "thought:11111111-1111-4111-8111-111111111111";
 
 async function derivesAnchorEntitiesAndEdgesOnFirstRun() {
   const g = new FakeGraph();
-  const receipt = await deriveGraphFromMetadata(g, auth, baseInput());
+  const receipt = await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
 
   expect(receipt.status).toBe("new");
   expect(receipt.previous_hash).toBeUndefined();
@@ -32,10 +37,10 @@ async function derivesAnchorEntitiesAndEdgesOnFirstRun() {
 
 async function identicalRerunSkipsAllWrites() {
   const g = new FakeGraph();
-  await deriveGraphFromMetadata(g, auth, baseInput());
+  await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
   const callsAfterFirst = g.calls.length;
 
-  const receipt = await deriveGraphFromMetadata(g, auth, baseInput());
+  const receipt = await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
   expect(receipt.status).toBe("unchanged");
   expect(receipt.entities_upserted).toBe(0);
   expect(receipt.links_upserted).toBe(0);
@@ -48,7 +53,7 @@ async function identicalRerunSkipsAllWrites() {
 
 async function forcedRederiveWithIdenticalContentAddsNoDuplicates() {
   const g = new FakeGraph();
-  const first = await deriveGraphFromMetadata(g, auth, baseInput());
+  const first = await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
   // Simulate a stale prior derivation (e.g. an older hash version) so the
   // next run takes the "changed" branch even though the content is identical.
   // The anchor is addressed by its stable canonical id, not its display name.
@@ -57,7 +62,7 @@ async function forcedRederiveWithIdenticalContentAddsNoDuplicates() {
     "anchor row",
   );
   anchorRow.metadata = { derivation_hash: "stale-prior-hash" };
-  const second = await deriveGraphFromMetadata(g, auth, baseInput());
+  const second = await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
 
   expect(second.status).toBe("changed");
   expect(second.previous_hash).toBe("stale-prior-hash");
@@ -74,10 +79,10 @@ async function forcedRederiveWithIdenticalContentAddsNoDuplicates() {
 
 async function newMetadataTermAddsANodeAndReportsPreviousHash() {
   const g = new FakeGraph();
-  const first = await deriveGraphFromMetadata(g, auth, baseInput());
+  const first = await deriveGraphFromMetadata(asRepository(g), auth, baseInput());
 
   const changed = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       metadata: {
@@ -98,7 +103,7 @@ async function newMetadataTermAddsANodeAndReportsPreviousHash() {
 async function caseInsensitiveIdentityCollapsesToOneNode() {
   const g = new FakeGraph();
   const receipt = await deriveGraphFromMetadata(
-    g,
+    asRepository(g),
     auth,
     baseInput({
       metadata: { topics: [], people: ["Rico", "rico", " RICO "] },

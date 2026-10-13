@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canDelete, canWrite } from "../auth/permissions.ts";
+import { createEntityRepository } from "../db/entity-repository.ts";
 import {
   authIdentity,
   errorResult,
@@ -79,32 +80,21 @@ export function registerLinkEntities(
         return errorResult(`Permission denied: ${target.denied}`);
       }
 
-      const { rows } = await dependencies.pool.query(
-        `INSERT INTO ob_links
-           (from_type, from_id, to_type, to_id, relation, weight, namespace, metadata, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
-         ON CONFLICT (namespace, from_type, from_id, to_type, to_id, relation)
-         WHERE archived_at IS NULL
-         DO UPDATE SET
-           weight = EXCLUDED.weight,
-           metadata = ob_links.metadata || EXCLUDED.metadata,
-           archived_at = NULL,
-           updated_at = NOW()
-         RETURNING id, (xmax = 0) AS is_new, relation, weight, created_at`,
-        [
-          args.from_type,
-          args.from_id,
-          args.to_type,
-          args.to_id,
-          args.relation,
-          args.weight ?? 1.0,
-          target.namespace,
-          JSON.stringify(args.metadata ?? {}),
-          identity.clientId,
-        ],
-      );
+      const repository = createEntityRepository(dependencies.pool);
+      const rows = await repository.upsertLink({
+        fromType: args.from_type,
+        fromId: args.from_id,
+        toType: args.to_type,
+        toId: args.to_id,
+        relation: args.relation,
+        weight: args.weight ?? 1.0,
+        namespace: target.namespace,
+        metadata: JSON.stringify(args.metadata ?? {}),
+        createdBy: identity.clientId,
+      });
 
-      const row = rows[0];
+      const [row] = rows;
+      if (!row) return errorResult("Link upsert returned no row");
       dependencies.logger.info(
         { tool: "link_entities", id: row.id, isNew: row.is_new },
         "tool_result",
@@ -138,9 +128,7 @@ export function registerUnlinkEntities(
         from_id: graphUuid.describe("Source node UUID"),
         to_type: z.string().min(1).max(200).describe("Target node type"),
         to_id: graphUuid.describe("Target node UUID"),
-        relation: z
-          .enum(LINK_RELATIONS)
-          .describe("Relationship type to remove"),
+        relation: z.enum(LINK_RELATIONS).describe("Relationship type to remove"),
         namespace: writeNamespaceSchema,
       },
       annotations: {
@@ -160,30 +148,18 @@ export function registerUnlinkEntities(
         return errorResult(`Permission denied: ${target.denied}`);
       }
 
-      // Soft delete: the row is retained with an `archived_at` stamp so the
-      // graph's history stays reconstructible.
-      const { rows } = await dependencies.pool.query(
-        `UPDATE ob_links
-            SET archived_at = NOW(), updated_at = NOW()
-          WHERE namespace = $1
-            AND from_type = $2
-            AND from_id = $3
-            AND to_type = $4
-            AND to_id = $5
-            AND relation = $6
-            AND archived_at IS NULL
-        RETURNING id`,
-        [
-          target.namespace,
-          args.from_type,
-          args.from_id,
-          args.to_type,
-          args.to_id,
-          args.relation,
-        ],
-      );
+      const repository = createEntityRepository(dependencies.pool);
+      const rows = await repository.archiveLink({
+        namespace: target.namespace,
+        fromType: args.from_type,
+        fromId: args.from_id,
+        toType: args.to_type,
+        toId: args.to_id,
+        relation: args.relation,
+      });
 
-      if (rows.length === 0) {
+      const [archived] = rows;
+      if (!archived) {
         dependencies.logger.info(
           { tool: "unlink_entities", noop: true },
           "tool_result",
@@ -193,11 +169,11 @@ export function registerUnlinkEntities(
         return textResult("Already unlinked or not found");
       }
       dependencies.logger.info(
-        { tool: "unlink_entities", id: rows[0].id },
+        { tool: "unlink_entities", id: archived.id },
         "tool_result",
       );
       return textResult({
-        id: rows[0].id,
+        id: archived.id,
         namespace: target.namespace,
         unlinked: true,
       });

@@ -16,6 +16,7 @@
  * runs.
  */
 import { z } from "zod";
+import { createContextPackRepository } from "../db/context-pack-repository.ts";
 
 /**
  * The durable-memory kinds a distilled conversation produces.
@@ -24,13 +25,8 @@ import { z } from "zod";
  * contract ingests statements a caller decided are durable, not the traffic
  * they were derived from.
  */
-export const CONVERSATION_FACT_EVENT_TYPES = [
-  "fact",
-  "decision",
-  "receipt",
-] as const;
-export type ConversationFactEventType =
-  (typeof CONVERSATION_FACT_EVENT_TYPES)[number];
+export const CONVERSATION_FACT_EVENT_TYPES = ["fact", "decision", "receipt"] as const;
+export type ConversationFactEventType = (typeof CONVERSATION_FACT_EVENT_TYPES)[number];
 
 /**
  * Keys whose PRESENCE anywhere in a request means a raw conversation body was
@@ -182,9 +178,7 @@ export function findRawTranscriptKey(value: unknown): string | null {
     return null;
   }
   if (value && typeof value === "object") {
-    for (const [key, child] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (RAW_TRANSCRIPT_KEYS.has(key.toLowerCase())) return key;
       const hit = findRawTranscriptKey(child);
       if (hit) return hit;
@@ -233,10 +227,7 @@ function evidenceKey(
 }
 
 /** @returns The value at `key` when it is a string, else `undefined`. */
-function stringField(
-  record: Record<string, unknown>,
-  key: string,
-): string | undefined {
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
@@ -320,12 +311,11 @@ export async function mergeDuplicateEvidence(
   eventContentHash: string,
   fact: { event_type: ConversationFactEventType; source_locator?: string },
 ): Promise<{ eventId: string; kind: UnitDisposition }> {
-  const { rows } = await client.query(
-    `SELECT id, event_type, metadata FROM ob_session_events
-      WHERE lane_id = $1 AND content_hash = $2
-      FOR UPDATE`,
-    [laneId, eventContentHash],
-  );
+  const repository = createContextPackRepository(client);
+  const { rows } = await repository.lockDuplicateEvent({
+    laneId,
+    eventContentHash,
+  });
   const row = rows[0];
   if (!row) {
     // The conflicting row vanished between the INSERT and this readback (a
@@ -353,17 +343,10 @@ export async function mergeDuplicateEvidence(
     return { eventId, kind: "evidence_not_stored" };
   }
 
-  await client.query(
-    `UPDATE ob_session_events
-        SET metadata = jsonb_set(
-              COALESCE(metadata, '{}'::jsonb),
-              '{additional_evidence}',
-              $2::jsonb,
-              true
-            )
-      WHERE id = $1`,
-    [eventId, JSON.stringify([...existingEvidence, candidate])],
-  );
+  await repository.mergeEventEvidence({
+    eventId,
+    evidenceJson: JSON.stringify([...existingEvidence, candidate]),
+  });
   return { eventId, kind: "duplicate_evidence_merged" };
 }
 

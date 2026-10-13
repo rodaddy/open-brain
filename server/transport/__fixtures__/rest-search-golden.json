@@ -1,0 +1,134 @@
+{
+  "shared": {
+    "status": 200,
+    "body": {
+      "results": [
+        {
+          "source_type": "thought",
+          "id": "11111111-1111-4111-8111-111111111111",
+          "namespace": "shared-kb",
+          "content_preview": "zqxparity zqxparity zqxparity zqxparity shared alpha",
+          "tags": [
+            "zqxparity"
+          ],
+          "created_by": "parity",
+          "created_at": "2026-01-02T03:04:05.000Z",
+          "updated_at": "2026-01-02T03:04:05.000Z",
+          "tier": "warm",
+          "distance": 0,
+          "usefulness": 8,
+          "access_count": 0,
+          "extracted_metadata": null,
+          "source_ref": {
+            "source": "brain",
+            "type": "thought",
+            "id": "11111111-1111-4111-8111-111111111111",
+            "namespace": "shared-kb",
+            "created_by": "parity",
+            "created_at": "2026-01-02T03:04:05.000Z",
+            "last_updated_at": "2026-01-02T03:04:05.000Z",
+            "label": "zqxparity zqxparity zqxparity zqxparity shared alpha",
+            "preview": "zqxparity zqxparity zqxparity zqxparity shared alpha"
+          },
+          "explicit_links": []
+        },
+        {
+          "source_type": "thought",
+          "id": "22222222-2222-4222-8222-222222222222",
+          "namespace": "shared-kb",
+          "content_preview": "zqxparity zqxparity zqxparity shared beta",
+          "tags": [
+            "zqxparity"
+          ],
+          "created_by": "parity",
+          "created_at": "2026-01-02T03:04:05.000Z",
+          "updated_at": "2026-01-02T03:04:05.000Z",
+          "tier": "warm",
+          "distance": 0,
+          "usefulness": 6,
+          "access_count": 0,
+          "extracted_metadata": null,
+          "source_ref": {
+            "source": "brain",
+            "type": "thought",
+            "id": "22222222-2222-4222-8222-222222222222",
+            "namespace": "shared-kb",
+            "created_by": "parity",
+            "created_at": "2026-01-02T03:04:05.000Z",
+            "last_updated_at": "2026-01-02T03:04:05.000Z",
+            "label": "zqxparity zqxparity zqxparity shared beta",
+            "preview": "zqxparity zqxparity zqxparity shared beta"
+          },
+          "explicit_links": []
+        }
+      ],
+      "count": 2
+    }
+  },
+  "scoped": {
+    "status": 200,
+    "body": {
+      "results": [
+        {
+          "source_type": "thought",
+          "id": "33333333-3333-4333-8333-333333333333",
+          "namespace": "parity-scoped",
+          "content_preview": "zqxparity zqxparity scoped gamma",
+          "tags": [
+            "zqxparity"
+          ],
+          "created_by": "parity",
+          "created_at": "2026-01-02T03:04:05.000Z",
+          "updated_at": "2026-01-02T03:04:05.000Z",
+          "tier": "warm",
+          "distance": 0,
+          "usefulness": 4,
+          "access_count": 0,
+          "extracted_metadata": null,
+          "source_ref": {
+            "source": "brain",
+            "type": "thought",
+            "id": "33333333-3333-4333-8333-333333333333",
+            "namespace": "parity-scoped",
+            "created_by": "parity",
+            "created_at": "2026-01-02T03:04:05.000Z",
+            "last_updated_at": "2026-01-02T03:04:05.000Z",
+            "label": "zqxparity zqxparity scoped gamma",
+            "preview": "zqxparity zqxparity scoped gamma"
+          },
+          "explicit_links": []
+        },
+        {
+          "source_type": "thought",
+          "id": "44444444-4444-4444-8444-444444444444",
+          "namespace": "parity-scoped",
+          "content_preview": "zqxparity scoped delta",
+          "tags": [
+            "zqxparity"
+          ],
+          "created_by": "parity",
+          "created_at": "2026-01-02T03:04:05.000Z",
+          "updated_at": "2026-01-02T03:04:05.000Z",
+          "tier": "warm",
+          "distance": 0,
+          "usefulness": 2,
+          "access_count": 0,
+          "extracted_metadata": null,
+          "source_ref": {
+            "source": "brain",
+            "type": "thought",
+            "id": "44444444-4444-4444-8444-444444444444",
+            "namespace": "parity-scoped",
+            "created_by": "parity",
+            "created_at": "2026-01-02T03:04:05.000Z",
+            "last_updated_at": "2026-01-02T03:04:05.000Z",
+            "label": "zqxparity scoped delta",
+            "preview": "zqxparity scoped delta"
+          },
+          "explicit_links": []
+        }
+      ],
+      "count": 2
+    }
+  }
+}

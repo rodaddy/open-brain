@@ -4,21 +4,18 @@
  *
  * Split out of `drop-folder-collector.ts` (issue 864, L5).
  */
-import { toSql } from "pgvector/pg";
-import type pg from "pg";
-import type { AuthInfo } from "../../src/types.ts";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
+import type { AuthInfo } from "../types.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
 import { backgroundExtract } from "../domain/extraction.ts";
 import type { DropCollectorDeps } from "./drop-folder-contract.ts";
+import { DURABLE_TABLE } from "../db/drop-folder-repository.ts";
 
-// The durable table drop files land in. Reused (not re-implemented) so identical
-// content dedupes via the existing (content_hash, namespace) upsert, and the
-// same background metadata enrichment runs. Kept as an explicit constant so the
-// interpolation-free INSERT below never targets an arbitrary table.
-export const DURABLE_TABLE = "thoughts" as const;
+// The durable table drop files land in, re-exported from the repository that
+// owns the statements (issue 1209) so this module's public surface is unchanged.
+export { DURABLE_TABLE };
 
 export function fileToken(relPath: string): string {
-  return contentHash(relPath);
+  return normalizedContentHash(relPath);
 }
 
 // Outcome of one durable write attempt. `mutated` distinguishes a true no-op
@@ -48,7 +45,7 @@ function tagsAddSomething(existing: string[], incoming: string[]): boolean {
 /**
  * Write ONE file's content durably, reusing the exact content-hash identity the
  * log tools use so identical content dedupes at the durable row. `hash` is the
- * durable normalized content hash (contentHash), so the receipt, the in-batch
+ * durable normalized content hash (normalizedContentHash), so the receipt, the in-batch
  * dedupe key, and this upsert all agree.
  *
  * True no-op reruns (P2): before embedding or writing anything, probe for an
@@ -68,7 +65,7 @@ function tagsAddSomething(existing: string[], incoming: string[]): boolean {
 /** The one file's durable payload, grouped so the write keeps four parameters. */
 export interface DurableFile {
   content: string;
-  // The durable normalized content hash (contentHash).
+  // The durable normalized content hash (normalizedContentHash).
   hash: string;
   tags: string[];
 }
@@ -91,19 +88,8 @@ async function mergeExistingTags(
   }
   // Content unchanged but tags grew: update ONLY tags (no embedding recompute),
   // and only because the merged set strictly differs.
-  const updated = await deps.pool.query(
-    `UPDATE ${DURABLE_TABLE}
-       SET tags = (
-             SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-             FROM unnest(COALESCE(${DURABLE_TABLE}.tags, '{}') || $3::text[]) AS tag
-             WHERE tag IS NOT NULL
-           ),
-           updated_at = NOW()
-     WHERE content_hash = $1 AND namespace = $2
-     RETURNING id`,
-    [hash, namespace, tags],
-  );
-  const id = (updated.rows[0]?.id as string) ?? row.id;
+  const updated = await deps.repository.mergeTags(hash, namespace, tags);
+  const id = updated ?? row.id;
   return { id, merged: true, mutated: true };
 }
 
@@ -123,54 +109,40 @@ async function insertNewContent(
   const textToEmbed = tags.length ? `${content}\n${tags.join(" ")}` : content;
   const embedding = await deps.embedFn(textToEmbed);
 
-  const { rows } = await deps.pool.query(
-    `INSERT INTO ${DURABLE_TABLE} (content, tags, source, created_by, namespace, embedding, content_hash, embedded_at, embedding_model, source_refs)
-     VALUES ($1, $2, 'drop', $3, $4, $5, $6, $7, $8, '[]'::jsonb)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-     DO UPDATE SET
-       tags = (
-         SELECT COALESCE(array_agg(DISTINCT tag), '{}')
-         FROM unnest(COALESCE(${DURABLE_TABLE}.tags, '{}') || EXCLUDED.tags) AS tag
-         WHERE tag IS NOT NULL
-       ),
-       updated_at = NOW()
-     WHERE NOT (EXCLUDED.tags <@ COALESCE(${DURABLE_TABLE}.tags, '{}'))
-     RETURNING id, (xmax = 0) AS is_new`,
-    [
-      content,
-      tags,
-      auth.clientId,
-      namespace,
-      embedding ? toSql(embedding) : null,
-      hash,
-      embedding ? new Date().toISOString() : null,
-      embedding ? EMBEDDING_MODEL : null,
-    ],
-  );
+  const inserted = await deps.repository.insertContent({
+    content,
+    tags,
+    createdBy: auth.clientId,
+    namespace,
+    embedding,
+    hash,
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    embeddingModel: embedding ? embeddingModel() : null,
+  });
 
   // When the ON CONFLICT arm's WHERE excluded the update (concurrent identical
   // row, incoming tags already a subset), the statement returns no row. Re-read
   // the id so the caller still gets a stable durable id; that concurrent row is
   // reported as a merge, not a fresh insert.
-  if (rows.length === 0) {
-    const reread = await deps.pool.query(
-      `SELECT id FROM ${DURABLE_TABLE} WHERE content_hash = $1 AND namespace = $2`,
-      [hash, namespace],
-    );
-    const id = reread.rows[0]?.id as string;
-    return { id, merged: true, mutated: false };
+  if (inserted === undefined) {
+    const id = await deps.repository.idByContentHash(hash, namespace);
+    return { id: id as string, merged: true, mutated: false };
   }
 
-  const id = rows[0].id as string;
-  const isNew = rows[0].is_new as boolean;
+  const id = inserted.id;
+  const isNew = inserted.is_new;
   if (isNew) {
     // Same fire-and-forget background enrichment path the log tools drive.
-    backgroundExtract(deps.pool as pg.Pool, DURABLE_TABLE, {
-      entryId: id,
-      namespace,
-      text: content,
-      existingTags: tags,
-    });
+    backgroundExtract(
+      deps.pool as Parameters<typeof backgroundExtract>[0],
+      DURABLE_TABLE,
+      {
+        entryId: id,
+        namespace,
+        text: content,
+        existingTags: tags,
+      },
+    );
   }
   return { id, merged: !isNew, mutated: true };
 }
@@ -184,11 +156,7 @@ export async function writeDurableFile(
   // Probe first. This is the no-op gate: an unchanged rerun must not embed or
   // write. The durable unique index on (content_hash, namespace) still backs the
   // race-safe INSERT below if the row appears after this read.
-  const existing = await deps.pool.query(
-    `SELECT id, tags FROM ${DURABLE_TABLE} WHERE content_hash = $1 AND namespace = $2`,
-    [file.hash, namespace],
-  );
-  const row = existing.rows[0] as { id: string; tags: string[] | null } | undefined;
+  const row = await deps.repository.findByContentHash(file.hash, namespace);
   if (row !== undefined) {
     return mergeExistingTags(deps, namespace, file, row);
   }

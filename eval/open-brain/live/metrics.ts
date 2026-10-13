@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type {
   LiveFixture,
@@ -34,7 +35,7 @@ export function parseThresholds(raw: unknown): LiveThresholds {
 export async function loadThresholds(path: string): Promise<LiveThresholds> {
   let raw: unknown;
   try {
-    raw = await Bun.file(path).json();
+    raw = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to read thresholds ${path}: ${message}`);
@@ -56,10 +57,7 @@ export function relevantIdsFor(probe: LiveProbe): string[] {
  * Recall@K: fraction of relevant items that appear in the top-k retrieved list.
  * By convention a probe with no relevant items has perfect recall (1).
  */
-export function recallAtK(
-  retrievedTopK: string[],
-  relevantIds: string[],
-): number {
+export function recallAtK(retrievedTopK: string[], relevantIds: string[]): number {
   if (relevantIds.length === 0) return 1;
   const retrieved = new Set(retrievedTopK);
   const hits = relevantIds.filter((id) => retrieved.has(id)).length;
@@ -81,9 +79,7 @@ export function precisionAtK(
   }
   if (k <= 0) return 0;
   const relevant = new Set(relevantIds);
-  const hits = retrievedTopK
-    .slice(0, k)
-    .filter((id) => relevant.has(id)).length;
+  const hits = retrievedTopK.slice(0, k).filter((id) => relevant.has(id)).length;
   return hits / k;
 }
 
@@ -106,10 +102,7 @@ export function reciprocalRank(
 }
 
 /** Count forbidden (out-of-namespace) ids that leaked into the retrieved list. */
-export function namespaceLeaks(
-  retrieved: string[],
-  forbiddenIds: string[],
-): number {
+export function namespaceLeaks(retrieved: string[], forbiddenIds: string[]): number {
   if (forbiddenIds.length === 0) return 0;
   const forbidden = new Set(forbiddenIds);
   return retrieved.filter((id) => forbidden.has(id)).length;
@@ -179,9 +172,7 @@ export function buildScorecard(
     failures.push(`mrr ${mrr} below threshold ${t.min_mrr}`);
   }
   if (leaks > t.max_namespace_leaks) {
-    failures.push(
-      `namespace_leaks ${leaks} above threshold ${t.max_namespace_leaks}`,
-    );
+    failures.push(`namespace_leaks ${leaks} above threshold ${t.max_namespace_leaks}`);
   }
 
   return {

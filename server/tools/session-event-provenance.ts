@@ -25,8 +25,7 @@ export function writerProvenance(identity: AuthIdentity): {
     writer_identity: identity.clientId,
     token_identity: identity.tokenClientId,
     delegated_agent_id: null,
-    namespace_source:
-      identity.namespaceSource === "delegated" ? "header" : "token",
+    namespace_source: identity.namespaceSource === "delegated" ? "header" : "token",
   };
 }
 

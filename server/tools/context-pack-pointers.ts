@@ -117,9 +117,7 @@ export interface PointerBuilderInput {
  * through the SAME fitter as guidance and repo_facts — one whole-pack budget,
  * one citation reconciliation, no parallel path to drift.
  */
-export function buildPointerSection(
-  input: PointerBuilderInput,
-): SectionFragment {
+export function buildPointerSection(input: PointerBuilderInput): SectionFragment {
   // Pointers carry no per-item text body, so only the item COUNT is budgeted.
   // `maxItemChars` is irrelevant here but keeps the shared budget-shape contract.
   const { maxItems } = resolveItemBudget(input.budget, {
@@ -204,8 +202,7 @@ export function buildPointerSection(
  * alone is the discoverable marker of the missing write-side contract; no
  * verbose public missing-contract payload is emitted.
  */
-const CANDIDATE_PREDICATE_UNAVAILABLE =
-  "candidate_predicate_unavailable" as const;
+const CANDIDATE_PREDICATE_UNAVAILABLE = "candidate_predicate_unavailable" as const;
 
 /**
  * Build the `candidate_memory` fragment: a truthful empty state by design.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 
 import { OpenBrainHTTPError, OpenBrainProtocolError } from "../src/client.ts";
 import { ValidationError } from "../src/policy.ts";
@@ -8,11 +8,7 @@ import {
   errorCategory,
   publicReceipt,
 } from "../src/receipts.ts";
-import {
-  ReceiptStatus,
-  RuntimeReceipt,
-  ScopeProofError,
-} from "../src/runtime.ts";
+import { ReceiptStatus, RuntimeReceipt, ScopeProofError } from "../src/runtime.ts";
 import { SpoolFullError } from "../src/spool.ts";
 
 describe("error category mapping", () => {
@@ -20,25 +16,19 @@ describe("error category mapping", () => {
     expect(errorCategory(new ScopeProofError("scope mismatch"))).toBe(
       "scope-proof-failed",
     );
-    expect(
-      errorCategory(new OpenBrainHTTPError("denied", { statusCode: 401 })),
-    ).toBe("http-auth");
-    expect(
-      errorCategory(new OpenBrainHTTPError("denied", { statusCode: 403 })),
-    ).toBe("http-auth");
-    expect(
-      errorCategory(new OpenBrainHTTPError("boom", { statusCode: 500 })),
-    ).toBe("http-error");
-    expect(errorCategory(new OpenBrainHTTPError("unreachable"))).toBe(
-      "network",
+    expect(errorCategory(new OpenBrainHTTPError("denied", { statusCode: 401 }))).toBe(
+      "http-auth",
     );
-    expect(errorCategory(new OpenBrainProtocolError("bad payload"))).toBe(
+    expect(errorCategory(new OpenBrainHTTPError("denied", { statusCode: 403 }))).toBe(
+      "http-auth",
+    );
+    expect(errorCategory(new OpenBrainHTTPError("boom", { statusCode: 500 }))).toBe(
       "http-error",
     );
+    expect(errorCategory(new OpenBrainHTTPError("unreachable"))).toBe("network");
+    expect(errorCategory(new OpenBrainProtocolError("bad payload"))).toBe("http-error");
     expect(errorCategory(new SpoolFullError("full"))).toBe("spool-full");
-    expect(errorCategory(new ValidationError("bad input"))).toBe(
-      "invalid-request",
-    );
+    expect(errorCategory(new ValidationError("bad input"))).toBe("invalid-request");
     expect(errorCategory(new Error("anything else"))).toBe("other");
     expect(errorCategory("a thrown string")).toBe("other");
     expect(errorCategory(undefined)).toBe("other");
@@ -70,8 +60,7 @@ describe("public receipts", () => {
     return new RuntimeReceipt({
       operation: "capture",
       status,
-      durable:
-        status === ReceiptStatus.SAVED || status === ReceiptStatus.SPOOLED,
+      durable: status === ReceiptStatus.SAVED || status === ReceiptStatus.SPOOLED,
       directAttempted: true,
       fallbackAttempted: false,
       spoolKey: status === ReceiptStatus.SPOOLED ? "spool-key-1" : null,

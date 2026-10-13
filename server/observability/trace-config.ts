@@ -15,7 +15,7 @@ function trimmedEnv(env: Record<string, string | undefined>, key: string): strin
 /**
  * Resolve tracing configuration from the environment.
  *
- * Mirrors `readMcpAuditConfig` (`src/audit-log.ts:134-158`), with the opposite
+ * Mirrors `readMcpAuditConfig` in `server/security/audit-log.ts`, with the opposite
  * default: audit is on unless disabled, tracing is OFF unless every coordinate
  * is present. A payload-carrying export to an external server is opt-in per
  * deployment, never something a missing variable turns on by accident.

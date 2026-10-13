@@ -1,21 +1,25 @@
 /**
- * REST read routes: search, single entry lookup and namespace counts (issue 864
- * split of `src/rest-api.ts`). Route paths, status codes, response shapes,
+ * REST read routes: search, single entry lookup and namespace counts (split of
+ * the REST router in the L5 move, issue 864). Route paths, status codes, response shapes,
  * error strings and zod schemas are unchanged from the pre-split router.
  */
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { canRead } from "../security/permissions.ts";
-import {
-  executeSearchWithScopedSharedFallback,
-  executeSearchWithSharedFallback,
-  type SearchMode,
-} from "../../src/tools/search-brain.ts";
+import { canRead } from "../auth/permissions.ts";
+// The modern engine (issue 841 cut 2). Both executors take their collaborators
+// as an injected `SearchDependencies` rather than resolving shared-namespace
+// config and the embedding timeout ambiently, so this route builds that object
+// from `RestDeps` and the two arms differ only in calling convention: the
+// shared arm is positional, the scoped arm takes a request object.
+import { executeSearchWithSharedFallback } from "../tools/search-engine.ts";
+import { executeSearchWithScopedSharedFallback } from "../tools/search-engine-scoped-fallback.ts";
+import type { SearchDependencies, SearchMode } from "../tools/search-engine-types.ts";
 import { ALL_TABLES } from "../db/table-constants.ts";
 import { TABLE_COLUMNS } from "../domain/table-projections.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
 import { namespaceFilterFor, readableNamespaces } from "../domain/read-policy.ts";
-import { isSharedNamespace } from "../../src/shared-namespace.ts";
-import type { AuthInfo, Table, Tier } from "../../src/types.ts";
+import { isSharedNamespace } from "../security/shared-namespace-ambient.ts";
+import type { AuthInfo, Table, Tier } from "../types.ts";
 import {
   getAuth,
   isReadableNamespaceDenied,
@@ -72,10 +76,24 @@ export async function getSearch(
   }
 
   const namespaceFilter = namespaceFilterFor(auth, namespace);
+  const searchDeps: SearchDependencies = {
+    pool: deps.pool,
+    embedFn: (text) => deps.embedFn(text),
+    logger: deps.logger,
+    searchEmbeddingTimeoutMs: deps.searchEmbeddingTimeoutMs,
+    jev: deps.jev,
+    // Without these the engine's shared-namespace helpers throw rather than
+    // defaulting (`server/tools/shared-namespace.ts` `requireNames`), which is
+    // the isolation boundary refusing to guess which partition it is binding.
+    sharedNamespaceNames: deps.sharedNamespaceNames,
+  };
   const rows =
     typeof namespaceFilter === "string" && isSharedNamespace(namespaceFilter)
-      ? await executeSearchWithSharedFallback(
-          deps,
+      ? // The 10th argument is `requestedShared`, and this branch IS the
+        // condition it names: the caller asked for the shared namespace by
+        // name, which is what entitles the shared fallback to fan out.
+        await executeSearchWithSharedFallback(
+          searchDeps,
           accessibleTables,
           q,
           limit,
@@ -83,17 +101,19 @@ export async function getSearch(
           tier as Tier | undefined,
           offset,
           namespaceFilter,
+          {},
+          true,
         )
-      : await executeSearchWithScopedSharedFallback(
-          deps,
-          accessibleTables,
-          q,
+      : await executeSearchWithScopedSharedFallback({
+          dependencies: searchDeps,
+          tables: accessibleTables,
+          query: q,
           limit,
-          mode as SearchMode,
-          tier as Tier | undefined,
+          mode: mode as SearchMode,
+          tier: tier as Tier | undefined,
           offset,
-          namespaceFilter,
-        );
+          namespace: namespaceFilter,
+        });
 
   res.json({ results: rows, count: rows.length });
 }
@@ -125,10 +145,13 @@ export async function getEntry(
   const readable = readableNamespaces(auth);
   const predicate = readNamespacePredicate(auth, 2);
   const params: unknown[] = readable ? [id.data, readable] : [id.data];
-  const { rows } = await deps.pool.query(
-    `SELECT ${columns} FROM ${table} WHERE id = $1${predicate} AND archived_at IS NULL`,
+  const repository = createEntryReadRepository(deps.pool);
+  const rows = await repository.selectRestEntry({
+    table,
+    columnsSql: columns,
+    predicateClause: predicate,
     params,
-  );
+  });
 
   if (rows.length === 0) {
     res.status(404).json({ error: "Entry not found or archived" });
@@ -174,14 +197,15 @@ export async function getNamespaces(
 
   const accessibleTables = ALL_TABLES.filter((t) => canRead(auth.role, t));
   const readable = readableNamespaces(auth);
-  const queries = accessibleTables.map((table) => {
+  const repository = createEntryReadRepository(deps.pool);
+  const queries = accessibleTables.map(async (table) => {
     const predicate = readable ? " AND namespace = ANY($1::text[])" : "";
-    return deps.pool.query(
-      `SELECT '${table}' AS table_name, namespace, COUNT(*) AS count
-         FROM ${table} WHERE archived_at IS NULL${predicate}
-         GROUP BY namespace ORDER BY count DESC`,
-      readable ? [readable] : [],
-    );
+    const rows = await repository.countNamespaces({
+      table,
+      predicateClause: predicate,
+      params: readable ? [readable] : [],
+    });
+    return { rows };
   });
 
   const results = await Promise.all(queries);

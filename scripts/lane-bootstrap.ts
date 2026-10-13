@@ -1,8 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * lane-bootstrap — stand up one known-good lane environment, in one command.
  *
- *   bun scripts/lane-bootstrap.ts --branch <name> --reason "<stated reason>" [--fresh-db]
+ *   node scripts/lane-bootstrap.ts --branch <name> --reason "<stated reason>" [--fresh-db]
  *
  * Ledger item 15 (docs/issue-graph.md:261, decisions pass 2026-08-07). On one
  * night ~5 lanes hand-built their environments and each hit one of three
@@ -39,6 +39,9 @@ import { existsSync, copyFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AdminConnection } from "./test-support/clone-database.ts";
+import { resolveLaneDbConnection } from "./test-support/test-db-server.ts";
+import { createdbTemplate } from "./test-support/test-template-db.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The temp workspace is machine-specific (#636), so it is read rather than
@@ -97,47 +100,58 @@ interface Args {
 }
 
 class LaneBootstrapError extends Error {
-  constructor(
-    readonly step: string,
-    message: string,
-  ) {
+  readonly step: string;
+
+  constructor(step: string, message: string) {
     super(message);
+    this.step = step;
   }
 }
 
-function parseArgs(argv: string[]): Args {
-  let branch = "";
-  let reason = "";
-  let freshDb = false;
+/** Mutable accumulator the flag handlers write into. */
+interface ArgAccumulator {
+  branch: string;
+  reason: string;
+  freshDb: boolean;
+}
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--branch") {
-      branch = argv[++i] ?? "";
-    } else if (arg === "--reason") {
-      reason = argv[++i] ?? "";
-    } else if (arg === "--fresh-db") {
-      freshDb = true;
-    } else if (arg === "--help" || arg === "-h") {
-      printUsage();
-      process.exit(0);
-    } else {
-      throw new LaneBootstrapError(
-        "args",
-        `unknown argument "${arg}". Run with --help for usage.`,
-      );
-    }
-  }
+/**
+ * One handler per flag. Each returns how many EXTRA argv entries it consumed,
+ * so a value-taking flag reports 1 and a switch reports 0. A table keeps the
+ * argv contract in one readable place; the flag names and the error text are
+ * unchanged from the original if/else chain.
+ */
+const FLAG_HANDLERS: Record<
+  string,
+  (acc: ArgAccumulator, next: string | undefined) => number
+> = {
+  "--branch": (acc, next) => {
+    acc.branch = next ?? "";
+    return 1;
+  },
+  "--reason": (acc, next) => {
+    acc.reason = next ?? "";
+    return 1;
+  },
+  "--fresh-db": (acc) => {
+    acc.freshDb = true;
+    return 0;
+  },
+  "--help": () => {
+    printUsage();
+    process.exit(0);
+  },
+  "-h": () => {
+    printUsage();
+    process.exit(0);
+  },
+};
 
-  if (!branch.trim()) {
-    throw new LaneBootstrapError(
-      "args",
-      "--branch <name> is required (the lane's new branch, cut from origin/main).",
-    );
-  }
-
-  // The reason gate. Checked before anything is created, so a refusal never
-  // leaves a half-built lane behind.
+/**
+ * The reason gate. Checked before anything is created, so a refusal never
+ * leaves a half-built lane behind.
+ */
+function validateReason(reason: string): string {
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
     throw new LaneBootstrapError(
@@ -154,8 +168,36 @@ function parseArgs(argv: string[]): Args {
       `--reason "${trimmedReason}" is a placeholder, not a stated reason.\n\n${REASON_RULE}`,
     );
   }
+  return trimmedReason;
+}
 
-  return { branch: branch.trim(), reason: trimmedReason, freshDb };
+function parseArgs(argv: string[]): Args {
+  const acc: ArgAccumulator = { branch: "", reason: "", freshDb: false };
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    const handler = FLAG_HANDLERS[arg];
+    if (!handler) {
+      throw new LaneBootstrapError(
+        "args",
+        `unknown argument "${arg}". Run with --help for usage.`,
+      );
+    }
+    i += handler(acc, argv[i + 1]);
+  }
+
+  if (!acc.branch.trim()) {
+    throw new LaneBootstrapError(
+      "args",
+      "--branch <name> is required (the lane's new branch, cut from origin/main).",
+    );
+  }
+
+  return {
+    branch: acc.branch.trim(),
+    reason: validateReason(acc.reason),
+    freshDb: acc.freshDb,
+  };
 }
 
 function printUsage(): void {
@@ -163,7 +205,7 @@ function printUsage(): void {
     [
       "lane-bootstrap — stand up one known-good lane environment.",
       "",
-      "  bun scripts/lane-bootstrap.ts --branch <name> --reason \"<why>\" [--fresh-db]",
+      '  node scripts/lane-bootstrap.ts --branch <name> --reason "<why>" [--fresh-db]',
       "",
       "  --branch <name>   new branch for the lane, cut from origin/main (never main)",
       "  --reason  <text>  REQUIRED. Why this worktree exists; printed into the output.",
@@ -311,32 +353,94 @@ function readEnvFile(path: string): Record<string, string> {
   return out;
 }
 
-function main(): void {
-  const args = parseArgs(process.argv.slice(2));
-  const slug = slugify(args.branch);
-  const worktreePath = join(WORKTREE_BASE, slug);
-
-  process.stdout.write("lane-bootstrap\n");
-  // The reason is echoed FIRST, so it lands in the lane transcript above any
-  // output that might scroll. This is the whole point of requiring it.
-  process.stdout.write(`  reason: ${args.reason}\n\n`);
-
-  // --- 1. never main -------------------------------------------------------
-  if (args.branch === "main" || args.branch === "origin/main") {
+/** --- 1. never main ------------------------------------------------------- */
+function assertBranchAllowed(branch: string): void {
+  if (branch === "main" || branch === "origin/main") {
     throw new LaneBootstrapError(
       "branch",
       "refusing to create a lane on main. Lanes branch FROM origin/main onto a new branch; a worktree sitting on main is how a protected branch gets committed to by accident.",
     );
   }
+}
 
-  // --- 2. worktree ---------------------------------------------------------
+/** --- 2. worktree --------------------------------------------------------- */
+function assertWorktreeAbsent(worktreePath: string): void {
   if (existsSync(worktreePath)) {
     throw new LaneBootstrapError(
       "worktree",
       `${worktreePath} already exists. Refusing to touch it — it may be a live lane. Remove it yourself (git worktree remove ${worktreePath}) or pick another --branch.`,
     );
   }
+}
 
+/**
+ * Continuation path: the branch already exists, so check it out where it
+ * already points. Verifies it agrees with origin FIRST and returns the
+ * branchOrigin summary line. Refuses BEFORE any worktree is created.
+ */
+function checkOutExistingBranch(branch: string, worktreePath: string): string {
+  // The branch is the lane's existing work, so the ONLY safe thing to do is
+  // check it out where it already points. Verify it agrees with origin FIRST: a
+  // local tip that has drifted from its remote is a reconciliation the operator
+  // must make, never one this script makes for them. Both SHAs are named on
+  // refusal because a refusal that does not say what to reconcile is a dead end.
+  const localSha = capture("continuation", "git", [
+    "rev-parse",
+    `refs/heads/${branch}`,
+  ]);
+
+  const originRef = `refs/remotes/origin/${branch}`;
+  const originProbe = spawnSync(
+    "git",
+    ["rev-parse", "--verify", "--quiet", originRef],
+    { cwd: REPO_ROOT, encoding: "utf-8" },
+  );
+  const originSha = originProbe.status === 0 ? (originProbe.stdout || "").trim() : "";
+
+  if (!originSha) {
+    // Local-only branch. Not divergence — there is nothing to diverge from —
+    // so this continues, but it is a state worth naming: nothing has been
+    // pushed, and the lane is the only copy of this work.
+    step(
+      "continuation",
+      `branch ${branch} already exists at ${localSha} and has NO origin counterpart (${originRef} not found) — continuing on the local branch; nothing was created, reset, or pushed`,
+    );
+  } else if (originSha !== localSha) {
+    // REFUSED BEFORE ANY WORKTREE IS CREATED. The refusal is raised here, at
+    // the check, and not after `worktree add` — a refusal that first leaves a
+    // worktree behind is not a refusal.
+    throw new LaneBootstrapError(
+      "continuation",
+      `branch ${branch} exists locally but has DIVERGED from origin.\n` +
+        `      local  ${localSha} (refs/heads/${branch})\n` +
+        `      origin ${originSha} (${originRef})\n\n` +
+        `    Refusing before creating anything: no worktree was created and no ref was ` +
+        `touched, so both commits are intact. Reconciling them is yours to decide — this ` +
+        `script will never reset, force, or discard a lane's local work to make a ` +
+        `bootstrap succeed. Push, pull, rebase, or pick another --branch, then re-run.`,
+    );
+  } else {
+    step(
+      "continuation",
+      `branch ${branch} already exists and is in sync with origin at ${localSha} — continuing on it (NOT re-cut from origin/main, and the branch ref was not touched)`,
+    );
+  }
+
+  // No `-b`: check out the branch that already exists, where it points.
+  run("worktree", "git", ["worktree", "add", worktreePath, branch]);
+  step(
+    "worktree",
+    `${worktreePath} on EXISTING branch ${branch} at ${localSha} (continuation)`,
+  );
+
+  return `continuation of existing branch at ${localSha}`;
+}
+
+/**
+ * --- 2a. fresh vs continuation -------------------------------------------
+ * Creates the worktree and returns the branchOrigin summary line.
+ */
+function prepareWorktree(branch: string, worktreePath: string): string {
   run("fetch", "git", ["fetch", "origin", "--quiet"]);
   step("fetch", "origin fetched");
 
@@ -352,89 +456,31 @@ function main(): void {
   // teardown rejection stands, and nothing below removes, resets, or moves a
   // ref. A state this script inspects and declines to touch is NAMED instead.
   const branchExists =
-    spawnSync(
-      "git",
-      ["show-ref", "--verify", "--quiet", `refs/heads/${args.branch}`],
-      { cwd: REPO_ROOT },
-    ).status === 0;
+    spawnSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd: REPO_ROOT,
+    }).status === 0;
 
   // Which path ran, carried into the LANE READY block. The summary is what a
   // lane actually pastes into a report, so "from origin/main" printed over a
   // continuation would misstate the lane's own starting point.
-  let branchOrigin = "";
-
   if (!branchExists) {
-    branchOrigin = "new branch from origin/main";
     run("worktree", "git", [
       "worktree",
       "add",
       "-b",
-      args.branch,
+      branch,
       worktreePath,
       "origin/main",
     ]);
-    step("worktree", `${worktreePath} on new branch ${args.branch} from origin/main`);
-  } else {
-    // Continuation. The branch is the lane's existing work, so the ONLY safe
-    // thing to do is check it out where it already points. Verify it agrees
-    // with origin FIRST: a local tip that has drifted from its remote is a
-    // reconciliation the operator must make, never one this script makes for
-    // them. Both SHAs are named on refusal because a refusal that does not say
-    // what to reconcile is a dead end.
-    const localSha = capture("continuation", "git", [
-      "rev-parse",
-      `refs/heads/${args.branch}`,
-    ]);
-
-    const originRef = `refs/remotes/origin/${args.branch}`;
-    const originProbe = spawnSync(
-      "git",
-      ["rev-parse", "--verify", "--quiet", originRef],
-      { cwd: REPO_ROOT, encoding: "utf-8" },
-    );
-    const originSha =
-      originProbe.status === 0 ? (originProbe.stdout || "").trim() : "";
-
-    if (!originSha) {
-      // Local-only branch. Not divergence — there is nothing to diverge from —
-      // so this continues, but it is a state worth naming: nothing has been
-      // pushed, and the lane is the only copy of this work.
-      step(
-        "continuation",
-        `branch ${args.branch} already exists at ${localSha} and has NO origin counterpart (${originRef} not found) — continuing on the local branch; nothing was created, reset, or pushed`,
-      );
-    } else if (originSha !== localSha) {
-      // REFUSED BEFORE ANY WORKTREE IS CREATED. The refusal is raised here, at
-      // the check, and not after `worktree add` — a refusal that first leaves a
-      // worktree behind is not a refusal.
-      throw new LaneBootstrapError(
-        "continuation",
-        `branch ${args.branch} exists locally but has DIVERGED from origin.\n` +
-          `      local  ${localSha} (refs/heads/${args.branch})\n` +
-          `      origin ${originSha} (${originRef})\n\n` +
-          `    Refusing before creating anything: no worktree was created and no ref was ` +
-          `touched, so both commits are intact. Reconciling them is yours to decide — this ` +
-          `script will never reset, force, or discard a lane's local work to make a ` +
-          `bootstrap succeed. Push, pull, rebase, or pick another --branch, then re-run.`,
-      );
-    } else {
-      step(
-        "continuation",
-        `branch ${args.branch} already exists and is in sync with origin at ${localSha} — continuing on it (NOT re-cut from origin/main, and the branch ref was not touched)`,
-      );
-    }
-
-    branchOrigin = `continuation of existing branch at ${localSha}`;
-
-    // No `-b`: check out the branch that already exists, where it points.
-    run("worktree", "git", ["worktree", "add", worktreePath, args.branch]);
-    step(
-      "worktree",
-      `${worktreePath} on EXISTING branch ${args.branch} at ${localSha} (continuation)`,
-    );
+    step("worktree", `${worktreePath} on new branch ${branch} from origin/main`);
+    return "new branch from origin/main";
   }
 
-  // --- 3. .env -------------------------------------------------------------
+  return checkOutExistingBranch(branch, worktreePath);
+}
+
+/** --- 3. .env ------------------------------------------------------------- */
+function copyEnvFile(worktreePath: string): string {
   const srcEnv = join(REPO_ROOT, ".env");
   if (!existsSync(srcEnv)) {
     throw new LaneBootstrapError(
@@ -444,62 +490,100 @@ function main(): void {
   }
   copyFileSync(srcEnv, join(worktreePath, ".env"));
   step("env", ".env copied from repo root");
+  return srcEnv;
+}
 
-  // --- 4. deps -------------------------------------------------------------
-  // Fails loudly by contract: run() throws on non-zero. A partially-installed
-  // environment is exactly the bun-types failure from the ledger.
-  run("deps", "bun", ["install", "--frozen-lockfile"], { cwd: worktreePath });
-  step("deps", "bun install --frozen-lockfile completed");
+/**
+ * --- 4. deps -------------------------------------------------------------
+ * Fails loudly by contract: run() throws on non-zero. A partially-installed
+ * environment is exactly the bun-types failure from the ledger.
+ */
+function installDeps(worktreePath: string): void {
+  run("deps", "npm", ["ci"], { cwd: worktreePath });
+  step("deps", "npm ci completed");
+}
 
-  // --- 5. optional fresh database -----------------------------------------
-  let dbUrl = "";
-  let dbName = "";
-  if (args.freshDb) {
-    const env = readEnvFile(srcEnv);
-    const host = env.DB_HOST || env.PGHOST || "127.0.0.1";
-    const port = env.DB_PORT || env.PGPORT || "5432";
-    const user = env.DB_USER || env.PGUSER;
-    const password = env.DB_PASSWORD || env.PGPASSWORD || "";
-    if (!user) {
-      throw new LaneBootstrapError(
-        "db",
-        "no DB_USER/PGUSER in .env; cannot create a test database.",
-      );
-    }
+/**
+ * Compose the collision-proof database name and ANNOUNCE any shortening.
+ *
+ * Postgres identifiers are bounded at NAMEDATALEN-1 = 63 bytes; this is a
+ * compile-time server constant (`show max_identifier_length` = 63 on the
+ * dogfood cluster), not a policy choice, and the server silently TRUNCATES
+ * anything longer rather than erroring. Silent truncation is the danger:
+ * it would cut the tail, which is precisely where the uniqueness suffix
+ * lives, so two long branch names would collapse to the same database and
+ * truncate each other's tables — the exact collision --fresh-db exists to
+ * prevent. The uniqueness suffix is therefore kept WHOLE and the
+ * human-readable slug yields the space instead; the name stays unique no
+ * matter how long the branch is.
+ */
+function composeDbName(slug: string): string {
+  // Collision-proof by construction: slug + pid + time + random. Two lanes on
+  // the same branch name, started in the same second, still differ. A fixed
+  // name is how concurrent lanes truncate each other's tables.
+  const suffix = `${process.pid}_${Date.now().toString(36)}${Math.floor(
+    Math.random() * 1296,
+  )
+    .toString(36)
+    .padStart(2, "0")}`;
 
-    // Collision-proof by construction: slug + pid + time + random. Two lanes on
-    // the same branch name, started in the same second, still differ. A fixed
-    // name is how concurrent lanes truncate each other's tables.
-    const suffix = `${process.pid}_${Date.now().toString(36)}${Math.floor(Math.random() * 1296)
-      .toString(36)
-      .padStart(2, "0")}`;
+  const prefix = "lane_";
+  const laneSuffix = `_${suffix}`;
+  const room = 63 - prefix.length - laneSuffix.length;
+  const fullSlug = slug.replace(/-/g, "_");
+  const slugPart = fullSlug.slice(0, Math.max(0, room));
+  const dbName = `${prefix}${slugPart}${laneSuffix}`;
+  if (slugPart !== fullSlug) {
+    // Operator ruling 2026-08-07: nothing is adjusted silently. The name is
+    // still collision-proof (suffix whole); only the readable part shrank,
+    // and the lane transcript must say so rather than leave a name that
+    // doesn't match the branch unexplained.
+    step(
+      "db-name",
+      `NOTICE: branch slug shortened to fit Postgres's 63-byte identifier bound: "${fullSlug}" -> "${slugPart}" (uniqueness suffix kept whole; database is ${dbName})`,
+    );
+  }
+  return dbName;
+}
 
-    // Postgres identifiers are bounded at NAMEDATALEN-1 = 63 bytes; this is a
-    // compile-time server constant (`show max_identifier_length` = 63 on the
-    // dogfood cluster), not a policy choice, and the server silently TRUNCATES
-    // anything longer rather than erroring. Silent truncation is the danger:
-    // it would cut the tail, which is precisely where the uniqueness suffix
-    // lives, so two long branch names would collapse to the same database and
-    // truncate each other's tables — the exact collision --fresh-db exists to
-    // prevent. The uniqueness suffix is therefore kept WHOLE and the
-    // human-readable slug yields the space instead; the name stays unique no
-    // matter how long the branch is.
-    const prefix = "lane_";
-    const laneSuffix = `_${suffix}`;
-    const room = 63 - prefix.length - laneSuffix.length;
-    const fullSlug = slug.replace(/-/g, "_");
-    const slugPart = fullSlug.slice(0, Math.max(0, room));
-    dbName = `${prefix}${slugPart}${laneSuffix}`;
-    if (slugPart !== fullSlug) {
-      // Operator ruling 2026-08-07: nothing is adjusted silently. The name is
-      // still collision-proof (suffix whole); only the readable part shrank,
-      // and the lane transcript must say so rather than leave a name that
-      // doesn't match the branch unexplained.
-      step(
-        "db-name",
-        `NOTICE: branch slug shortened to fit Postgres's 63-byte identifier bound: "${fullSlug}" -> "${slugPart}" (uniqueness suffix kept whole; database is ${dbName})`,
-      );
-    }
+/** libpq connection facts for the fresh test database, read from the repo .env. */
+function readDbConnection(srcEnv: string): {
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  template: string;
+} {
+  const env = readEnvFile(srcEnv);
+  // #1667: OPENBRAIN_TEST_DB_* (process env first, then .env) names the test
+  // server and wins over DB_*; unset, the .env DB_*/PG* path is unchanged.
+  let conn: AdminConnection;
+  try {
+    conn = resolveLaneDbConnection(process.env, env, (notice) => step("db", notice));
+  } catch (err) {
+    throw new LaneBootstrapError(
+      "db",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return {
+    ...conn,
+    // #1667: OPENBRAIN_TEST_TEMPLATE_DB (process env first, then .env) replaces
+    // template0; an invalid name throws here, before anything is created.
+    template: createdbTemplate({ ...env, ...process.env }),
+  };
+}
+
+/** --- 5. optional fresh database ----------------------------------------- */
+function createFreshDatabase(
+  srcEnv: string,
+  slug: string,
+  worktreePath: string,
+): { dbName: string; dbUrl: string } {
+  {
+    const { host, port, user, password, template } = readDbConnection(srcEnv);
+
+    const dbName = composeDbName(slug);
 
     const pgEnv: NodeJS.ProcessEnv = { ...process.env };
     if (password) pgEnv.PGPASSWORD = password;
@@ -514,12 +598,12 @@ function main(): void {
     run(
       "db-create",
       "createdb",
-      ["-h", host, "-p", port, "-U", user, "-E", "UTF8", "-T", "template0", dbName],
+      ["-h", host, "-p", port, "-U", user, "-E", "UTF8", "-T", template, dbName],
       { env: pgEnv },
     );
-    step("db-create", `${dbName} created (UTF8, template0)`);
+    step("db-create", `${dbName} created (UTF8, ${template})`);
 
-    // Migrations run through the EXISTING path — `bun run migrate` ->
+    // Migrations run through the EXISTING path — `npm run migrate` ->
     // scripts/migrate.ts -> createPool() (src/db/pool.ts:22), which reads
     // DB_NAME from the environment. Overriding DB_NAME is therefore how the
     // existing migration path is pointed at the new database; no second
@@ -533,7 +617,7 @@ function main(): void {
       DB_NAME: dbName,
     };
     if (password) migrateEnv.DB_PASSWORD = password;
-    run("db-migrate", "bun", ["run", "migrate"], {
+    run("db-migrate", "npm", ["run", "migrate"], {
       cwd: worktreePath,
       env: migrateEnv,
     });
@@ -542,10 +626,18 @@ function main(): void {
     const auth = password
       ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}`
       : encodeURIComponent(user);
-    dbUrl = `postgres://${auth}@${host}:${port}/${dbName}`;
+    return { dbName, dbUrl: `postgres://${auth}@${host}:${port}/${dbName}` };
   }
+}
 
-  // --- final report --------------------------------------------------------
+/** --- final report -------------------------------------------------------- */
+function printLaneReady(
+  args: Args,
+  worktreePath: string,
+  branchOrigin: string,
+  db: { dbName: string; dbUrl: string },
+): void {
+  const { dbName, dbUrl } = db;
   const lines: string[] = [
     "",
     "─".repeat(72),
@@ -555,7 +647,7 @@ function main(): void {
     `  worktree:  ${worktreePath}`,
     `  branch:    ${args.branch} (${branchOrigin})`,
     `  env:       .env copied — OK`,
-    `  deps:      bun install --frozen-lockfile — OK`,
+    `  deps:      npm ci — OK`,
     `  hooks:     ${describeHooksPath(worktreePath)}`,
   ];
   if (args.freshDb) {
@@ -571,7 +663,9 @@ function main(): void {
   lines.push("─".repeat(72));
   // Printed, never executed. See the ledger rejection record
   // (docs/issue-graph.md:284): teardown stays manual and agent-owned.
-  lines.push("TEARDOWN — run these YOURSELF when the lane is done. Nothing here is automatic.");
+  lines.push(
+    "TEARDOWN — run these YOURSELF when the lane is done. Nothing here is automatic.",
+  );
   lines.push("─".repeat(72));
   lines.push("");
   lines.push(`    git worktree remove ${worktreePath}`);
@@ -582,6 +676,30 @@ function main(): void {
   }
   lines.push("");
   process.stdout.write(lines.join("\n") + "\n");
+}
+
+function main(): void {
+  const args = parseArgs(process.argv.slice(2));
+  const slug = slugify(args.branch);
+  const worktreePath = join(WORKTREE_BASE, slug);
+
+  process.stdout.write("lane-bootstrap\n");
+  // The reason is echoed FIRST, so it lands in the lane transcript above any
+  // output that might scroll. This is the whole point of requiring it.
+  process.stdout.write(`  reason: ${args.reason}\n\n`);
+
+  assertBranchAllowed(args.branch);
+  assertWorktreeAbsent(worktreePath);
+
+  const branchOrigin = prepareWorktree(args.branch, worktreePath);
+  const srcEnv = copyEnvFile(worktreePath);
+  installDeps(worktreePath);
+
+  const db = args.freshDb
+    ? createFreshDatabase(srcEnv, slug, worktreePath)
+    : { dbName: "", dbUrl: "" };
+
+  printLaneReady(args, worktreePath, branchOrigin, db);
 }
 
 try {

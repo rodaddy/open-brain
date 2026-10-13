@@ -7,7 +7,7 @@
  * because the window module distinguishes an absent field from an explicit value.
  */
 
-import type { BackgroundTraceRecorder } from "../application/background-tracing.ts";
+import type { BackgroundTraceRecorder } from "../observability/background-tracing.ts";
 import { claimDistillBatch, DEFAULT_CONTEXT_WINDOW } from "../domain/distill-window.ts";
 import type { DistillSweepDeps } from "./distill-handler.ts";
 

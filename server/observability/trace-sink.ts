@@ -20,14 +20,14 @@ import {
 } from "@langfuse/tracing";
 import { setGlobalErrorHandler } from "@opentelemetry/core";
 import { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
-import type { BackgroundObservation } from "../application/background-tracing.ts";
+import type { BackgroundObservation } from "./background-tracing.ts";
 import { tracingErrorLabel } from "./trace-error-label.ts";
 import {
   reportSinkFailure,
   reportSinkSuccess,
   SinkHealthTracker,
 } from "./trace-sink-health.ts";
-import { repoRelease } from "./trace-release.ts";
+import { repoRelease, type DeployStampParser } from "./trace-release.ts";
 import type {
   McpTracingConfig,
   TraceBody,
@@ -193,6 +193,7 @@ function emitChildObservation(
 export function defaultSinkFactory(
   config: McpTracingConfig,
   logger: TracingLogger,
+  deps: { readonly parseDeployStamp: DeployStampParser },
 ): TracingSink {
   // The SDK's own logger writes export failures straight to `console.error`
   // with the raw error attached (`@langfuse/core` Logger.error), which would
@@ -210,7 +211,7 @@ export function defaultSinkFactory(
   //
   // Spread so an unresolvable SHA omits the option entirely instead of passing
   // `undefined`, keeping "unknown release" distinct from a placeholder value.
-  const release = repoRelease();
+  const release = repoRelease({ parseStamp: deps.parseDeployStamp });
   const processor = new LangfuseSpanProcessor({
     publicKey: config.publicKey,
     secretKey: config.secretKey,
@@ -282,7 +283,9 @@ export function defaultSinkFactory(
       });
       span.end();
     } catch {
-      // A probe that cannot even be built is not a recovery; stay down.
+      // Deliberate: a probe that cannot even be built is not a recovery, so
+      // stay down. Reporting here would be wrong for the reason spelled out at
+      // :296-299 — it would count this probe as a dropped trace.
       return;
     }
     void processor
@@ -399,7 +402,7 @@ async function drainSink(sink: TracingSink, logger: TracingLogger): Promise<void
 /**
  * Resolve when `work` settles or the deadline passes, whichever is first.
  *
- * Same shape as the audit lane's bounded write (`src/audit-log.ts:453-455`).
+ * Same shape as the audit lane's own bounded write in `server/security/audit-log.ts`.
  * The timer is cleared on the fast path so a bounded drain never holds the
  * event loop open past its own completion, and `work` is left running: it is
  * fire-and-forget by contract, and abandoning the wait is the entire point.

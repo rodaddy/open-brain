@@ -6,7 +6,7 @@
 # data; NEVER merge playground data back into live.
 #
 # SEPARATE DATABASE, NOT A SEPARATE SCHEMA. The repo's own migration test says
-# why (src/db/migrations/028_maintenance_jobs_lease_expired_compat.test.ts:83):
+# why (server/db/migrations/028_maintenance_jobs_lease_expired_compat.test.ts:83):
 #
 #   "A dedicated Client (not a Pool) so the schema-scoping search_path set once
 #    at connect time holds for every query in this file. A Pool hands out
@@ -33,7 +33,7 @@
 #   OPENBRAIN_PLAY_DB      default target  (default open_brain_play)
 set -euo pipefail
 
-REPO_DIR="${OPENBRAIN_REPO_DIR:-/Volumes/ThunderBolt/Development/open-brain}"
+REPO_DIR="${OPENBRAIN_REPO_DIR:-/srv/dev/open-brain}"
 LIVE_DB="${OPENBRAIN_LIVE_DB:-open_brain_local_20260724}"
 # The open_brain_local_ prefix is REQUIRED, not stylistic: the runtime's
 # fail-closed guard (src/local-clone-mode.ts:154) refuses to start local clone
@@ -131,7 +131,7 @@ fi
 # This works without --no-owner because both roles already exist locally. On a
 # host where they do not, the restore would need them created first -- which is
 # the correct failure, not a reason to strip ownership.
-DUMP_DIR="${TMPDIR_OVERRIDE:-/Volumes/ThunderBolt/open-brain-local/_scratch}"
+DUMP_DIR="${TMPDIR_OVERRIDE:-/srv/open-brain-local/_scratch}"
 mkdir -p "$DUMP_DIR"
 DUMP_FILE="${DUMP_DIR}/${TARGET}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 

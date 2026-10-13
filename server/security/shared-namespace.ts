@@ -20,11 +20,11 @@
  *
  * This module reads no environment. Every raw value arrives as a field of the
  * one {@link SharedNamespaceEnv} options parameter, filled by the caller that
- * already holds the composition root's config. The legacy zero-argument call
- * form lives on in the L5 adapter at `src/shared-namespace.ts`.
+ * already holds the composition root's config. The zero-argument call form
+ * lives in `./shared-namespace-ambient.ts`.
  */
 
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 
 const DEFAULT_SHARED_NAMESPACE = "shared-kb";
 const DEFAULT_LEGACY_SHARED_NAMESPACE = "";

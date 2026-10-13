@@ -1,24 +1,32 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { z } from "zod";
-import type pg from "pg";
-import type { AuthInfo, Table } from "../../src/types.ts";
-import { ALL_TABLES } from "../../src/tools/search-brain.ts";
-import type { generateEmbedding } from "../../src/embedding.ts";
-// The legacy adapter, not `server/domain/promotion-service.ts` directly: the
-// server-side service takes the promotion kill switch as a value, and the
-// adapter is what reads `OPENBRAIN_PROMOTION_KILL_SWITCH` at call time. This
-// route's caller (`server/transport/rest.ts`) does not carry config, so calling
-// the service directly here would silently drop the kill switch. Repointing at
-// the service is L6 work, once config reaches the REST surface.
-import { promoteEntry } from "../../src/promotion-service.ts";
+import type { AuthInfo, Table } from "../types.ts";
+// `ALL_TABLES` never belonged to the search engine: the legacy barrel only
+// re-exported `server/db/table-constants.ts`. Importing the defining module is
+// the same binding with no barrel in between, and it is already how the sibling
+// read routes reach it (`rest-api-reads.ts`).
+import { ALL_TABLES } from "../db/table-constants.ts";
+import type { generateEmbedding } from "../embedding/provider.ts";
+// The four statements this route used to execute live here now (issue 1209);
+// `_plans/463-server-rewrite-charter.md` reserves raw SQL for server/db.
+import type {
+  PromotionRepository,
+  PromotionScanRow,
+} from "../db/promotion-repository.ts";
+// The server-side service takes the promotion kill switch as a value. The
+// reader is `promotionKillSwitch` from `server/config.ts` — the one module that
+// reads the environment (Rico ruling 2026-08-30) — injected by
+// `server/main.ts` through `deps` and invoked at call time, which is when the
+// retired promotion-service adapter read it before the L5 move (issue 864).
+import { promoteEntry } from "../domain/promotion-service.ts";
 import { describeError, logger } from "../observability/log-surface.ts";
 import {
   appendReadNamespacePredicate,
   canReadNamespace,
 } from "../domain/read-policy.ts";
 import { appendWriteNamespacePredicate } from "../security/namespace-policy.ts";
-// The src/ module, not `server/tools/shared-namespace.ts`: the server-side one
+// The ambient module, not `server/tools/shared-namespace.ts`: the server-side one
 // requires the composition root to inject `sharedNamespaceNames` from the
 // validated ServerConfig, and this route's caller
 // (`server/transport/rest.ts`) does not carry config. Calling it here throws
@@ -28,7 +36,7 @@ import {
   canonicalNamespace,
   physicalNamespace,
   sharedNamespaceConfig,
-} from "../../src/shared-namespace.ts";
+} from "../security/shared-namespace-ambient.ts";
 import {
   explicitSharedNominationSqlPredicate,
   isExplicitSharedNomination,
@@ -36,8 +44,17 @@ import {
 } from "../domain/promotion-nomination.ts";
 
 interface RestDeps {
-  pool: pg.Pool;
+  /**
+   * The promotion write path still hands the pool to `promoteEntry`, a domain
+   * service that owns its own statements. Typed from that signature so this
+   * transport file names no driver module (issue 1209).
+   */
+  pool: Parameters<typeof promoteEntry>[0];
+  /** The four statements this route used to execute itself. */
+  promotion: PromotionRepository;
   embedFn: typeof generateEmbedding;
+  /** The promotion kill switch, read at call time; injected by the entrypoint. */
+  readonly promotionKillSwitch: () => boolean;
 }
 
 function getAuth(req: Request): AuthInfo | null {
@@ -151,17 +168,13 @@ async function handlePromote(
     target_namespace ?? sharedNamespaceConfig().sharedNamespace;
   let result;
   try {
-    result = await promoteEntry(
-      deps.pool,
-      table,
-      id,
-      resolvedTargetNamespace,
+    result = await promoteEntry(deps.pool, table, id, {
+      dryRun: dry_run ?? false,
+      targetNamespace: resolvedTargetNamespace,
       reason,
       auth,
-      {
-        dryRun: dry_run ?? false,
-      },
-    );
+      killSwitch: deps.promotionKillSwitch(),
+    });
   } catch (err) {
     respondPromoteFailure(res, err, resolvedTargetNamespace);
     return;
@@ -197,10 +210,11 @@ async function handleDemote(
   const { table, id } = parsed.data;
   const selectParams: unknown[] = [id];
   const readPredicate = appendReadNamespacePredicate(auth, selectParams);
-  const { rows } = await deps.pool.query(
-    `SELECT id, namespace, promoted_from FROM ${table} WHERE id = $1 AND archived_at IS NULL${readPredicate}`,
-    selectParams,
-  );
+  const rows = await deps.promotion.selectDemotionSource({
+    table,
+    readPredicate,
+    params: selectParams,
+  });
 
   const found = rows[0];
   if (rows.length === 0 || !found) {
@@ -215,11 +229,12 @@ async function handleDemote(
   const provenance = found.promoted_from;
   const updateParams: unknown[] = [id];
   const writePredicate = appendWriteNamespacePredicate(auth, updateParams);
-  const { rowCount } = await deps.pool.query(
-    `UPDATE ${table} SET archived_at = NOW() WHERE id = $1${writePredicate}`,
-    updateParams,
-  );
-  if ((rowCount ?? 0) === 0) {
+  const rowCount = await deps.promotion.archiveEntry({
+    table,
+    writePredicate,
+    params: updateParams,
+  });
+  if (rowCount === 0) {
     res.status(404).json({ error: "Entry not found or already archived" });
     return;
   }
@@ -232,13 +247,12 @@ async function handleDemote(
   });
 }
 
-/** One scan row, as the scan query projects it. */
-interface ScanRow {
-  id: string;
-  content_hash: string | null;
-  created_at: string;
-  metadata: Record<string, unknown> | null;
-}
+/**
+ * One scan row, as the scan query projects it. The projection moved to
+ * `server/db/promotion-repository.ts` with its statement (issue 1209), so the
+ * row shape is that module's; the local name is kept for the call sites below.
+ */
+type ScanRow = PromotionScanRow;
 
 /** A scanned entry that already exists in the target namespace. */
 type DuplicateEntry = Record<string, unknown>;
@@ -282,12 +296,11 @@ async function findTargetDuplicate(
   target: ScanTarget,
 ): Promise<DuplicateEntry | null> {
   if (!row.content_hash) return null;
-  const { rows: targetDupes } = await deps.pool.query(
-    `SELECT id FROM ${table}
-             WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL
-             LIMIT 1`,
-    [row.content_hash, target.physicalNamespace],
-  );
+  const targetDupes = await deps.promotion.findDuplicateInTarget({
+    table,
+    contentHash: row.content_hash,
+    targetNamespace: target.physicalNamespace,
+  });
   const existing = targetDupes[0];
   if (!existing) return null;
   return {
@@ -318,19 +331,16 @@ async function scanTable(
   const metadataSelect = promotionMetadataSelect(table);
   const nominationFilter = explicitSharedNominationSqlPredicate(table);
 
-  const { rows } = await deps.pool.query(
-    `SELECT t.id, t.content_hash, t.namespace, t.created_at,
-                ${metadataSelect} AS metadata,
-                '${table}' AS table_name
-         FROM ${table} t
-         WHERE t.namespace = $1 AND t.archived_at IS NULL${nominationFilter}${sinceFilter}
-         ORDER BY t.created_at DESC
-         LIMIT $2`,
+  const rows = await deps.promotion.scanNominations({
+    table,
+    metadataSelect,
+    nominationFilter,
+    sinceFilter,
     params,
-  );
+  });
 
   const buckets: ScanBuckets = { candidates: [], duplicates: [] };
-  for (const row of rows as ScanRow[]) {
+  for (const row of rows) {
     const duplicate = await findTargetDuplicate(deps, table, row, target);
     if (duplicate) {
       buckets.duplicates.push(duplicate);

@@ -40,8 +40,7 @@ export function withSourceRefs(rows: SearchRow[]): SearchRow[] {
       namespace: row.namespace,
       created_by: row.created_by,
       created_at: toIsoString(row.created_at),
-      last_updated_at:
-        toIsoString(row.updated_at) ?? toIsoString(row.created_at),
+      last_updated_at: toIsoString(row.updated_at) ?? toIsoString(row.created_at),
       label: (row.content_preview ?? "").slice(0, 120),
       preview: (row.content_preview ?? "").slice(0, 300),
     },
@@ -60,9 +59,7 @@ export function withCanonicalNamespaces(
 ): SearchRow[] {
   return rows.map((row) => ({
     ...row,
-    namespace: row.namespace
-      ? canonicalNamespace(row.namespace, names)
-      : row.namespace,
+    namespace: row.namespace ? canonicalNamespace(row.namespace, names) : row.namespace,
     source_ref: row.source_ref
       ? {
           ...row.source_ref,

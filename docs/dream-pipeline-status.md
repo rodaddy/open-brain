@@ -7,10 +7,22 @@
 Every number below was read from the real database on 2026-07-28, not from a
 fixture. Where something is not built, it says so.
 
+> **Dated snapshot (note added 2026-09-21).** This describes the tree as of
+> 2026-07-28. The `src/` directory has since been retired: the stage modules
+> are now in `server/maintenance/` (`dream-light.ts`, `dream-rem.ts`,
+> `dream-deep.ts`, `distill-handler.ts`), their queries in `server/db/`, the
+> distiller and dedupe logic in `server/domain/`, and the grading server in
+> `server/application/grading-server.ts`. Every `src/<file>.ts:<line>` citation
+> below is historical and its line numbers no longer resolve; the runtime is
+> Node 24 with `npm run`, not `bun run`. Gap 3's re-warm claim is now proven
+> by `server/maintenance/dream-rem-rewarm.pg.test.ts`: passes over a finite
+> project cluster settle, and a pass over a fully warmed cluster rewrites
+> nothing. Current v1 status lives on issue 1469.
+
 ## TL;DR for the operator
 
 ```bash
-set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+set -a; . /srv/open-brain-local/local-clone.env; set +a
 bun run migrate          # 39 migrations, idempotent
 bun run dream:cycle      # distill -> light -> rem -> deep, 1.3s
 bun run grade            # grading page at http://127.0.0.1:3417/
@@ -141,7 +153,7 @@ Row counts before and after the full pipeline run, identical:
 | `content_occurrences` | 1,098 | 1,098 |
 
 `thoughts` and `decisions` match the last backup exactly. Migrations 001–037 are
-unmodified — `git diff --name-status origin/main -- src/db/migrations/` reports
+unmodified — `git diff --name-status origin/main -- server/db/migrations/` reports
 eight `A` (added) entries and zero modifications.
 
 ## Gaps — what is NOT built
@@ -241,8 +253,8 @@ structurally present and functionally unexercised.
 ## How the operator starts the grading server
 
 ```bash
-cd /Volumes/ThunderBolt/Development/open-brain
-set -a; . /Volumes/ThunderBolt/open-brain-local/local-clone.env; set +a
+cd /srv/dev/open-brain
+set -a; . /srv/open-brain-local/local-clone.env; set +a
 bun run grade
 ```
 
@@ -333,7 +345,7 @@ candidate back into recall. A promoted grade currently changes
 a passed candidate into a `thoughts` or `decisions` row. Verified by search:
 `review_action = 'promoted'` appears in `src/` at exactly two sites, a stats
 `FILTER` (`src/candidate-review.ts:823`) and a test fixture
-(`src/db/migrations/reinforcement-and-said-at.test.ts:102`). Nothing consumes a
+(`server/db/migrations/reinforcement-and-said-at.test.ts:102`). Nothing consumes a
 promoted grade.
 
 ## Verification state of this branch

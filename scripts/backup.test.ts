@@ -1,8 +1,10 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { testScratchDir } from "./test-support/scratch-dir.ts";
 import { runPgDump } from "./backup.ts";
+import { expectDefined } from "./test-support/expect-defined.ts";
 
 const tempDirs: string[] = [];
 
@@ -13,31 +15,29 @@ afterAll(async () => {
 });
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "ob298-backup-"));
+  const dir = testScratchDir("ob298-backup-");
   tempDirs.push(dir);
   return dir;
 }
 
-describe("runPgDump failure handling", () => {
-  const STDERR_ROW_SENTINEL = "LEAK-SENTINEL-PGDUMP-ROW-CONTENT";
+const STDERR_ROW_SENTINEL = "LEAK-SENTINEL-PGDUMP-ROW-CONTENT";
 
-  async function withFakePgDump<T>(
-    scriptBody: string,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    const dir = await tempDir();
-    const fakeTool = join(dir, "fake-pg-dump.ts");
-    await Bun.write(fakeTool, scriptBody);
-    const prev = process.env.OPENBRAIN_PG_DUMP_BIN;
-    process.env.OPENBRAIN_PG_DUMP_BIN = `bun ${fakeTool}`;
-    try {
-      return await fn();
-    } finally {
-      if (prev === undefined) delete process.env.OPENBRAIN_PG_DUMP_BIN;
-      else process.env.OPENBRAIN_PG_DUMP_BIN = prev;
-    }
+/** Points OPENBRAIN_PG_DUMP_BIN at a scratch fake for the body of `fn`. */
+async function withFakePgDump<T>(scriptBody: string, fn: () => Promise<T>): Promise<T> {
+  const dir = await tempDir();
+  const fakeTool = join(dir, "fake-pg-dump.ts");
+  await writeFile(fakeTool, scriptBody);
+  const prev = process.env.OPENBRAIN_PG_DUMP_BIN;
+  process.env.OPENBRAIN_PG_DUMP_BIN = `${process.execPath} ${fakeTool}`;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.OPENBRAIN_PG_DUMP_BIN;
+    else process.env.OPENBRAIN_PG_DUMP_BIN = prev;
   }
+}
 
+describe("runPgDump failure handling", () => {
   it("removes the partial dump file on failure so a retry is not blocked by --force", async () => {
     // Fake pg_dump: writes partial dump bytes to stdout, then fails with
     // stderr that carries literal row content.
@@ -67,9 +67,9 @@ describe("runPgDump failure handling", () => {
       }
       expect(thrown).not.toBeNull();
       // Partial dump removed: a retry without --force is not blocked.
-      expect(await Bun.file(dumpPath).exists()).toBe(false);
+      expect(existsSync(dumpPath)).toBe(false);
       // Error is exit code + sanitized class only — receipt-safe.
-      const message = thrown!.message;
+      const message = expectDefined(thrown, "runPgDump error").message;
       expect(message).toContain("pg_dump exited with code 1");
       expect(message).toContain("query failed");
       expect(message).not.toContain(STDERR_ROW_SENTINEL);
@@ -97,7 +97,7 @@ describe("runPgDump failure handling", () => {
         dumpPath,
         snapshot: "00000003-0000001B-1",
       });
-      expect(await Bun.file(dumpPath).text()).toBe("full-dump-bytes");
+      expect(await readFile(dumpPath, "utf8")).toBe("full-dump-bytes");
     });
   });
 
@@ -105,7 +105,8 @@ describe("runPgDump failure handling", () => {
     const dir = await tempDir();
     const argvPath = join(dir, "argv.json");
     const script = [
-      `await Bun.write(${JSON.stringify(argvPath)}, JSON.stringify(Bun.argv.slice(2)));`,
+      `import { writeFileSync } from "node:fs";`,
+      `writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
       `process.stdout.write("dump");`,
       "",
     ].join("\n");
@@ -121,7 +122,7 @@ describe("runPgDump failure handling", () => {
         dumpPath,
         snapshot,
       });
-      const argv = JSON.parse(await Bun.file(argvPath).text()) as string[];
+      const argv = JSON.parse(await readFile(argvPath, "utf8")) as string[];
       const snapshotIndex = argv.indexOf("--snapshot");
       expect(snapshotIndex).toBeGreaterThanOrEqual(0);
       expect(argv[snapshotIndex + 1]).toBe(snapshot);

@@ -1,8 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
-import { repoFactMetadata } from "../src/tools/repo-facts.ts";
+import { repoFactMetadata } from "../server/domain/repo-facts.ts";
 
 const manifestSchema = z.object({
   version: z.literal(1),
@@ -46,7 +46,7 @@ type Summary = {
 function usage(): never {
   console.error(
     [
-      "Usage: bun run scripts/promote-qmd-repo-facts.ts --file <manifest.json> [--namespace <namespace>] [--dry-run]",
+      "Usage: node scripts/promote-qmd-repo-facts.ts --file <manifest.json> [--namespace <namespace>] [--dry-run]",
       "       [--timeout-ms <milliseconds>]",
       "",
       "Reads curated qmd-derived repo facts and upserts them with open-brain.upsert_repo_fact.",
@@ -56,8 +56,47 @@ function usage(): never {
   process.exit(2);
 }
 
-function parseArgs(argv: string[]) {
-  const args = {
+type Args = {
+  file: string;
+  namespace: string;
+  dryRun: boolean;
+  mcp2cli: string;
+  timeoutMs: number;
+};
+
+/** Flags that consume the next argv entry as their value. */
+const VALUE_FLAGS: Record<string, (args: Args, value: string) => void> = {
+  "--file": (args, value) => {
+    args.file = value;
+  },
+  "--namespace": (args, value) => {
+    args.namespace = value;
+  },
+  "--mcp2cli": (args, value) => {
+    args.mcp2cli = value;
+  },
+  "--timeout-ms": (args, value) => {
+    args.timeoutMs = Number(value);
+  },
+};
+
+/** Flags that consume no argv entry. */
+const BARE_FLAGS: Record<string, (args: Args) => void> = {
+  "--dry-run": (args) => {
+    args.dryRun = true;
+  },
+  "--help": () => usage(),
+  "-h": () => usage(),
+};
+
+function argsAreUsable(args: Args): boolean {
+  return Boolean(
+    args.file && args.mcp2cli && Number.isFinite(args.timeoutMs) && args.timeoutMs > 0,
+  );
+}
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
     file: "",
     namespace: "",
     dryRun: false,
@@ -66,28 +105,22 @@ function parseArgs(argv: string[]) {
   };
 
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--file") {
-      args.file = argv[++i] ?? "";
-    } else if (arg === "--namespace") {
-      args.namespace = argv[++i] ?? "";
-    } else if (arg === "--dry-run") {
-      args.dryRun = true;
-    } else if (arg === "--mcp2cli") {
-      args.mcp2cli = argv[++i] ?? "";
-    } else if (arg === "--timeout-ms") {
-      args.timeoutMs = Number(argv[++i] ?? 0);
-    } else if (arg === "--help" || arg === "-h") {
-      usage();
-    } else {
-      console.error(`Unknown argument: ${arg}`);
-      usage();
+    const arg = argv[i] ?? "";
+    const applyValue = VALUE_FLAGS[arg];
+    if (applyValue) {
+      applyValue(args, argv[++i] ?? "");
+      continue;
     }
-  }
-
-  if (!args.file || !args.mcp2cli || !Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+    const applyBare = BARE_FLAGS[arg];
+    if (applyBare) {
+      applyBare(args);
+      continue;
+    }
+    console.error(`Unknown argument: ${arg}`);
     usage();
   }
+
+  if (!argsAreUsable(args)) usage();
   return args;
 }
 
@@ -175,15 +208,20 @@ function existingFactState(
     const found = row.metadata ?? {};
     if (found.fact_type !== metadata.fact_type) continue;
     sawSameIdentity = true;
-    if (
-      found.fact === metadata.fact &&
-      found.source_commit === metadata.source_commit &&
-      found.source_url === metadata.source_url
-    ) {
-      return "exact";
-    }
+    if (isSameFactContent(found, metadata)) return "exact";
   }
   return sawSameIdentity ? "stale" : "missing";
+}
+
+function isSameFactContent(
+  found: Record<string, unknown>,
+  metadata: z.infer<typeof repoFactMetadata>,
+): boolean {
+  return (
+    found.fact === metadata.fact &&
+    found.source_commit === metadata.source_commit &&
+    found.source_url === metadata.source_url
+  );
 }
 
 function isTimeout(err: unknown): boolean {
@@ -191,15 +229,127 @@ function isTimeout(err: unknown): boolean {
   return err.message.includes("ETIMEDOUT") || err.message.includes("timed out");
 }
 
-export function promoteManifest(
-  manifest: Manifest,
-  options: {
-    namespace?: string;
-    dryRun?: boolean;
-    mcp2cli?: string;
-    timeoutMs?: number;
-  },
-): Summary {
+type Fact = z.infer<typeof repoFactMetadata>;
+
+type PromoteOptions = {
+  namespace?: string;
+  dryRun?: boolean;
+  mcp2cli?: string;
+  timeoutMs?: number;
+};
+
+const DEFAULT_MCP2CLI = "mcp2cli";
+const DEFAULT_TIMEOUT_MS = 30000;
+
+function identityKey(namespace: string | undefined, fact: Fact): string {
+  return [
+    namespace ?? "",
+    fact.repo,
+    fact.collection,
+    fact.path,
+    fact.symbol ?? fact.subject ?? "",
+    fact.fact_type,
+  ].join("\0");
+}
+
+function contentFingerprint(fact: Fact): string {
+  return JSON.stringify({
+    fact: fact.fact,
+    source_commit: fact.source_commit,
+    source_url: fact.source_url,
+    verified_at: fact.verified_at,
+    confidence: fact.confidence,
+    staleness_policy: fact.staleness_policy,
+    refresh_hint: fact.refresh_hint,
+  });
+}
+
+/**
+ * Reads the current state of a fact, treating a read failure as "missing" so
+ * the write attempt still happens; the write result decides final failure.
+ */
+function readStateOrMissing(
+  options: PromoteOptions,
+  namespace: string | undefined,
+  fact: Fact,
+): "exact" | "stale" | "missing" {
+  try {
+    return existingFactState(
+      options.mcp2cli ?? DEFAULT_MCP2CLI,
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      namespace,
+      fact,
+    );
+  } catch {
+    return "missing";
+  }
+}
+
+/** After a timeout the write may still have landed; a re-read settles it. */
+function landedDespiteTimeout(
+  err: unknown,
+  options: PromoteOptions,
+  namespace: string | undefined,
+  fact: Fact,
+): boolean {
+  if (!isTimeout(err)) return false;
+  try {
+    return factExists(
+      options.mcp2cli ?? DEFAULT_MCP2CLI,
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      namespace,
+      fact,
+    );
+  } catch {
+    return false;
+  }
+}
+
+type PromoteRun = {
+  summary: Summary;
+  options: PromoteOptions;
+  namespace: string | undefined;
+};
+
+function promoteOne(run: PromoteRun, fact: Fact, index: number): void {
+  const { summary, options, namespace } = run;
+  const state = readStateOrMissing(options, namespace, fact);
+  if (state === "exact") {
+    summary.unchanged += 1;
+    return;
+  }
+  const wasStale = state === "stale";
+  if (wasStale) summary.stale += 1;
+
+  try {
+    const upsert = callUpsert(
+      options.mcp2cli ?? DEFAULT_MCP2CLI,
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      namespace,
+      fact,
+    );
+    if (upsert.is_new === false) {
+      if (wasStale) summary.updated += 1;
+      else summary.unchanged += 1;
+    } else {
+      summary.promoted += 1;
+    }
+  } catch (err) {
+    if (landedDespiteTimeout(err, options, namespace, fact)) {
+      summary.verified_after_timeout += 1;
+      return;
+    }
+    summary.failed += 1;
+    summary.failures.push({
+      index,
+      repo: fact.repo,
+      path: fact.path,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export function promoteManifest(manifest: Manifest, options: PromoteOptions): Summary {
   const namespace = options.namespace ?? manifest.defaults?.namespace;
   const summary: Summary = {
     total: manifest.facts.length,
@@ -217,26 +367,13 @@ export function promoteManifest(
 
   const seen = new Map<string, string>();
   for (const [index, fact] of manifest.facts.entries()) {
-    const key = [
-      namespace ?? "",
-      fact.repo,
-      fact.collection,
-      fact.path,
-      fact.symbol ?? fact.subject ?? "",
-      fact.fact_type,
-    ].join("\0");
-    const fingerprint = JSON.stringify({
-      fact: fact.fact,
-      source_commit: fact.source_commit,
-      source_url: fact.source_url,
-      verified_at: fact.verified_at,
-      confidence: fact.confidence,
-      staleness_policy: fact.staleness_policy,
-      refresh_hint: fact.refresh_hint,
-    });
+    const key = identityKey(namespace, fact);
+    const fingerprint = contentFingerprint(fact);
     const seenFingerprint = seen.get(key);
     if (seenFingerprint !== undefined) {
-      if (seenFingerprint !== fingerprint) {
+      if (seenFingerprint === fingerprint) {
+        summary.skipped += 1;
+      } else {
         summary.failed += 1;
         summary.failures.push({
           index,
@@ -244,9 +381,7 @@ export function promoteManifest(
           path: fact.path,
           error: "Conflicting duplicate repo fact identity in manifest",
         });
-        continue;
       }
-      summary.skipped += 1;
       continue;
     }
     seen.set(key, fingerprint);
@@ -256,67 +391,7 @@ export function promoteManifest(
       continue;
     }
 
-    let wasStale = false;
-    try {
-      const state = existingFactState(
-        options.mcp2cli ?? "mcp2cli",
-        options.timeoutMs ?? 30000,
-        namespace,
-        fact,
-      );
-      if (state === "exact") {
-        summary.unchanged += 1;
-        continue;
-      }
-      wasStale = state === "stale";
-      if (wasStale) summary.stale += 1;
-    } catch {
-      // Continue to the upsert path; list/read failures should not prevent a
-      // write attempt, but the write result still decides final failure.
-    }
-
-    try {
-      const upsert = callUpsert(
-        options.mcp2cli ?? "mcp2cli",
-        options.timeoutMs ?? 30000,
-        namespace,
-        fact,
-      );
-      if (upsert.is_new === false) {
-        if (wasStale) {
-          summary.updated += 1;
-        } else {
-          summary.unchanged += 1;
-        }
-      } else {
-        summary.promoted += 1;
-      }
-    } catch (err) {
-      if (isTimeout(err)) {
-        try {
-          if (
-            factExists(
-              options.mcp2cli ?? "mcp2cli",
-              options.timeoutMs ?? 30000,
-              namespace,
-              fact,
-            )
-          ) {
-            summary.verified_after_timeout += 1;
-            continue;
-          }
-        } catch {
-          // Keep the original timeout as the reported failure.
-        }
-      }
-      summary.failed += 1;
-      summary.failures.push({
-        index,
-        repo: fact.repo,
-        path: fact.path,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    promoteOne({ summary, options, namespace }, fact, index);
   }
 
   return summary;

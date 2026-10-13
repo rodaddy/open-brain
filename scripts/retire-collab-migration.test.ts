@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
-import { runMigrations } from "../src/db/migrate.ts";
+import { runMigrations } from "../server/db/migrate.ts";
 import {
   COLLAB_RETIRE_APPROVAL_ENV,
   COLLAB_RETIRE_APPROVAL_VALUE,
@@ -16,12 +16,21 @@ import {
   type StepName,
 } from "./retire-collab-migration.ts";
 import { requireScratchAdminUrl } from "./test-support/require-test-database.ts";
+import { sqlTemplateClause } from "./test-support/test-template-db.ts";
 
 const { Client, Pool } = pg;
 
 const approvedReleaseEnv = {
   [COLLAB_RETIRE_APPROVAL_ENV]: COLLAB_RETIRE_APPROVAL_VALUE,
 };
+
+/**
+ * An explicit loopback environment for the unapproved dry-run (issue 1667).
+ * Inheriting process.env made the case depend on wherever the suite's database
+ * lives: on a remote DB_HOST the release guard rightly treats the run as live
+ * and refuses. The guard's own unit cases below pass their env the same way.
+ */
+const loopbackDryRunEnv = { DB_HOST: "127.0.0.1" };
 
 /** Builds a full Args from the fields a given test actually varies. */
 function migrationArgs(overrides: Partial<Args> = {}): Args {
@@ -45,18 +54,14 @@ describe("retire-collab-migration args", () => {
   });
 
   it("honors --execute, --acknowledge-out-of-scope, and step subsets", () => {
-    const args = parseArgs([
-      "--execute",
-      "--acknowledge-out-of-scope",
-      "--thoughts",
-    ]);
+    const args = parseArgs(["--execute", "--acknowledge-out-of-scope", "--thoughts"]);
     expect(args.execute).toBe(true);
     expect(args.acknowledgeOutOfScope).toBe(true);
     expect([...args.steps]).toEqual(["thoughts"]);
   });
 
   it("rejects unknown flags", () => {
-    const originalExit = process.exit;
+    const originalExit = process.exit.bind(process);
     let exitCode: number | undefined;
     process.exit = ((code?: number) => {
       exitCode = code;
@@ -98,12 +103,8 @@ describe("retire-collab-migration transaction", () => {
   });
 
   it("refuses live dry-runs without explicit release approval before DB access", async () => {
-    expect(
-      dbHostRequiresReleaseApproval({ DB_HOST: "192.0.2.21" }),
-    ).toBe(true);
-    expect(dbHostRequiresReleaseApproval({ DB_HOST: "127.0.0.1" })).toBe(
-      false,
-    );
+    expect(dbHostRequiresReleaseApproval({ DB_HOST: "192.0.2.21" })).toBe(true);
+    expect(dbHostRequiresReleaseApproval({ DB_HOST: "127.0.0.1" })).toBe(false);
 
     const pool = {
       query: async () => {
@@ -112,11 +113,9 @@ describe("retire-collab-migration transaction", () => {
     };
 
     await expect(
-      runMigration(
-        pool,
-        migrationArgs({ steps: new Set<StepName>(["lanes"]) }),
-        { DB_HOST: "production-host" },
-      ),
+      runMigration(pool, migrationArgs({ steps: new Set<StepName>(["lanes"]) }), {
+        DB_HOST: "production-host",
+      }),
     ).rejects.toThrow(COLLAB_RETIRE_APPROVAL_ENV);
   });
 
@@ -126,10 +125,7 @@ describe("retire-collab-migration transaction", () => {
     const failingClient = {
       query: async (sql: string, _params?: unknown[]) => {
         clientQueries.push(sql.trim().split(/\s+/).slice(0, 3).join(" "));
-        if (
-          sql.includes("ob_session_lanes") &&
-          sql.trim().startsWith("UPDATE")
-        ) {
+        if (sql.includes("ob_session_lanes") && sql.trim().startsWith("UPDATE")) {
           throw new Error("boom: simulated lane failure");
         }
         return { rows: [{ count: 0 }], rowCount: 0 };
@@ -164,7 +160,7 @@ describe("retire-collab-migration transaction", () => {
 
 // -----------------------------------------------------------------------------
 // Scratch-DB integration tests built from the REAL repo migrations
-// (src/db/migrations/*.sql via runMigrations), so schema drift between the
+// (server/db/migrations/*.sql via runMigrations), so schema drift between the
 // script and production cannot hide behind an invented fixture schema.
 // Demands OPENBRAIN_SCRATCH_ADMIN_URL — a superuser/owner connection string
 // that can CREATE/DROP DATABASE (e.g. postgres://localhost/postgres). Never
@@ -231,11 +227,11 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
   await pool.query(
     `INSERT INTO ob_entities (entity_type, name, canonical_id, namespace, created_by)
      VALUES
-       ('repo_fact', 'king-core:unique', 'rf:king-core:unique', 'collab', 'rico'),
-       ('repo_fact', 'king-core:dupe', 'rf:king-core:dupe', 'collab', 'rico'),
-       ('repo_fact', 'king-core:dupe', 'rf:king-core:dupe-shared', 'shared-kb', 'rico'),
-       ('repo_fact', 'king-core:canon-collab-name', 'rf:king-core:canon', 'collab', 'rico'),
-       ('repo_fact', 'king-core:canon-shared-name', 'rf:king-core:canon', 'shared-kb', 'rico'),
+       ('repo_fact', 'acme-core:unique', 'rf:acme-core:unique', 'collab', 'rico'),
+       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe', 'collab', 'rico'),
+       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe-shared', 'shared-kb', 'rico'),
+       ('repo_fact', 'acme-core:canon-collab-name', 'rf:acme-core:canon', 'collab', 'rico'),
+       ('repo_fact', 'acme-core:canon-shared-name', 'rf:acme-core:canon', 'shared-kb', 'rico'),
        ('project', 'legacy-project-node', NULL, 'collab', 'rico')`,
   );
 
@@ -252,7 +248,7 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
 // Bun's default 5s per-hook allowance is not enough for `beforeAll`, and the
 // shortfall only shows in a full-suite run where the server is also serving
 // every other suite: it creates a database and then applies all 49 files in
-// src/db/migrations one transaction at a time (src/db/migrate.ts:45). That is
+// server/db/migrations one transaction at a time (src/db/migrate.ts:45). That is
 // real work, so the setup hook is sized against it rather than left on the
 // default, which surfaced as an unnamed hook failure at 5004ms (#912).
 //
@@ -287,7 +283,8 @@ async function createScratchDatabase(): Promise<ScratchPool> {
   const adminUrl = requireAdminUrl();
   const admin = new Client({ connectionString: adminUrl });
   await admin.connect();
-  await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
+  // #1667: OPENBRAIN_TEST_TEMPLATE_DB, when set, supplies the template.
+  await admin.query(`CREATE DATABASE ${SCRATCH_DB}${sqlTemplateClause("")}`);
   await admin.end();
   const pool = new Pool({
     connectionString: scratchUrl(adminUrl, SCRATCH_DB),
@@ -342,9 +339,7 @@ async function dropScratchDatabase(pool: ScratchPool | undefined): Promise<void>
 }
 
 /** The plan a dry-run must report: counts populated, nothing yet performed. */
-function expectDryRunPlan(
-  report: Awaited<ReturnType<typeof runMigration>>,
-): void {
+function expectDryRunPlan(report: Awaited<ReturnType<typeof runMigration>>): void {
   const { thoughts, entities, lanes } = requireStepReports(report);
 
   expect(thoughts.unmirrored_before).toBe(3);
@@ -413,14 +408,14 @@ async function expectThoughtsMigrated(pool: ScratchPool): Promise<void> {
 async function expectEntitiesMigrated(pool: ScratchPool): Promise<void> {
   // Re-tagged entity moved to shared-kb.
   const retagged = await pool.query(
-    `SELECT namespace FROM ob_entities WHERE name = 'king-core:unique'`,
+    `SELECT namespace FROM ob_entities WHERE name = 'acme-core:unique'`,
   );
   expect(retagged.rows[0].namespace).toBe("shared-kb");
 
   // Name-conflict entity archived in collab.
   const nameConflict = await pool.query(
     `SELECT archived_at FROM ob_entities
-      WHERE name = 'king-core:dupe' AND namespace = 'collab'`,
+      WHERE name = 'acme-core:dupe' AND namespace = 'collab'`,
   );
   expect(nameConflict.rows[0].archived_at).not.toBeNull();
 
@@ -428,7 +423,7 @@ async function expectEntitiesMigrated(pool: ScratchPool): Promise<void> {
   // active shared-kb row) archived in collab, NOT re-tagged.
   const canonConflict = await pool.query(
     `SELECT namespace, archived_at FROM ob_entities
-      WHERE name = 'king-core:canon-collab-name'`,
+      WHERE name = 'acme-core:canon-collab-name'`,
   );
   expect(canonConflict.rows[0].namespace).toBe("collab");
   expect(canonConflict.rows[0].archived_at).not.toBeNull();
@@ -474,9 +469,7 @@ describe("retire-collab-migration scratch Postgres real migrations (live Postgre
     // With no default and NOT NULL, an INSERT omitting namespace fails loudly
     // instead of silently landing in collab.
     await expect(
-      pool.query(
-        `INSERT INTO thoughts (content, created_by) VALUES ('no ns', 'test')`,
-      ),
+      pool.query(`INSERT INTO thoughts (content, created_by) VALUES ('no ns', 'test')`),
     ).rejects.toThrow();
     await expect(
       pool.query(
@@ -498,7 +491,7 @@ describe("retire-collab-migration scratch Postgres real migrations (live Postgre
   });
 
   it("dry-run reports plan + audit without mutating", async () => {
-    const report = await runMigration(pool, migrationArgs());
+    const report = await runMigration(pool, migrationArgs(), loopbackDryRunEnv);
     expect(report.dry_run).toBe(true);
     expect(report.audit.total_out_of_scope).toBe(3);
 
@@ -512,11 +505,7 @@ describe("retire-collab-migration scratch Postgres real migrations (live Postgre
 
   it("refuses --execute while out-of-scope content exists and mutates nothing", async () => {
     await expect(
-      runMigration(
-        pool,
-        migrationArgs({ execute: true }),
-        approvedReleaseEnv,
-      ),
+      runMigration(pool, migrationArgs({ execute: true }), approvedReleaseEnv),
     ).rejects.toThrow("OUTSIDE the migrated scope");
 
     const sharedCount = await pool.query(

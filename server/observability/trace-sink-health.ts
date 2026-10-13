@@ -11,7 +11,7 @@
  * during that window.
  *
  * Split out of `langfuse-tracing.ts` because this is a self-contained state
- * machine with its own external consumer (`src/rotating-file.ts`) and no
+ * machine with its own external consumer (`server/logging/rotating-file.ts`) and no
  * dependency on the SDK, the MCP server, or the trace body.
  */
 import type { TracingLogger } from "./trace-types.ts";

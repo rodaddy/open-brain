@@ -1,13 +1,14 @@
 /**
- * REST write routes for persons and sessions (issue 864 split of
- * `src/rest-api.ts`). Route paths, status codes, response shapes, error strings
+ * REST write routes for persons and sessions (split of the REST router in
+ * the L5 move, issue 864). Route paths, status codes, response shapes, error strings
  * and zod schemas are unchanged from the pre-split router.
  */
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { toSql } from "pgvector/pg";
-import { canWrite } from "../security/permissions.ts";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
+import { createPeopleRepository } from "../db/people-repository.ts";
+import { canWrite } from "../auth/permissions.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
 import {
   sessionEmbedText,
   sessionSourceHashInput,
@@ -50,51 +51,6 @@ export const sessionSchema = z.object({
   namespace: namespaceSchema.optional(),
 });
 
-const PERSON_UPSERT_SQL = `INSERT INTO relationships (
-        person_name, context, relationship_type, warmth, last_contact,
-        email, phone, notes, tags, metadata,
-        created_by, namespace, embedding, content_hash, embedded_at, embedding_model
-      ) VALUES (
-        $1, $2, $3, $4, $5::date,
-        $6, $7, $8, COALESCE($9::text[], '{}'), COALESCE($10::jsonb, '{}'),
-        $11, $12, $13, $14, $15, $16
-      )
-      ON CONFLICT (namespace, person_name) DO UPDATE SET
-        context = COALESCE(EXCLUDED.context, relationships.context),
-        relationship_type = COALESCE(EXCLUDED.relationship_type, relationships.relationship_type),
-        warmth = COALESCE(EXCLUDED.warmth, relationships.warmth),
-        last_contact = COALESCE(EXCLUDED.last_contact, relationships.last_contact),
-        email = COALESCE(EXCLUDED.email, relationships.email),
-        phone = COALESCE(EXCLUDED.phone, relationships.phone),
-        notes = COALESCE(EXCLUDED.notes, relationships.notes),
-        tags = CASE WHEN $9 IS NOT NULL THEN EXCLUDED.tags ELSE relationships.tags END,
-        metadata = CASE WHEN $10 IS NOT NULL THEN EXCLUDED.metadata ELSE relationships.metadata END,
-        embedding = EXCLUDED.embedding,
-        content_hash = EXCLUDED.content_hash,
-        embedded_at = EXCLUDED.embedded_at,
-        embedding_model = EXCLUDED.embedding_model
-      RETURNING id, (xmax = 0) AS inserted`;
-
-const SESSION_UPSERT_SQL = `INSERT INTO sessions (session_id, project, summary, tags, blockers, next_steps, key_decisions, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (namespace, session_id) WHERE session_id IS NOT NULL
-         DO UPDATE SET
-           summary = EXCLUDED.summary,
-           tags = EXCLUDED.tags,
-           blockers = EXCLUDED.blockers,
-           next_steps = EXCLUDED.next_steps,
-           key_decisions = EXCLUDED.key_decisions,
-           embedding = EXCLUDED.embedding,
-           content_hash = EXCLUDED.content_hash,
-           embedded_at = EXCLUDED.embedded_at,
-           updated_at = NOW()
-         RETURNING id, (xmax = 0) AS is_new`;
-
-const SESSION_INSERT_SQL = `INSERT INTO sessions (project, summary, tags, blockers, next_steps, key_decisions, created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
-       RETURNING id`;
-
 interface PersonUpsertContext {
   deps: RestDeps;
   fields: z.infer<typeof personSchema>;
@@ -107,24 +63,26 @@ interface PersonUpsertContext {
 /** The relationships upsert parameter list, kept out of the handler body. */
 async function upsertPerson(ctx: PersonUpsertContext) {
   const { fields, cols } = ctx;
-  const { rows } = await ctx.deps.pool.query(PERSON_UPSERT_SQL, [
-    fields.name,
-    orNull(fields.context),
-    orNull(fields.relationship_type),
-    orNull(fields.warmth),
-    orNull(fields.last_contact),
-    orNull(fields.email),
-    orNull(fields.phone),
-    orNull(fields.notes),
-    orNull(fields.tags),
-    fields.metadata ? JSON.stringify(fields.metadata) : null,
-    ctx.clientId,
-    ctx.ns,
-    cols.vector,
-    ctx.hash,
-    cols.embeddedAt,
-    cols.model,
-  ]);
+  const rows = await createPeopleRepository(ctx.deps.pool).upsertPersonFromRest({
+    values: [
+      fields.name,
+      orNull(fields.context),
+      orNull(fields.relationship_type),
+      orNull(fields.warmth),
+      orNull(fields.last_contact),
+      orNull(fields.email),
+      orNull(fields.phone),
+      orNull(fields.notes),
+      orNull(fields.tags),
+      fields.metadata ? JSON.stringify(fields.metadata) : null,
+      ctx.clientId,
+      ctx.ns,
+      cols.vector,
+      ctx.hash,
+      cols.embeddedAt,
+      cols.model,
+    ],
+  });
   return rows[0];
 }
 
@@ -147,9 +105,9 @@ export async function postPerson(
   if (ns === null) return;
 
   const embeddableText = [name, context ?? "", notes ?? ""].filter(Boolean).join("\n");
-  const hash = contentHash(embeddableText);
+  const hash = normalizedContentHash(embeddableText);
   const embedding = await deps.embedFn(embeddableText);
-  const cols = embeddingColumns(embedding, toSql, EMBEDDING_MODEL);
+  const cols = embeddingColumns(embedding, toSql, embeddingModel());
 
   const row = await upsertPerson({
     deps,
@@ -191,21 +149,23 @@ async function upsertKeyedSession(
   ctx: SessionWriteContext & { sessionId: string },
 ): Promise<void> {
   const { deps, res, fields, ns, clientId, values } = ctx;
-  const { rows } = await deps.pool.query(SESSION_UPSERT_SQL, [
-    ctx.sessionId,
-    orNull(fields.project),
-    fields.summary,
-    fields.tags ?? [],
-    fields.blockers ?? [],
-    fields.next_steps ?? [],
-    fields.key_decisions ?? [],
-    clientId,
-    ns,
-    values.embeddingVal,
-    values.hash,
-    values.embeddedAt,
-    values.model,
-  ]);
+  const rows = await createPeopleRepository(deps.pool).upsertKeyedSession({
+    values: [
+      ctx.sessionId,
+      orNull(fields.project),
+      fields.summary,
+      fields.tags ?? [],
+      fields.blockers ?? [],
+      fields.next_steps ?? [],
+      fields.key_decisions ?? [],
+      clientId,
+      ns,
+      values.embeddingVal,
+      values.hash,
+      values.embeddedAt,
+      values.model,
+    ],
+  });
 
   res.status(rows[0].is_new ? 201 : 200).json({
     id: rows[0].id,
@@ -218,20 +178,22 @@ async function upsertKeyedSession(
 
 async function insertUnkeyedSession(ctx: SessionWriteContext): Promise<void> {
   const { deps, res, fields, ns, clientId, values } = ctx;
-  const { rows } = await deps.pool.query(SESSION_INSERT_SQL, [
-    orNull(fields.project),
-    fields.summary,
-    fields.tags ?? [],
-    fields.blockers ?? [],
-    fields.next_steps ?? [],
-    fields.key_decisions ?? [],
-    clientId,
-    ns,
-    values.embeddingVal,
-    values.hash,
-    values.embeddedAt,
-    values.model,
-  ]);
+  const rows = await createPeopleRepository(deps.pool).insertUnkeyedSession({
+    values: [
+      orNull(fields.project),
+      fields.summary,
+      fields.tags ?? [],
+      fields.blockers ?? [],
+      fields.next_steps ?? [],
+      fields.key_decisions ?? [],
+      clientId,
+      ns,
+      values.embeddingVal,
+      values.hash,
+      values.embeddedAt,
+      values.model,
+    ],
+  });
 
   if (rows.length === 0) {
     res.status(409).json({ error: "Duplicate session content" });
@@ -267,12 +229,12 @@ export async function postSession(
   // Canonical session hash input and embed text -- shared with the repair
   // registry via sessionSourceHashInput()/sessionEmbedText() so repair never
   // disagrees with this writer.
-  const hash = contentHash(sessionSourceHashInput({ summary, project }));
+  const hash = normalizedContentHash(sessionSourceHashInput({ summary, project }));
   const embedding = await deps.embedFn(
     sessionEmbedText({ summary, key_decisions, next_steps, blockers }),
   );
 
-  const sessionCols = embeddingColumns(embedding, toSql, EMBEDDING_MODEL);
+  const sessionCols = embeddingColumns(embedding, toSql, embeddingModel());
   const values: SessionEmbeddingValues = {
     embedding,
     embeddingVal: sessionCols.vector,

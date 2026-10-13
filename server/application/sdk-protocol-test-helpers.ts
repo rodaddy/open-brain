@@ -26,7 +26,7 @@ import { WorkingSetStore } from "../realtime/working-set.ts";
 import { registerMemoryTools } from "../tools/index.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "../tools/shared-namespace-fixture.ts";
 import { silentLogger } from "../transport/testing/silent-logger.ts";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
 
 export { expectDefined };
 export const TEST_TOKEN = "sdk-protocol-proof-token";
@@ -107,8 +107,8 @@ export function fakeHealthDatabase(): Database {
 /**
  * The production-shaped auth seam: a bearer token becomes `req.auth`.
  *
- * This is deliberately the SAME placement production uses (`src/index.ts` mounts
- * `authMiddleware` on `/mcp`), because the placement is what is under test. The
+ * This is deliberately the SAME placement production uses (`authMiddleware`
+ * mounted on `/mcp`), because the placement is what is under test. The
  * token map is a single fixed token rather than the real loader -- the point is
  * that SOMETHING sets `req.auth` before the SDK reads it, not how the token is
  * looked up.
@@ -139,18 +139,6 @@ interface LiveHarness {
 export const live: Partial<LiveHarness> = {};
 
 /**
- * Extra applications and listeners a single test composed for itself.
- *
- * The `live` harness above holds ONE of each, which is right for the tests that
- * drive a single client. The two-worker front needs three at once (two workers
- * plus the front), so they are tracked here and torn down by the same
- * `afterEach`. Without this they would leak a listener per run, and a leaked
- * listener is the failure that shows up as an unrelated later test hanging.
- */
-const extraApplications: ShadowApplication[] = [];
-const extraServers: Server[] = [];
-
-/**
  * Realtime stores, injected per composed application rather than inherited.
  *
  * The realtime fixture records `id: "ws-1"` / `"rw-1"`, and those ids come from
@@ -167,7 +155,7 @@ const extraServers: Server[] = [];
  * store is per APPLICATION here, matching one server process owning its own
  * realtime state, which is exactly the lifetime the fixture recorded against.
  */
-export function freshRealtimeStores(): {
+function freshRealtimeStores(): {
   workingSetStore: WorkingSetStore;
   recoveryWalStore: RecoveryWalStore;
 } {
@@ -181,53 +169,6 @@ export function freshRealtimeStores(): {
       logger: pino({ level: "silent" }),
     }),
   };
-}
-
-/**
- * Compose one real single-worker application and bind it to an ephemeral port.
- *
- * Factored out of `connectRealClient` because the two-worker proof needs REAL
- * worker processes-equivalents behind the front -- the whole point of that test
- * is that the aggregate reads a genuine `/health` body off a genuine socket
- * rather than a hand-written `{status}` object from an injected `fetch`.
- */
-export async function startWorkerApplication(pool: Pool): Promise<{
-  application: ShadowApplication;
-  server: Server;
-  port: number;
-}> {
-  // One store pair per APPLICATION, shared by every session it serves -- the
-  // realtime state belongs to the process, not to a connection.
-  const realtime = freshRealtimeStores();
-  const application = createShadowApplication({
-    config: testConfig(),
-    logger: silentLogger(),
-    database: fakeHealthDatabase(),
-    authenticate: bearerAuth(),
-    parseRequestBody: express.json(),
-    serverFactory: () => {
-      const server = new McpServer({
-        name: "open-brain-rewrite",
-        version: "1.0.0",
-      });
-      registerMemoryTools(server, {
-        pool,
-        embedFn: async () => Array(768).fill(0.01) as number[],
-        logger: pino({ level: "silent" }),
-        sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
-        embeddingModel: "sdk-protocol-proof",
-        ...realtime,
-      });
-      return server;
-    },
-  });
-  const server = await new Promise<Server>((resolve) => {
-    const listener = application.app.listen(0, "127.0.0.1", () => resolve(listener));
-  });
-  const { port } = server.address() as AddressInfo;
-  extraApplications.push(application);
-  extraServers.push(server);
-  return { application, server, port };
 }
 
 /**
@@ -298,6 +239,8 @@ export async function callTool(
   try {
     body = JSON.parse(text);
   } catch {
+    // Deliberate: a non-JSON tool payload is a legitimate result shape here, so
+    // the raw `text` is returned to the test as the body and asserted on there.
     body = { text };
   }
   return { isError: result.isError === true, body, text };
@@ -305,8 +248,7 @@ export async function callTool(
 
 /**
  * Tear down everything a single test composed: the `live` harness client,
- * listener, and application, plus any extra listeners and applications the
- * two-worker proof stood up. Called from the suite's `afterEach`, so a leaked
+ * listener, and application. Called from the suite's `afterEach`, so a leaked
  * listener never surfaces later as an unrelated test hanging.
  */
 export async function closeExtras(): Promise<void> {
@@ -323,13 +265,6 @@ export async function closeExtras(): Promise<void> {
   if (live.application) {
     await live.application.close();
     live.application = undefined;
-  }
-  while (extraServers.length > 0) {
-    const server = expectDefined(extraServers.pop(), "extra server");
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-  while (extraApplications.length > 0) {
-    await expectDefined(extraApplications.pop(), "extra application").close();
   }
 }
 

@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
 import { expectDefined } from "../test-support/expect-defined.ts";
 import {
   createMockPool,
@@ -144,7 +145,7 @@ title: Test
 
 describe("readFiles", () => {
   it("reads a single markdown file from a directory", async () => {
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "note.md"),
       `---\ntitle: Test Note\n---\n\nThis is a test note with enough content to pass the minimum length check.`,
     );
@@ -156,9 +157,21 @@ describe("readFiles", () => {
     expect(expectDefined(files[0], "files[0]").body).toContain("This is a test note");
   });
 
+  it("returns absolute file paths when the source directory is relative", async () => {
+    await writeFile(
+      join(tmpDir, "relative.md"),
+      "This relative source fixture has enough content to be imported.",
+    );
+
+    const files = await readFiles(relative(process.cwd(), tmpDir), "*.md");
+
+    expect(files).toHaveLength(1);
+    expect(isAbsolute(expectDefined(files[0], "files[0]").filePath)).toBe(true);
+  });
+
   it("skips files with body shorter than 10 characters", async () => {
-    await Bun.write(join(tmpDir, "short.md"), "tiny");
-    await Bun.write(
+    await writeFile(join(tmpDir, "short.md"), "tiny");
+    await writeFile(
       join(tmpDir, "long.md"),
       "This file has enough content to be included in the import.",
     );
@@ -170,7 +183,7 @@ describe("readFiles", () => {
   });
 
   it("skips files with only frontmatter and no body", async () => {
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "fm-only.md"),
       `---\ntitle: Only FM\ntags: [a]\n---\n`,
     );
@@ -182,11 +195,14 @@ describe("readFiles", () => {
 
   it("reads files from nested directories with glob pattern", async () => {
     const nestedDir = join(tmpDir, "sub", "deep");
-    await Bun.write(
+    // writeFile does not create parent directories, unlike the bun
+    // global it replaces.
+    await mkdir(nestedDir, { recursive: true });
+    await writeFile(
       join(nestedDir, "nested.md"),
       "This is a nested file with plenty of body content for the import.",
     );
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "top.md"),
       "This is a top-level file with enough body content to pass.",
     );
@@ -199,12 +215,28 @@ describe("readFiles", () => {
     expect(paths.some((p) => p.includes("top.md"))).toBe(true);
   });
 
+  it("skips directories matched by a broad glob while reading nested files", async () => {
+    const matchingDir = join(tmpDir, "notes.md");
+    await mkdir(matchingDir);
+    await writeFile(
+      join(matchingDir, "nested.md"),
+      "This nested markdown file has enough content to be imported.",
+    );
+
+    const files = await readFiles(tmpDir, "**/*");
+
+    expect(files).toHaveLength(1);
+    expect(expectDefined(files[0], "files[0]").filePath).toBe(
+      join(matchingDir, "nested.md"),
+    );
+  });
+
   it("respects custom glob pattern", async () => {
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "note.md"),
       "Markdown file with enough content for the import test.",
     );
-    await Bun.write(
+    await writeFile(
       join(tmpDir, "note.txt"),
       "Text file with enough content for the import test.",
     );
@@ -224,7 +256,7 @@ describe("readFiles", () => {
   it("handles binary-like content that passes length check", async () => {
     // Binary files won't have frontmatter, body is the raw content
     const binaryContent = Buffer.alloc(100, 0xff).toString();
-    await Bun.write(join(tmpDir, "binary.md"), binaryContent);
+    await writeFile(join(tmpDir, "binary.md"), binaryContent);
 
     const files = await readFiles(tmpDir, "**/*.md");
     // It may or may not pass the length check depending on encoding,
@@ -366,7 +398,7 @@ describe("medium: 10-file import with dedup", () => {
 describe("large: 100-file import", () => {
   it("reads 100 programmatically generated files", async () => {
     for (let i = 0; i < 100; i++) {
-      await Bun.write(
+      await writeFile(
         join(tmpDir, `file-${i}.md`),
         `---\ntitle: Test ${i}\ntags: [test, batch]\n---\n\nThis is test file number ${i} with enough content to pass the minimum length check.`,
       );

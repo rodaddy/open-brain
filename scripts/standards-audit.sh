@@ -6,7 +6,7 @@ set -uo pipefail
 # failing), so this cd must guard itself -- otherwise a bad path silently
 # audits whatever directory the caller happened to be in.
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
-WORK="${OB_SCRATCH:-/Volumes/ThunderBolt/_tmp/open-brain/_scratch}"
+WORK="${OB_SCRATCH:-/srv/_tmp/open-brain/_scratch}"
 mkdir -p "$WORK"
 
 echo "=== 1. ENFORCEMENT (step 1 of the migration order) ==="

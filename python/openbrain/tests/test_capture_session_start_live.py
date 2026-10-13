@@ -26,6 +26,7 @@ import os
 
 import pytest
 
+from conftest import Secret
 from openbrain.apps.hooks.session import SessionStartHook, run_session_start
 from openbrain.config import CanonSettings
 
@@ -54,7 +55,7 @@ EPISODIC_SECTIONS = frozenset(
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -67,14 +68,14 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
-def canon_settings(live_env: dict[str, str], **overrides: object) -> CanonSettings:
+def canon_settings(live_env: dict[str, Secret], **overrides: object) -> CanonSettings:
     """CanonSettings pointed at the live playground, canon-only by default."""
     values: dict[str, object] = {
-        "base_url": live_env["OPENBRAIN_TEST_BASE_URL"],
-        "token": live_env["OPENBRAIN_TEST_TOKEN"],
+        "base_url": live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+        "token": live_env["OPENBRAIN_TEST_TOKEN"].get(),
         "repo": "open-brain",
     }
     values.update(overrides)
@@ -93,7 +94,7 @@ class TestSessionStartReadsCanonOnlyLive:
     """The default read returns the canon tiers and nothing episodic, from the server."""
 
     async def test_the_default_returns_the_three_canon_sections_and_no_episodic(
-        self, live_env: dict[str, str]
+        self, live_env: dict[str, Secret]
     ) -> None:
         payload = SessionStartHook(session_id="session-start-live", source="startup")
 
@@ -112,7 +113,7 @@ class TestSessionStartReadsCanonOnlyLive:
         assert keys.isdisjoint(EPISODIC_SECTIONS)
 
     async def test_the_compact_source_also_returns_canon(
-        self, live_env: dict[str, str]
+        self, live_env: dict[str, Secret]
     ) -> None:
         # source is read but must not gate injection: canon loads on every start.
         payload = SessionStartHook(session_id="session-start-live", source="compact")
@@ -127,7 +128,7 @@ class TestSessionStartSectionOverrideIsLive:
     """The section override is a live path, not just declared."""
 
     async def test_an_empty_override_reads_nothing(
-        self, live_env: dict[str, str]
+        self, live_env: dict[str, Secret]
     ) -> None:
         # An explicit empty override means inject nothing -- the guard returns
         # None before any client is built, so this needs no server round trip.
@@ -140,7 +141,7 @@ class TestSessionStartSectionOverrideIsLive:
         assert pack is None
 
     async def test_a_widened_override_surfaces_the_extra_section_live(
-        self, live_env: dict[str, str]
+        self, live_env: dict[str, Secret]
     ) -> None:
         # Widen the request to include an episodic section. The server honors the
         # request list, so the extra section appears -- proving the override list

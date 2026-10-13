@@ -5,7 +5,7 @@
  * the other for a type alone.
  */
 import type pg from "pg";
-import type { EmbeddingOptions, EmbeddingResult } from "../../src/embedding.ts";
+import type { EmbeddingOptions, EmbeddingResult } from "../embedding/provider.ts";
 
 /** Minimal queryable surface -- a pg.Pool or pg.PoolClient both satisfy this. */
 export type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;

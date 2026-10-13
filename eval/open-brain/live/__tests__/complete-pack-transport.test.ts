@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   LiveTransportError,
   OpenBrainLiveClient,
@@ -8,6 +8,7 @@ import {
 } from "../transport.ts";
 import { setUpCompletePackClients } from "../complete-pack-setup.ts";
 import type { LiveEvalConfig } from "../config.ts";
+import { expectDefined } from "../../../../scripts/test-support/expect-defined.ts";
 
 // Transport-boundary tests for the complete-pack additions: parseContextPackPayload
 // normalization / fail-closed behavior, the OpenBrainLiveClient.contextPack call
@@ -34,7 +35,11 @@ describe("parseContextPackPayload", () => {
     // Non-object citation entries are filtered out.
     expect(payload.citations.length).toBe(1);
     expect(payload.warnings.scope_denials.length).toBe(1);
-    expect(payload.warnings.truncation[0]!.starved).toBe(true);
+    const firstWarnEntry = expectDefined(
+      payload.warnings.truncation[0],
+      "warnings.truncation[0]",
+    );
+    expect(firstWarnEntry.starved).toBe(true);
   });
 
   it("defaults missing containers to their empty forms", () => {
@@ -48,12 +53,8 @@ describe("parseContextPackPayload", () => {
   });
 
   it("fails closed content-free on a non-object body (never an empty pack)", () => {
-    expect(() => parseContextPackPayload("[1,2,3]")).toThrow(
-      LiveTransportError,
-    );
-    expect(() => parseContextPackPayload("not json")).toThrow(
-      LiveTransportError,
-    );
+    expect(() => parseContextPackPayload("[1,2,3]")).toThrow(LiveTransportError);
+    expect(() => parseContextPackPayload("not json")).toThrow(LiveTransportError);
     try {
       parseContextPackPayload("[1,2,3]");
     } catch (error) {
@@ -108,15 +109,13 @@ describe("OpenBrainLiveClient.contextPack", () => {
     });
     expect(payload.status).toBe("ok");
     expect(calls.length).toBe(1);
-    expect(calls[0]!.name).toBe("agent_context_pack");
-    expect(calls[0]!.args.namespace).toBe("eval-ns");
-    expect(calls[0]!.args.requested_sections).toEqual([
-      "working_set",
-      "durable_memory",
-    ]);
-    expect(calls[0]!.args.budget).toEqual({ max_tokens: 6000 });
+    const call = expectDefined(calls[0], "calls[0]");
+    expect(call.name).toBe("agent_context_pack");
+    expect(call.args.namespace).toBe("eval-ns");
+    expect(call.args.requested_sections).toEqual(["working_set", "durable_memory"]);
+    expect(call.args.budget).toEqual({ max_tokens: 6000 });
     // No thread_id in scope -> not sent.
-    expect("thread_id" in (calls[0]!.args as object)).toBe(false);
+    expect("thread_id" in (call.args as object)).toBe(false);
   });
 
   it("throws a redacted error on a denied pack call", async () => {
@@ -152,6 +151,7 @@ describe("setUpCompletePackClients lifecycle", () => {
     negativeTokenIsDistinct: false,
     primaryNamespace: "ns-primary",
     negativeNamespace: "ns-negative",
+    project: "open-brain",
     searchMode: "hybrid",
     timeoutMs: 1000,
   };

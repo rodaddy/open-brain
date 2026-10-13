@@ -11,13 +11,11 @@
  * of a contact in a lane it cannot read.
  */
 import { z } from "zod";
-import { toSql } from "pgvector/pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createPeopleRepository } from "../db/people-repository.ts";
+import type { PersonRow } from "../db/people-repository.ts";
 import { canRead, canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { NamespacePredicate } from "../auth/namespace-policy.ts";
 import { contentHash, embeddingFields } from "./memory-helpers.ts";
 import {
@@ -27,26 +25,17 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 
-/** Columns `find_person` returns, matching observed current-src. */
-const PERSON_COLUMNS = `id, person_name, context, relationship_type, warmth,
-  last_contact, email, phone, notes, tags, metadata, created_at`;
-
 /**
  * `upsert_person` input, hoisted so the write's uniqueness key -- the name that
  * `ON CONFLICT` matches on -- is readable next to the SQL that relies on it.
  */
 const UPSERT_PERSON_INPUT = {
   name: z.string().min(1).describe("Person's full name (used as unique key)"),
-  context: z
-    .string()
-    .optional()
-    .describe("How you know them, where they work, etc."),
+  context: z.string().optional().describe("How you know them, where they work, etc."),
   relationship_type: z
     .string()
     .optional()
-    .describe(
-      "Relationship category: friend, family, colleague, acquaintance, etc.",
-    ),
+    .describe("Relationship category: friend, family, colleague, acquaintance, etc."),
   warmth: z
     .number()
     .int()
@@ -65,9 +54,7 @@ const UPSERT_PERSON_INPUT = {
   metadata: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe(
-      "Additional structured data (e.g. apple_id, imessage, social handles)",
-    ),
+    .describe("Additional structured data (e.g. apple_id, imessage, social handles)"),
   namespace: z
     .string()
     .min(1)
@@ -100,39 +87,6 @@ const FIND_PERSON_INPUT = {
     .describe("Number of results to skip for pagination (default 0)"),
 };
 
-/**
- * `INSERT ... ON CONFLICT` for a contact row.
- *
- * `tags`/`metadata` use a NULL-check rather than COALESCE on the update side so
- * that an explicitly-passed empty array or object REPLACES the stored value,
- * while omitting the field leaves it untouched. COALESCE alone cannot tell
- * those two cases apart.
- */
-const UPSERT_PERSON_SQL = `INSERT INTO relationships (
-           person_name, context, relationship_type, warmth, last_contact,
-           email, phone, notes, tags, metadata,
-           created_by, namespace, embedding, content_hash, embedded_at, embedding_model
-         ) VALUES (
-           $1, $2, $3, $4, $5::date,
-           $6, $7, $8, COALESCE($9::text[], '{}'), COALESCE($10::jsonb, '{}'),
-           $11, $12, $13, $14, $15, $16
-         )
-         ON CONFLICT (namespace, person_name) DO UPDATE SET
-           context = COALESCE(EXCLUDED.context, relationships.context),
-           relationship_type = COALESCE(EXCLUDED.relationship_type, relationships.relationship_type),
-           warmth = COALESCE(EXCLUDED.warmth, relationships.warmth),
-           last_contact = COALESCE(EXCLUDED.last_contact, relationships.last_contact),
-           email = COALESCE(EXCLUDED.email, relationships.email),
-           phone = COALESCE(EXCLUDED.phone, relationships.phone),
-           notes = COALESCE(EXCLUDED.notes, relationships.notes),
-           tags = CASE WHEN $9 IS NOT NULL THEN EXCLUDED.tags ELSE relationships.tags END,
-           metadata = CASE WHEN $10 IS NOT NULL THEN EXCLUDED.metadata ELSE relationships.metadata END,
-           embedding = EXCLUDED.embedding,
-           content_hash = EXCLUDED.content_hash,
-           embedded_at = EXCLUDED.embedded_at,
-           embedding_model = EXCLUDED.embedding_model
-         RETURNING id, (xmax = 0) AS inserted`;
-
 /** Caller-supplied `upsert_person` arguments, as Zod hands them to the handler. */
 type UpsertPersonArgs = {
   name: string;
@@ -155,9 +109,7 @@ type UpsertPersonArgs = {
  * identifiers rather than prose, and embedding them dilutes the vector.
  */
 function personEmbedText(args: UpsertPersonArgs): string {
-  return [args.name, args.context ?? "", args.notes ?? ""]
-    .filter(Boolean)
-    .join("\n");
+  return [args.name, args.context ?? "", args.notes ?? ""].filter(Boolean).join("\n");
 }
 
 /** Positional parameters for {@link UPSERT_PERSON_SQL}, in declaration order. */
@@ -189,9 +141,6 @@ function upsertPersonValues(options: {
   ];
 }
 
-/** Rows `find_person` reads, in either search mode. */
-type PersonRow = Record<string, unknown>;
-
 /** Semantic mode: nearest contacts by embedding distance. */
 async function findPeopleSemantic(options: {
   dependencies: MemoryToolDependencies;
@@ -203,16 +152,13 @@ async function findPeopleSemantic(options: {
   const { dependencies, predicate } = options;
   const embedding = await dependencies.embedFn(options.query);
   if (!embedding) return null;
-  const result = await dependencies.pool.query(
-    `SELECT ${PERSON_COLUMNS},
-                  embedding <=> $1::halfvec(768) AS distance
-             FROM relationships
-            WHERE embedding IS NOT NULL AND archived_at IS NULL${predicate.clause}
-            ORDER BY distance ASC
-            LIMIT $2 OFFSET $3`,
-    [toSql(embedding), options.rowCount, options.offset, ...predicate.values],
-  );
-  return result.rows;
+  return await createPeopleRepository(dependencies.pool).findPeopleSemantic({
+    embedding,
+    rowCount: options.rowCount,
+    offset: options.offset,
+    predicateClause: predicate.clause,
+    predicateValues: predicate.values,
+  });
 }
 
 /** Name mode: ILIKE partial match, warmest and most recently contacted first. */
@@ -227,15 +173,13 @@ async function findPeopleByName(options: {
   // `%` and `_` are ILIKE wildcards, so a caller searching for a literal
   // one must not have it treated as a pattern.
   const escaped = options.query.replaceAll("%", "\\%").replaceAll("_", "\\_");
-  const result = await options.dependencies.pool.query(
-    `SELECT ${PERSON_COLUMNS}
-             FROM relationships
-            WHERE person_name ILIKE $1 AND archived_at IS NULL${predicate.clause}
-            ORDER BY warmth DESC NULLS LAST, last_contact DESC NULLS LAST
-            LIMIT $2 OFFSET $3`,
-    [`%${escaped}%`, options.rowCount, options.offset, ...predicate.values],
-  );
-  return result.rows;
+  return await createPeopleRepository(options.dependencies.pool).findPeopleByName({
+    pattern: `%${escaped}%`,
+    rowCount: options.rowCount,
+    offset: options.offset,
+    predicateClause: predicate.clause,
+    predicateValues: predicate.values,
+  });
 }
 
 export function registerPeopleTools(
@@ -276,15 +220,16 @@ function registerUpsertPerson(
       const embeddableText = personEmbedText(args);
       const embedding = await embeddingFields(dependencies, embeddableText);
 
-      const { rows } = await dependencies.pool.query(
-        UPSERT_PERSON_SQL,
-        upsertPersonValues({
-          args,
-          clientId: identity.clientId,
-          namespace,
-          embeddableText,
-          embedding,
-        }),
+      const rows = await createPeopleRepository(dependencies.pool).upsertPersonFromTool(
+        {
+          values: upsertPersonValues({
+            args,
+            clientId: identity.clientId,
+            namespace,
+            embeddableText,
+            embedding,
+          }),
+        },
       );
 
       const row = rows[0];
@@ -339,8 +284,7 @@ function registerFindPerson(
         args.mode === "semantic"
           ? await findPeopleSemantic(request)
           : await findPeopleByName(request);
-      if (rows === null)
-        return errorResult("Failed to generate query embedding");
+      if (rows === null) return errorResult("Failed to generate query embedding");
 
       dependencies.logger.info(
         {

@@ -9,7 +9,7 @@
  * The database probe and `fetch` are injected, so this test opens no socket and
  * touches no Postgres.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { DatabaseHealth } from "../db/pool.ts";
 import { getSingleWorkerHealth } from "./index.ts";
 import type { SingleWorkerHealthInput, TransportNatsHealth } from "./index.ts";
@@ -39,7 +39,10 @@ function input(overrides?: Partial<SingleWorkerHealthInput>): SingleWorkerHealth
 function okFetch(calls: { url: string; authorization: string | null }[]): typeof fetch {
   return (async (url: string | URL | Request, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    calls.push({ url: String(url), authorization: headers.get("Authorization") });
+    calls.push({
+      url: url instanceof Request ? url.url : String(url),
+      authorization: headers.get("Authorization"),
+    });
     return new Response("{}", { status: 200 });
   }) as unknown as typeof fetch;
 }
@@ -116,7 +119,9 @@ describe("single worker health boundary", () => {
     );
     expect(health.embedding.connected).toBe(false);
   });
+});
 
+describe("single worker health transport and producer signals", () => {
   it("degrades when NATS is the requested transport and is unavailable", async () => {
     const natsHealth: TransportNatsHealth = {
       requested_transport: "nats",

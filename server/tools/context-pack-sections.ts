@@ -90,10 +90,7 @@ export function resolveItemBudget(
   );
   const maxItemChars = Math.max(
     0,
-    Math.min(
-      defaults.maxItemChars,
-      supplied?.maxItemChars ?? defaults.maxItemChars,
-    ),
+    Math.min(defaults.maxItemChars, supplied?.maxItemChars ?? defaults.maxItemChars),
   );
   return { maxItems, maxItemChars };
 }

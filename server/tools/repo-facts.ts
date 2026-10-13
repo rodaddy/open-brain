@@ -6,12 +6,12 @@
  *
  * A repo fact is STABLE OPERATING KNOWLEDGE plus source pointers -- never a raw
  * code chunk and never credential-like material. Both refusals are enforced
- * here on the write path, and the validators are imported from the current-src
- * module rather than reimplemented: a second copy of a secret detector that
+ * here on the write path, and the validators are imported from
+ * `server/domain/repo-facts.ts` rather than reimplemented: a second copy of a
+ * secret detector that
  * drifts is a detector that silently stops detecting.
  */
 import { z } from "zod";
-import { toSql } from "pgvector/pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead, canWrite } from "../auth/permissions.ts";
 import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
@@ -33,6 +33,7 @@ import {
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
+import { createEntityReportRepository } from "../db/entity-report-repository.ts";
 
 const REPO_FACT_COLUMNS = `id, entity_type, name, canonical_id, namespace,
   metadata, created_by, created_at, updated_at`;
@@ -193,29 +194,15 @@ async function handleUpsertRepoFact(
 
   const embedding = await embedRepoFact(dependencies, metadata, factCanonicalId);
 
-  const { rows } = await dependencies.pool.query(
-    `INSERT INTO ob_entities
-       (entity_type, name, canonical_id, namespace, metadata, embedding, created_by)
-     VALUES ('repo_fact', $1, $2, $3, $4::jsonb, $5, $6)
-     ON CONFLICT (namespace, entity_type, lower(name))
-     WHERE archived_at IS NULL
-     DO UPDATE SET
-       canonical_id = EXCLUDED.canonical_id,
-       metadata = EXCLUDED.metadata,
-       embedding = COALESCE(EXCLUDED.embedding, ob_entities.embedding),
-       archived_at = NULL,
-       updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new, entity_type, name, canonical_id,
-               namespace, metadata, created_at, updated_at`,
-    [
-      entityName(metadata),
-      factCanonicalId,
-      namespace,
-      JSON.stringify(storedMetadata),
-      embedding ? toSql(embedding) : null,
-      identity.clientId,
-    ],
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.upsertRepoFact({
+    name: entityName(metadata),
+    canonicalId: factCanonicalId,
+    namespace,
+    metadata: JSON.stringify(storedMetadata),
+    embedding: embedding ?? null,
+    createdBy: identity.clientId,
+  });
 
   dependencies.logger.info(
     { tool: "upsert_repo_fact", canonicalId: factCanonicalId },
@@ -287,14 +274,12 @@ async function handleListRepoFacts(
   ): Promise<Array<Record<string, unknown>>> => {
     const { filters, values } = repoFactFilters(args, scope);
     values.push(rowCap, queryOffset);
-    const { rows } = await dependencies.pool.query(
-      `SELECT ${REPO_FACT_COLUMNS}
-         FROM ob_entities
-        WHERE ${filters.join(" AND ")}
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT $${values.length - 1} OFFSET $${values.length}`,
-      values,
-    );
+    const repository = createEntityReportRepository(dependencies.pool);
+    const rows = await repository.listRepoFacts({
+      columns: REPO_FACT_COLUMNS,
+      filters,
+      parameters: values,
+    });
     return rows as Array<Record<string, unknown>>;
   };
 

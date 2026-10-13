@@ -16,7 +16,7 @@ import {
   logNatsSubscriptionError,
 } from "./nats-bridge-envelope.ts";
 
-export function nextNatsResubscribeDelay(currentMs: number): number {
+function nextNatsResubscribeDelay(currentMs: number): number {
   return Math.min(currentMs * 2, NATS_RESUBSCRIBE_MAX_DELAY_MS);
 }
 

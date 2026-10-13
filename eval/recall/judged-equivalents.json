@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "note": "Rows judged to answer a fixture query by themselves, for fixtures whose authored label-2 row is one of many near-identical rows: repeated memory versions, a session mirrored as a session event, or the same blocker recorded on many days. Judged 2026-09-21 on the attempt M result windows (RRF window for the first two fixtures, Jev window for codex-checkpoint-blocked-on-main): blind 0/1/2 grading by an off-family model (gpt-5.6-terra, low) that saw only the query and lettered row text, with the head session concurring; a row is listed only when both graded it 2. For sam-fail-closed only rows that state the zero AND blank price rule are listed. Consumed by scripts/done-means/1417-jev-paired-compare.mjs, which names every requirement an equivalent satisfied in its receipt. eval/recall/fixtures.json is unchanged, so every published baseline keeps its pin. Issue 1417.",
+  "fixtures": {
+    "dap-raw-ids-only": [
+      "session_event:1cfb4b25-ddd0-4857-86f4-c6dde34bc4d8",
+      "session_event:30cf909a-9d9e-47d7-8aac-ac85f4168c97",
+      "session_event:86c53945-4893-4a85-89cc-c5fec950630a",
+      "session_event:cca8540b-dadd-4149-b159-46fa87166f3c",
+      "thought:1a3554d8-1000-4b8f-8b5a-e9feeb7a334d",
+      "thought:3ef40467-76d1-40a8-a147-a6168a2929f3",
+      "thought:cd5f298a-decf-4ee9-831a-28725313fd5c",
+      "thought:da99f846-51cc-43a3-9813-672b29eb9006",
+      "thought:f12d4157-43f7-403a-a6d7-cf72e979480a"
+    ],
+    "sam-fail-closed": [
+      "session_event:0833421b-dffc-4f7e-9f83-d334c1bbf543",
+      "session_event:865a83bc-dee6-42cd-b556-1e96e193416d",
+      "session_event:a4fa1d79-7e42-4b52-9e1f-5b623e865084",
+      "session_event:c587950c-dd9e-42d2-bb05-cbd0eb915f23",
+      "thought:9059a74c-0d44-461f-8736-10e9c0fbaf72"
+    ],
+    "codex-checkpoint-blocked-on-main": [
+      "session:d2b3cfca-5f8b-4df0-8346-55a6e4cb4337",
+      "session_event:0027071b-adc8-47db-8c48-1581fc960ed3",
+      "session_event:0309b3d5-e05b-475f-bdd2-cbdc05b8eb9f",
+      "session_event:221b8ac0-9f4c-4ba9-b419-a77df468fded",
+      "session_event:238a2dd4-9502-4584-a18a-201c74805f52",
+      "session_event:260e3523-8576-4000-9324-76ee6c28b7e1",
+      "session_event:5b846b92-4721-4e24-a1ef-545952c47b48",
+      "session_event:74d73b6a-30bf-431e-b0e1-ce66b34ba35e",
+      "session_event:8caa030e-83e8-4946-b573-c3da8bac60f1",
+      "session_event:ef4c2fe7-5c19-4310-a5eb-b27a7aeedd55"
+    ]
+  }
+}

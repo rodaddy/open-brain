@@ -11,7 +11,7 @@ The log answers "who called which tool, when, with what outcome and rough
 payload shape" without ever persisting request content.
 
 Implementation: `src/audit-log.ts`. Schema:
-`src/db/migrations/022_mcp_tool_audit_log.sql`.
+`server/db/migrations/022_mcp_tool_audit_log.sql`.
 
 ## Table: `mcp_tool_audit_log`
 

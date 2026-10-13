@@ -35,7 +35,10 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { ALL_TABLES } from "./curation-helpers.ts";
+import { createPromotionRepository } from "../db/promotion-repository.ts";
 import { isPromotionIdentity, legacyTargetRefusal } from "./promotion-shared.ts";
+import { askJev } from "../integrations/jev.ts";
+import { JEV_SHARE_SCREEN_QUESTION } from "../integrations/jev-question-sets.ts";
 
 /** Tables `promote_shared` can lift into shared truth. */
 const PROMOTABLE_TABLES = ["thoughts", "decisions"] as const;
@@ -140,15 +143,11 @@ function countNamespaceRows(
   return Promise.all(
     tables.map(async (table) => {
       const predicate = namespacePredicate(identity, "read", 1);
-      const { rows } = await dependencies.pool.query(
-        `SELECT '${table}' AS table_name, namespace, COUNT(*) AS count
-           FROM ${table}
-          WHERE archived_at IS NULL${predicate.clause}
-          GROUP BY namespace
-          ORDER BY count DESC`,
-        [...predicate.values],
-      );
-      return rows;
+      return createPromotionRepository(dependencies.pool).countNamespaceRows({
+        table,
+        predicateClause: predicate.clause,
+        params: [...predicate.values],
+      });
     }),
   );
 }
@@ -277,13 +276,97 @@ async function loadPromotionSource(
 ): Promise<Record<string, unknown> | undefined> {
   const contentColumns = table === "decisions" ? "title, rationale" : "content";
   const predicate = namespacePredicate(identity, "read", 2);
-  const { rows } = await dependencies.pool.query(
-    `SELECT id, ${contentColumns}, tags, extracted_metadata
-       FROM ${table as ResourceTable}
-      WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-    [id, ...predicate.values],
+  const rows = await createPromotionRepository(dependencies.pool).selectPromotionSource(
+    {
+      table: table as ResourceTable,
+      contentColumns,
+      predicateClause: predicate.clause,
+      params: [id, ...predicate.values],
+    },
   );
   return rows.length === 0 ? undefined : (rows[0] as Record<string, unknown>);
+}
+
+/** Issue 1618 B3: `shareable` below this confidence is held for review. */
+const SHARE_SCREEN_MIN_CONFIDENCE = 0.9;
+
+/** The Jev screen verdict, as reported back to the caller. */
+interface ShareScreenVerdict {
+  answer: string;
+  confidence: number;
+}
+
+/**
+ * Ask Jev whether the entry may become shared truth (issue 1618 B3).
+ *
+ * Runs only AFTER `classifyShareCandidate`, whose regex secret check has
+ * already refused known secrets, so those never leave the box. Fails closed:
+ * any Jev error or unexpected answer is a hold, never a pass.
+ *
+ * @returns The verdict and whether it clears the screen.
+ */
+async function screenWithJev(
+  screen: NonNullable<MemoryToolDependencies["jevShareScreen"]>,
+  content: string,
+): Promise<{ pass: boolean; verdict?: ShareScreenVerdict; failure?: string }> {
+  try {
+    const response = await askJev(
+      screen.config,
+      { entry: content },
+      { share_screen: JEV_SHARE_SCREEN_QUESTION },
+      screen.fetchFn,
+    );
+    const answer = response.answers.share_screen;
+    if (!answer || answer.type !== "choice") {
+      return { pass: false, failure: "Jev returned no share_screen choice" };
+    }
+    const verdict = { answer: answer.choice, confidence: answer.confidence };
+    const pass =
+      answer.choice === "shareable" && answer.confidence >= SHARE_SCREEN_MIN_CONFIDENCE;
+    return { pass, verdict };
+  } catch (error) {
+    return {
+      pass: false,
+      failure: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Run the optional Jev screen when it is enabled and the classifier let the
+ * entry through (issue 1618 B3). A hold is the existing error-result shape.
+ *
+ * @returns The passing verdict (absent when the screen did not run), or the hold.
+ */
+async function applyShareScreen(
+  dependencies: MemoryToolDependencies,
+  decision: string,
+  content: string,
+  id: string,
+): Promise<
+  { shareScreen?: ShareScreenVerdict } | { held: ReturnType<typeof errorResult> }
+> {
+  const screen = dependencies.jevShareScreen;
+  if (
+    !(decision === "share" || decision === "manual-review") ||
+    !screen?.config.enabled
+  ) {
+    return {};
+  }
+  const screened = await screenWithJev(screen, content);
+  if (screened.pass && screened.verdict) return { shareScreen: screened.verdict };
+  dependencies.logger.warn(
+    { tool: "promote_shared", id, verdict: screened.verdict },
+    "promote_shared_screen_held",
+  );
+  const why = screened.verdict
+    ? `Jev answered ${screened.verdict.answer} at confidence ${screened.verdict.confidence}`
+    : `Jev screen failed (${screened.failure}); held, fail closed`;
+  return {
+    held: errorResult(
+      `Held: entry classified as manual-review by the share screen and not promoted. ${why}`,
+    ),
+  };
 }
 
 /** Everything the promotion call itself needs once the request is authorized. */
@@ -296,14 +379,25 @@ interface RunPromotionOptions {
   reason: string | undefined;
   dryRun: boolean;
   classification: string;
+  /** Issue 1618 B3: present only when the Jev screen ran and passed. */
+  shareScreen?: ShareScreenVerdict;
 }
 
 /** @returns The promotion result, or the error result its failure maps to. */
 async function runPromotion(
   options: RunPromotionOptions,
 ): Promise<ReturnType<typeof textResult>> {
-  const { dependencies, identity, table, id, target, reason, dryRun, classification } =
-    options;
+  const {
+    dependencies,
+    identity,
+    table,
+    id,
+    target,
+    reason,
+    dryRun,
+    classification,
+    shareScreen,
+  } = options;
   try {
     const result = await promoteEntry(dependencies.pool, table, id, {
       targetNamespace: target,
@@ -311,12 +405,17 @@ async function runPromotion(
       auth: promotionAuth(identity),
       dryRun,
       killSwitch: dependencies.promotionKillSwitch ?? false,
+      ...(shareScreen ? { promotionConfidence: shareScreen.confidence } : {}),
     });
     dependencies.logger.info(
       { tool: "promote_shared", id, status: result.status, dryRun },
       "tool_result",
     );
-    return textResult({ classification, ...result });
+    return textResult({
+      classification,
+      ...result,
+      ...(shareScreen ? { share_screen: shareScreen } : {}),
+    });
   } catch (error) {
     const statusCode = (error as { statusCode?: number }).statusCode;
     const message = error instanceof Error ? error.message : String(error);
@@ -380,7 +479,17 @@ async function handlePromoteShared(
     );
   }
 
+  const screened = await applyShareScreen(
+    dependencies,
+    decision,
+    shareContent(args.table, row),
+    args.id,
+  );
+  if ("held" in screened) return screened.held;
+  const { shareScreen } = screened;
+
   return runPromotion({
+    ...(shareScreen ? { shareScreen } : {}),
     dependencies,
     identity: outcome.identity,
     table: args.table,

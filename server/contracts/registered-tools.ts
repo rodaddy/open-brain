@@ -12,9 +12,10 @@ import type { MemoryToolDependencies } from "../tools/types.ts";
  * src-side gap map does, and it is load-bearing there because it also has to
  * attribute a tool to a file; here it would be a second, weaker model of the
  * registry that a regex detail can silently falsify. That is not hypothetical:
- * `src/tools` puts the tool name on the same line as `registerTool(` while
- * `server/tools` puts it on the next line, so the existing single-line pattern
- * finds ZERO rewrite tools. A check that reports "nothing missing" because its
+ * the pre-transplant tool tree put the tool name on the same line as
+ * `registerTool(` while `server/tools` puts it on the next line, so the
+ * existing single-line pattern finds ZERO rewrite tools. A check that reports
+ * "nothing missing" because its
  * regex matched nothing is the exact failure this whole change exists to remove.
  *
  * Registration is pure name/schema/handler bookkeeping -- no handler runs and

@@ -111,7 +111,7 @@ When logging thoughts/decisions, include contextual tags:
 
 | Context | Auto-Tags |
 |---------|-----------|
-| In a king repo | `["king", "<repo-name>"]` |
+| In a acme repo | `["acme", "<repo-name>"]` |
 | Infrastructure work | `["infra", "<service-name>"]` |
 | Personal/career | `["personal"]` |
 | Financial | `["personal", "finance"]` |

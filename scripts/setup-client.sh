@@ -45,7 +45,7 @@ command -v uv >/dev/null 2>&1 || die "uv not on PATH — install uv first (https
 command -v python3 >/dev/null 2>&1 || die "python3 not on PATH"
 
 [ -d "$BUNDLE_DIR/wheels" ] || die "bundle incomplete: no wheels/ next to this script"
-[ -f "$BUNDLE_DIR/env/claudex-observation.env" ] || die "bundle incomplete: env/claudex-observation.env missing"
+[ -f "$BUNDLE_DIR/env/openbrain.env" ] || die "bundle incomplete: env/openbrain.env missing"
 [ -f "$BUNDLE_DIR/env/openbrain-hook-env" ] || die "bundle incomplete: env/openbrain-hook-env missing"
 [ -f "$BUNDLE_DIR/settings-hooks.json" ] || die "bundle incomplete: settings-hooks.json missing"
 
@@ -152,14 +152,31 @@ done
 
 log "==> placing env dir at $TARGET_ENV_DIR"
 mkdir -p "$TARGET_ENV_DIR"
-if [ -f "$TARGET_ENV_DIR/claudex-observation.env" ]; then
-  backup="$TARGET_ENV_DIR/claudex-observation.env.bak-$(date +%Y%m%d-%H%M%S)"
-  cp -p "$TARGET_ENV_DIR/claudex-observation.env" "$backup"
+
+# --- 2a. one-time migration off the harness-named env file (issue 1371) -----
+# The client env file used to be named after one harness (`claudex-observation`)
+# even though every runtime reads it. A box installed before that rename still
+# has the old name on disk. Rename it -- never copy it, because a copy leaves a
+# second file holding the same live bearer token -- and announce the rename, per
+# the repo's "nothing is adjusted silently" rule. Only when the old file is the
+# ONLY one present: if both exist the new name is already authoritative and the
+# old one is stale, so touching it would be the silent adjustment.
+if [ -f "$TARGET_ENV_DIR/claudex-observation.env" ] && \
+   [ ! -f "$TARGET_ENV_DIR/openbrain.env" ]; then
+  mv "$TARGET_ENV_DIR/claudex-observation.env" "$TARGET_ENV_DIR/openbrain.env"
+  : > "$TARGET_ENV_DIR/claudex-observation.env.migrated-$(date +%Y%m%d)"
+  log "    migrated env file: claudex-observation.env -> openbrain.env (issue 1371)"
+  log "    the name carried a harness word; every runtime reads this file"
+fi
+
+if [ -f "$TARGET_ENV_DIR/openbrain.env" ]; then
+  backup="$TARGET_ENV_DIR/openbrain.env.bak-$(date +%Y%m%d-%H%M%S)"
+  cp -p "$TARGET_ENV_DIR/openbrain.env" "$backup"
   log "    existing env file backed up to $(basename "$backup")"
 fi
-cp "$BUNDLE_DIR/env/claudex-observation.env" "$TARGET_ENV_DIR/"
+cp "$BUNDLE_DIR/env/openbrain.env" "$TARGET_ENV_DIR/"
 cp "$BUNDLE_DIR/env/openbrain-hook-env" "$TARGET_ENV_DIR/"
-chmod 600 "$TARGET_ENV_DIR/claudex-observation.env"
+chmod 600 "$TARGET_ENV_DIR/openbrain.env"
 chmod +x "$TARGET_ENV_DIR/openbrain-hook-env"
 
 # --- 2b. this machine's Development root, WRITTEN ---------------------------
@@ -172,7 +189,7 @@ chmod +x "$TARGET_ENV_DIR/openbrain-hook-env"
 # value (or none), so this rewrite is what makes the file correct per box --
 # same reason the wrapper's ENV_FILE is rewritten just below.
 if [ -n "$DEV_ROOT_RESOLVED" ]; then
-  python3 - "$TARGET_ENV_DIR/claudex-observation.env" "$DEV_ROOT_RESOLVED" <<'PY'
+  python3 - "$TARGET_ENV_DIR/openbrain.env" "$DEV_ROOT_RESOLVED" <<'PY'
 import re
 import shlex
 import sys
@@ -361,7 +378,7 @@ ENV_DIR="$(CDPATH='' cd -- "$(dirname -- "$WRAPPER_SOURCE")" 2>/dev/null && pwd)
   printf '%s\\n' "openbrain-hook-env: could not resolve wrapper directory: $WRAPPER_SOURCE" >&2
   exit 1
 }}
-ENV_FILE="$ENV_DIR/claudex-observation.env"
+ENV_FILE="$ENV_DIR/openbrain.env"
 if [ ! -r "$ENV_FILE" ]; then
   printf '%s\\n' "openbrain-hook-env: env file missing or unreadable: $ENV_FILE (wrapper source: $WRAPPER_SOURCE)" >&2
   exit 1
@@ -451,7 +468,7 @@ PY
 log ""
 log "==> proving the install"
 
-BASE_URL="$(python3 - "$TARGET_ENV_DIR/claudex-observation.env" <<'PY'
+BASE_URL="$(python3 - "$TARGET_ENV_DIR/openbrain.env" <<'PY'
 import sys
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
@@ -491,7 +508,7 @@ case "$BASE_URL" in
 
     Edit this line, then re-run:
 
-      $TARGET_ENV_DIR/claudex-observation.env
+      $TARGET_ENV_DIR/openbrain.env
 
     Preferred -- TLS, so it needs no extra variable and works off the LAN:
 
@@ -525,11 +542,11 @@ fi
 # a request key -- pointing at the JSON rather than at the missing line in the
 # env file. The first client install spent four round trips on that gap.
 if rg -q '^[[:space:]]*(export[[:space:]]+)?OPENBRAIN_NAMESPACE=' \
-    "$TARGET_ENV_DIR/claudex-observation.env" 2>/dev/null; then
+    "$TARGET_ENV_DIR/openbrain.env" 2>/dev/null; then
   log "    [ok] OPENBRAIN_NAMESPACE present in the env file"
 else
   die "OPENBRAIN_NAMESPACE is missing from
-    $TARGET_ENV_DIR/claudex-observation.env
+    $TARGET_ENV_DIR/openbrain.env
 
     The provider CLI takes the namespace from the ENVIRONMENT, never from the
     request body, so without this line every recall fails with a message about
@@ -551,7 +568,7 @@ fi
 log "    recall through the installed openbrain-memory:"
 recall_out="$(
   set -a
-  . "$TARGET_ENV_DIR/claudex-observation.env"
+  . "$TARGET_ENV_DIR/openbrain.env"
   set +a
   printf '%s' '{"operation":"recall","query":"client install proof","scope":{"agent":"setup-client","platform":"claude-code","server_id":"client-install","channel_id":"client-install","session_key":"client-install-proof"}}' \
     | openbrain-memory 2>&1 || true

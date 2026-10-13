@@ -75,7 +75,7 @@ removed its own (`src/tools/ingest-raw-turn.ts:30`);
 
 ## [C] Python client — `python/openbrain-memory/`
 
-**State: MERGED in-repo; consumed downstream** by mcp2cli, Hermes, and the
+**State: MERGED in-repo; consumed downstream** by mcp2cli and the
 deployed adapter per `docs/memory-contract.md` and `docs/downstream-rollout.md`.
 
 The typed client: `AgentMemory` (`agent.py:222`) owns session lifecycle,

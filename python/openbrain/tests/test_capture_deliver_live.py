@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from conftest import Secret
 from openbrain.apps.capture.deliver import deliver_new_turns
 from openbrain.apps.capture.watermark import WatermarkStore
 
@@ -42,7 +43,7 @@ REQUESTED_NAMESPACE = "spine-live"
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -55,7 +56,7 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
 def operator_line(turn_uuid: str, content: str, session: str) -> str:
@@ -161,13 +162,13 @@ def fetch_attribution(database_url: str, turn_uuid: str) -> tuple[str, bool] | N
     return None if row is None else (str(row[0]), bool(row[1]))
 
 
-def started_memory(live_env: dict[str, str], session: str) -> Any:
+def started_memory(live_env: dict[str, Secret], session: str) -> Any:
     from openbrain_memory.agent import AgentMemory
     from openbrain_memory.client import OpenBrainClient
 
     client = OpenBrainClient(
-        base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-        token=live_env["OPENBRAIN_TEST_TOKEN"],
+        base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+        token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
         namespace=REQUESTED_NAMESPACE,
         agent_id="spine-live-test",
         allow_insecure_http=True,
@@ -193,7 +194,7 @@ class TestSizeSpreadOneDelivery:
     """One delivery of many sizes; every row whole, straddling both buried cuts."""
 
     async def test_every_size_reaches_ob_raw_turns_whole_in_one_delivery(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # ONE transcript, ONE delivery carrying every size -- not N round trips.
         # A per-size delivery would prove each size survives alone; a mixed batch
@@ -218,7 +219,7 @@ class TestSizeSpreadOneDelivery:
         result = await deliver_new_turns(path, session, store, memory)
         assert result.delivered == len(SPREAD_SIZES)
 
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         for size, (turn_uuid, text) in turns.items():
             row = fetch_row(database_url, turn_uuid)
             assert row is not None, f"size {size}: no row -- a turn was dropped"
@@ -233,7 +234,7 @@ class TestOneTurnEndToEnd:
     """#418's added acceptance criterion: the row exists, and it is whole."""
 
     async def test_turns_reach_ob_raw_turns_whole_and_replay_is_a_noop(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         session = f"spine-live-{uuid.uuid4()}"
         small_id, big_id = f"u-{uuid.uuid4()}", f"u-{uuid.uuid4()}"
@@ -253,7 +254,7 @@ class TestOneTurnEndToEnd:
         result = await deliver_new_turns(path, session, store, memory)
         assert result.delivered == 2
 
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         small = fetch_row(database_url, small_id)
         assert small is not None
         assert small[0] == "yes"
@@ -273,7 +274,7 @@ class TestBothSidesReachPostgres:
     """#447 on the real wire: the conversation lands, the reasoning does not."""
 
     async def test_a_conversation_lands_with_each_side_attributed(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         """THE PRODUCT PROOF, end to end.
 
@@ -304,7 +305,7 @@ class TestBothSidesReachPostgres:
             "regression, where the corpus holds the question and not the answer"
         )
 
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         stored_question = fetch_row(database_url, operator_id)
         stored_finding = fetch_row(database_url, assistant_id)
 
@@ -326,7 +327,7 @@ class TestBothSidesReachPostgres:
         assert fetch_attribution(database_url, assistant_id) == ("assistant", False)
 
     async def test_no_reasoning_or_tool_name_is_ever_persisted(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         """The hard rule, proven against the column rather than the parser.
 
@@ -348,7 +349,7 @@ class TestBothSidesReachPostgres:
 
         await deliver_new_turns(path, session, store, memory)
 
-        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"]
+        database_url = live_env["OPENBRAIN_TEST_DATABASE_URL"].get()
         with psycopg.connect(database_url) as connection:
             rows = connection.execute(
                 "SELECT content FROM ob_raw_turns WHERE session_ref = %s",

@@ -146,9 +146,6 @@ export function logDurableFailure(options: {
 }): void {
   const { logger, event, error, errorFields, detailFields } = options;
   const err = asError(error);
-  logger.error(
-    { ...errorFields, error_message: err?.message ?? String(error) },
-    event,
-  );
+  logger.error({ ...errorFields, error_message: err?.message ?? String(error) }, event);
   logger.debug(detailFields, `${event}_detail`);
 }

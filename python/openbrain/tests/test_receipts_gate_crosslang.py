@@ -61,7 +61,7 @@ from openbrain.receipts import (
 #: suite into a permanent silent skip that still reports green.
 GATE_SCRIPT = Path(
     os.environ.get("OPENBRAIN_CONTEXT_BUDGET_GATE")
-    or "/Volumes/ThunderBolt/Development/_ob/scripts/context-budget-gate.ts"
+    or "/srv/dev/_ob/scripts/context-budget-gate.ts"
 )
 
 #: A directory the gate resolves to a Development project. It only has to exist
@@ -80,11 +80,37 @@ SESSION_ID = "receipts-crosslang-session"
 #: wedged gate hanging the suite, not a performance assertion.
 GATE_TIMEOUT_SECONDS = 60.0
 
+
+def _missing_preconditions() -> list[str]:
+    """Name every precondition that is absent, with the exact path checked.
+
+    A skip that names only the file's basename tells a CI reader nothing about
+    WHICH checkout was looked for, so the one cross-language proof in the suite
+    can vanish silently and still report green (#704). Evaluated at collection
+    time so the reason reflects the state the run actually saw.
+
+    Returns:
+        Human-readable descriptions of the absent preconditions; empty when the
+        proof can run.
+    """
+    missing: list[str] = []
+    if shutil.which("bun") is None:
+        missing.append("bun is not on PATH")
+    if not GATE_SCRIPT.is_file():
+        missing.append(f"the gate script is not a file at {GATE_SCRIPT}")
+    return missing
+
+
+_MISSING = _missing_preconditions()
+
 pytestmark = pytest.mark.skipif(
-    shutil.which("bun") is None or not GATE_SCRIPT.is_file(),
+    bool(_MISSING),
     reason=(
         "the cross-language proof needs bun and the Development checkout's "
-        f"{GATE_SCRIPT.name}; without both there is no gate to prove against"
+        "context-budget-gate.ts; skipping because "
+        + " and ".join(_MISSING)
+        + f" (gate path checked: {GATE_SCRIPT}; override with "
+        "OPENBRAIN_CONTEXT_BUDGET_GATE)"
     ),
 )
 

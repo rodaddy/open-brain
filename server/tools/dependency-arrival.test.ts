@@ -22,10 +22,10 @@
  * the same shape `search-read-scope.test.ts` and `src/operator-doctor.test.ts`
  * already use.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "vitest";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { testScratchDir } from "../../scripts/test-support/scratch-dir.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,7 +33,7 @@ import pino from "pino";
 import type { Pool } from "pg";
 import type { Role } from "../config.ts";
 import { readNatsRuntimeBoundary } from "../application/nats-runtime.ts";
-import { resetOperatorDoctorCache } from "../../src/operator-doctor.ts";
+import { resetOperatorDoctorCache } from "../application/operator-doctor.ts";
 import { registerMemoryTools } from "./index.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
@@ -165,15 +165,16 @@ describe("ftsCorpusConfig arrives at search_brain's SQL", () => {
 /**
  * Unique per case, in a directory that exists on every runner.
  *
- * A repo-relative scratch path is a developer-machine assumption: CI has no
- * such directory, so the file could never be written there. Same shape as
+ * `testScratchDir` is the one resolver that knows where a test may write: it
+ * creates its base when absent and honors the ambient override, so this is
+ * writable on a fresh runner and on a developer machine alike. Same shape as
  * `server/logging/rotating-file.test.ts`.
  */
 let walCounter = 0;
 function scratchWalPath(): string {
   walCounter += 1;
   return join(
-    mkdtempSync(join(tmpdir(), "ob-arrival-")),
+    testScratchDir("ob-arrival-"),
     `arrival-recovery-wal-${walCounter}.jsonl`,
   );
 }
@@ -304,13 +305,13 @@ describe("natsRuntimeBoundary arrives at operator_doctor", () => {
  *
  * `searchQmdInternal` runs `bun <qmdPath> search …`, so a script IS the qmd
  * binary as far as the handler is concerned. Writing it under the same
- * `mkdtempSync` root the WAL cases use keeps this runnable on a fresh runner,
- * which a repo-relative scratch path would not be.
+ * `testScratchDir` root the WAL cases use keeps this runnable on a fresh
+ * runner.
  *
  * @returns The absolute path to the stub.
  */
 function stubQmdEntryPoint(marker: string): string {
-  const path = join(mkdtempSync(join(tmpdir(), "ob-arrival-qmd-")), "qmd-stub.ts");
+  const path = join(testScratchDir("ob-arrival-qmd-"), "qmd-stub.ts");
   writeFileSync(
     path,
     `console.log(JSON.stringify([{ path: ${JSON.stringify(marker)}, content: "stub hit", score: 0.9 }]));\n`,

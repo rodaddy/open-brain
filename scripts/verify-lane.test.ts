@@ -16,20 +16,15 @@
 // runs inside a checkout. The fence is belt AND braces because a single
 // unpinned call is enough to corrupt the branch under development — which is
 // exactly what happened while authoring this file.
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, renameSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { decideDepsAtHead, DEPENDENCY_MANIFESTS } from "./verify-lane.ts";
+import { testScratchBase, testScratchDir } from "./test-support/scratch-dir.ts";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// Repo-relative, matching src/operator-doctor.test.ts:29 — `_scratch/` is
-// already excluded by .gitignore:119. NOT a hardcoded `/Volumes/...` default:
-// that is the operator's Mac, and CI died on `EACCES: permission denied, mkdir
-// '/Volumes'` on the Linux runner.
-const SCRATCH_DIR = join(REPO_ROOT, "_scratch", "verify-lane-deps");
-const ARCHIVE_DIR = join(REPO_ROOT, "_scratch", "_archive", "verify-lane-deps");
+const SCRATCH_DIR = testScratchDir("verify-lane-deps-");
+const ARCHIVE_DIR = join(testScratchBase(), "_archive", "verify-lane-deps");
 
 /**
  * Environment fence for every git invocation against a fixture.
@@ -57,10 +52,10 @@ function gitEnv(fixtureParent: string): NodeJS.ProcessEnv {
 }
 
 describe("DEPENDENCY_MANIFESTS", () => {
-  it("covers both files that decide what bun install produces", () => {
+  it("covers both files that decide what npm ci produces", () => {
     // A manifest missing from this list is a manifest whose change is invisible
     // to the comparison, which is the original defect in a narrower form.
-    expect([...DEPENDENCY_MANIFESTS]).toEqual(["package.json", "bun.lock"]);
+    expect([...DEPENDENCY_MANIFESTS]).toEqual(["package.json", "package-lock.json"]);
   });
 });
 
@@ -127,29 +122,93 @@ describe("decideDepsAtHead", () => {
 // The decision is only as good as the signal feeding it, so drive the real
 // `git diff --quiet` against a throwaway repository whose head adds a
 // devDependency — the exact shape of PR #771.
+let repo = "";
+let baseSha = "";
+let addsDepSha = "";
+let lockOnlySha = "";
+let unrelatedSha = "";
+
+// Pin BOTH the git dir and the work tree, never a bare -C, and fence the
+// environment. With only -C, git walks UP to the first enclosing repository
+// when the fixture is not one — which is how a failed `git init` silently
+// committed this fixture's `base` and `docs only` commits into the
+// surrounding worktree during authoring, deleting every tracked file in it.
+const git = (args: string[]): string => {
+  const r = spawnSync(
+    "git",
+    ["--git-dir", join(repo, ".git"), "--work-tree", repo, ...args],
+    { cwd: repo, encoding: "utf-8", env: gitEnv(SCRATCH_DIR) },
+  );
+  if (r.status !== 0) {
+    throw new Error(`git ${args.join(" ")} exited ${r.status}: ${r.stderr}`);
+  }
+  return (r.stdout ?? "").trim();
+};
+
+const diffStatus = (from: string, to: string): number => {
+  // Pinned and fenced like every other call in this file (review round 1, P2).
+  const r = spawnSync(
+    "git",
+    [
+      "--git-dir",
+      join(repo, ".git"),
+      "--work-tree",
+      repo,
+      "diff",
+      "--quiet",
+      from,
+      to,
+      "--",
+      ...DEPENDENCY_MANIFESTS,
+    ],
+    { cwd: repo, encoding: "utf-8", env: gitEnv(SCRATCH_DIR) },
+  );
+  return r.status ?? -1;
+};
+
+function commitBase(): void {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "t" }) + "\n");
+  writeFileSync(join(repo, "package-lock.json"), '{"lockfileVersion":3}\n');
+  writeFileSync(join(repo, "README.md"), "base\n");
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "base"]);
+  baseSha = git(["rev-parse", "HEAD"]);
+}
+
+function commitAddedDependency(): void {
+  writeFileSync(
+    join(repo, "package.json"),
+    JSON.stringify({ name: "t", devDependencies: { oxlint: "1.0.0" } }) + "\n",
+  );
+  writeFileSync(
+    join(repo, "package-lock.json"),
+    '{"lockfileVersion":3,"oxlint":true}\n',
+  );
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "add oxlint"]);
+  addsDepSha = git(["rev-parse", "HEAD"]);
+}
+
+function commitLockOnly(): void {
+  git(["reset", "--hard", "--quiet", baseSha]);
+  writeFileSync(
+    join(repo, "package-lock.json"),
+    '{"lockfileVersion":3,"lockOnly":true}\n',
+  );
+  git(["add", "package-lock.json"]);
+  git(["commit", "--quiet", "-m", "lockfile only"]);
+  lockOnlySha = git(["rev-parse", "HEAD"]);
+}
+
+function commitUnrelatedChange(): void {
+  git(["reset", "--hard", "--quiet", baseSha]);
+  writeFileSync(join(repo, "README.md"), "changed\n");
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "docs only"]);
+  unrelatedSha = git(["rev-parse", "HEAD"]);
+}
+
 describe("git diff --quiet over the dependency manifests", () => {
-  let repo = "";
-  let baseSha = "";
-  let addsDepSha = "";
-  let unrelatedSha = "";
-
-  // Pin BOTH the git dir and the work tree, never a bare -C, and fence the
-  // environment. With only -C, git walks UP to the first enclosing repository
-  // when the fixture is not one — which is how a failed `git init` silently
-  // committed this fixture's `base` and `docs only` commits into the
-  // surrounding worktree during authoring, deleting every tracked file in it.
-  const git = (args: string[]): string => {
-    const r = spawnSync(
-      "git",
-      ["--git-dir", join(repo, ".git"), "--work-tree", repo, ...args],
-      { cwd: repo, encoding: "utf-8", env: gitEnv(SCRATCH_DIR) },
-    );
-    if (r.status !== 0) {
-      throw new Error(`git ${args.join(" ")} exited ${r.status}: ${r.stderr}`);
-    }
-    return (r.stdout ?? "").trim();
-  };
-
   beforeAll(() => {
     mkdirSync(SCRATCH_DIR, { recursive: true });
     repo = mkdtempSync(join(SCRATCH_DIR, "fixture-"));
@@ -162,7 +221,16 @@ describe("git diff --quiet over the dependency manifests", () => {
     // resulting .git — an unchecked init is what enables the escape at all.
     const init = spawnSync(
       "git",
-      ["--git-dir", join(repo, ".git"), "--work-tree", repo, "init", "--quiet", "-b", "fixture"],
+      [
+        "--git-dir",
+        join(repo, ".git"),
+        "--work-tree",
+        repo,
+        "init",
+        "--quiet",
+        "-b",
+        "fixture",
+      ],
       { cwd: repo, encoding: "utf-8", env: gitEnv(SCRATCH_DIR) },
     );
     if (init.status !== 0) {
@@ -181,62 +249,38 @@ describe("git diff --quiet over the dependency manifests", () => {
     git(["config", "core.hooksPath", join(repo, ".git", "no-hooks")]);
     git(["config", "commit.gpgsign", "false"]);
 
-    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "t" }) + "\n");
-    writeFileSync(join(repo, "bun.lock"), "lock-v1\n");
-    writeFileSync(join(repo, "README.md"), "base\n");
-    git(["add", "."]);
-    git(["commit", "--quiet", "-m", "base"]);
-    baseSha = git(["rev-parse", "HEAD"]);
+    commitBase();
 
     // A head that adds a devDependency — #771's shape.
-    writeFileSync(
-      join(repo, "package.json"),
-      JSON.stringify({ name: "t", devDependencies: { oxlint: "1.0.0" } }) + "\n",
-    );
-    writeFileSync(join(repo, "bun.lock"), "lock-v1\noxlint\n");
-    git(["add", "."]);
-    git(["commit", "--quiet", "-m", "add oxlint"]);
-    addsDepSha = git(["rev-parse", "HEAD"]);
+    commitAddedDependency();
+
+    // A lockfile-only head must also invalidate the bootstrap dependency tree.
+    commitLockOnly();
 
     // A head that touches neither manifest.
-    git(["reset", "--hard", "--quiet", baseSha]);
-    writeFileSync(join(repo, "README.md"), "changed\n");
-    git(["add", "."]);
-    git(["commit", "--quiet", "-m", "docs only"]);
-    unrelatedSha = git(["rev-parse", "HEAD"]);
+    commitUnrelatedChange();
   });
 
   afterAll(() => {
     // Archive with mv, never rm (AGENTS.md: an agent runs no recursive delete).
     // Fixtures accumulate inside the checkout otherwise, since _scratch/ is now
     // repo-relative.
-    if (!repo || !existsSync(repo)) return;
+    if (!repo || !existsSync(SCRATCH_DIR)) return;
     mkdirSync(ARCHIVE_DIR, { recursive: true });
     const dest = join(ARCHIVE_DIR, `${Date.now()}-${process.pid}`);
-    renameSync(repo, dest);
+    renameSync(SCRATCH_DIR, dest);
     process.stdout.write(`  fixture archived to: ${dest}\n`);
   });
-
-  const diffStatus = (from: string, to: string): number => {
-    // Pinned and fenced like every other call in this file (review round 1, P2).
-    const r = spawnSync(
-      "git",
-      [
-        "--git-dir", join(repo, ".git"),
-        "--work-tree", repo,
-        "diff", "--quiet", from, to, "--", ...DEPENDENCY_MANIFESTS,
-      ],
-      { cwd: repo, encoding: "utf-8", env: gitEnv(SCRATCH_DIR) },
-    );
-    return r.status ?? -1;
-  };
 
   it("reports a difference when the head adds a devDependency", () => {
     const status = diffStatus(baseSha, addsDepSha);
     expect(status).toBe(1);
     expect(
-      decideDepsAtHead({ bootstrapSha: baseSha, headSha: addsDepSha, diffStatus: status })
-        .outcome,
+      decideDepsAtHead({
+        bootstrapSha: baseSha,
+        headSha: addsDepSha,
+        diffStatus: status,
+      }).outcome,
     ).toBe("reinstall");
   });
 
@@ -244,9 +288,24 @@ describe("git diff --quiet over the dependency manifests", () => {
     const status = diffStatus(baseSha, unrelatedSha);
     expect(status).toBe(0);
     expect(
-      decideDepsAtHead({ bootstrapSha: baseSha, headSha: unrelatedSha, diffStatus: status })
-        .outcome,
+      decideDepsAtHead({
+        bootstrapSha: baseSha,
+        headSha: unrelatedSha,
+        diffStatus: status,
+      }).outcome,
     ).toBe("unchanged");
+  });
+
+  it("reports a difference when only package-lock.json changes", () => {
+    const status = diffStatus(baseSha, lockOnlySha);
+    expect(status).toBe(1);
+    expect(
+      decideDepsAtHead({
+        bootstrapSha: baseSha,
+        headSha: lockOnlySha,
+        diffStatus: status,
+      }).outcome,
+    ).toBe("reinstall");
   });
 
   it("fails closed when the comparison names a commit that does not exist", () => {
@@ -256,7 +315,11 @@ describe("git diff --quiet over the dependency manifests", () => {
     expect(status).not.toBe(0);
     expect(status).not.toBe(1);
     expect(() =>
-      decideDepsAtHead({ bootstrapSha: baseSha, headSha: "0".repeat(40), diffStatus: status }),
+      decideDepsAtHead({
+        bootstrapSha: baseSha,
+        headSha: "0".repeat(40),
+        diffStatus: status,
+      }),
     ).toThrow(/Refusing to guess/);
   });
 });

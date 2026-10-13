@@ -1,7 +1,7 @@
-import type { PoolClient } from "pg";
+import type { DreamLightRepository } from "../db/dream-light-repository.ts";
 
 import { isHarnessNoise } from "../capture/ingest-raw-turn.ts";
-import { isCountable, MAX_SESSION_REFS } from "./dream-light.ts";
+import { isCountable } from "./dream-light.ts";
 
 /** One unswept raw turn, as claimed by a Light sweep. */
 export interface SweepRow {
@@ -26,7 +26,7 @@ export type OccurrenceOutcome =
  * unit. Behaviour is identical to the inline version it replaces.
  */
 export async function recordTurnOccurrence(
-  client: PoolClient,
+  repository: DreamLightRepository,
   row: SweepRow,
 ): Promise<OccurrenceOutcome> {
   // Stamped as swept but never counted: must not be reconsidered next
@@ -39,54 +39,17 @@ export async function recordTurnOccurrence(
 
   const sessionRef = row.session_ref ?? "";
 
-  // The upsert. session_count increments ONLY when this session has not
-  // already contributed — that condition is what makes the number
-  // corroboration rather than repetition. occurred_at drives both
-  // timestamps; first_seen_at never moves once set.
-  // session_bumped MUST be computed from the PRE-update row
-  // (`content_occurrences.session_refs`, the excluded-row alias inside DO
-  // UPDATE), never from the returned row. Evaluating `session_refs @> $3`
-  // in RETURNING reads the row AFTER the append, so the ref is always
-  // present and the flag is always false — measured: the counter reported 0
-  // corroborations on a sweep that produced a session_count of 3.
-  const upserted = await client.query<{
-    existed: boolean;
-    session_bumped: boolean;
-  }>(
-    `INSERT INTO content_occurrences (
-       namespace, content_hash, occurrence_count, session_count,
-       session_refs, sample_content, first_seen_at, last_seen_at, updated_at
-     ) VALUES ($1, $2, 1, 1, $3, $4, $5, $5, now())
-     ON CONFLICT (namespace, content_hash) DO UPDATE SET
-       occurrence_count = content_occurrences.occurrence_count + 1,
-       session_count = content_occurrences.session_count
-         + CASE WHEN $6 <> '' AND NOT (content_occurrences.session_refs @> $3)
-                THEN 1 ELSE 0 END,
-       session_refs = CASE
-         WHEN $6 <> '' AND NOT (content_occurrences.session_refs @> $3)
-         THEN (content_occurrences.session_refs || $3)[1:${MAX_SESSION_REFS}]
-         ELSE content_occurrences.session_refs
-       END,
-       last_seen_at = GREATEST(content_occurrences.last_seen_at, $5),
-       first_seen_at = LEAST(content_occurrences.first_seen_at, $5),
-       updated_at = now()
-     RETURNING (xmax <> 0) AS existed,
-               (xmax <> 0
-                AND $6 <> ''
-                AND NOT (content_occurrences.session_refs @> $3)) AS session_bumped`,
-    [
-      row.namespace,
-      row.content_hash,
-      sessionRef === "" ? [] : [sessionRef],
-      row.content.slice(0, 500),
-      row.occurred_at,
-      sessionRef,
-    ],
-  );
+  const upserted = await repository.upsertOccurrence({
+    namespace: row.namespace,
+    contentHash: row.content_hash,
+    sessionRef,
+    sampleContent: row.content.slice(0, 500),
+    occurredAt: row.occurred_at,
+  });
 
   // xmax <> 0 distinguishes an UPDATE from an INSERT on a conflicting
   // upsert — the standard Postgres idiom, and cheaper than a pre-SELECT.
-  const first = upserted.rows[0];
+  const first = upserted[0];
   if (first?.existed !== true) return "created";
   return first.session_bumped === true ? "corroborated" : "updated";
 }

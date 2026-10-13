@@ -16,7 +16,7 @@
  * `operator_doctor` (neither of which is namespaced, and whose role gates are
  * therefore the entire boundary).
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -77,7 +77,10 @@ async function clientCapturingQueries(
 }
 
 /** @returns The one query whose SQL matches, failing when it is not unique. */
-function queryMatching(queries: readonly CapturedQuery[], needle: string): CapturedQuery {
+function queryMatching(
+  queries: readonly CapturedQuery[],
+  needle: string,
+): CapturedQuery {
   const matches = queries.filter((query) => query.sql.includes(needle));
   expect(matches).toHaveLength(1);
   const query = matches[0];
@@ -222,9 +225,11 @@ describe("service-metadata surfaces gate on role alone", () => {
     const result = await client.callTool({ name: "get_contract", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    const contract = JSON.parse((result.content as Array<{ text: string }>)[0]?.text ?? "{}");
+    const contract = JSON.parse(
+      (result.content as Array<{ text: string }>)[0]?.text ?? "{}",
+    );
     expect(contract.service).toBe("open-brain");
-    expect(contract.contract_version).toBe("2026-08-09.memory-tools.v24");
+    expect(contract.contract_version).toBe("2026-08-09.memory-tools.v25");
     expect(queries).toHaveLength(0);
   });
 

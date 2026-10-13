@@ -37,7 +37,7 @@ line.
 | source | scope | contains |
 |---|---|---|
 | `.env` (from `.env.example`) | server process | database, embedding, auth tokens, port |
-| `~/.local/share/openbrain-memory/env/claudex-observation.env` | Claude runtime | `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN` |
+| `~/.local/share/openbrain-memory/env/openbrain.env` | every runtime's client (install-managed; read by `openbrain-hook-env`) | `OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN` |
 | CI job `env:` blocks | `.github/workflows/ci.yml` | throwaway per-run database coordinates |
 | runtime `config` mapping | Python CLI JSON envelope | per-call override of base_url / namespace / role / timeout |
 
@@ -99,6 +99,45 @@ machine.
 | `EMBEDDING_WATCHDOG_RESTART_SCRIPT` | unset | `src/embedding.ts:139` |
 | `OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS` | — | `src/tools/search-brain.ts:165` |
 | `SEARCH_EMBEDDING_TIMEOUT_MS` | — | legacy spelling, still read |
+
+## Jev decision adapter
+
+Jev is off by default. `OPENBRAIN_JEV_REM_ENABLED=1` enables classification-only
+label/score decisions for scheduled REM and the disposable REM ethereal runner;
+`OPENBRAIN_JEV_SEARCH_ENABLED=1` independently enables hybrid-search
+reranking. Either flag also requires `OPENBRAIN_JEV_API_KEY`. The shared
+defaults are endpoint `https://api.typesafe.ai/v1/systemone`, model
+`jev-1.13.0` and timeout `3000` ms; override them with
+`OPENBRAIN_JEV_BASE_URL`, `OPENBRAIN_JEV_MODEL`, and
+`OPENBRAIN_JEV_TIMEOUT_MS`.
+
+Classifier records are greedily packed into the largest complete groups that
+fit two serialized UTF-8 byte estimates: `192000` for the whole request and
+`96000` for state plus the longest question. The provider documents 64k tokens
+and 32k tokens for those two; the byte values are those figures at 3 bytes per
+token, because the repository has no provider-exact Jev tokenizer. The earlier
+`64000` and `32000` assumed 1 byte per token and refused real records of 33 to
+62 KB (issue 1417). Measured on that data: about 3.5 request bytes per token,
+every request accepted. Text that tokenizes below 3 bytes per token can be
+refused by the provider, and the caller then falls back exactly as it did when
+the old values refused the record locally. Override the lower hard ceilings with
+`OPENBRAIN_JEV_MAX_REQUEST_BYTES` and
+`OPENBRAIN_JEV_MAX_STATE_QUESTION_BYTES`. A record and all questions in its
+named classifier set stay together. No content is truncated or dropped, and a
+single record that exceeds either ceiling fails before any HTTP request.
+REM label/score and retrieval relevance are named, versioned classifier sets;
+new Choice, Noul, and native 2–10-level Score sets use the same planner and
+executor without changing their control flow. The adapter validates and retains
+provider probability distributions, confidence, Score legends, and token usage.
+
+The REM adapter sends one batched label/score request when the complete
+input fits, or the smallest number of bounded requests otherwise. Every Jev
+request completes before Terra receives the validated decisions and supplies
+quote, synopsis, agent behavior, and reasons. The scheduled REM importer uses
+this adapter when `OPENBRAIN_JEV_REM_ENABLED=1`; startup rejects that flag unless
+`OPENBRAIN_JEV_API_KEY` is present and non-blank. Search sends the whole authorized fused candidate pool in one
+request when it fits, or bounded requests otherwise, reranks only after RRF,
+and falls back to the unchanged RRF order when any Jev decision fails.
 
 ### `EMBEDDING_MODEL`'s code default is wrong for this deployment
 
@@ -311,7 +350,7 @@ flag set with an incomplete triple logs one content-free
 so a typo cannot silently produce a zero-trace deployment.
 
 **Deploy coupling:** the keys live in the operator environment, sourced from the
-Vaultwarden item `Langfuse - Open Brain Local Dogfood`; they are never committed
+the operator's password manager; they are never committed
 and never given values in `.env.example`. The variables are read ONCE at process
 start — `startServer` builds a single shared client before any session can
 exist — so **turning tracing on or off requires a service restart**. Editing the
@@ -534,7 +573,7 @@ config itself does not read is precedented here — `OPENBRAIN_OBSERVATION_HMAC_
 exists for exactly that reason.
 
 **Ordering, as always: the package declares first, the wrapper passes second.**
-`setup-client.sh` writes the variable into `claudex-observation.env` and the
+`setup-client.sh` writes the variable into `openbrain.env` and the
 `exec env -i` list in `openbrain-hook-env`; both are safe only against an
 install that carries this field. Single-quote the value in the env file — the
 wrapper sources it with POSIX `.`, so an unquoted path containing a space
@@ -544,7 +583,7 @@ sources to empty.
 wrapper's pass-through style is `VAR="${VAR:-}"`, which cannot express "absent" —
 it turns an unset variable into an **empty string** in the child. For a string
 setting that is harmless; for this `bool` it was not. Measured 2026-08-04 against
-the installed binary: with the variable omitted from `claudex-observation.env`,
+the installed binary: with the variable omitted from `openbrain.env`,
 the child received `OPENBRAIN_ALLOW_INSECURE_HTTP=""`, pydantic's bool parser
 rejected it (`Input should be a valid boolean … input_value=''`), **both**
 `load_capture_settings` and `load_canon_settings` raised, the entrypoints

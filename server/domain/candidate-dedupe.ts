@@ -1,86 +1,33 @@
 /**
- * Semantic near-dupe merge for candidates. Issue #398. RUNS IN REM.
+ * Semantic near-dupe merge for candidates. Issue #398. RUNS IN REM. A merge
+ * deletes the duplicate row, writes candidate_reinforcement (038), advances
+ * last_said_at and never first_said_at, and leaves confidence untouched.
  *
- * Exact dedupe already exists: the unique index on (namespace, content_hash)
- * (033_candidate_memory.sql:117-118) collapses identical strings. It catches
- * nothing else. Measured over the 2026-07-24 20-batch run: 307 emitted, 214
- * stored -- 93 caught, ~30% exact overlap -- while paraphrases passed straight
- * through (docs/dream-design.md:542-557):
- *
- *     "the delta is 5 rows"
- *     "the real local-only delta is 5 rows, not 128"
- *
- * Same fact, different hash, both stored. Fifty rows for one fact, none of them
- * looking well-established, defeats the corroboration mechanism #394 and #396
- * depend on.
- *
- * WHAT A MERGE DOES, and what it deliberately does not do
- * (docs/dream-design.md:605-618):
- *
- *   - the duplicate row is DELETED and one row is written to
- *     candidate_reinforcement (038). Counting those rows IS the reinforcement.
- *   - the survivor's confidence is UNCHANGED. Nothing is added to anything --
- *     confidence answers "is this true", reinforcement answers "how well
- *     established", and one number cannot hold both (dream-design.md:559-578).
- *   - the survivor's last_said_at advances to the duplicate's occurred_at.
- *   - the survivor's first_said_at NEVER moves. The span is the evidence.
- *   - source_refs is NOT appended -- refs go to the history table, so a hot
- *     item's row does not grow without bound.
- *
- * IS DELETING THE DUPLICATE ROW A SUPPRESSION? No, and the distinction matters
- * under the 2026-07-28 "everything passes" decision. Suppression is content
- * never entering, or a claim being withheld from the operator's queue. A merge
- * withholds nothing: the surviving candidate carries the same claim, it stays
- * on the queue, and the merge is UNDOABLE -- candidate_reinforcement keeps the
- * duplicate's hash, its turns, and its time, which is everything needed to
- * re-extract it (dream-design.md:706-708). Reversibility is precisely what
- * licenses doing this autonomously when almost nothing else in DREAM is.
- *
- * SURVIVOR CHOICE IS OLDEST-WINS, and it is not arbitrary. The oldest candidate
- * is the one whose first_said_at is genuinely earliest, so keeping it preserves
- * the longest span. Keeping the newest would silently reset first_said_at on
- * every merge and destroy the exact signal #396 reads.
- *
- * THRESHOLD: 0.09 cosine DISTANCE. Settled, not a fitting problem
- * (dream-design.md:631-649). Do NOT reuse DEFAULT_DUP_THRESHOLD from
- * src/tiering.ts:33 -- that is 0.08, tuned for lane-event-to-durable
- * comparison, a different question against a different corpus. The doc is
- * explicit that the candidate-to-candidate path needs its own value and the
- * existing constant must not be changed.
+ * See docs/decisions/candidate-dedupe-merge-is-reversible-not-suppression.md
  */
 
 import type pg from "pg";
-import type { MaintenanceQueueLogger } from "../maintenance/maintenance-queue-runner.ts";
+import {
+  VECTOR_SEARCH_EF_SEARCH,
+  VECTOR_SEARCH_ITERATIVE_SCAN,
+} from "../db/vector-search.ts";
+/**
+ * The subset of the maintenance queue logger this module calls; declared here
+ * so the domain tier does not import maintenance. The runner's
+ * MaintenanceQueueLogger satisfies it structurally.
+ */
+export interface CandidateDedupeLogger {
+  info(message: string, fields: Record<string, string | number>): void;
+  warn(message: string, fields: Record<string, string | number>): void;
+  error(message: string, fields: Record<string, string | number>): void;
+}
 
 /**
- * Cosine DISTANCE at or below which two candidates are the same claim.
- * 0.09 distance = 0.91 similarity, the operator's standing threshold for "is
- * this close enough to be the same thing" (docs/dream-design.md:631-649). It
- * is worth keeping because two independent lines of work landed on ~0.91 for
- * the same judgement, not because of where it was first observed.
+ * Cosine DISTANCE at or below which two candidates are the same claim. Do NOT
+ * raise it, and do NOT reuse the tiering module's DEFAULT_DUP_THRESHOLD (0.08,
+ * a different question against a different corpus).
  *
- * Risk direction, stated in the doc and preserved here: too loose merges
- * genuinely distinct facts, too tight leaves dupes. The history table makes the
- * loose case recoverable, but slightly too tight remains the safer default.
- *
- * MEASURED ON THIS CORPUS, 2026-07-28: it fires ZERO times. Over a 400-candidate
- * sample of the 1,104 real candidates (all embedded), the CLOSEST pair in the
- * whole sample is 0.1240 distance. At the settled 0.09 cutoff there are 0
- * pairs; at 0.20 there are 7; at 0.30 there are 29.
- *
- * That is a finding about the corpus, NOT a reason to loosen the threshold. It
- * is the same property Light measured from the other direction (one
- * cross-session repeat in 3,558 turns): the operator states a thing once, in
- * its own words, and does not restate it. The near-dupe problem #398 was
- * written against -- "fifty rows for one fact" across a 12,946-file backfill --
- * is a backfill-scale phenomenon that this 3-day capture has not reached.
- *
- * DO NOT RAISE THIS VALUE TO MAKE THE STAGE "DO SOMETHING". The doc calls 0.09
- * settled, not a fitting problem (dream-design.md:645-649), and loosening it to
- * 0.20 to capture 7 pairs would be tuning a merge threshold on the desire to
- * see output rather than on graded evidence -- exactly the error the 2026-07-28
- * governing decision exists to prevent. A merge that fires zero times suppresses
- * nothing, which is the correct behaviour when there is nothing to merge.
+ * See docs/decisions/candidate-dedupe-threshold-is-settled-not-fitted.md
  */
 export const CANDIDATE_DUP_DISTANCE = 0.09;
 
@@ -100,7 +47,7 @@ export interface CandidateDedupeSummary {
 
 export interface CandidateDedupeDeps {
   pool: pg.Pool;
-  logger: MaintenanceQueueLogger;
+  logger: CandidateDedupeLogger;
   namespace?: string;
   batchSize?: number;
   /** Cosine distance cutoff. Defaults to {@link CANDIDATE_DUP_DISTANCE}. */
@@ -118,37 +65,40 @@ interface MergeRow {
   distance: number;
 }
 
-/** Select each unreviewed duplicate paired with the oldest survivor of its cluster. */
-async function selectMergePairs(
-  client: pg.PoolClient,
-  deps: CandidateDedupeDeps,
-  batchSize: number,
-  distance: number,
-): Promise<MergeRow[]> {
-  // Pair each candidate with its single nearest neighbour inside the
-  // threshold, restricted to a strictly OLDER survivor. The `<` on
-  // (said_at, id) is a strict total order, so it enforces oldest-wins AND
-  // makes the relation antisymmetric: A and B can never absorb each other.
-  //
-  // DISTINCT ON keeps only the closest match per duplicate: a candidate has
-  // one claim, so it reinforces one survivor, not every neighbour it happens
-  // to be near.
-  //
-  // THE CHAIN CASE, and why the survivor is resolved to the OLDEST member of
-  // its cluster rather than to its nearest neighbour. Antisymmetry alone does
-  // not prevent A <- B <- C: B can be both a duplicate (of A) and the nearest
-  // survivor (for C). Merging that naively deletes B while C's reinforcement
-  // row points at it -- the row then CASCADEs away with B (038) and C's
-  // restatement is silently lost, which is exactly the data loss the
-  // reversibility guarantee promises cannot happen.
-  //
-  // The recursive term walks each pair's survivor edge to its terminal node.
-  // Because every edge strictly decreases (said_at, id), the walk is finite
-  // and lands on a candidate that is nobody's duplicate -- so the survivor of
-  // a chain is its oldest member, every reinforcement in the cluster points
-  // there, and nothing that gets deleted is ever a reinforcement target.
-  const pairs = await client.query<MergeRow>(
-    `WITH RECURSIVE scoped AS (
+/**
+ * The pairing query. Exported so a live-Postgres test can EXPLAIN it and prove
+ * the nearest-survivor lookup is served by
+ * candidate_memory_embedding_unreviewed_hnsw (migration 051, issue 1488).
+ *
+ * Pair each candidate with its single nearest neighbour inside the threshold,
+ * restricted to a strictly OLDER survivor. The `<` on (said_at, id) is a
+ * strict total order, so it enforces oldest-wins AND makes the relation
+ * antisymmetric: A and B can never absorb each other.
+ *
+ * The nearest survivor is found by an ordered index lookup (LATERAL ... ORDER
+ * BY distance LIMIT 1): a candidate has one claim, so it reinforces one
+ * survivor, not every neighbour it happens to be near. Two consequences of the
+ * index: ties in distance are no longer broken by survivor id (an index order
+ * cannot carry a second key), and HNSW is approximate, so a rare
+ * near-duplicate can be missed in one pass and caught in a later one. Scanning
+ * every unreviewed candidate instead (~295k on dogfood) is what REM must not
+ * do to the database.
+ *
+ * THE CHAIN CASE, and why the survivor is resolved to the OLDEST member of its
+ * cluster rather than to its nearest neighbour. Antisymmetry alone does not
+ * prevent A <- B <- C: B can be both a duplicate (of A) and the nearest
+ * survivor (for C). Merging that naively deletes B while C's reinforcement row
+ * points at it -- the row then CASCADEs away with B (038) and C's restatement
+ * is silently lost, which is exactly the data loss the reversibility guarantee
+ * promises cannot happen.
+ *
+ * The recursive term walks each pair's survivor edge to its terminal node.
+ * Because every edge strictly decreases (said_at, id), the walk is finite and
+ * lands on a candidate that is nobody's duplicate -- so the survivor of a
+ * chain is its oldest member, every reinforcement in the cluster points there,
+ * and nothing that gets deleted is ever a reinforcement target.
+ */
+export const CANDIDATE_MERGE_PAIRS_SQL = `WITH RECURSIVE scoped AS (
        SELECT id, namespace, content_hash, embedding, model,
               COALESCE(first_said_at, created_at) AS said_at,
               COALESCE(last_said_at, first_said_at, created_at) AS last_at,
@@ -166,21 +116,26 @@ async function selectMergePairs(
         LIMIT $2
      ),
      nearest AS (
-       SELECT DISTINCT ON (d.id)
-              d.id                 AS dup_id,
+       SELECT d.id                 AS dup_id,
               s.id                 AS survivor_id,
               d.namespace          AS namespace,
               d.content_hash       AS dup_content_hash,
               d.last_at            AS dup_occurred_at,
               d.source_turn_ids    AS dup_source_turn_ids,
               d.model              AS dup_model,
-              (d.embedding <=> s.embedding)::float8 AS distance
+              s.distance
          FROM dups d
-         JOIN scoped s
-           ON s.namespace = d.namespace
-          AND (s.said_at, s.id) < (d.said_at, d.id)
-          AND (d.embedding <=> s.embedding) <= $3
-        ORDER BY d.id, (d.embedding <=> s.embedding) ASC, s.id ASC
+         CROSS JOIN LATERAL (
+           SELECT c.id, (c.embedding <=> d.embedding)::float8 AS distance
+             FROM candidate_memory c
+            WHERE c.reviewed_at IS NULL
+              AND c.embedding IS NOT NULL
+              AND c.namespace = d.namespace
+              AND (COALESCE(c.first_said_at, c.created_at), c.id) < (d.said_at, d.id)
+            ORDER BY c.embedding <=> d.embedding
+            LIMIT 1
+         ) s
+        WHERE s.distance <= $3
      ),
      -- Walk each survivor edge to the terminal (oldest) node. The steps
      -- counter bounds the recursion explicitly rather than relying on the
@@ -207,9 +162,30 @@ async function selectMergePairs(
             t.terminal AS survivor_id
        FROM nearest n
        JOIN terminal t ON t.dup_id = n.dup_id
-      WHERE t.terminal <> n.dup_id`,
-    [deps.namespace ?? null, batchSize, distance],
-  );
+      WHERE t.terminal <> n.dup_id`;
+
+/**
+ * Select each unreviewed duplicate paired with the oldest survivor of its
+ * cluster. The filtered-HNSW settings are transaction-local, so the caller
+ * must already be inside the transaction that runs this query.
+ */
+async function selectMergePairs(
+  client: pg.PoolClient,
+  deps: CandidateDedupeDeps,
+  batchSize: number,
+  distance: number,
+): Promise<MergeRow[]> {
+  await client.query("SELECT set_config('hnsw.ef_search', $1, true)", [
+    VECTOR_SEARCH_EF_SEARCH,
+  ]);
+  await client.query("SELECT set_config('hnsw.iterative_scan', $1, true)", [
+    VECTOR_SEARCH_ITERATIVE_SCAN,
+  ]);
+  const pairs = await client.query<MergeRow>(CANDIDATE_MERGE_PAIRS_SQL, [
+    deps.namespace ?? null,
+    batchSize,
+    distance,
+  ]);
   return pairs.rows;
 }
 
@@ -331,6 +307,9 @@ export async function runCandidateDedupe(
 
   const client = await deps.pool.connect();
   try {
+    // One transaction: the HNSW settings are transaction-local, and the row
+    // locks taken below only hold inside one.
+    await client.query("BEGIN");
     const pairs = await selectMergePairs(client, deps, batchSize, distance);
     summary.examined = pairs.length;
     await lockPairRows(client, pairs);
@@ -340,7 +319,20 @@ export async function runCandidateDedupe(
 
     await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    // A ROLLBACK that itself fails is a DIFFERENT condition from the query
+    // failure below, and it was the one nobody could see. `candidate_dedupe_failed`
+    // names the original error, so an operator reading it reasonably assumes the
+    // transaction was unwound; if the rollback also failed, the connection goes
+    // back to the pool still inside an aborted transaction and the next borrower
+    // fails for a reason that has nothing to do with its own work. Named here so
+    // the two are distinguishable in the log. The error class only, matching the
+    // sibling clause: a rollback error can quote row content.
+    await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+      deps.logger.warn("candidate_dedupe_rollback_failed", {
+        examined: summary.examined,
+        reason: rollbackError instanceof Error ? rollbackError.name : "non_error",
+      });
+    });
     deps.logger.error("candidate_dedupe_failed", {
       examined: summary.examined,
       reason: err instanceof Error ? err.name : "non_error",

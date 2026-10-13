@@ -17,6 +17,8 @@
  * server-generated ids or timestamps.
  */
 
+import { readFile } from "node:fs/promises";
+
 export interface FixtureStep {
   tool: string;
   arguments: Record<string, unknown>;
@@ -44,7 +46,7 @@ export interface ServerFixture {
 /** Read one recorded server fixture by its `id` (the filename stem). */
 export async function loadServerFixture(id: string): Promise<ServerFixture> {
   const url = new URL(`./server/${id}.fixture.json`, import.meta.url);
-  return (await Bun.file(url).json()) as ServerFixture;
+  return JSON.parse(await readFile(url, "utf8")) as ServerFixture;
 }
 
 /**
@@ -60,7 +62,8 @@ export function replacePlaceholders(
 ): unknown {
   if (typeof value === "string") {
     return Object.entries(replacements).reduce(
-      (result, [placeholder, replacement]) => result.replaceAll(placeholder, replacement),
+      (result, [placeholder, replacement]) =>
+        result.replaceAll(placeholder, replacement),
       value,
     );
   }
@@ -87,57 +90,68 @@ export function replacePlaceholders(
  * `contracts/server-tool-parity.test.ts` has always used.
  */
 export function expectObserved(actual: unknown, expected: unknown): void {
-  if (expected === "<uuid>") {
-    expectTrue(
-      typeof actual === "string" &&
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-          actual,
-        ),
-      `expected a uuid, received ${JSON.stringify(actual)}`,
-    );
-    return;
-  }
-  if (expected === "<iso-date>") {
-    expectTrue(
-      typeof actual === "string" && !Number.isNaN(Date.parse(actual)),
-      `expected an ISO date, received ${JSON.stringify(actual)}`,
-    );
-    return;
-  }
-  if (expected === "<non-empty-string>") {
-    expectTrue(
-      typeof actual === "string" && actual.length > 0,
-      `expected a non-empty string, received ${JSON.stringify(actual)}`,
-    );
-    return;
-  }
-  if (Array.isArray(expected)) {
-    expectTrue(
-      Array.isArray(actual),
-      `expected an array, received ${JSON.stringify(actual)}`,
-    );
-    const observedArray = actual as unknown[];
-    expectTrue(
-      observedArray.length === expected.length,
-      `expected ${expected.length} items, received ${observedArray.length}`,
-    );
-    expected.forEach((item, index) => expectObserved(observedArray[index], item));
-    return;
-  }
-  if (expected && typeof expected === "object") {
-    expectTrue(
-      Boolean(actual) && typeof actual === "object" && !Array.isArray(actual),
-      `expected an object, received ${JSON.stringify(actual)}`,
-    );
-    for (const [key, value] of Object.entries(expected)) {
-      expectObserved((actual as Record<string, unknown>)[key], value);
-    }
-    return;
-  }
+  if (expected === "<uuid>") return expectUuid(actual);
+  if (expected === "<iso-date>") return expectIsoDate(actual);
+  if (expected === "<non-empty-string>") return expectNonEmptyString(actual);
+  if (Array.isArray(expected)) return expectArrayShape(actual, expected);
+  if (expected && typeof expected === "object")
+    return expectObjectShape(actual, expected);
   expectTrue(
     Object.is(actual, expected) || JSON.stringify(actual) === JSON.stringify(expected),
     `expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
   );
+}
+
+/** The `<uuid>` placeholder branch of {@link expectObserved}. */
+function expectUuid(actual: unknown): void {
+  expectTrue(
+    typeof actual === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        actual,
+      ),
+    `expected a uuid, received ${JSON.stringify(actual)}`,
+  );
+}
+
+/** The `<iso-date>` placeholder branch of {@link expectObserved}. */
+function expectIsoDate(actual: unknown): void {
+  expectTrue(
+    typeof actual === "string" && !Number.isNaN(Date.parse(actual)),
+    `expected an ISO date, received ${JSON.stringify(actual)}`,
+  );
+}
+
+/** The `<non-empty-string>` placeholder branch of {@link expectObserved}. */
+function expectNonEmptyString(actual: unknown): void {
+  expectTrue(
+    typeof actual === "string" && actual.length > 0,
+    `expected a non-empty string, received ${JSON.stringify(actual)}`,
+  );
+}
+
+/** The length-exact array branch of {@link expectObserved}. */
+function expectArrayShape(actual: unknown, expected: unknown[]): void {
+  expectTrue(
+    Array.isArray(actual),
+    `expected an array, received ${JSON.stringify(actual)}`,
+  );
+  const observedArray = actual as unknown[];
+  expectTrue(
+    observedArray.length === expected.length,
+    `expected ${expected.length} items, received ${observedArray.length}`,
+  );
+  expected.forEach((item, index) => expectObserved(observedArray[index], item));
+}
+
+/** The recorded-keys-only object branch of {@link expectObserved}. */
+function expectObjectShape(actual: unknown, expected: object): void {
+  expectTrue(
+    Boolean(actual) && typeof actual === "object" && !Array.isArray(actual),
+    `expected an object, received ${JSON.stringify(actual)}`,
+  );
+  for (const [key, value] of Object.entries(expected)) {
+    expectObserved((actual as Record<string, unknown>)[key], value);
+  }
 }
 
 /** Substitute placeholders into the recorded expectation, then compare. */

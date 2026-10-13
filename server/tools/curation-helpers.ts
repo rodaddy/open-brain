@@ -93,7 +93,18 @@ export const STALE_DAYS = 90;
 /** Preview width current-src slices each curation row to. */
 export const PREVIEW_WIDTH = 200;
 
-/** @returns The row preview sliced to the observed current-src width. */
+/**
+ * @returns The row preview sliced to the observed current-src width.
+ *
+ * Only a string column has a preview. A number or boolean is rendered by its
+ * own `toString`; anything else (object, null, undefined) yields the empty
+ * string rather than `[object Object]`, matching what current-src emitted for
+ * the text columns this is called on.
+ */
 export function previewOf(value: unknown): string {
-  return String(value ?? "").slice(0, PREVIEW_WIDTH);
+  if (typeof value === "string") return value.slice(0, PREVIEW_WIDTH);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value.toString().slice(0, PREVIEW_WIDTH);
+  }
+  return "";
 }

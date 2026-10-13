@@ -1,35 +1,22 @@
 /**
- * Canonical vs physical shared-namespace resolution.
+ * The validated-name-set shared-namespace call form (issue 841): a call-form
+ * adapter over the one implementation in `server/security/shared-namespace.ts`,
+ * which owns every namespace decision. Nothing here decides anything.
  *
- * Design authority: `docs/decisions/shared-kb-canonical-namespace.md`. `shared-kb`
- * is the ONE public name for shared truth. The legacy `collab` namespace was
- * retired in #167 — it is frozen and mirrored, not deleted — so this module
- * carries a deliberate two-name model:
- *
- *   - the CANONICAL name is what callers pass and what results report back, so a
- *     client never has to know which physical partition a row lives in;
- *   - the PHYSICAL name is what the `namespace` column actually holds, which is
- *     what a predicate must bind.
- *
- * They are equal in every normal deployment. They diverge only when an operator
- * points them apart during a migration, and the split exists so that window does
- * not require rewriting call sites. Read paths translate canonical -> physical
- * before building a predicate ({@link physicalNamespace}) and physical ->
- * canonical before emitting a row ({@link canonicalNamespace}); mixing those two
- * directions up is the failure this separation is here to make visible.
- *
- * There is NO default legacy namespace: `legacySharedNamespace` is `""` unless an
- * operator sets one. An empty legacy name must never match caller input, so every
- * legacy check below tests for non-empty FIRST — otherwise an unset config would
- * make `""` "legacy" and match unnamespaced input.
- *
- * Every name here arrives from the validated `ServerConfig`; this module reads no
- * environment of its own, so a call site that forgets to pass the set gets an
- * error naming the function rather than a default that quietly mis-binds.
+ * See docs/decisions/shared-namespace-adapter-two-name-model.md
+ * Design authority: docs/decisions/shared-kb-canonical-namespace.md
  */
 
 import type { SharedNamespaceGroup } from "../config/env-groups.ts";
 import type { AuthInfo } from "../types.ts";
+import type { SharedNamespaceEnv } from "../security/shared-namespace.ts";
+import {
+  canonicalNamespace as canonicalNamespaceWith,
+  isLegacySharedNamespace as isLegacySharedNamespaceWith,
+  isSharedNamespace as isSharedNamespaceWith,
+  physicalNamespace as physicalNamespaceWith,
+  shouldRejectLegacySharedWrite as shouldRejectLegacySharedWriteWith,
+} from "../security/shared-namespace.ts";
 
 /**
  * The shared-namespace name set.
@@ -65,6 +52,31 @@ function requireNames(
 }
 
 /**
+ * Project an already-validated name set back into the resolver's raw shape.
+ *
+ * The one implementation takes {@link SharedNamespaceEnv} — the eight raw
+ * environment values — because it is the module that owns precedence and
+ * defaulting. A validated group has already been through that resolution, so
+ * each field maps to the single raw key that reproduces it verbatim: the
+ * per-name keys win over the `OPENBRAIN_*` fallbacks, and the booleans and the
+ * count are written in the spellings the resolver's own parsers accept. The
+ * round trip is exact, which is what lets this file hold no decision of its own.
+ *
+ * @param names The validated set from the composition root.
+ * @returns Raw values that resolve back to exactly that set.
+ */
+function asEnv(names: SharedNamespaceGroup): SharedNamespaceEnv {
+  return {
+    sharedNamespaceCanonical: names.canonicalSharedNamespace,
+    sharedNamespacePhysical: names.physicalSharedNamespace,
+    sharedNamespaceLegacy: names.legacySharedNamespace,
+    legacySharedFallback: names.legacyFallbackEnabled ? "1" : "0",
+    sharedFallbackMinResults: String(names.fallbackMinResults),
+    allowLegacySharedWrites: names.allowLegacySharedWrites ? "1" : "0",
+  };
+}
+
+/**
  * Pass through the validated shared-namespace name set.
  *
  * Kept as a named accessor so existing call sites read the same way; it adds no
@@ -88,10 +100,9 @@ export function isSharedNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): boolean {
-  const config = requireNames(names, "isSharedNamespace");
-  return (
-    namespace === config.canonicalSharedNamespace ||
-    namespace === config.physicalSharedNamespace
+  return isSharedNamespaceWith(
+    namespace,
+    asEnv(requireNames(names, "isSharedNamespace")),
   );
 }
 
@@ -111,11 +122,10 @@ export function isLegacySharedNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): boolean {
-  const legacy = requireNames(
-    names,
-    "isLegacySharedNamespace",
-  ).legacySharedNamespace;
-  return legacy !== "" && namespace === legacy;
+  return isLegacySharedNamespaceWith(
+    namespace,
+    asEnv(requireNames(names, "isLegacySharedNamespace")),
+  );
 }
 
 /**
@@ -136,11 +146,11 @@ export function shouldRejectLegacySharedWrite(
   targetNamespace: string,
   names?: SharedNamespaceGroup,
 ): boolean {
-  const config = requireNames(names, "shouldRejectLegacySharedWrite");
-  if (config.allowLegacySharedWrites) return false;
-  if (config.legacySharedNamespace === "") return false;
-  if (targetNamespace !== config.legacySharedNamespace) return false;
-  return auth.role !== "admin" && auth.role !== "ob-admin";
+  return shouldRejectLegacySharedWriteWith(
+    auth,
+    targetNamespace,
+    asEnv(requireNames(names, "shouldRejectLegacySharedWrite")),
+  );
 }
 
 /**
@@ -157,16 +167,10 @@ export function canonicalNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): string {
-  const config = requireNames(names, "canonicalNamespace");
-  if (
-    config.legacySharedNamespace !== "" &&
-    namespace === config.legacySharedNamespace
-  ) {
-    return config.canonicalSharedNamespace;
-  }
-  return namespace === config.physicalSharedNamespace
-    ? config.canonicalSharedNamespace
-    : namespace;
+  return canonicalNamespaceWith(
+    namespace,
+    asEnv(requireNames(names, "canonicalNamespace")),
+  );
 }
 
 /**
@@ -183,8 +187,8 @@ export function physicalNamespace(
   namespace: string,
   names?: SharedNamespaceGroup,
 ): string {
-  const config = requireNames(names, "physicalNamespace");
-  return namespace === config.canonicalSharedNamespace
-    ? config.physicalSharedNamespace
-    : namespace;
+  return physicalNamespaceWith(
+    namespace,
+    asEnv(requireNames(names, "physicalNamespace")),
+  );
 }

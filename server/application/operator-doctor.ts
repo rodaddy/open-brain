@@ -2,8 +2,8 @@
  * `operator_doctor`: assemble the frozen diagnostic payload, and serve it from
  * a single-flight short-TTL cache.
  *
- * Moved out of `src/operator-doctor.ts` (issue 864, L5 of
- * `_plans/server-hardening-ladder.md`) and split into siblings by
+ * Carried across in the L5 move (issue 864, `_plans/server-hardening-ladder.md`)
+ * and split into siblings by
  * responsibility: `./operator-doctor-types.ts` owns the frozen shape and the
  * classification constants, `./operator-doctor-probes.ts` asks the individual
  * diagnostic questions, and this file assembles and caches.
@@ -11,21 +11,21 @@
  * Every value the old module read from `process.env` now arrives as a field of
  * the single `OperatorDoctorOptions` parameter, filled by `server/main.ts` from
  * the parsed `ServerConfig`. The legacy env-reading call form survives on the
- * `src/operator-doctor.ts` L5 adapter, which retires with `src/` at L6.
+ * L5 adapter, which retires at L6.
  */
 import type pg from "pg";
-import { CONTRACT_VERSION, CONTRACT_SCHEMA_VERSION } from "../../src/contract.ts";
+import { CONTRACT_VERSION, CONTRACT_SCHEMA_VERSION } from "../contracts/contract.ts";
 import {
   getEmbeddingProviderDiagnostics,
-  EMBEDDING_DIMENSIONS,
-  EMBEDDING_MODEL,
-} from "../../src/embedding.ts";
+  embeddingDimensions,
+  embeddingModel,
+} from "../embedding/provider.ts";
 import { checkPoolHealth } from "../db/legacy-pool.ts";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
 import type { NatsBridgeHealth } from "./nats-bridge.ts";
-import type { NatsRuntimeBoundary } from "../../src/nats-runtime.ts";
-import { isRequestedTransportDegraded } from "../../src/nats-runtime.ts";
+import type { NatsRuntimeBoundary } from "./nats-runtime.ts";
+import { isRequestedTransportDegraded } from "./nats-runtime.ts";
 import {
   DOCTOR_CACHE_TTL_MS,
   DOCTOR_CONTRACT_VERSION,
@@ -123,8 +123,8 @@ function embeddingSection(
   return {
     configured: diagnostics.configured,
     available,
-    model: EMBEDDING_MODEL,
-    dimensions: EMBEDDING_DIMENSIONS,
+    model: embeddingModel(),
+    dimensions: embeddingDimensions(),
     recent_failures: {
       last_failure_code: diagnostics.last_failure_code,
       consecutive_restartable_failures: diagnostics.consecutive_restartable_failures,
@@ -237,7 +237,7 @@ export async function getOperatorDoctorStatus(
       // Logged HERE, at the owning boundary, and then re-thrown unchanged.
       //
       // Every consumer of this function converts the rejection into a
-      // deliberately content-free response -- the REST route in src/index.ts
+      // deliberately content-free response -- the REST route
       // sends `{ error: "operator doctor status unavailable" }` and the MCP tool
       // sends the same string -- because a raw doctor error can carry paths and
       // env detail. That is right for the RESPONSE and left alone. But it meant

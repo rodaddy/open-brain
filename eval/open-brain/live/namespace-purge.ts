@@ -90,12 +90,15 @@ export interface NamespacePurgeResult {
 }
 
 export class NamespacePurgeRefused extends Error {
-  constructor(readonly namespace: string) {
+  readonly namespace: string;
+
+  constructor(namespace: string) {
     // Content-free: names the rule and the length of the offending value, never
     // the value itself, which may be an operator's real namespace.
     super(
       `namespace purge REFUSED: a name of length ${namespace.length} does not start with the required "${EVAL_NAMESPACE_PREFIX}" prefix; this purge may only remove namespaces it created`,
     );
+    this.namespace = namespace;
     this.name = "NamespacePurgeRefused";
   }
 }
@@ -148,10 +151,9 @@ export async function purgeNamespace(
       // Table name comes from the module-local const tuple above -- never from
       // a caller, a request, or the database -- so interpolating it introduces
       // no injection surface. The namespace is parameterized.
-      const result = await pool.query(
-        `DELETE FROM ${table} WHERE namespace = $1`,
-        [namespace],
-      );
+      const result = await pool.query(`DELETE FROM ${table} WHERE namespace = $1`, [
+        namespace,
+      ]);
       const count = result.rowCount ?? 0;
       if (count > 0) {
         deletedByTable[table] = count;
@@ -160,12 +162,16 @@ export async function purgeNamespace(
     } catch (error: unknown) {
       // Content-free: the error class, never the driver's message, which can
       // echo row content back into a receipt.
-      failedTables[table] =
-        error instanceof Error ? error.constructor.name : "unknown";
+      failedTables[table] = error instanceof Error ? error.constructor.name : "unknown";
     }
   }
 
-  return { namespace, deleted_by_table: deletedByTable, deleted, failed_tables: failedTables };
+  return {
+    namespace,
+    deleted_by_table: deletedByTable,
+    deleted,
+    failed_tables: failedTables,
+  };
 }
 
 /**

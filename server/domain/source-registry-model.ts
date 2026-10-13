@@ -1,7 +1,12 @@
+// The source-registry vocabulary, input schemas, row mapping, and the pure
+// authorization helpers that decide which namespace a registry write lands in
+// and whether the caller may grant approval. No queries live here; the pool
+// work is in ./source-registry.ts.
+
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import type { AuthInfo } from "../../src/types.ts";
-import { physicalNamespace } from "../../src/shared-namespace.ts";
+import type { AuthInfo } from "../types.ts";
+import { physicalNamespace } from "../security/shared-namespace-ambient.ts";
 
 // The only table this module touches. Interpolation is never used; every query
 // names the table as a literal. Kept as an explicit allowlist constant so a

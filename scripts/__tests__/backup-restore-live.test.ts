@@ -28,11 +28,13 @@
  * missing prerequisite FAILS loudly instead of skipping, so no run can
  * silently no-op.
  *
- * The scratch databases live on the same server as the test database but use
- * dedicated `open_brain_ci_restore_*` names, mirroring the DB_NAME /
+ * The scratch databases live on the local clone's server -- the test
+ * database's own server whenever that is loopback (#1667, resolveDrillAdmin) --
+ * under dedicated `open_brain_ci_restore_*` names, mirroring the DB_NAME /
  * DB_NAME_TEST separation in ci.yml, and are dropped afterwards.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pgToolAvailable } from "../backup-lib.ts";
 import { requireTestDatabaseUrl } from "../test-support/require-test-database.ts";
@@ -120,7 +122,7 @@ async function drillVerify(backupReceipt: CliReceipt): Promise<void> {
 
   // Receipts and manifest are content-free: no namespace names, no row
   // content, no credentials.
-  const manifestText = await Bun.file(join(backupDir, "manifest.json")).text();
+  const manifestText = await readFile(join(backupDir, "manifest.json"), "utf8");
   for (const artifact of [
     manifestText,
     JSON.stringify(backupReceipt),

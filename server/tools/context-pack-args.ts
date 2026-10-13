@@ -60,7 +60,7 @@ export const scopeInputSchema = {
  * or the structural form the recall emits, so a caller can echo back an item's
  * own `source_ref` verbatim.
  */
-export const priorContextReferenceInputSchema = z
+const priorContextReferenceInputSchema = z
   .object({
     citation_id: z.string().trim().min(1).max(500).optional(),
     source_ref: z
@@ -79,8 +79,7 @@ export const priorContextReferenceInputSchema = z
   })
   .strict()
   .refine(
-    (value) =>
-      value.citation_id !== undefined || value.source_ref !== undefined,
+    (value) => value.citation_id !== undefined || value.source_ref !== undefined,
     {
       message: "prior_context reference requires citation_id or source_ref",
       path: ["citation_id"],
@@ -92,7 +91,7 @@ export const priorContextReferenceInputSchema = z
  * the EXACT same budget contract, so the bounds live here once rather than being
  * duplicated — and silently drifting — in each tool's input schema.
  */
-export const contextPackBudgetInputSchema = z
+const contextPackBudgetInputSchema = z
   .object({
     max_tokens: z.number().int().min(100).max(20000).optional(),
     max_latency_ms: z.number().int().min(1).max(10000).optional(),
@@ -109,7 +108,7 @@ export const contextPackBudgetInputSchema = z
  * narrows what the query matches, and a walk run to completion has received
  * every record the query found.
  */
-export const contextPackContinuationInputSchema = z
+const contextPackContinuationInputSchema = z
   .object({
     offset: z.number().int().min(0),
   })
@@ -263,18 +262,14 @@ export const agentContextPackStrictSchema = strictRequestSchema(
 );
 
 /** The exact accepted top-level key set, derived from the schema — never re-listed. */
-export const AGENT_CONTEXT_PACK_REQUEST_KEYS = Object.keys(
+const AGENT_CONTEXT_PACK_REQUEST_KEYS = Object.keys(
   agentContextPackInputSchema,
 ) as readonly string[];
 
 export type AgentContextPackArgs = z.infer<typeof agentContextPackArgsSchema>;
 
 export function parseAgentContextPackArgs(args: unknown): AgentContextPackArgs {
-  rejectUnknownRequestKeys(
-    args,
-    AGENT_CONTEXT_PACK_REQUEST_KEYS,
-    "agent_context_pack",
-  );
+  rejectUnknownRequestKeys(args, AGENT_CONTEXT_PACK_REQUEST_KEYS, "agent_context_pack");
   return agentContextPackArgsSchema.parse(args);
 }
 
@@ -326,17 +321,13 @@ export const agentReflexPointersStrictSchema = strictRequestSchema(
  * it omits `requested_sections` and the section toggles — so passing a pack key
  * here is exactly the near-miss #535 is about and must be named, not stripped.
  */
-export const AGENT_REFLEX_POINTERS_REQUEST_KEYS = Object.keys(
+const AGENT_REFLEX_POINTERS_REQUEST_KEYS = Object.keys(
   agentReflexPointersInputSchema,
 ) as readonly string[];
 
-export type AgentReflexPointersArgs = z.infer<
-  typeof agentReflexPointersArgsSchema
->;
+export type AgentReflexPointersArgs = z.infer<typeof agentReflexPointersArgsSchema>;
 
-export function parseAgentReflexPointersArgs(
-  args: unknown,
-): AgentReflexPointersArgs {
+export function parseAgentReflexPointersArgs(args: unknown): AgentReflexPointersArgs {
   rejectUnknownRequestKeys(
     args,
     AGENT_REFLEX_POINTERS_REQUEST_KEYS,

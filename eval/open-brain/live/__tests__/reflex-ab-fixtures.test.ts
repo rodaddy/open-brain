@@ -1,8 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseReflexAbFixture } from "../reflex-ab-fixtures.ts";
 import { parseReflexPointersPayload } from "../transport.ts";
+import { expectDefined } from "../../../../scripts/test-support/expect-defined.ts";
 
 // Fixture-validation + payload-parse tests for the reflex A/B gate (#335).
 // These prove the fixture's referential integrity guards fire (so the gate can
@@ -12,7 +15,7 @@ import { parseReflexPointersPayload } from "../transport.ts";
 
 const SHIPPED = JSON.parse(
   readFileSync(
-    join(import.meta.dir, "../../fixtures/reflex-ab-v1.json"),
+    join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/reflex-ab-v1.json"),
     "utf8",
   ),
 );
@@ -62,7 +65,10 @@ describe("reflex A/B fixture validation", () => {
     expect(fixture.net_new_ids.length).toBeGreaterThan(0);
     // Every prior_known id is a primary-role, prior_known-flagged entry.
     for (const id of fixture.prior_known_ids) {
-      const entry = fixture.corpus.find((c) => c.id === id)!;
+      const entry = expectDefined(
+        fixture.corpus.find((c) => c.id === id),
+        `corpus entry ${id}`,
+      );
       expect(entry.namespace_role).toBe("primary");
       expect(entry.prior_known).toBe(true);
     }
@@ -71,7 +77,10 @@ describe("reflex A/B fixture validation", () => {
       expect(fixture.prior_known_ids).not.toContain(id);
     }
     for (const id of fixture.forbidden_ids) {
-      const entry = fixture.corpus.find((c) => c.id === id)!;
+      const entry = expectDefined(
+        fixture.corpus.find((c) => c.id === id),
+        `corpus entry ${id}`,
+      );
       expect(entry.namespace_role).toBe("negative");
     }
   });
@@ -82,7 +91,7 @@ describe("reflex A/B fixture validation", () => {
 
   it("rejects a prior_known id that is not flagged prior_known on its entry", () => {
     const f = baseFixture();
-    f.corpus[0]!.prior_known = false;
+    expectDefined(f.corpus[0], "corpus[0]").prior_known = false;
     expect(() => parseReflexAbFixture(f)).toThrow(/prior_known: true/);
   });
 
@@ -120,14 +129,15 @@ describe("reflex A/B fixture validation", () => {
       content: "k2",
       tags: [],
     });
-    expect(() => parseReflexAbFixture(f)).toThrow(
-      /missing from prior_known_ids/,
-    );
+    expect(() => parseReflexAbFixture(f)).toThrow(/missing from prior_known_ids/);
   });
 
   it("rejects a duplicate corpus id", () => {
     const f = baseFixture();
-    f.corpus.push({ ...f.corpus[1]!, prior_known: false });
+    f.corpus.push({
+      ...expectDefined(f.corpus[1], "corpus[1]"),
+      prior_known: false,
+    });
     expect(() => parseReflexAbFixture(f)).toThrow(/duplicate corpus id/);
   });
 

@@ -30,19 +30,13 @@ export function readJournalRows(walPath: string): string[] {
     .filter(Boolean);
 }
 
-export function appendJournalRecord(
-  walPath: string,
-  record: RecoveryWalRecord,
-): void {
+export function appendJournalRecord(walPath: string, record: RecoveryWalRecord): void {
   mkdirSync(dirname(walPath), { recursive: true });
   appendFileSync(walPath, `${JSON.stringify(record)}\n`, "utf8");
 }
 
 /** Rewrite the journal as exactly these records, replacing whatever was there. */
-export function rewriteJournal(
-  walPath: string,
-  records: RecoveryWalRecord[],
-): void {
+export function rewriteJournal(walPath: string, records: RecoveryWalRecord[]): void {
   mkdirSync(dirname(walPath), { recursive: true });
   writeFileSync(
     walPath,

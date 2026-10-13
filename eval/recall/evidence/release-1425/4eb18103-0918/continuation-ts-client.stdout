@@ -1,0 +1,13 @@
+
+> open-brain@0.9.0 test
+> node node_modules/vitest/vitest.mjs run clients/ts/tests
+
+
+ RUN  v5.0.0 /work/open-brain-continuation
+
+
+ Test Files  6 passed (6)
+      Tests  58 passed (58)
+   Start at  01:03:16
+   Duration  2.11s (tests 57%, import 27%, transform 15%, worker 1%)
+

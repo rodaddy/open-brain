@@ -49,7 +49,7 @@
  * lease invariants survive the port, leaving the job green while proving
  * nothing about a failure mode that never throws.
  */
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import pg from "pg";
 import pino from "pino";
 import { MaintenanceTerminalError, type MaintenanceJob } from "./maintenance-job.ts";
@@ -569,7 +569,7 @@ describe("maintenance runtime composition (live Postgres)", () => {
       // `ob_raw_turns` fixtures (`parity-raw-turn-*`) make the distill arm
       // produce `memory.distill` rows just as globally.
       await client.query(`DELETE FROM maintenance_jobs WHERE job_kind = ANY($1)`, [
-        ["graph.derive", "memory.distill"],
+        ["graph.derive", "memory.distill", "dream.light"],
       ]);
       await client.query(`DELETE FROM ob_sources WHERE namespace = $1`, [namespace]);
     }

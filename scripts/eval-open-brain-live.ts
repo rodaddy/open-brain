@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Single-command live recall gate (EVAL-3, issue #324).
 //
 //   bun run eval:live
@@ -12,6 +12,9 @@
 // Output is content-free: only ids, namespaces, labels, scores, and statuses.
 // No memory bodies, tokens, or secrets are ever printed.
 
+import { execFileSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LiveEvalConfig } from "../eval/open-brain/live/config.ts";
 import { loadLiveConfig, makeRunId } from "../eval/open-brain/live/config.ts";
@@ -89,23 +92,25 @@ export async function setUpGateClients(
 
 function argValue(name: string): string | undefined {
   const prefix = `--${name}=`;
-  for (const arg of Bun.argv.slice(2)) {
+  for (const arg of process.argv.slice(2)) {
     if (arg.startsWith(prefix)) return arg.slice(prefix.length);
   }
-  const index = Bun.argv.indexOf(`--${name}`);
-  const next = index >= 0 ? Bun.argv[index + 1] : undefined;
+  const index = process.argv.indexOf(`--${name}`);
+  const next = index >= 0 ? process.argv[index + 1] : undefined;
   return next && !next.startsWith("--") ? next : undefined;
 }
 
 async function gitCommit(): Promise<string> {
   try {
-    const proc = Bun.spawn(["git", "rev-parse", "HEAD"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const output = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    return code === 0 ? output.trim() : "unknown";
+    // execFileSync rather than a hand-rolled promise wrapper: this is a
+    // bounded one-line capture, and its only failure mode is already handled
+    // by the catch below. A non-zero exit THROWS here where it previously
+    // returned a non-zero code, and the catch turns both into "unknown", so
+    // the observable behavior is unchanged.
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -146,13 +151,11 @@ async function main(): Promise<number> {
 
     const reportPath = argValue("report");
     if (reportPath) {
-      await Bun.write(
-        reportPath,
-        `${JSON.stringify(outcome.receipt, null, 2)}\n`,
-      );
+      await mkdir(dirname(reportPath), { recursive: true });
+      await writeFile(reportPath, `${JSON.stringify(outcome.receipt, null, 2)}\n`);
     }
 
-    if (Bun.argv.includes("--json")) {
+    if (process.argv.includes("--json")) {
       console.log(JSON.stringify(outcome.receipt, null, 2));
     } else {
       printReceipt(outcome.receipt);

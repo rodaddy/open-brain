@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -127,7 +127,6 @@ describe("local clone launcher", () => {
     ]);
     expect(JSON.stringify(receipts)).not.toContain("local-secret");
   });
-
 });
 
 describe("local clone launcher fails closed", () => {
@@ -161,9 +160,9 @@ describe("local clone launcher fails closed", () => {
       },
     });
 
-    await expect(
-      runLocalCloneLauncher("start", cloneEnv(), deps),
-    ).rejects.toThrow("identity does not match DB_NAME");
+    await expect(runLocalCloneLauncher("start", cloneEnv(), deps)).rejects.toThrow(
+      "identity does not match DB_NAME",
+    );
     expect(embeddingCalled).toBe(false);
     expect(spawnCalled).toBe(false);
   });
@@ -199,7 +198,6 @@ describe("local clone launcher fails closed", () => {
       ),
     ).rejects.toThrow("incompatible dimension");
   });
-
 });
 
 describe("local clone launcher spawn", () => {
@@ -223,7 +221,7 @@ describe("local clone launcher spawn", () => {
       ...cloneEnv(),
       PATH: "/should/not/be/inherited",
       SSH_AUTH_SOCK: "/should/not/be/inherited",
-      CORE01_HOST: "192.0.2.21",
+      UNRELATED_HOST: "192.0.2.21",
       AUTH_TOKEN_USER_LOCAL: "rico:local-user-token",
       OPENBRAIN_TRACING_ENABLED: "1",
       OPENBRAIN_TRACING_ENDPOINT: "http://langfuse.local:3000",
@@ -253,15 +251,12 @@ describe("local clone launcher spawn", () => {
     // #530: the tracing coordinates must reach the server child, or
     // createTracingRuntime silently stays off while the env file says on.
     expect(spawnedEnv?.OPENBRAIN_TRACING_ENABLED).toBe("1");
-    expect(spawnedEnv?.OPENBRAIN_TRACING_ENDPOINT).toBe(
-      "http://langfuse.local:3000",
-    );
+    expect(spawnedEnv?.OPENBRAIN_TRACING_ENDPOINT).toBe("http://langfuse.local:3000");
     expect(spawnedEnv).not.toHaveProperty("PATH");
     expect(spawnedEnv).not.toHaveProperty("SSH_AUTH_SOCK");
-    expect(spawnedEnv).not.toHaveProperty("CORE01_HOST");
+    expect(spawnedEnv).not.toHaveProperty("UNRELATED_HOST");
     expect(handlers.size).toBe(0);
   });
-
 });
 
 describe("local clone child environment", () => {
@@ -310,7 +305,6 @@ describe("local clone child environment", () => {
     });
     expect(child).not.toHaveProperty("EMBEDDING_WATCHDOG_RESTART_SCRIPT");
   });
-
 });
 
 describe("local clone dropped-configuration reporter", () => {
@@ -384,9 +378,9 @@ describe("local clone dropped-configuration reporter", () => {
       ...cloneEnv(),
       OPENBRAIN_SOME_FUTURE_SERVER_KEY: "configured-but-unlisted",
     };
-    expect(
-      describeDroppedChildEnvironment(env).map((entry) => entry.key),
-    ).toContain("OPENBRAIN_SOME_FUTURE_SERVER_KEY");
+    expect(describeDroppedChildEnvironment(env).map((entry) => entry.key)).toContain(
+      "OPENBRAIN_SOME_FUTURE_SERVER_KEY",
+    );
     expect(buildChildEnvironment(env)).not.toHaveProperty(
       "OPENBRAIN_SOME_FUTURE_SERVER_KEY",
     );
@@ -420,7 +414,6 @@ describe("local clone dropped-configuration reporter", () => {
     // operator cannot use to tell a broken deploy from a normal one.
     expect(describeDroppedChildEnvironment(cloneEnv())).toEqual([]);
   });
-
 });
 
 describe("local clone serving target and failure boundary", () => {
@@ -440,9 +433,7 @@ describe("local clone serving target and failure boundary", () => {
         fakeDependencies({
           database: {
             prove: async () => {
-              throw new Error(
-                "password=should-not-escape host=external.example",
-              );
+              throw new Error("password=should-not-escape host=external.example");
             },
           },
         }),
@@ -469,7 +460,6 @@ describe("local clone serving target and failure boundary", () => {
     expect(existsSync(`${repoRoot}${SERVING_ENTRYPOINT}`)).toBe(true);
   });
 });
-
 
 interface LocalCloneUrl {
   host: string;
@@ -520,8 +510,7 @@ const REAL_PG_URL = requireLocalCloneTestDatabaseUrl();
 
 describe("local clone real PostgreSQL boundary (live Postgres)", () => {
   it("proves the explicit loopback clone in a read-only transaction", async () => {
-    const { host, database, user, port, password } =
-      requireLocalCloneUrl(REAL_PG_URL);
+    const { host, database, user, port, password } = requireLocalCloneUrl(REAL_PG_URL);
 
     const proof = await productionDependencies.database.prove({
       DB_HOST: host,

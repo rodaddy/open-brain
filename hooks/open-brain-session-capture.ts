@@ -1,25 +1,28 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // SessionEnd hook: captures session knowledge to Open Brain
 // Uses mcp2cli for transport/auth -- no raw HTTP
 // Fires on: session end
 // Silent on all errors -- never blocks session end
 
-export {};
+import { spawnSync } from "node:child_process";
 
 try {
-  const input = await Bun.stdin.json();
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const { cwd } = input;
   const project = cwd.split("/").pop() || "unknown";
 
   // Get recent git log (last 10 commits)
   let commits: string[] = [];
   try {
-    const logResult = Bun.spawnSync(
-      ["git", "log", "--oneline", "--no-decorate", "-10"],
-      { cwd, timeout: 3000 },
-    );
-    if (logResult.exitCode === 0) {
-      commits = logResult.stdout.toString().trim().split("\n").filter(Boolean);
+    const logResult = spawnSync("git", ["log", "--oneline", "--no-decorate", "-10"], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf8",
+    });
+    if (logResult.status === 0) {
+      commits = logResult.stdout.trim().split("\n").filter(Boolean);
     }
   } catch {
     /* no git or not a repo */
@@ -29,21 +32,24 @@ try {
   let diffStat = "";
   try {
     // Check commit count first -- HEAD~1 fails on single-commit repos
-    const countResult = Bun.spawnSync(["git", "rev-list", "--count", "HEAD"], {
+    const countResult = spawnSync("git", ["rev-list", "--count", "HEAD"], {
       cwd,
       timeout: 2000,
+      encoding: "utf8",
     });
     const commitCount =
-      countResult.exitCode === 0
-        ? parseInt(countResult.stdout.toString().trim(), 10)
-        : 0;
+      countResult.status === 0 ? parseInt(countResult.stdout.trim(), 10) : 0;
     const diffArgs =
       commitCount <= 1
-        ? ["git", "show", "--stat", "--format=", "HEAD"]
-        : ["git", "diff", "--stat", "HEAD~1", "HEAD"];
-    const diffResult = Bun.spawnSync(diffArgs, { cwd, timeout: 3000 });
-    if (diffResult.exitCode === 0) {
-      diffStat = diffResult.stdout.toString().trim();
+        ? ["show", "--stat", "--format=", "HEAD"]
+        : ["diff", "--stat", "HEAD~1", "HEAD"];
+    const diffResult = spawnSync("git", diffArgs, {
+      cwd,
+      timeout: 3000,
+      encoding: "utf8",
+    });
+    if (diffResult.status === 0) {
+      diffStat = diffResult.stdout.trim();
     }
   } catch {
     /* ignore */
@@ -52,12 +58,13 @@ try {
   // Get branch name for tags
   let branch = "";
   try {
-    const branchResult = Bun.spawnSync(["git", "branch", "--show-current"], {
+    const branchResult = spawnSync("git", ["branch", "--show-current"], {
       cwd,
       timeout: 2000,
+      encoding: "utf8",
     });
-    if (branchResult.exitCode === 0) {
-      branch = branchResult.stdout.toString().trim();
+    if (branchResult.status === 0) {
+      branch = branchResult.stdout.trim();
     }
   } catch {
     /* ignore */
@@ -69,9 +76,7 @@ try {
   const decisionCommits = commits.filter((c) => decisionPrefixes.test(c));
 
   // Build key_decisions from commit messages (strip hash)
-  const key_decisions = decisionCommits.map((c) =>
-    c.replace(/^[a-f0-9]+ /, ""),
-  );
+  const key_decisions = decisionCommits.map((c) => c.replace(/^[a-f0-9]+ /, ""));
 
   // Build rich summary
   const summaryParts: string[] = [`Session end capture for ${project}`];
@@ -85,23 +90,20 @@ try {
   const tags = ["auto-save", "session-end"];
   if (branch) {
     const branchType = branch.split("/")[0];
-    if (
-      ["feat", "fix", "wip", "chore", "refactor", "docs"].includes(branchType)
-    ) {
+    if (["feat", "fix", "wip", "chore", "refactor", "docs"].includes(branchType)) {
       tags.push(branchType);
     }
   }
 
   // Helper to call mcp2cli
   const callOB = (tool: string, params: Record<string, unknown>): boolean => {
-    const result = Bun.spawnSync(
-      ["mcp2cli", "open-brain", tool, "--params", JSON.stringify(params)],
-      { timeout: 12000 },
+    const result = spawnSync(
+      "mcp2cli",
+      ["open-brain", tool, "--params", JSON.stringify(params)],
+      { timeout: 12000, encoding: "utf8" },
     );
-    if (result.exitCode !== 0) {
-      console.error(
-        `open-brain ${tool} failed: ${result.stderr.toString().trim()}`,
-      );
+    if (result.status !== 0) {
+      console.error(`open-brain ${tool} failed: ${(result.stderr ?? "").trim()}`);
       return false;
     }
     return true;
@@ -135,6 +137,8 @@ try {
   }
 } catch (err) {
   // Log but never block session end
-  console.error(`open-brain session-capture hook error: ${err}`);
+  console.error(
+    `open-brain session-capture hook error: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
+  );
   process.exit(0);
 }

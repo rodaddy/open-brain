@@ -1,6 +1,28 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { LiveMemoryTable } from "./types.ts";
+import {
+  isAlreadyAbsentMarker,
+  parseContextPackPayload,
+  parseHits,
+  parseReflexPointersPayload,
+  redactToolFailure,
+  safeJson,
+  sanitizeThrownTransportError,
+} from "./transport-parse.ts";
+import {
+  LiveTransportError,
+  type ArchiveTable,
+  type ContextPackPayload,
+  type ContextPackScope,
+  type DenialProbeResult,
+  type LogMemoryResult,
+  type McpClientLike,
+  type OpenBrainToolCaller,
+  type ReflexPointersPayload,
+  type ReflexPriorContextRef,
+  type SearchHit,
+} from "./transport-types.ts";
 
 // Live transport for the recall gate.
 //
@@ -12,177 +34,36 @@ import type { LiveMemoryTable } from "./types.ts";
 // REST surface) because it uniformly exposes archive_entry, which the REST API
 // does not, and archive_entry is namespace-scoped -- the property that makes
 // teardown mutation-safe.
+//
+// The type surface lives in ./transport-types.ts and the redaction/parsing
+// boundary in ./transport-parse.ts (issue 752, file-length bound). The
+// functions MOVED; there is still exactly ONE parse/redaction implementation,
+// which is the point -- a second copy of a redaction predicate is how one of
+// them silently stops redacting. Everything is re-exported here, so this module
+// remains the single import specifier every caller in the repo already uses.
 
-/** Minimal tool interface so the gate can run against a fake in tests. */
-export interface OpenBrainToolCaller {
-  callTool(
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<ToolCallResult>;
-  close(): Promise<void>;
-}
-
-export interface ToolCallResult {
-  /** True when the server reported the call as an error. */
-  isError: boolean;
-  /**
-   * True when the server denied the call for permission/namespace reasons.
-   * Modeled distinctly from a generic error so the gate can require an explicit
-   * denial (isolation proof) without ever inspecting the raw error body.
-   */
-  denied: boolean;
-  /**
-   * On success: the raw response body text, from which the client parses only
-   * structured fields (ids, namespace) -- it is never logged or embedded in a
-   * receipt. Empty string on error, where the body is discarded at the
-   * redaction boundary so no memory body or secret can escape.
-   */
-  data: string;
-  /**
-   * A redacted, content-free label for a failed call: tool name plus, when the
-   * server surfaced them, an error class / status / reason keyword. NEVER the
-   * raw response text -- that could carry a memory body or secret. Empty string
-   * on success.
-   */
-  errorLabel: string;
-}
-
-export type ArchiveTable = LiveMemoryTable | "sessions";
-
-export interface LogMemoryResult {
-  id: string;
-  /** The namespace the server reported the row was written to. */
-  namespace: string;
-  /**
-   * The server's `merged` flag: false when this call CREATED a new row, true
-   * when it upserted onto an existing row (ON CONFLICT). The seeder requires
-   * `merged === false` so it can only ever count a fresh, this-run creation --
-   * a merged upsert means the record predates this run (a stranded prior seed in
-   * a reused namespace) and must never be treated as newly created and later
-   * archived as though this run owned it.
-   */
-  merged: boolean;
-}
-
-export interface SearchHit {
-  id: string;
-  source_type: string;
-  namespace?: string;
-}
-
-/**
- * The exact seven-coordinate active scope the complete-pack gate binds. The
- * namespace is the isolation predicate (the per-run throwaway namespace); the
- * remaining coordinates address the exact working-set / durable-lane scope. A
- * missing `thread_id` means the unthreaded lane, exactly as the pack tool treats
- * an omitted thread id.
- */
-export interface ContextPackScope {
-  namespace: string;
-  agent: string;
-  platform: string;
-  server_id: string;
-  channel_id: string;
-  thread_id?: string | null;
-  session_key: string;
-}
-
-/**
- * The structural fields the complete-pack gate reads out of the pack payload.
- * Deliberately narrow: only the shape needed to verify presence/emptiness,
- * citations, budget, and warnings. Section bodies are kept as opaque records so
- * the gate reads item counts / citation ids / empty markers WITHOUT the eval
- * code ever needing to log a memory body. The raw payload text is never carried.
- */
-export interface ContextPackPayload {
-  status: string;
-  sections: Record<string, unknown>;
-  citations: Array<Record<string, unknown>>;
-  budget: Record<string, unknown>;
-  warnings: {
-    scope_denials: Array<Record<string, unknown>>;
-    degraded_sources: Array<Record<string, unknown>>;
-    truncation: Array<Record<string, unknown>>;
-  };
-}
-
-/**
- * Result of an explicit isolation probe: an attempt by one caller to read a
- * namespace it must not be able to read. `denied` is the only signal the gate
- * trusts as proof of isolation; an empty-but-successful search is NOT denial.
- * `hitCount` is retained so a "denied but non-empty" contradiction can be
- * surfaced content-free. No hit ids or bodies are carried.
- */
-export interface DenialProbeResult {
-  denied: boolean;
-  hitCount: number;
-}
-
-/**
- * One explicit prior-context reference for a reflex-pointers call: an identifier
- * or structural source pointer for a record already supplied to the model this
- * turn. Only resolvable identity is ever carried -- never a raw prior-context
- * body -- mirroring `agent_reflex_pointers.prior_context`. The suppression-ON
- * arm of the A/B gate echoes back the citation ids the already-known seeds were
- * emitted under; the suppression-OFF arm sends none.
- */
-export interface ReflexPriorContextRef {
-  citation_id?: string;
-  source_ref?:
-    string | { source: string; type: string; id: string; namespace?: string };
-}
-
-/**
- * The structural fields the reflex-A/B gate reads out of an
- * `agent_reflex_pointers` payload. Deliberately narrow: the body-free pointer
- * section (items carry identity + structural source_ref only), the top-level
- * citations, the whole-pack budget, and the warnings channel. Section item
- * bodies stay opaque records so the gate reads pointer ids / citation ids /
- * counts WITHOUT ever inspecting a memory body. The raw payload text is never
- * carried past this boundary.
- */
-export interface ReflexPointersPayload {
-  status: string;
-  placement: string;
-  pointers: Record<string, unknown>;
-  citations: Array<Record<string, unknown>>;
-  budget: Record<string, unknown>;
-  warnings: {
-    scope_denials: Array<Record<string, unknown>>;
-    degraded_sources: Array<Record<string, unknown>>;
-    truncation: Array<Record<string, unknown>>;
-  };
-}
-
-/**
- * The public error surface for a live transport failure. Callers may log or
- * embed `label` in a receipt; it is redacted to tool/class/status/reason
- * keywords only and never contains raw response text.
- */
-export class LiveTransportError extends Error {
-  readonly label: string;
-  readonly denied: boolean;
-  /**
-   * Content-free diagnostics carried from a failing child process: the error
-   * class and one redacted stderr line. Without these a provider failure
-   * presents as a bare exit code and has to be recovered by replaying the
-   * command by hand (issue #583).
-   */
-  readonly errorClass?: string;
-  readonly stderrFirstLine?: string;
-  constructor(
-    label: string,
-    denied: boolean,
-    diagnostics: { errorClass?: string; stderrFirstLine?: string } = {},
-  ) {
-    super(label);
-    this.name = "LiveTransportError";
-    this.label = label;
-    this.denied = denied;
-    this.errorClass = diagnostics.errorClass;
-    this.stderrFirstLine = diagnostics.stderrFirstLine;
-  }
-}
+export {
+  isDenialLabel,
+  parseContextPackPayload,
+  parseHits,
+  parseReflexPointersPayload,
+  redactToolFailure,
+  sanitizeThrownTransportError,
+} from "./transport-parse.ts";
+export { LiveTransportError } from "./transport-types.ts";
+export type {
+  ArchiveTable,
+  ContextPackPayload,
+  ContextPackScope,
+  DenialProbeResult,
+  LogMemoryResult,
+  McpClientLike,
+  OpenBrainToolCaller,
+  ReflexPointersPayload,
+  ReflexPriorContextRef,
+  SearchHit,
+  ToolCallResult,
+} from "./transport-types.ts";
 
 /**
  * Semantic wrapper over an OpenBrainToolCaller. Keeps the gate orchestrator
@@ -190,7 +71,11 @@ export class LiveTransportError extends Error {
  * unit tests target with a fake caller.
  */
 export class OpenBrainLiveClient {
-  constructor(private readonly caller: OpenBrainToolCaller) {}
+  private readonly caller: OpenBrainToolCaller;
+
+  constructor(caller: OpenBrainToolCaller) {
+    this.caller = caller;
+  }
 
   /**
    * Call a tool whose success contract is one JSON object and return that parsed
@@ -219,19 +104,8 @@ export class OpenBrainLiveClient {
    * The seed is a CREATE: this run owns every record it later archives, so the
    * response must prove a fresh row was created under the exact namespace we
    * asked for. `log_thought`/`log_decision` return `{id, namespace, merged}`
-   * (src/tools/log-thought.ts, log-decision.ts). We fail closed content-free on
-   * any response that does not exactly match a create:
-   *
-   *  - missing/non-string `id` -> we never learned the server id, so teardown
-   *    could not archive this row (`:missing-id`).
-   *  - missing/non-boolean or `merged: true` -> the server upserted onto an
-   *    EXISTING row (a stranded prior seed in a reused namespace), so this is
-   *    not a this-run creation; archiving it later would tombstone a row this
-   *    run did not create (`:merged-upsert` / `:missing-merged`).
-   *  - a returned namespace that is not EXACTLY `opts.namespace` -> the row did
-   *    not land where we bound our teardown/scoring, so we must not treat it as
-   *    ours (`:namespace-mismatch`). We do NOT default a missing namespace to
-   *    the requested one: that would mask a server that wrote elsewhere.
+   * (src/tools/log-thought.ts, log-decision.ts). `assertFreshSeed` fails closed
+   * content-free on any response that does not exactly match a create.
    */
   async logMemory(opts: {
     table: LiveMemoryTable;
@@ -257,25 +131,7 @@ export class OpenBrainLiveClient {
     if (result.isError) {
       throw new LiveTransportError(result.errorLabel, result.denied);
     }
-    const parsed = safeJson(result.data);
-    const id = typeof parsed?.id === "string" ? parsed.id : undefined;
-    if (!id) {
-      // Content-free: name the tool, not the response body.
-      throw new LiveTransportError(`${tool}:missing-id`, false);
-    }
-    // `merged` must be present and a boolean; a create is `merged === false`.
-    if (typeof parsed?.merged !== "boolean") {
-      throw new LiveTransportError(`${tool}:missing-merged`, false);
-    }
-    if (parsed.merged) {
-      // The server upserted onto a pre-existing row -- not a this-run creation.
-      throw new LiveTransportError(`${tool}:merged-upsert`, false);
-    }
-    // The returned namespace must EXACTLY equal the one we bound teardown/scoring
-    // to; no defaulting a missing/other namespace to the requested one.
-    if (parsed.namespace !== opts.namespace) {
-      throw new LiveTransportError(`${tool}:namespace-mismatch`, false);
-    }
+    const id = assertFreshSeed(tool, safeJson(result.data), opts.namespace);
     return { id, namespace: opts.namespace, merged: false };
   }
 
@@ -359,18 +215,10 @@ export class OpenBrainLiveClient {
     includeUnreviewedRecovery?: boolean;
   }): Promise<ContextPackPayload> {
     const args: Record<string, unknown> = {
-      namespace: opts.scope.namespace,
-      agent: opts.scope.agent,
-      platform: opts.scope.platform,
-      server_id: opts.scope.server_id,
-      channel_id: opts.scope.channel_id,
-      session_key: opts.scope.session_key,
+      ...scopeArgs(opts.scope),
       query: opts.query,
       requested_sections: [...opts.requestedSections],
     };
-    if (opts.scope.thread_id !== undefined && opts.scope.thread_id !== null) {
-      args.thread_id = opts.scope.thread_id;
-    }
     if (opts.includeUnreviewedRecovery) {
       args.include_unreviewed_recovery = true;
     }
@@ -406,17 +254,9 @@ export class OpenBrainLiveClient {
     budgetMaxTokens?: number;
   }): Promise<ReflexPointersPayload> {
     const args: Record<string, unknown> = {
-      namespace: opts.scope.namespace,
-      agent: opts.scope.agent,
-      platform: opts.scope.platform,
-      server_id: opts.scope.server_id,
-      channel_id: opts.scope.channel_id,
-      session_key: opts.scope.session_key,
+      ...scopeArgs(opts.scope),
       query: opts.query,
     };
-    if (opts.scope.thread_id !== undefined && opts.scope.thread_id !== null) {
-      args.thread_id = opts.scope.thread_id;
-    }
     // Only attach prior_context on the suppression-ON arm. An empty array is the
     // suppression-OFF arm and is deliberately OMITTED rather than sent as [], so
     // the two arms differ exactly by the presence of the references -- never by
@@ -511,304 +351,66 @@ export class OpenBrainLiveClient {
 }
 
 /**
- * Parse ranked search hits from a JSON array body. Never logs the body.
- *
- * This is the transport boundary for every hit the gate scores or probes. It
- * FAILS CLOSED content-free rather than silently dropping any entry, because a
- * discarded raw result never reaches the gate-level validator (gate.ts
- * `toFixtureRetrieval`) and so could compress rankings or hide a foreign /
- * malformed result before PASS logic runs:
- *
- *  - a successful search body MUST be a JSON array. A non-array (object, scalar)
- *    or invalid JSON is a malformed result set (`search_brain:malformed-results`)
- *    -- NOT an empty result, which the old `return []` conflated with real
- *    "no hits" and let a malformed body pass as a clean empty read.
- *  - every array entry MUST be an object carrying a non-empty string `id`
- *    (`search_brain:malformed-hit`). A non-object row, a missing id, or an empty
- *    id is unaccountable at this boundary and must not be silently skipped.
- *
- * `namespace` stays OPTIONAL on purpose: a hit that is a valid object with a
- * string id but no namespace passes THIS boundary and reaches gate.ts, which
- * fails it specifically as `foreign-namespace`. Requiring namespace here would
- * mask that distinct (and security-relevant) gate-level classification.
- *
- * Content-free: labels name only the tool + failure class, never a raw body,
- * row, or id value.
+ * The six scope coordinates every scoped tool call carries, plus `thread_id`
+ * only when the caller bound one. An explicitly-absent thread id means the
+ * unthreaded lane and is OMITTED rather than sent as null, exactly as the pack
+ * tool treats an omitted thread id.
  */
-export function parseHits(text: string): SearchHit[] {
-  const parsed = safeJsonArray(text);
-  if (!parsed) {
-    // Non-array success body or invalid JSON: a malformed result set, not empty.
-    throw new LiveTransportError("search_brain:malformed-results", false);
-  }
-  const hits: SearchHit[] = [];
-  for (const row of parsed) {
-    if (!row || typeof row !== "object") {
-      // A non-object array entry is unaccountable; never silently skip it.
-      throw new LiveTransportError("search_brain:malformed-hit", false);
-    }
-    const id = (row as Record<string, unknown>).id;
-    if (typeof id !== "string" || id.length === 0) {
-      // Missing / non-string / empty id: cannot account for this hit.
-      throw new LiveTransportError("search_brain:malformed-hit", false);
-    }
-    const sourceType = (row as Record<string, unknown>).source_type;
-    const namespace = (row as Record<string, unknown>).namespace;
-    hits.push({
-      id,
-      source_type: typeof sourceType === "string" ? sourceType : "",
-      // Optional by design: a missing namespace reaches gate.ts, which fails it
-      // as foreign-namespace. Do NOT reject it here.
-      namespace: typeof namespace === "string" ? namespace : undefined,
-    });
-  }
-  return hits;
-}
-
-/**
- * Parse the complete context-pack payload from a JSON object body. Never logs
- * the body, which can carry memory bodies inside its section items.
- *
- * Fails closed content-free rather than defaulting a malformed body to an empty
- * pack: a non-object body, or invalid JSON, is a malformed pack
- * (`agent_context_pack:malformed-payload`), NOT an empty pack -- conflating the
- * two would let a broken pack pass as a clean empty. `sections`, `citations`,
- * `budget`, and `warnings.*` are normalized to their expected container shapes
- * (object / array), defaulting a MISSING container to its empty form so the gate
- * can classify a genuinely-empty pack without inspecting any body. The section
- * bodies themselves stay opaque records; the gate reads only their structural
- * fields.
- */
-export function parseContextPackPayload(text: string): ContextPackPayload {
-  const parsed = safeJson(text);
-  if (!parsed) {
-    throw new LiveTransportError("agent_context_pack:malformed-payload", false);
-  }
-  const asRecordArray = (value: unknown): Array<Record<string, unknown>> => {
-    if (!Array.isArray(value)) return [];
-    return value.filter(
-      (row): row is Record<string, unknown> =>
-        !!row && typeof row === "object" && !Array.isArray(row),
-    );
+function scopeArgs(scope: ContextPackScope): Record<string, unknown> {
+  const args: Record<string, unknown> = {
+    namespace: scope.namespace,
+    agent: scope.agent,
+    platform: scope.platform,
+    server_id: scope.server_id,
+    channel_id: scope.channel_id,
+    session_key: scope.session_key,
   };
-  const asRecord = (value: unknown): Record<string, unknown> =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-
-  const warnings = asRecord(parsed.warnings);
-  return {
-    status: typeof parsed.status === "string" ? parsed.status : "",
-    sections: asRecord(parsed.sections),
-    citations: asRecordArray(parsed.citations),
-    budget: asRecord(parsed.budget),
-    warnings: {
-      scope_denials: asRecordArray(warnings.scope_denials),
-      degraded_sources: asRecordArray(warnings.degraded_sources),
-      truncation: asRecordArray(warnings.truncation),
-    },
-  };
-}
-
-/**
- * Parse the reflex-pointers payload from a JSON object body. Never logs the
- * body. Fails closed content-free rather than defaulting a malformed body to an
- * empty reflex: a non-object body or invalid JSON is a malformed reflex
- * (`agent_reflex_pointers:malformed-payload`), NOT an empty one -- conflating
- * the two would let a broken reflex pass as a clean empty. `pointers`,
- * `citations`, `budget`, and `warnings.*` are normalized to their expected
- * container shapes, defaulting a MISSING container to its empty form so the gate
- * can classify a genuinely-empty reflex without inspecting any body. The pointer
- * item bodies stay opaque records; the gate reads only their structural fields
- * (id, citation_id, source_ref identity coordinates).
- */
-export function parseReflexPointersPayload(
-  text: string,
-): ReflexPointersPayload {
-  const parsed = safeJson(text);
-  if (!parsed) {
-    throw new LiveTransportError(
-      "agent_reflex_pointers:malformed-payload",
-      false,
-    );
+  if (scope.thread_id !== undefined && scope.thread_id !== null) {
+    args.thread_id = scope.thread_id;
   }
-  const asRecordArray = (value: unknown): Array<Record<string, unknown>> => {
-    if (!Array.isArray(value)) return [];
-    return value.filter(
-      (row): row is Record<string, unknown> =>
-        !!row && typeof row === "object" && !Array.isArray(row),
-    );
-  };
-  const asRecord = (value: unknown): Record<string, unknown> =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-
-  const warnings = asRecord(parsed.warnings);
-  return {
-    status: typeof parsed.status === "string" ? parsed.status : "",
-    placement: typeof parsed.placement === "string" ? parsed.placement : "",
-    pointers: asRecord(parsed.pointers),
-    citations: asRecordArray(parsed.citations),
-    budget: asRecord(parsed.budget),
-    warnings: {
-      scope_denials: asRecordArray(warnings.scope_denials),
-      degraded_sources: asRecordArray(warnings.degraded_sources),
-      truncation: asRecordArray(warnings.truncation),
-    },
-  };
+  return args;
 }
 
 /**
- * The exact plain-text no-op marker archive_entry returns for the zero-row case
- * (src/tools/archive-entry.ts): "Already archived or not found", and nothing
- * else. This is the ONLY non-structured success shape teardown treats as "the
- * row is gone".
+ * Assert a seed response is a fresh create bound to the exact namespace asked
+ * for, returning the server-assigned id. Fails closed content-free on every
+ * shape that is not exactly a create:
  *
- * Matching is EXACT (trimmed, case-insensitive) -- not substring -- on purpose:
- * a destructive teardown must fail closed, so a partial phrase ("not found"),
- * "no rows", or the marker embedded in incidental/mixed text must NOT classify,
- * because any of those could false-pass on unrelated server output. Anything
- * that is not exactly this marker fails closed at the caller. The raw text is
- * never logged or returned -- only the boolean.
+ *  - missing/non-string `id` -> we never learned the server id, so teardown
+ *    could not archive this row (`:missing-id`).
+ *  - missing/non-boolean or `merged: true` -> the server upserted onto an
+ *    EXISTING row (a stranded prior seed in a reused namespace), so this is not
+ *    a this-run creation; archiving it later would tombstone a row this run did
+ *    not create (`:merged-upsert` / `:missing-merged`).
+ *  - a returned namespace that is not EXACTLY `namespace` -> the row did not
+ *    land where we bound our teardown/scoring, so we must not treat it as ours
+ *    (`:namespace-mismatch`). We do NOT default a missing namespace to the
+ *    requested one: that would mask a server that wrote elsewhere.
  */
-const ARCHIVE_ABSENT_MARKER = "already archived or not found";
-
-function isAlreadyAbsentMarker(text: string): boolean {
-  return text.trim().toLowerCase() === ARCHIVE_ABSENT_MARKER;
-}
-
-function safeJson(text: string): Record<string, unknown> | undefined {
-  try {
-    const value = JSON.parse(text);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
+function assertFreshSeed(
+  tool: string,
+  parsed: Record<string, unknown> | undefined,
+  namespace: string,
+): string {
+  const id = typeof parsed?.id === "string" ? parsed.id : undefined;
+  if (!id) {
+    // Content-free: name the tool, not the response body.
+    throw new LiveTransportError(`${tool}:missing-id`, false);
   }
-}
-
-function safeJsonArray(text: string): unknown[] | undefined {
-  try {
-    const value = JSON.parse(text);
-    return Array.isArray(value) ? value : undefined;
-  } catch {
-    return undefined;
+  // `merged` must be present and a boolean; a create is `merged === false`.
+  if (typeof parsed?.merged !== "boolean") {
+    throw new LiveTransportError(`${tool}:missing-merged`, false);
   }
-}
-
-/**
- * Denial keywords: a permission/namespace/auth refusal. These are the security-
- * relevant signals the isolation proof depends on, so they are classified FIRST,
- * ahead of any generic error keyword. A server body can legitimately mix a
- * denial phrase with a generic one (e.g. "invalid request: permission denied for
- * namespace"); if a generic keyword like "invalid" were matched first, a real
- * denial would be mislabeled as a non-denial error and the isolation proof (or a
- * teardown auth failure) would be silently misread. Denial precedence closes
- * that classification hole.
- */
-const DENIAL_ERROR_KEYWORDS: readonly string[] = [
-  "permission denied",
-  "not authenticated",
-  "unauthorized",
-  "forbidden",
-];
-
-/**
- * Generic (non-denial) error bodies the gate is willing to name in a content-
- * free label. Matched only AFTER the denial keywords above, so a mixed body that
- * contains a denial phrase always classifies as a denial regardless of array
- * order.
- */
-const GENERIC_ERROR_KEYWORDS: readonly string[] = [
-  "invalid",
-  "not found",
-  "already archived",
-  "rate limit",
-  "timeout",
-];
-
-/**
- * The full allowlist of non-sensitive tokens the gate may copy out of a
- * response is exactly DENIAL_ERROR_KEYWORDS followed by GENERIC_ERROR_KEYWORDS.
- * Only these tokens are ever emitted; anything else collapses to a bare marker,
- * so a memory body or secret in the error text can never leak into a log or
- * receipt.
- *
- * Select the single keyword to name in a content-free label, prioritizing any
- * denial keyword over every generic one so a mixed body classifies as a denial.
- * Returns undefined when no known keyword is present.
- */
-function matchRedactedKeyword(lower: string): string | undefined {
-  return (
-    DENIAL_ERROR_KEYWORDS.find((kw) => lower.includes(kw)) ??
-    GENERIC_ERROR_KEYWORDS.find((kw) => lower.includes(kw))
-  );
-}
-
-/** True when the redacted error signal indicates a permission/namespace denial. */
-export function isDenialLabel(label: string): boolean {
-  return (
-    label.includes("permission-denied") ||
-    label.includes("unauthorized") ||
-    label.includes("forbidden") ||
-    label.includes("not-authenticated")
-  );
-}
-
-/**
- * Reduce a failed tool call to a content-free label. Emits the tool name plus
- * at most one matched known keyword (as a slug); the raw response text is never
- * included. Returns { errorLabel, denied }.
- */
-export function redactToolFailure(
-  toolName: string,
-  rawText: string,
-): { errorLabel: string; denied: boolean } {
-  const lower = rawText.toLowerCase();
-  const matched = matchRedactedKeyword(lower);
-  const slug = matched ? matched.replace(/\s+/g, "-") : "error";
-  const errorLabel = `${toolName}:${slug}`;
-  return { errorLabel, denied: isDenialLabel(errorLabel) };
-}
-
-/**
- * Sanitize a THROWN transport-layer error (connect / callTool / close) into a
- * content-free LiveTransportError. The MCP SDK can throw errors whose `.message`
- * carries the raw remote HTTP body or response text -- which could include a
- * memory body or secret -- so we NEVER surface `error.message` verbatim. We copy
- * out only the operation name plus, if the message happens to contain one of the
- * known non-sensitive keywords, that single keyword as a slug. Anything else
- * collapses to `<op>:transport-error`. An HTTP status code (a bare number) is
- * safe to name and helps triage, so we extract at most one 3-digit status.
- *
- * `op` is the transport operation (e.g. "connect", "close", or a tool name), not
- * the raw error, so the label shape matches redactToolFailure's `<name>:<slug>`.
- */
-export function sanitizeThrownTransportError(
-  op: string,
-  error: unknown,
-): LiveTransportError {
-  // Already redacted upstream: pass it through unchanged so we never re-wrap or
-  // accidentally widen a content-free label.
-  if (error instanceof LiveTransportError) {
-    return error;
+  if (parsed.merged) {
+    // The server upserted onto a pre-existing row -- not a this-run creation.
+    throw new LiveTransportError(`${tool}:merged-upsert`, false);
   }
-  const raw = error instanceof Error ? error.message : String(error);
-  const lower = raw.toLowerCase();
-  const matchedKeyword = matchRedactedKeyword(lower);
-  const statusMatch = /\b([1-5]\d{2})\b/.exec(raw);
-  let slug: string;
-  if (matchedKeyword) {
-    slug = matchedKeyword.replace(/\s+/g, "-");
-  } else if (statusMatch) {
-    slug = `http-${statusMatch[1]}`;
-  } else {
-    slug = "transport-error";
+  // The returned namespace must EXACTLY equal the one we bound teardown/scoring
+  // to; no defaulting a missing/other namespace to the requested one.
+  if (parsed.namespace !== namespace) {
+    throw new LiveTransportError(`${tool}:namespace-mismatch`, false);
   }
-  const errorLabel = `${op}:${slug}`;
-  return new LiveTransportError(errorLabel, isDenialLabel(errorLabel));
+  return id;
 }
 
 /**
@@ -823,24 +425,7 @@ export function sanitizeThrownTransportError(
  * two callers sharing one admin/ob-admin token but carrying different
  * X-Namespace headers are genuinely isolated from each other -- token identity
  * is NOT what proves isolation, the header-bound namespace is.
- */
-/**
- * Minimal surface of the MCP SDK client the caller depends on. Injected so unit
- * tests can drive the redaction boundary (a thrown connect/callTool/close) with
- * a fake that emits raw, secret-bearing errors -- proving nothing raw escapes --
- * without standing up a hosted server.
- */
-export interface McpClientLike {
-  connect(transport: unknown): Promise<void>;
-  callTool(
-    request: { name: string; arguments: Record<string, unknown> },
-    schema: undefined,
-    options: { timeout: number },
-  ): Promise<{ content?: unknown; isError?: boolean }>;
-  close(): Promise<void>;
-}
-
-/**
+ *
  * Build the real SDK client + streamable-HTTP transport bound to a token and a
  * per-request X-Namespace header. Factored out so createMcpCaller can accept an
  * injected client in tests.
@@ -873,11 +458,10 @@ export async function createMcpCaller(opts: {
   namespace: string;
   timeoutMs: number;
   /** Injectable client factory; defaults to the real SDK client. Tests override. */
-  clientFactory?: (o: {
-    baseUrl: string;
-    token: string;
-    namespace: string;
-  }) => { client: McpClientLike; transport: unknown };
+  clientFactory?: (o: { baseUrl: string; token: string; namespace: string }) => {
+    client: McpClientLike;
+    transport: unknown;
+  };
 }): Promise<OpenBrainToolCaller> {
   const factory = opts.clientFactory ?? defaultMcpClientFactory;
   const { client, transport } = factory({

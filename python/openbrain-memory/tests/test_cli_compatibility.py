@@ -21,7 +21,7 @@ FIXTURE_PATH = (
     / "adapter-0.1.17-requests.json"
 )
 CLI_0_1_17_WHEEL = Path(
-    "/Users/rico/.local/share/openbrain-memory/wheels/"
+    "/home/user/.local/share/openbrain-memory/wheels/"
     "openbrain_memory-0.1.17-py3-none-any.whl"
 )
 RUN_0_1_17_COMPAT_ENV = "OPENBRAIN_RUN_0_1_17_CLI_COMPAT"

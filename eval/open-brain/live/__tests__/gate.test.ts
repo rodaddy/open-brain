@@ -1,289 +1,21 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
+import { labelTeardownError, runLiveGate, teardownRecords } from "../gate.ts";
+import { LiveTransportError } from "../transport.ts";
+import { expectTransportError } from "./transport-test-support.ts";
 import {
-  labelTeardownError,
-  runLiveGate,
-  teardownRecords,
-  type GateClients,
-} from "../gate.ts";
-import type { LiveEvalConfig } from "../config.ts";
-import {
-  LiveTransportError,
-  OpenBrainLiveClient,
-  type OpenBrainToolCaller,
-  type ToolCallResult,
-} from "../transport.ts";
-import type { LiveFixture, LiveThresholds, SearchHit } from "../types.ts";
+  CONFIG,
+  FIXTURE,
+  THRESHOLDS,
+  assertContentFree,
+  makeFakeClients,
+  run,
+} from "./gate-test-support.ts";
 
-// Orchestrator tests for runLiveGate (issue #322 seeding/teardown + isolation
-// regression, #324 composite gate). These drive a structural fake at the
-// OpenBrainLiveClient seam so no hosted server is touched. What they prove:
-//
-//  - Teardown ALWAYS runs and archives exactly the records this run seeded --
-//    even when seeding fails partway, when a query throws, or when a probe fails.
-//  - A cleanup (archive) failure can never turn an otherwise-passing run into
-//    PASS: teardownClean is a gate condition, not just a receipt field.
-//  - The negative-control isolation proof is mandatory: PASS requires an
-//    explicit denial. An allowed-but-empty negative read, an allowed non-empty
-//    read, and a thrown non-denial error each fail the gate.
-//  - Retrieved server ids are mapped back to fixture ids for scoring, and a
-//    leaked negative id is counted as a namespace leak.
-//  - thresholds that do not apply to the fixture throw before any live write.
-//
-// Everything the gate emits is content-free: only ids, namespaces, counts,
-// booleans, and scores. These tests also assert no memory body leaks into the
-// receipt.
-
-const CONFIG: LiveEvalConfig = {
-  baseUrl: "http://127.0.0.1:3100",
-  primaryToken: "primary-token",
-  negativeToken: "primary-token",
-  negativeTokenIsDistinct: false,
-  primaryNamespace: "eval-live-recall-run-test",
-  negativeNamespace: "eval-live-recall-run-test-negative",
-  searchMode: "hybrid",
-  timeoutMs: 1000,
-};
-
-const THRESHOLDS: LiveThresholds = {
-  schema_version: 1,
-  thresholds_id: "test-thresholds-v1",
-  applies_to_fixture_id: "test-fixture-v1",
-  top_k: 5,
-  thresholds: {
-    min_recall_at_k: 0.9,
-    min_precision_at_k: 0.3,
-    min_mrr: 0.8,
-    max_namespace_leaks: 0,
-  },
-};
-
-// A small fixture: two primary records relevant to one probe, one negative
-// record forbidden to that probe.
-const FIXTURE: LiveFixture = {
-  schema_version: 1,
-  fixture_id: "test-fixture-v1",
-  description: "test",
-  corpus: [
-    {
-      id: "prim-a",
-      table: "thoughts",
-      namespace_role: "primary",
-      content: "primary a body",
-      tags: ["t"],
-    },
-    {
-      id: "prim-b",
-      table: "decisions",
-      namespace_role: "primary",
-      content: "primary b body",
-      tags: ["t"],
-    },
-    {
-      id: "neg-secret",
-      table: "thoughts",
-      namespace_role: "negative",
-      content: "negative secret body that must never surface",
-      tags: ["t"],
-    },
-  ],
-  probes: [
-    {
-      id: "probe-1",
-      query: "find a and b",
-      relevant: [
-        { id: "prim-a", grade: 2 },
-        { id: "prim-b", grade: 2 },
-      ],
-      forbidden_ids: ["neg-secret"],
-    },
-  ],
-};
-
-interface FakeOptions {
-  /** Fixture ids whose seed should throw a transport error (partial seed). */
-  seedFailFor?: string[];
-  /** Throw on the primary search call. */
-  searchThrows?: boolean;
-  /** Fixture ids whose archive should throw (cleanup failure). */
-  archiveFailFor?: string[];
-  /**
-   * How the primary caller's read of the NEGATIVE namespace resolves:
-   *  - "denied": server denies the read (isolation proven).
-   *  - "empty": read is allowed but returns nothing (NOT proof).
-   *  - "leak": read is allowed and returns the negative record (breach).
-   *  - "throws": a non-denial transport error (proof could not be established).
-   */
-  negativeRead?: "denied" | "empty" | "leak" | "throws";
-  /**
-   * Extra fixture ids to inject into the PRIMARY probe search result, e.g. a
-   * leaked negative id, to exercise leak counting via the retrieval mapping.
-   */
-  extraPrimaryHits?: string[];
-  /**
-   * Raw extra hits to append to the PRIMARY probe search result AFTER the
-   * mapped/seeded primary hits, used to exercise pre-mapping hit validation:
-   * a hit with a foreign/missing namespace, or an id this run never created.
-   * These are appended verbatim (no seed-map filtering) so the gate must react
-   * to them rather than silently drop them.
-   */
-  rawExtraPrimaryHits?: Array<{ id: string; namespace?: string }>;
-}
-
-interface FakeState {
-  seeded: Map<string, { table: string; namespace: string }>;
-  archived: string[];
-  closed: number;
-  /** Namespaces the PRIMARY caller's isolation probe (attemptRead) targeted. */
-  attemptReadNamespaces: string[];
-}
-
-/**
- * Build a pair of fake OpenBrainLiveClients (primary + negative) plus the shared
- * state they mutate. The fakes model just enough server behavior for the gate:
- * seeding assigns a stable server id ("srv-<fixtureId>"), primary search returns
- * the seeded primary records (best-first) mapped through their server ids, and
- * archive records the id. Negative-namespace behavior is driven by FakeOptions.
- */
-function makeFakeClients(
-  fixture: LiveFixture,
-  opts: FakeOptions = {},
-): {
-  clients: GateClients;
-  state: FakeState;
-} {
-  const state: FakeState = {
-    seeded: new Map(),
-    archived: [],
-    closed: 0,
-    attemptReadNamespaces: [],
-  };
-  const serverId = (fixtureId: string) => `srv-${fixtureId}`;
-
-  const seedFail = new Set(opts.seedFailFor ?? []);
-  const archiveFail = new Set(opts.archiveFailFor ?? []);
-
-  // Reverse index: server id -> fixture id, for building search hits.
-  const byServerId = (id: string) => id.replace(/^srv-/, "");
-
-  function makeClient(role: "primary" | "negative"): OpenBrainLiveClient {
-    const fake = {
-      async logMemory(o: {
-        table: string;
-        content: string;
-        tags: string[];
-        namespace: string;
-      }) {
-        // Which fixture entry is this? Match by content (unique per entry).
-        const entry = fixture.corpus.find((c) => c.content === o.content);
-        const fixtureId = entry?.id ?? "unknown";
-        if (seedFail.has(fixtureId)) {
-          throw new LiveTransportError(`log:${fixtureId}:error`, false);
-        }
-        const id = serverId(fixtureId);
-        state.seeded.set(id, { table: o.table, namespace: o.namespace });
-        // A fresh create: merged:false, matching the seed contract the real
-        // logMemory now enforces.
-        return { id, namespace: o.namespace, merged: false };
-      },
-      async search(o: { namespace: string }): Promise<SearchHit[]> {
-        if (opts.searchThrows) {
-          throw new LiveTransportError("search_brain:timeout", false);
-        }
-        // Return the seeded PRIMARY records as ranked hits (best-first: a then b),
-        // plus any injected extra hits (e.g. a leaked negative id).
-        const primaryFixtureIds = fixture.corpus
-          .filter((c) => c.namespace_role === "primary")
-          .map((c) => c.id);
-        const hitFixtureIds = [
-          ...primaryFixtureIds,
-          ...(opts.extraPrimaryHits ?? []),
-        ];
-        const mapped: SearchHit[] = hitFixtureIds
-          .filter((fid) => state.seeded.has(serverId(fid)))
-          .map((fid) => ({
-            id: serverId(fid),
-            source_type: "thoughts",
-            namespace: o.namespace,
-          }));
-        // Append any raw (deliberately un-seeded / foreign-namespace) hits so a
-        // test can prove the gate validates EVERY hit before mapping instead of
-        // silently discarding an unaccountable one. The `namespace` key defaults
-        // to the searched namespace unless the test overrides it (including
-        // setting it undefined to model a hit with no namespace).
-        const raw: SearchHit[] = (opts.rawExtraPrimaryHits ?? []).map((h) => ({
-          id: h.id,
-          source_type: "thoughts",
-          namespace: "namespace" in h ? h.namespace : o.namespace,
-        }));
-        return [...mapped, ...raw];
-      },
-      async attemptRead(o: {
-        namespace: string;
-      }): Promise<{ denied: boolean; hitCount: number }> {
-        // Record the namespace the PRIMARY isolation probe targeted so a test can
-        // pin the live-proven call shape: the gate must probe the NEGATIVE
-        // namespace with the PRIMARY caller.
-        if (role === "primary") {
-          state.attemptReadNamespaces.push(o.namespace);
-        }
-        switch (opts.negativeRead ?? "denied") {
-          case "denied":
-            return { denied: true, hitCount: 0 };
-          case "empty":
-            return { denied: false, hitCount: 0 };
-          case "leak":
-            return { denied: false, hitCount: 1 };
-          case "throws":
-            throw new LiveTransportError("search_brain:timeout", false);
-        }
-      },
-      async archive(o: { table: string; id: string }) {
-        const fixtureId = byServerId(o.id);
-        if (archiveFail.has(fixtureId)) {
-          throw new LiveTransportError("archive_entry:error", false);
-        }
-        state.archived.push(o.id);
-        return state.seeded.has(o.id) ? "archived" : "already_absent";
-      },
-      async close() {
-        state.closed += 1;
-      },
-    };
-    return fake as unknown as OpenBrainLiveClient;
-  }
-
-  return {
-    clients: {
-      primary: makeClient("primary"),
-      negative: makeClient("negative"),
-    },
-    state,
-  };
-}
-
-function run(fixture: LiveFixture, opts: FakeOptions = {}) {
-  const { clients, state } = makeFakeClients(fixture, opts);
-  return {
-    outcome: runLiveGate({
-      fixture,
-      thresholds: THRESHOLDS,
-      config: CONFIG,
-      clients,
-      commit: "testcommit",
-      generatedAt: "2026-07-22T00:00:00.000Z",
-    }),
-    state,
-  };
-}
-
-/** Assert a receipt (serialized) carries no memory-body content. */
-function assertContentFree(receipt: unknown): void {
-  const json = JSON.stringify(receipt);
-  expect(json).not.toContain("body");
-  expect(json).not.toContain("secret");
-  expect(json).not.toContain("primary a body");
-  expect(json).not.toContain("must never surface");
-}
+// Orchestrator suites for runLiveGate (issue #322 seeding/teardown + isolation
+// regression, #324 composite gate), driven by the shared structural fake in
+// ./gate-test-support.ts so no hosted server is touched. The REAL-transport
+// parseHits seam lives in ./gate-transport-boundary.test.ts; the harness and
+// what these suites prove are documented on the support module.
 
 describe("runLiveGate happy path", () => {
   it("seeds, scores, proves isolation, tears down, and reports PASS", async () => {
@@ -366,7 +98,9 @@ describe("runLiveGate teardown discipline", () => {
       searchThrows: true,
       archiveFailFor: ["prim-a"],
     });
-    const err = await outcome.catch((e) => e as LiveTransportError);
+    const err = expectTransportError(
+      await outcome.catch((e) => e as LiveTransportError),
+    );
     expect(err).toBeInstanceOf(LiveTransportError);
     // Original redacted label preserved, teardown count appended.
     expect(err.label).toBe("search_brain:timeout;teardown-failed=1");
@@ -378,7 +112,9 @@ describe("runLiveGate teardown discipline", () => {
 
   it("leaves the deferred error unchanged when teardown strands nothing", async () => {
     const { outcome } = run(FIXTURE, { searchThrows: true });
-    const err = await outcome.catch((e) => e as LiveTransportError);
+    const err = expectTransportError(
+      await outcome.catch((e) => e as LiveTransportError),
+    );
     // No teardown failure -> label is untouched (no suffix).
     expect(err.label).toBe("search_brain:timeout");
   });
@@ -391,9 +127,9 @@ describe("runLiveGate teardown discipline", () => {
     expect(passed).toBe(false);
     expect(receipt.teardown.failed).toBe(1);
     expect(receipt.teardown.archived).toBe(2);
-    expect(
-      receipt.failures.some((f) => f.includes("teardown failed to archive")),
-    ).toBe(true);
+    expect(receipt.failures.some((f) => f.includes("teardown failed to archive"))).toBe(
+      true,
+    );
     // Metrics still computed and content-free.
     expect(receipt.metrics.recall_at_k).toBe(1);
     assertContentFree(receipt);
@@ -434,9 +170,7 @@ describe("runLiveGate negative-control (isolation) discipline", () => {
     expect(receipt.negative_control.ran).toBe(true);
     expect(receipt.negative_control.denied).toBe(false);
     // The failure label is content-free (redacted transport label only).
-    expect(receipt.negative_control.failure).toContain(
-      "negative-control read failed",
-    );
+    expect(receipt.negative_control.failure).toContain("negative-control read failed");
     expect(receipt.negative_control.failure).not.toContain("body");
     // Teardown still ran for all seeded records.
     expect(state.archived.length).toBe(3);
@@ -451,7 +185,9 @@ describe("runLiveGate negative-control (isolation) discipline", () => {
     const { outcome, state } = run(FIXTURE, {
       rawExtraPrimaryHits: [{ id: "srv-foreign", namespace: "some-other-ns" }],
     });
-    const err = await outcome.catch((e) => e as LiveTransportError);
+    const err = expectTransportError(
+      await outcome.catch((e) => e as LiveTransportError),
+    );
     expect(err).toBeInstanceOf(LiveTransportError);
     expect(err.label).toBe("search_brain:foreign-namespace");
     // Content-free: the offending namespace value / id never appears.
@@ -465,7 +201,9 @@ describe("runLiveGate negative-control (isolation) discipline", () => {
     const { outcome, state } = run(FIXTURE, {
       rawExtraPrimaryHits: [{ id: "srv-nons", namespace: undefined }],
     });
-    const err = await outcome.catch((e) => e as LiveTransportError);
+    const err = expectTransportError(
+      await outcome.catch((e) => e as LiveTransportError),
+    );
     expect(err).toBeInstanceOf(LiveTransportError);
     // A missing namespace is treated as foreign (not exactly the primary ns).
     expect(err.label).toBe("search_brain:foreign-namespace");
@@ -480,7 +218,9 @@ describe("runLiveGate negative-control (isolation) discipline", () => {
     const { outcome, state } = run(FIXTURE, {
       rawExtraPrimaryHits: [{ id: "srv-unknown-1234" }], // defaults to primary ns
     });
-    const err = await outcome.catch((e) => e as LiveTransportError);
+    const err = expectTransportError(
+      await outcome.catch((e) => e as LiveTransportError),
+    );
     expect(err).toBeInstanceOf(LiveTransportError);
     expect(err.label).toBe("search_brain:unknown-hit");
     expect(err.label).not.toContain("srv-unknown-1234");
@@ -495,9 +235,7 @@ describe("runLiveGate negative-control (isolation) discipline", () => {
     expect(receipt.metrics.namespace_leaks).toBe(1);
     expect(scorecard.passed).toBe(false);
     expect(passed).toBe(false);
-    expect(receipt.failures.some((f) => f.includes("namespace_leaks"))).toBe(
-      true,
-    );
+    expect(receipt.failures.some((f) => f.includes("namespace_leaks"))).toBe(true);
     assertContentFree(receipt);
   });
 });
@@ -536,159 +274,15 @@ describe("runLiveGate composite verdict", () => {
   });
 });
 
-describe("runLiveGate through the REAL transport parseHits boundary", () => {
-  // The fakes above stub search at the OpenBrainLiveClient level, so they never
-  // exercise parseHits. This test wires a REAL primary OpenBrainLiveClient over a
-  // scripted tool caller, so the search body flows through the actual parseHits
-  // transport boundary and into the gate. It proves the end-to-end seam: a hit
-  // that is a valid object with a string id but NO namespace survives parseHits
-  // (namespace is optional there) and reaches the gate, which fails it closed as
-  // foreign-namespace -- not silently dropped at either layer.
-
-  /** Scripted tool caller: name -> queue of results, plus the standard close. */
-  function scriptedCaller(
-    script: Record<string, ToolCallResult[]>,
-  ): OpenBrainToolCaller {
-    const queues: Record<string, ToolCallResult[]> = {};
-    for (const [k, v] of Object.entries(script)) queues[k] = [...v];
-    return {
-      async callTool(name) {
-        const q = queues[name];
-        if (!q || q.length === 0) {
-          throw new Error(`scripted caller has no result for ${name}`);
-        }
-        return q.shift()!;
-      },
-      async close() {},
-    };
-  }
-
-  const ok = (data: string): ToolCallResult => ({
-    isError: false,
-    denied: false,
-    data,
-    errorLabel: "",
-  });
-
-  it("a valid namespace-less hit passes parseHits and fails at the gate as foreign-namespace", async () => {
-    const primaryNs = CONFIG.primaryNamespace;
-    // Seed responses: log_thought / log_decision return fresh creates under the
-    // primary namespace so the seed map is populated for prim-a and prim-b.
-    // The single probe search then returns the two seeded ids (with namespace)
-    // PLUS one valid hit that has a string id but NO namespace field.
-    const primary = new OpenBrainLiveClient(
-      scriptedCaller({
-        log_thought: [
-          ok(
-            JSON.stringify({
-              id: "srv-prim-a",
-              namespace: primaryNs,
-              merged: false,
-            }),
-          ),
-        ],
-        log_decision: [
-          ok(
-            JSON.stringify({
-              id: "srv-prim-b",
-              namespace: primaryNs,
-              merged: false,
-            }),
-          ),
-        ],
-        search_brain: [
-          ok(
-            JSON.stringify([
-              {
-                id: "srv-prim-a",
-                source_type: "thoughts",
-                namespace: primaryNs,
-              },
-              {
-                id: "srv-prim-b",
-                source_type: "decisions",
-                namespace: primaryNs,
-              },
-              // Valid object, string id, NO namespace: survives parseHits, then
-              // the gate must fail it closed as foreign-namespace.
-              { id: "srv-no-ns", source_type: "thoughts" },
-            ]),
-          ),
-        ],
-        // Teardown archives the two primary records (bound to id+table).
-        archive_entry: [
-          ok(
-            JSON.stringify({
-              id: "srv-prim-a",
-              table: "thoughts",
-              archived: true,
-            }),
-          ),
-          ok(
-            JSON.stringify({
-              id: "srv-prim-b",
-              table: "decisions",
-              archived: true,
-            }),
-          ),
-        ],
-      }),
-    );
-
-    // The negative client only needs to seed its one record and archive it; its
-    // namespace read is never reached because the primary search fails first.
-    const negative = new OpenBrainLiveClient(
-      scriptedCaller({
-        log_thought: [
-          ok(
-            JSON.stringify({
-              id: "srv-neg-secret",
-              namespace: CONFIG.negativeNamespace,
-              merged: false,
-            }),
-          ),
-        ],
-        archive_entry: [
-          ok(
-            JSON.stringify({
-              id: "srv-neg-secret",
-              table: "thoughts",
-              archived: true,
-            }),
-          ),
-        ],
-      }),
-    );
-
-    const err = await runLiveGate({
-      fixture: FIXTURE,
-      thresholds: THRESHOLDS,
-      config: CONFIG,
-      clients: { primary, negative },
-      commit: "testcommit",
-      generatedAt: "2026-07-22T00:00:00.000Z",
-    }).catch((e) => e as LiveTransportError);
-
-    expect(err).toBeInstanceOf(LiveTransportError);
-    // parseHits kept the namespace-less hit (namespace optional), so the gate --
-    // not the transport boundary -- classified it as foreign-namespace.
-    expect(err.label).toBe("search_brain:foreign-namespace");
-    expect(err.label).not.toContain("srv-no-ns");
-  });
-});
-
 // Issue #671: the bare `catch {}` in `teardownRecords` discarded the cleanup
 // error, so when the third credentialed #653 verify reported failed=2 the
 // throw's label was unrecoverable from the receipt, the log, or anywhere else.
 describe("teardownRecords failure labels (#671)", () => {
   it("captures a LiveTransportError's redacted label, one per failure, in order", async () => {
-    const tally = await teardownRecords(
-      ["ok", "bad-a", "bad-b"],
-      async (record) => {
-        if (record === "ok") return "archived";
-        throw new LiveTransportError(`archive_entry:${record}`, false);
-      },
-    );
+    const tally = await teardownRecords(["ok", "bad-a", "bad-b"], async (record) => {
+      if (record === "ok") return "archived";
+      throw new LiveTransportError(`archive_entry:${record}`, false);
+    });
     expect(tally.attempted).toBe(3);
     expect(tally.archived).toBe(1);
     expect(tally.failed).toBe(2);

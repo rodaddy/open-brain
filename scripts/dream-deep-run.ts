@@ -1,7 +1,7 @@
 /**
  * Build DREAM Deep review bundles and print them. Issue #394.
  *
- * READ-ONLY. This script mutates nothing -- src/dream-deep.ts issues only
+ * READ-ONLY. This script mutates nothing -- the Deep module issues only
  * SELECTs, and grading is the operator's act on the review page, not this
  * script's. Safe to run at any time.
  *
@@ -15,27 +15,18 @@
  * inspect exactly what that page will receive without starting a server.
  */
 
-import { Pool } from "pg";
 import {
   buildReviewBundles,
   DEFAULT_BUNDLE_LIMIT,
   type ReviewBundle,
-} from "../src/dream-deep.ts";
+} from "../server/maintenance/dream-deep.ts";
+import { createDreamDeepRepository } from "../server/db/dream-deep-repository.ts";
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
-
-const logger = {
-  info: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-  warn: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-  error: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-};
+// stdout is the `--json` payload here, so every log line goes to stderr. `warn`
+// already does; `info` is redirected.
+const logger = createConsoleLogger({ infoToStderr: true });
 
 /** Truncate for terminal display only. The bundle itself is never truncated. */
 function clip(text: string, n: number): string {
@@ -43,7 +34,7 @@ function clip(text: string, n: number): string {
   return flat.length <= n ? flat : `${flat.slice(0, n)}…`;
 }
 
-function render(bundle: ReviewBundle, index: number): void {
+function renderCandidate(bundle: ReviewBundle, index: number): void {
   const c = bundle.candidate;
   console.log(
     `\n--- [${index + 1}] ${c.candidate_type}${c.uncertain ? " (uncertain)" : ""}`,
@@ -53,10 +44,11 @@ function render(bundle: ReviewBundle, index: number): void {
   if (c.uncertainty_reason) {
     console.log(`    doubt     : ${clip(c.uncertainty_reason, 160)}`);
   }
-  console.log(
-    `    said      : ${c.first_said_at ?? "?"} -> ${c.last_said_at ?? "?"}`,
-  );
-  // Receipts, not a score (dream-design.md:709-712).
+  console.log(`    said      : ${c.first_said_at ?? "?"} -> ${c.last_said_at ?? "?"}`);
+}
+
+/** Receipts, not a score (dream-design.md:709-712). */
+function renderEvidence(bundle: ReviewBundle): void {
   console.log(
     `    evidence  : ${bundle.corroboration.session_count} session(s), ` +
       `${bundle.corroboration.occurrence_count} occurrence(s), ` +
@@ -66,6 +58,9 @@ function render(bundle: ReviewBundle, index: number): void {
     `    machine   : ${bundle.machine.grade ?? "ungraded"}` +
       (bundle.machine.model ? ` (${bundle.machine.model})` : ""),
   );
+}
+
+function renderTurns(bundle: ReviewBundle): void {
   console.log(`    turns     : ${bundle.turns.length}`);
   for (const turn of bundle.turns) {
     const marker = turn.is_source ? ">>" : "  ";
@@ -75,18 +70,19 @@ function render(bundle: ReviewBundle, index: number): void {
   }
 }
 
+function render(bundle: ReviewBundle, index: number): void {
+  renderCandidate(bundle, index);
+  renderEvidence(bundle);
+  renderTurns(bundle);
+}
+
 async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
-  });
+  const pool = createPool();
 
   try {
     const { bundles, summary } = await buildReviewBundles({
       pool,
+      deep: createDreamDeepRepository(pool),
       logger,
       limit: Number(arg("--limit") ?? DEFAULT_BUNDLE_LIMIT),
     });

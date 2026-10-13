@@ -1,4 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+
+import { spawnSync } from "node:child_process";
 
 type SmokeStep = {
   name: string;
@@ -138,10 +140,7 @@ const steps: SmokeStep[] = [
       include_events: true,
       event_limit: 10,
     },
-    expectOutput: [
-      sessionKey,
-      "Codex smoke flow reached validation receipt step.",
-    ],
+    expectOutput: [sessionKey, "Codex smoke flow reached validation receipt step."],
   },
   {
     name: "search saved checkpoint context",
@@ -159,22 +158,18 @@ const steps: SmokeStep[] = [
 ];
 
 function commandFor(step: SmokeStep): string[] {
-  return [
-    "mcp2cli",
-    "open-brain",
-    step.tool,
-    "--params",
-    JSON.stringify(step.params),
-  ];
+  return ["mcp2cli", "open-brain", step.tool, "--params", JSON.stringify(step.params)];
 }
 
 if (!writeEnabled) {
-  console.log(
-    "Dry run only. Set OPEN_BRAIN_CODEX_SMOKE_WRITE=1 to execute writes.",
-  );
+  console.log("Dry run only. Set OPEN_BRAIN_CODEX_SMOKE_WRITE=1 to execute writes.");
   for (const step of steps) {
     console.log(`\n# ${step.name}`);
-    console.log(commandFor(step).map((part) => JSON.stringify(part)).join(" "));
+    console.log(
+      commandFor(step)
+        .map((part) => JSON.stringify(part))
+        .join(" "),
+    );
   }
   process.exit(0);
 }
@@ -182,18 +177,36 @@ if (!writeEnabled) {
 for (const step of steps) {
   const command = commandFor(step);
   console.log(`\n# ${step.name}`);
-  const proc = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe" });
-  const stdout = new TextDecoder().decode(proc.stdout).trim();
-  const stderr = new TextDecoder().decode(proc.stderr).trim();
-  if (proc.stdout.byteLength > 0) {
+  const [executable, ...args] = command;
+  if (executable === undefined) {
+    console.error(`${step.tool} produced an empty command`);
+    process.exit(1);
+  }
+  // encoding: "utf8" makes node return strings directly, replacing the manual
+  // TextDecoder pass. Node reports the exit code as `status`, NOT `exitCode`,
+  // and `status` is null when the child was killed by a signal or failed to
+  // launch -- so the null case is mapped to 1 rather than handed to
+  // process.exit(), which would otherwise coerce it to a SUCCESS exit and
+  // report a failed smoke step as green.
+  const proc = spawnSync(executable, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (proc.error) {
+    console.error(`${step.tool} failed to launch: ${proc.error.message}`);
+    process.exit(1);
+  }
+  const stdout = (proc.stdout ?? "").trim();
+  const stderr = (proc.stderr ?? "").trim();
+  if (stdout.length > 0) {
     console.log(stdout);
   }
-  if (proc.stderr.byteLength > 0) {
+  if (stderr.length > 0) {
     console.error(stderr);
   }
-  if (proc.exitCode !== 0) {
-    console.error(`${step.tool} failed with exit code ${proc.exitCode}`);
-    process.exit(proc.exitCode);
+  if (proc.status !== 0) {
+    console.error(`${step.tool} failed with exit code ${proc.status}`);
+    process.exit(proc.status ?? 1);
   }
   for (const expected of step.expectOutput ?? []) {
     if (!stdout.includes(expected)) {

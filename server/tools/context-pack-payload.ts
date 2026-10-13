@@ -121,15 +121,11 @@ export function assembleWarnings(
 }
 
 /** The reported whole-pack allocation block, present only when one applies. */
-export function wholePackReport(
-  allocator: PackAllocator,
-): Record<string, unknown> {
+export function wholePackReport(allocator: PackAllocator): Record<string, unknown> {
   if (allocator.wholePackBudget === null) return {};
   return {
     whole_pack: {
-      content_char_limit: wholePackSerializedLimitFor(
-        allocator.wholePackBudget,
-      ),
+      content_char_limit: wholePackSerializedLimitFor(allocator.wholePackBudget),
       content_chars_used: charsUsed(allocator),
       allocation_order: [...CONTEXT_PACK_SECTION_PRIORITY],
     },

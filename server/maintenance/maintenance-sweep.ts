@@ -1,13 +1,30 @@
+/**
+ * The maintenance PRODUCER: selects due distill lanes and changed graph sources
+ * and enqueues one bounded job each, plus the recurring timer that runs it.
+ *
+ * The consumer half is the runner (`./maintenance-queue-runner.ts`); this is
+ * the only thing that fills the queue it polls.
+ */
 import type pg from "pg";
 import {
   enqueueGraphDerivationJobs,
   type GraphDerivationEnqueuePort,
-} from "../../src/graph-derivation-handler.ts";
-import { buildMemoryDistillEnqueue } from "../../src/distill-handler.ts";
+} from "./graph-derivation-handler.ts";
+import { buildMemoryDistillEnqueue } from "./distill-handler.ts";
+import { buildDreamLightEnqueue } from "./dream-light.ts";
+import { buildDreamRemEnqueue, DEFAULT_REM_BATCH } from "./dream-rem.ts";
 import {
-  DEFAULT_MAX_DISTILL_SESSIONS,
-  DISTILL_ORDER_BY,
-} from "../../src/distill-window.ts";
+  produceRoute,
+  type RouteEligibilitySignals,
+  type RouteProducerResult,
+} from "./route-producer.ts";
+import type { RemProducerConfig, RouteProducerConfig } from "../config/maintenance.ts";
+import { createDreamLightRepository } from "../db/dream-light-repository.ts";
+import { DEFAULT_MAX_DISTILL_SESSIONS } from "../domain/distill-window.ts";
+import {
+  createMaintenanceSweepRepository,
+  type DistillLaneBatchRow,
+} from "../db/maintenance-sweep-repository.ts";
 import {
   safeMaintenanceErrorCategory,
   type MaintenanceJob,
@@ -37,6 +54,146 @@ export interface MaintenanceSweepOptions {
   distillBatchSize?: number;
   maxDistillBatchesPerTick?: number;
   graphDerivationLimit?: number;
+  rem?: RemProducerConfig;
+  readRemSignals?: () => Promise<RemEligibilitySignals>;
+  route?: RouteProducerConfig;
+  readRouteSignals?: () => Promise<RouteEligibilitySignals>;
+}
+
+export interface RemEligibilitySignals {
+  nowMs: number;
+  schedulerStartedAtMs: number;
+  lastRemCompletedAtMs: number | null;
+  requestsPerMinute: number;
+  headroomBytes: number;
+  lightBacklog: number;
+}
+
+export interface RemProducerResult {
+  eligible: boolean;
+  enqueued: boolean;
+  reason:
+    | "disabled"
+    | "invalid_config"
+    | "invalid_signals"
+    | "headroom"
+    | "cooldown"
+    | "busy"
+    | "low_rate"
+    | "backlog"
+    | "forced";
+}
+
+const REM_STARVATION_CEILING_MS = 6 * 60 * 60 * 1_000;
+
+function validSignal(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
+function remSignalsValid(s: RemEligibilitySignals): boolean {
+  const scalarSignals = [
+    s.nowMs,
+    s.schedulerStartedAtMs,
+    s.requestsPerMinute,
+    s.headroomBytes,
+    s.lightBacklog,
+  ];
+  return (
+    scalarSignals.every(validSignal) &&
+    (s.lastRemCompletedAtMs === null || validSignal(s.lastRemCompletedAtMs)) &&
+    s.schedulerStartedAtMs <= s.nowMs &&
+    (s.lastRemCompletedAtMs === null || s.lastRemCompletedAtMs <= s.nowMs)
+  );
+}
+
+function remEligibilityReason(
+  config: Extract<RemProducerConfig, { enabled: true }>,
+  signals: RemEligibilitySignals,
+): RemProducerResult["reason"] {
+  const since =
+    signals.nowMs - (signals.lastRemCompletedAtMs ?? signals.schedulerStartedAtMs);
+  if (since >= REM_STARVATION_CEILING_MS) return "forced";
+  if (signals.lightBacklog >= config.backlogHighWater) return "backlog";
+  if (signals.requestsPerMinute <= config.maxRequestsPerMinute) return "low_rate";
+  return "busy";
+}
+
+/** Issue 1488: no gap before the first completion; otherwise wait minGapMs. */
+function remInCooldown(
+  config: Extract<RemProducerConfig, { enabled: true }>,
+  s: RemEligibilitySignals,
+): boolean {
+  return (
+    s.lastRemCompletedAtMs !== null &&
+    s.nowMs - s.lastRemCompletedAtMs < config.minGapMs
+  );
+}
+
+/** Decide and enqueue one bounded REM slice; all measurements are injected. */
+export async function enqueueDreamRemIfEligible(input: {
+  config: RemProducerConfig;
+  signals: RemEligibilitySignals;
+  queue: Pick<GraphDerivationEnqueuePort, "enqueue">;
+}): Promise<RemProducerResult> {
+  if (!input.config.enabled) {
+    return { eligible: false, enqueued: false, reason: "disabled" };
+  }
+  if (
+    !Number.isSafeInteger(input.config.forcedSliceSize) ||
+    input.config.forcedSliceSize < 1 ||
+    input.config.forcedSliceSize > DEFAULT_REM_BATCH
+  ) {
+    return { eligible: false, enqueued: false, reason: "invalid_config" };
+  }
+  const s = input.signals;
+  if (!remSignalsValid(s)) {
+    return { eligible: false, enqueued: false, reason: "invalid_signals" };
+  }
+  if (s.headroomBytes < input.config.minHeadroomBytes) {
+    return { eligible: false, enqueued: false, reason: "headroom" };
+  }
+  if (remInCooldown(input.config, s)) {
+    return { eligible: false, enqueued: false, reason: "cooldown" };
+  }
+  const reason = remEligibilityReason(input.config, s);
+  if (reason === "busy") {
+    return { eligible: false, enqueued: false, reason: "busy" };
+  }
+  const completionIdentity = s.lastRemCompletedAtMs ?? s.schedulerStartedAtMs;
+  const job = await input.queue.enqueue(
+    buildDreamRemEnqueue({
+      sweepLabel: `auto:${completionIdentity}`,
+      batchSize: input.config.forcedSliceSize,
+    }),
+  );
+  return {
+    eligible: true,
+    enqueued: job.enqueueOutcome !== "deduped",
+    reason,
+  };
+}
+
+async function produceRem(
+  options: MaintenanceSweepOptions,
+): Promise<RemProducerResult> {
+  if (!options.rem?.enabled) {
+    return { eligible: false, enqueued: false, reason: "disabled" };
+  }
+  if (!options.readRemSignals) {
+    return { eligible: false, enqueued: false, reason: "invalid_signals" };
+  }
+  try {
+    return await enqueueDreamRemIfEligible({
+      config: options.rem,
+      signals: await options.readRemSignals(),
+      queue: options.queue,
+    });
+  } catch (error: unknown) {
+    options.logger.warn("maintenance_sweep_rem_signals_failed", {
+      error_category: safeMaintenanceErrorCategory(error),
+    });
+    return { eligible: false, enqueued: false, reason: "invalid_signals" };
+  }
 }
 
 export interface MaintenanceSweepSummary {
@@ -56,6 +213,8 @@ export interface MaintenanceSweepSummary {
   distillTurnsDeferred: number;
   graphJobsEnqueued: number;
   graphLimitReached: boolean;
+  rem: RemProducerResult;
+  route: RouteProducerResult;
 }
 
 function boundedInteger(
@@ -66,112 +225,22 @@ function boundedInteger(
   return Math.min(Math.max(Math.trunc(value ?? fallback), 1), max);
 }
 
-const DISTILL_LANE_BATCH_SQL = `WITH due_turns AS (
-       SELECT id, lane_id, namespace, session_ref, occurred_at, created_at
-         FROM ob_raw_turns
-        WHERE distilled_at IS NULL
-          AND retention_tier = 'live'
-     ),
-     due_sessions AS (
-       SELECT lane_id, namespace, session_ref, min(occurred_at) AS first_due
-         FROM due_turns
-        GROUP BY lane_id, namespace, session_ref
-     ),
-     ranked_sessions AS (
-       SELECT *, row_number() OVER (
-                PARTITION BY lane_id, namespace
-                ORDER BY first_due ASC NULLS LAST,
-                         session_ref ASC NULLS LAST
-              ) AS session_rank
-         FROM due_sessions
-     ),
-     window_turns AS (
-       SELECT t.id, t.lane_id, t.namespace, t.session_ref, t.occurred_at,
-              t.content_hash, (t.distilled_at IS NULL) AS is_due
-         FROM ob_raw_turns t
-         JOIN ranked_sessions s
-           ON s.lane_id IS NOT DISTINCT FROM t.lane_id
-          AND s.namespace = t.namespace
-          AND s.session_ref IS NOT DISTINCT FROM t.session_ref
-          AND s.session_rank <= $1
-        WHERE t.retention_tier = 'live'
-     ),
-     -- RANK ONLY WORK THAT NEEDS DOING (#747). turn_rank is compared against
-     -- the batch bound downstream, so anything ranked here consumes a position
-     -- in that window. Ranking already-distilled turns alongside due ones let
-     -- finished work hold the whole window: measured 2026-08-25 on the dogfood
-     -- corpus, 2,070 already-distilled turns pushed the first due turn to rank
-     -- 1501 -- one past the bound -- so the producer selected 0 batches on
-     -- every tick for 27 days while 189,725 turns waited. Because finished
-     -- turns are re-ranked identically on each pass, the starvation was
-     -- permanent rather than transient, and it worsens as a namespace grows:
-     -- the four namespaces that kept working are simply small enough that all
-     -- their turns fit under the bound.
-     --
-     -- The is_due column stays SELECTed because the FILTER clauses and
-     -- batch_hash below still read it; this changes WHICH ROWS ARE RANKED,
-     -- not the shape of the result.
-     ranked_window_turns AS (
-       SELECT *, row_number() OVER (
-                PARTITION BY lane_id, namespace
-                ORDER BY ${DISTILL_ORDER_BY}
-              ) AS turn_rank
-         FROM window_turns
-        WHERE is_due
-     ),
-     lane_totals AS (
-       SELECT lane_id, namespace, count(*)::int AS pending_turns,
-              min(created_at) AS first_due
-         FROM due_turns
-        GROUP BY lane_id, namespace
-     ),
-     due_lanes AS (
-       SELECT totals.lane_id, totals.namespace, totals.pending_turns,
-              count(*) FILTER (
-                WHERE w.is_due AND w.turn_rank <= $2
-              )::int AS processable_turns,
-              md5(string_agg(w.id::text || ':' || w.content_hash, ','
-                             ORDER BY w.turn_rank)
-                  FILTER (
-                    WHERE w.is_due AND w.turn_rank <= $2
-                  )) AS batch_hash,
-              totals.first_due
-         FROM lane_totals totals
-         JOIN ranked_window_turns w
-           ON w.lane_id IS NOT DISTINCT FROM totals.lane_id
-          AND w.namespace = totals.namespace
-        GROUP BY totals.lane_id, totals.namespace, totals.pending_turns,
-                 totals.first_due
-       HAVING count(*) FILTER (
-                WHERE w.is_due AND w.turn_rank <= $2
-              ) > 0
-     )
-     SELECT lane_id, namespace, pending_turns, processable_turns, batch_hash,
-            count(*) OVER()::int AS total_batches
-       FROM due_lanes
-      ORDER BY first_due, lane_id
-      LIMIT $3`;
-
-async function selectDistillLaneBatches(
-  pool: Pick<pg.Pool, "query">,
-  maxSessions: number,
-  maxTurns: number,
-  maxBatches: number,
-): Promise<DistillLaneBatch[]> {
-  const { rows } = await pool.query(DISTILL_LANE_BATCH_SQL, [
-    maxSessions,
-    maxTurns,
-    maxBatches,
-  ]);
-
-  return rows.map((row) => ({
-    laneId: (row.lane_id as string | null) ?? null,
-    namespace: row.namespace as string,
-    batchHash: row.batch_hash as string,
-    pendingTurns: row.pending_turns as number,
-    processableTurns: row.processable_turns as number,
-    totalBatches: row.total_batches as number,
-  }));
+/**
+ * Widen one raw batch row into the producer's shape.
+ *
+ * The statement itself moved to ../db/maintenance-sweep-repository.ts (issue
+ * 1209); this mapping stayed, because DistillLaneBatch is a maintenance-tier
+ * vocabulary rather than a database one.
+ */
+function toDistillLaneBatch(row: DistillLaneBatchRow): DistillLaneBatch {
+  return {
+    laneId: row.lane_id ?? null,
+    namespace: row.namespace,
+    batchHash: row.batch_hash,
+    pendingTurns: row.pending_turns,
+    processableTurns: row.processable_turns,
+    totalBatches: row.total_batches,
+  };
 }
 
 async function enqueueDistillBatches(
@@ -197,7 +266,7 @@ async function enqueueDistillBatches(
         // watermark, so a succeeded job cannot block the lane's next window.
         //
         // That reasoning holds ONLY while something actually consumes. When the
-        // claim returned no due turns (fixed in src/distill-window.ts), nothing
+        // claim returned no due turns (fixed in ../domain/distill-window.ts), nothing
         // was consumed, the watermark never moved, and this key stayed
         // identical forever -- so every later insert was dropped by ON CONFLICT
         // DO NOTHING while this loop went on counting them as enqueued.
@@ -241,6 +310,20 @@ async function enqueueGraphBatches(
   return batch;
 }
 
+async function enqueueLightBatches(options: MaintenanceSweepOptions): Promise<void> {
+  const repository = createDreamLightRepository(options.pool);
+  const rows = await repository.claimUnsweptTurns({
+    batchSize: 1,
+  });
+  const deferred = await repository.countDeferredMissingTimestamp();
+  if (deferred > 0) {
+    options.logger.warn("maintenance_sweep_light_deferred_missing_timestamp", {
+      deferred_missing_timestamp: deferred,
+    });
+  }
+  if (rows.length > 0) await options.queue.enqueue(buildDreamLightEnqueue());
+}
+
 /**
  * Produce one bounded maintenance sweep. Selection is read-only and happens
  * outside queue claims; the durable queue's idempotency keys make repeated
@@ -266,12 +349,14 @@ export async function runMaintenanceSweep(
   );
 
   const distillMaxSessions = DEFAULT_MAX_DISTILL_SESSIONS;
-  const batches = await selectDistillLaneBatches(
+  const batchRows = await createMaintenanceSweepRepository(
     options.pool,
-    distillMaxSessions,
-    distillBatchSize,
-    maxDistillBatches,
-  );
+  ).selectDistillLaneBatches({
+    maxSessions: distillMaxSessions,
+    maxTurns: distillBatchSize,
+    maxBatches: maxDistillBatches,
+  });
+  const batches = batchRows.map(toDistillLaneBatch);
   const totalBatches = batches[0]?.totalBatches ?? 0;
   const distill = await enqueueDistillBatches(
     options,
@@ -291,6 +376,15 @@ export async function runMaintenanceSweep(
     });
   }
 
+  try {
+    await enqueueLightBatches(options);
+  } catch (error: unknown) {
+    options.logger.warn("maintenance_sweep_light_failed", {
+      error_category: safeMaintenanceErrorCategory(error),
+    });
+  }
+  const rem = await produceRem(options);
+  const route = await produceRoute(options);
   const graph = await enqueueGraphBatches(options, graphDerivationLimit);
   const summary: MaintenanceSweepSummary = {
     distillBatchesSelected: batches.length,
@@ -300,6 +394,8 @@ export async function runMaintenanceSweep(
     distillTurnsDeferred: distill.deferredTurns,
     graphJobsEnqueued: graph.jobs.length,
     graphLimitReached: graph.limitReached,
+    rem,
+    route,
   };
   options.logger.info("maintenance_sweep_complete", {
     distill_batches_selected: summary.distillBatchesSelected,
@@ -309,6 +405,12 @@ export async function runMaintenanceSweep(
     distill_turns_deferred: summary.distillTurnsDeferred,
     graph_jobs_enqueued: summary.graphJobsEnqueued,
     graph_limit_reached: summary.graphLimitReached ? 1 : 0,
+    rem_eligible: summary.rem.eligible ? 1 : 0,
+    rem_enqueued: summary.rem.enqueued ? 1 : 0,
+    rem_reason: summary.rem.reason,
+    route_eligible: Number(summary.route.eligible),
+    route_enqueued: Number(summary.route.enqueued),
+    route_reason: summary.route.reason,
   });
   return summary;
 }
@@ -355,7 +457,7 @@ const DEFAULT_QUIET_THRESHOLD_MS = 60_000;
  *
  * THIS LIVES HERE, NOT IN A BOOTSTRAP, BECAUSE THERE ARE TWO COMPOSITIONS OF
  * THE MAINTENANCE RUNNER AND ONLY ONE OF THEM USED TO START A PRODUCER.
- * `src/maintenance-bootstrap.ts` (reached from the LEGACY `src/index.ts`) has
+ * `./maintenance-bootstrap.ts` (reached from the legacy entrypoint) has
  * started the sweep since #577. `server/maintenance/index.ts` — reached from
  * `server/main.ts`, which the Phase 6 cutover made the SERVING entrypoint —
  * composed the runner and nothing else. So #384's exact symptom survived the PR

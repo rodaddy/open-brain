@@ -1,4 +1,4 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { describe, expect, test, afterEach } from "vitest";
 import { parseArgs, runLaneTiering } from "./tier-lane-durable.ts";
 
 // The DB-driven loop of runLaneTiering is covered indirectly: it composes the
@@ -45,7 +45,7 @@ describe("tier-lane-durable kill switch", () => {
   test("runLaneTiering throws before touching the DB when the kill switch is set", async () => {
     process.env.OPENBRAIN_PROMOTION_KILL_SWITCH = "1";
     // Throws before createPool, so no DB connection is attempted.
-    expect(runLaneTiering(parseArgs([]))).rejects.toThrow(
+    await expect(runLaneTiering(parseArgs([]))).rejects.toThrow(
       "OPENBRAIN_PROMOTION_KILL_SWITCH is enabled",
     );
   });

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { CompletePackFixture } from "./complete-pack-types.ts";
 
@@ -13,16 +14,15 @@ const corpusEntrySchema = z.object({
   tags: z.array(z.string()),
 });
 
-export const completePackFixtureSchema: z.ZodType<CompletePackFixture> =
-  z.object({
-    schema_version: z.literal(1),
-    fixture_id: z.string().min(1),
-    description: z.string(),
-    query: z.string().min(1),
-    corpus: z.array(corpusEntrySchema).min(1),
-    expected_recall_ids: z.array(z.string().min(1)).min(1),
-    forbidden_ids: z.array(z.string().min(1)).min(1),
-  });
+export const completePackFixtureSchema: z.ZodType<CompletePackFixture> = z.object({
+  schema_version: z.literal(1),
+  fixture_id: z.string().min(1),
+  description: z.string(),
+  query: z.string().min(1),
+  corpus: z.array(corpusEntrySchema).min(1),
+  expected_recall_ids: z.array(z.string().min(1)).min(1),
+  forbidden_ids: z.array(z.string().min(1)).min(1),
+});
 
 /**
  * Parse and structurally validate a complete-pack fixture, then check
@@ -70,7 +70,7 @@ export async function loadCompletePackFixture(
 ): Promise<CompletePackFixture> {
   let raw: unknown;
   try {
-    raw = await Bun.file(path).json();
+    raw = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to read complete-pack fixture ${path}: ${message}`);

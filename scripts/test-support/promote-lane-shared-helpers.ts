@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import type { Pool } from "pg";
 import { parseArgs } from "../promote-lane-shared.ts";
-import { sharedNamespaceConfig } from "../../src/shared-namespace.ts";
+import { sharedNamespaceConfig } from "../settings.ts";
 import { expectDefined } from "./expect-defined.ts";
 
 export { expectDefined };

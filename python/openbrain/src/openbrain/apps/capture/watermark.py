@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS watermark (
 )
 """
 
+_PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_capture (
+    origin TEXT NOT NULL,
+    session_key TEXT NOT NULL,
+    transcript_path TEXT NOT NULL,
+    device INTEGER,
+    inode INTEGER,
+    source_size INTEGER,
+    state TEXT NOT NULL DEFAULT 'pending',
+    failure_category TEXT,
+    generation INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (origin, session_key)
+)
+"""
+
 
 class WatermarkRegressionError(ValueError):
     """An offset was advanced to a position behind where it already stood.
@@ -193,6 +208,19 @@ class Position(BaseModel):
         return self.identity == current
 
 
+class PendingCapture(BaseModel):
+    """A closed session's transcript locator, bound to its capture origin."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session_key: str
+    path: Path
+    identity: FileIdentity | None
+    source_size: int | None
+    generation: int
+    state: str = "pending"
+
+
 class WatermarkStore:
     """Per-session reading positions, persisted in SQLite.
 
@@ -215,6 +243,196 @@ class WatermarkStore:
         """Bind the store to a database file, creating it on first use."""
         self._path = path
         self._ready = False
+
+    async def register_pending(
+        self, origin: str, session_key: str, path: Path,
+        *, watermark_key: str | None = None,
+    ) -> PendingCapture:
+        """Persist a source locator before any network operation can fail."""
+        try:
+            status = path.stat()
+        except OSError:
+            identity = None
+            source_size = None
+        else:
+            identity = FileIdentity(device=status.st_dev, inode=status.st_ino)
+            source_size = status.st_size
+        return await asyncio.to_thread(
+            self._register_pending, origin, session_key, path, (identity, source_size),
+            watermark_key,
+        )
+
+    async def bind_missing_pending(
+        self, origin: str, pending: PendingCapture
+    ) -> PendingCapture | None:
+        """Bind a previously missing older source once it becomes readable."""
+        try:
+            status = pending.path.stat()
+        except OSError:
+            return None
+        identity = FileIdentity(device=status.st_dev, inode=status.st_ino)
+        return await asyncio.to_thread(
+            self._bind_missing_pending, origin, pending, identity, status.st_size
+        )
+
+    async def oldest_pending(
+        self, origin: str, *, except_session: str
+    ) -> PendingCapture | None:
+        """Return one retryable older source from exactly this origin."""
+        return await asyncio.to_thread(self._oldest_pending, origin, except_session)
+
+    async def complete_pending(
+        self, origin: str, session_key: str, generation: int
+    ) -> None:
+        """Forget a locator only after its delivery has acknowledged."""
+        await asyncio.to_thread(self._complete_pending, origin, session_key, generation)
+
+    async def source_changed(
+        self, origin: str, session_key: str, generation: int
+    ) -> None:
+        """Park a missing or replaced source without rebinding its identity."""
+        await asyncio.to_thread(self._source_changed, origin, session_key, generation)
+
+    async def has_position(self, session_key: str) -> bool:
+        """Check for a legacy unscoped watermark without trusting it."""
+        return await asyncio.to_thread(self._has_position, session_key)
+
+    def _register_pending(
+        self, origin: str, session_key: str, path: Path,
+        source: tuple[FileIdentity | None, int | None],
+        watermark_key: str | None,
+    ) -> PendingCapture:
+        identity, source_size = source
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT transcript_path, device, inode, source_size, state, generation "
+                "FROM pending_capture WHERE origin = ? AND session_key = ?",
+                (origin, session_key),
+            ).fetchone()
+            if identity is None and prior is not None:
+                connection.execute("COMMIT")
+                saved_path, device, inode, saved_size, _, generation = prior
+                saved_identity = (
+                    FileIdentity(device=device, inode=inode)
+                    if device is not None and inode is not None else None
+                )
+                return PendingCapture(
+                    session_key=session_key, path=Path(saved_path),
+                    identity=saved_identity, source_size=saved_size,
+                    generation=generation,
+                    state="unavailable" if saved_identity else "pending",
+                )
+            rebound = prior is not None and identity is not None and (
+                prior[0] != str(path) or prior[1] != identity.device
+                or prior[2] != identity.inode or prior[3] is None
+                or prior[3] > source_size or prior[4] != "pending"
+            )
+            row = connection.execute(
+                "INSERT INTO pending_capture "
+                "(origin, session_key, transcript_path, device, inode, source_size, state) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending') "
+                "ON CONFLICT(origin, session_key) DO UPDATE SET "
+                "generation = generation + 1, "
+                "transcript_path = excluded.transcript_path, "
+                "device = excluded.device, inode = excluded.inode, "
+                "source_size = excluded.source_size, state = 'pending', "
+                "failure_category = NULL "
+                "RETURNING generation, state, transcript_path, device, inode, source_size",
+                (
+                    origin,
+                    session_key,
+                    str(path),
+                    identity.device if identity else None,
+                    identity.inode if identity else None,
+                    source_size,
+                ),
+            ).fetchone()
+            if rebound and watermark_key is not None:
+                connection.execute(
+                    "DELETE FROM watermark WHERE session_key = ?", (watermark_key,)
+                )
+            connection.execute("COMMIT")
+        assert row is not None
+        generation, state, saved_path, device, inode, saved_size = row
+        saved_identity = (
+            FileIdentity(device=device, inode=inode)
+            if device is not None and inode is not None else None
+        )
+        return PendingCapture(
+            session_key=session_key, path=Path(saved_path), identity=saved_identity,
+            source_size=saved_size, generation=generation, state=state,
+        )
+
+    def _bind_missing_pending(
+        self, origin: str, pending: PendingCapture,
+        identity: FileIdentity, source_size: int,
+    ) -> PendingCapture | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "UPDATE pending_capture SET device = ?, inode = ?, source_size = ?, "
+                "generation = generation + 1 WHERE origin = ? AND session_key = ? "
+                "AND generation = ? AND state = 'pending' AND device IS NULL "
+                "AND inode IS NULL AND source_size IS NULL "
+                "RETURNING generation",
+                (identity.device, identity.inode, source_size, origin,
+                 pending.session_key, pending.generation),
+            ).fetchone()
+        if row is None:
+            return None
+        return PendingCapture(
+            session_key=pending.session_key, path=pending.path, identity=identity,
+            source_size=source_size, generation=row[0],
+        )
+
+    def _oldest_pending(
+        self, origin: str, except_session: str
+    ) -> PendingCapture | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT session_key, transcript_path, device, inode, source_size, generation "
+                "FROM pending_capture WHERE origin = ? AND session_key != ? "
+                "AND state = 'pending' ORDER BY rowid LIMIT 1",
+                (origin, except_session),
+            ).fetchone()
+        if row is None:
+            return None
+        session_key, path, device, inode, source_size, generation = row
+        identity = (
+            FileIdentity(device=device, inode=inode)
+            if device is not None and inode is not None else None
+        )
+        return PendingCapture(
+            session_key=session_key, path=Path(path), identity=identity,
+            source_size=source_size,
+            generation=generation,
+        )
+
+    def _complete_pending(self, origin: str, session_key: str, generation: int) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "DELETE FROM pending_capture WHERE origin = ? AND session_key = ? "
+                "AND generation = ?",
+                (origin, session_key, generation),
+            )
+
+    def _source_changed(
+        self, origin: str, session_key: str, generation: int
+    ) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "UPDATE pending_capture SET state = 'source_changed', "
+                "failure_category = 'source_changed' "
+                "WHERE origin = ? AND session_key = ? AND generation = ?",
+                (origin, session_key, generation),
+            )
+
+    def _has_position(self, session_key: str) -> bool:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM watermark WHERE session_key = ?", (session_key,)
+            ).fetchone()
+        return row is not None
 
     async def offset_for(self, session_key: str) -> int:
         """Return the byte offset already read for a session.
@@ -411,5 +629,6 @@ class WatermarkStore:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(_SCHEMA)
+            connection.execute(_PENDING_SCHEMA)
 
         self._ready = True

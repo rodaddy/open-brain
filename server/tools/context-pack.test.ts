@@ -8,175 +8,26 @@
  * A pack that emitted memory bodies as pointers, or double-listed evidence, or
  * ran the retrieval stack twice, would pass every fixture in the suite.
  *
- * Everything here runs against a fake pool, so there is no database and no
- * fixture state to reset. Assertions are on emitted SQL/parameters and on the
- * returned payload, never on rows a real database happened to hold.
+ * Shared fixtures live in `./testing/context-pack-test-support.ts`. The request-key
+ * and receipt suites live in `./context-pack-request-keys.test.ts`.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import pino from "pino";
-import type { Pool } from "pg";
-import type { Role } from "../config.ts";
+import { describe, expect, test } from "vitest";
+import { expectDefined } from "../testing/expect-defined.ts";
 import { WorkingSetStore } from "../realtime/working-set.ts";
-import { registerMemoryTools } from "./index.ts";
-import { DEFAULT_SHARED_NAMESPACE_NAMES } from "./shared-namespace-fixture.ts";
-
-interface CapturedQuery {
-  readonly sql: string;
-  readonly values: readonly unknown[];
-}
-
-const closers: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  await Promise.all(closers.splice(0).map((close) => close()));
-});
-
-/** One recalled brain row, shaped as the search engine emits it. */
-function searchRow(id: string, preview: string, namespace = "rico") {
-  return {
-    source_type: "thought",
-    id,
-    namespace,
-    content_preview: preview,
-    tags: null,
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: null,
-    usefulness: 1,
-    tier: "warm",
-  };
-}
-
-/**
- * Whether a captured statement belongs to the hybrid recall.
- *
- * A hybrid `executeSearch` issues TWO statements — the vector arm and the FTS
- * arm, in parallel — so counting statements counts arms, not retrieval stacks.
- * The vector arm is identified by its `query_embedding` CTE and the FTS arm by
- * its `fts_query` CTE, which lets a test count either one to count STACKS.
- */
-function isRecallSql(sql: string): boolean {
-  return sql.includes("query_embedding") || sql.includes("fts_query");
-}
-
-/** @returns The count of hybrid recall STACKS run (one per `executeSearch`). */
-function recallStackCount(queries: readonly CapturedQuery[]): number {
-  // Count only the vector arm: exactly one is issued per hybrid executeSearch.
-  return queries.filter((query) => query.sql.includes("query_embedding"))
-    .length;
-}
-
-interface HarnessOptions {
-  /** Rows every recall query returns. */
-  readonly rows?: Array<Record<string, unknown>>;
-  readonly workingSetStore?: WorkingSetStore;
-  /** Forces the recall query to throw, exercising the degraded path. */
-  readonly failRecall?: boolean;
-}
-
-async function harness(
-  role: Role,
-  clientId: string,
-  options: HarnessOptions = {},
-): Promise<{ client: Client; queries: CapturedQuery[] }> {
-  const queries: CapturedQuery[] = [];
-  const server = new McpServer({ name: "context-pack-test", version: "1.0.0" });
-  const pool = {
-    query: async (sql: string, values: unknown[] = []) => {
-      queries.push({ sql, values });
-      // The structured sections read ob_session_events / ob_entities and get [].
-      const isRecall = isRecallSql(sql);
-      if (isRecall && options.failRecall) throw new Error("recall exploded");
-      return { rows: isRecall ? (options.rows ?? []) : [] };
-    },
-  } as unknown as Pool;
-  registerMemoryTools(server, {
-    pool,
-    embedFn: async () => Array(768).fill(0.01),
-    logger: pino({ level: "silent" }),
-    sharedNamespaceNames: DEFAULT_SHARED_NAMESPACE_NAMES,
-    ...(options.workingSetStore
-      ? { workingSetStore: options.workingSetStore }
-      : {}),
-  });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  const send = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message, sendOptions) =>
-    send(message, {
-      ...sendOptions,
-      authInfo: { role, clientId, namespaceSource: "token" },
-    } as unknown as Parameters<typeof send>[1]);
-  const client = new Client({ name: "context-pack-client", version: "1.0.0" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-  closers.push(async () => {
-    await client.close();
-    await server.close();
-  });
-  return { client, queries };
-}
-
-/** Call a tool and parse its single JSON text payload. */
-async function callJson(
-  client: Client,
-  name: string,
-  args: Record<string, unknown>,
-): Promise<{ payload: Record<string, unknown>; isError: boolean }> {
-  const result = await client.callTool({ name, arguments: args });
-  const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-  return {
-    payload: JSON.parse(text) as Record<string, unknown>,
-    isError: result.isError === true,
-  };
-}
-
-const SCOPE = {
-  agent: "fixture-agent",
-  platform: "test",
-  server_id: "server-1",
-  channel_id: "channel-1",
-  session_key: "pack/test",
-};
-
-function sectionsOf(payload: Record<string, unknown>) {
-  return payload.sections as Record<
-    string,
-    Record<string, unknown> | undefined
-  >;
-}
-
-/**
- * The named section, failing loudly when it is absent.
- *
- * Asserting presence here rather than optional-chaining downstream means a
- * missing section fails as "expected pointers to be defined" instead of as a
- * confusing `undefined` mismatch several assertions later.
- */
-function sectionOf(
-  payload: Record<string, unknown>,
-  name: string,
-): Record<string, unknown> {
-  const section = sectionsOf(payload)[name];
-  expect(section).toBeDefined();
-  return section as Record<string, unknown>;
-}
-
-/** Items of a named section, typed for the field each test reads. */
-function itemsOf<T extends Record<string, unknown>>(
-  payload: Record<string, unknown>,
-  name: string,
-): T[] {
-  return (sectionOf(payload, name).items ?? []) as T[];
-}
-
-function citationIds(payload: Record<string, unknown>): string[] {
-  return (payload.citations as Array<{ id: string }>).map(
-    (citation) => citation.id,
-  );
-}
+import {
+  callJson,
+  type CapturedQuery,
+  citationIds,
+  emittedCitationIds,
+  harness,
+  isRecallSql,
+  itemsOf,
+  recallStackCount,
+  SCOPE,
+  searchRow,
+  sectionOf,
+  sectionsOf,
+} from "./testing/context-pack-test-support.ts";
 
 describe("namespace isolation is enforced before any query runs", () => {
   test("an unauthorized explicit namespace is denied, not silently emptied", async () => {
@@ -210,6 +61,73 @@ describe("namespace isolation is enforced before any query runs", () => {
     const recall = queries.find((query) => isRecallSql(query.sql));
     expect(recall).toBeDefined();
     expect(recall?.values).toContainEqual(["rico", "shared-kb"]);
+  });
+
+  test("the default pack recalls a namespace-scoped session event", async () => {
+    const event = {
+      source_type: "session_event",
+      id: "event-from-python-capture",
+      namespace: "rico",
+      content_preview: "python capture survives into the next session",
+      tags: null,
+      created_by: "python-runtime",
+      created_at: "2026-09-14T12:00:00.000Z",
+      updated_at: "2026-09-14T12:00:00.000Z",
+      usefulness: 0.5,
+      tier: "warm",
+    };
+    let capturedQueries: CapturedQuery[] = [];
+    const setup = await harness("agent", "rico", {
+      // A generic fake row would let an ALL_TABLES-only query pass. Return the
+      // marker only when the SQL actually selects the session-event corpus.
+      get rows() {
+        const sql = capturedQueries.at(-1)?.sql ?? "";
+        const selectsEvents =
+          sql.includes("session_events_results") || sql.includes("session_events_fts");
+        return selectsEvents ? [event] : [];
+      },
+    });
+    capturedQueries = setup.queries;
+
+    const { payload } = await callJson(setup.client, "agent_context_pack", {
+      ...SCOPE,
+      query: "python capture survives",
+    });
+
+    expect(itemsOf(payload, "durable_memory")).toContainEqual(
+      expect.objectContaining({
+        id: event.id,
+        source_type: "session_event",
+        namespace: "rico",
+        content: event.content_preview,
+        citation_id: `brain_record:session_event:${event.id}`,
+        source_ref: expect.objectContaining({
+          source: "brain",
+          type: "session_event",
+          id: event.id,
+          namespace: "rico",
+        }),
+      }),
+    );
+    expect(payload.citations).toContainEqual(
+      expect.objectContaining({
+        id: `brain_record:session_event:${event.id}`,
+        source_ref: expect.objectContaining({
+          source: "brain",
+          type: "session_event",
+          id: event.id,
+          namespace: "rico",
+        }),
+      }),
+    );
+
+    const recallArms = capturedQueries.filter((query) => isRecallSql(query.sql));
+    expect(recallArms).toHaveLength(2);
+    for (const arm of recallArms) {
+      expect(arm.sql).toContain("JOIN ob_session_lanes sl ON sl.id = se.lane_id");
+      expect(arm.sql).toContain("sl.namespace");
+      expect(arm.values).toContainEqual(["rico", "shared-kb"]);
+    }
   });
 });
 
@@ -268,7 +186,10 @@ describe("pointers carry references, never bodies", () => {
     });
 
     expect(sectionOf(payload, "pointers").item_count).toBe(1);
-    const item = itemsOf<Record<string, unknown>>(payload, "pointers")[0]!;
+    const item = expectDefined(
+      itemsOf<Record<string, unknown>>(payload, "pointers")[0],
+      "the first pointer item",
+    );
     expect(item.citation_id).toBe("brain_record:thought:a");
     expect(item.source_ref).toEqual({
       source: "brain",
@@ -278,12 +199,7 @@ describe("pointers carry references, never bodies", () => {
     });
     // The whole value of a pointer is that it is cheap and body-free. Any of
     // these fields appearing is body leakage.
-    for (const forbidden of [
-      "content",
-      "content_preview",
-      "label",
-      "preview",
-    ]) {
+    for (const forbidden of ["content", "content_preview", "label", "preview"]) {
       expect(item).not.toHaveProperty(forbidden);
     }
     // ... including inside the nested source_ref, which the durable item's own
@@ -303,19 +219,14 @@ describe("pointers carry references, never bodies", () => {
       requested_sections: ["durable_memory", "pointers"],
     });
 
-    const durableIds = itemsOf<{ citation_id: string }>(
-      payload,
-      "durable_memory",
-    ).map((item) => item.citation_id);
-    const pointerIds = itemsOf<{ citation_id: string }>(
-      payload,
-      "pointers",
-    ).map((item) => item.citation_id);
+    const durableIds = itemsOf<{ citation_id: string }>(payload, "durable_memory").map(
+      (item) => item.citation_id,
+    );
+    const pointerIds = itemsOf<{ citation_id: string }>(payload, "pointers").map(
+      (item) => item.citation_id,
+    );
 
-    expect(durableIds).toEqual([
-      "brain_record:thought:a",
-      "brain_record:thought:b",
-    ]);
+    expect(durableIds).toEqual(["brain_record:thought:a", "brain_record:thought:b"]);
     // Durable owns this evidence; re-listing it would double-count it against
     // the caller's budget and show the same record twice.
     expect(pointerIds).toEqual([]);
@@ -407,11 +318,7 @@ describe("citations stay a bijection with emitted items", () => {
       requested_sections: ["durable_memory", "pointers"],
     });
 
-    const emitted = Object.values(sectionsOf(payload)).flatMap((section) =>
-      ((section?.items ?? []) as Array<{ citation_id?: string }>)
-        .map((item) => item.citation_id)
-        .filter((id): id is string => typeof id === "string"),
-    );
+    const emitted = emittedCitationIds(payload);
     expect(citationIds(payload).sort()).toEqual(emitted.sort());
   });
 
@@ -433,10 +340,9 @@ describe("citations stay a bijection with emitted items", () => {
     });
 
     const durable = sectionOf(payload, "durable_memory");
-    const kept = itemsOf<{ citation_id: string }>(
-      payload,
-      "durable_memory",
-    ).map((item) => item.citation_id);
+    const kept = itemsOf<{ citation_id: string }>(payload, "durable_memory").map(
+      (item) => item.citation_id,
+    );
     expect(kept.length).toBeGreaterThan(0);
     expect(kept.length).toBeLessThan(rows.length);
     // A citation pointing at trimmed evidence is worse than no citation: it
@@ -516,8 +422,7 @@ describe("the whole-pack budget is a hard bound", () => {
     expect(sectionsOf(payload)).not.toHaveProperty("durable_memory");
     // Omitted-and-silent would be indistinguishable from never-requested.
     expect(
-      (payload.warnings as { truncation: Array<Record<string, unknown>> })
-        .truncation,
+      (payload.warnings as { truncation: Array<Record<string, unknown>> }).truncation,
     ).toContainEqual(
       expect.objectContaining({
         source: "durable_memory",
@@ -591,282 +496,5 @@ describe("a failed recall degrades content-free instead of erroring", () => {
     ).toContainEqual({ source: "durable_memory", reason: "recall_failed" });
     // The envelope must not carry the driver's message.
     expect(JSON.stringify(payload)).not.toContain("recall exploded");
-  });
-});
-
-describe("agent_reflex_pointers projects the pack without a second stack", () => {
-  test("the reflex runs exactly one recall and returns body-free pointers", async () => {
-    const { client, queries } = await harness("agent", "rico", {
-      rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
-    });
-
-    const { payload } = await callJson(client, "agent_reflex_pointers", {
-      ...SCOPE,
-      query: "needle",
-    });
-
-    expect(recallStackCount(queries)).toBe(1);
-    expect(payload.schema).toBe("openbrain.agent_reflex_pointers.v1");
-    expect(payload.placement).toBe("client_owned");
-    expect(payload.resolvable_reference_only).toBe(true);
-    const pointers = payload.pointers as Record<string, unknown>;
-    expect(pointers.item_count).toBe(2);
-    for (const item of pointers.items as Array<Record<string, unknown>>) {
-      expect(item).not.toHaveProperty("content");
-    }
-    // The bijection survives the projection.
-    expect(citationIds(payload).sort()).toEqual(
-      (pointers.items as Array<{ citation_id: string }>)
-        .map((item) => item.citation_id)
-        .sort(),
-    );
-  });
-
-  test("the reflex emits no non-pointer section even when the pack could", async () => {
-    const { client } = await harness("agent", "rico", {
-      rows: [searchRow("a", "alpha")],
-    });
-
-    const { payload } = await callJson(client, "agent_reflex_pointers", {
-      ...SCOPE,
-      query: "needle",
-    });
-
-    // It is a pointer reflex; a durable body arriving here would defeat the
-    // entire reason the surface exists.
-    expect(payload).not.toHaveProperty("sections");
-    expect(payload).not.toHaveProperty("durable_memory");
-  });
-
-  test("an auth denial passes through unchanged rather than inventing a message", async () => {
-    const { client } = await harness("agent", "rico");
-
-    const { payload, isError } = await callJson(
-      client,
-      "agent_reflex_pointers",
-      { ...SCOPE, namespace: "someone-else", query: "needle" },
-    );
-
-    expect(isError).toBe(true);
-    expect(payload.error).toBe(
-      "Permission denied: cannot read namespace 'someone-else'",
-    );
-  });
-
-  test("prior-context suppression applies before any pointer is emitted", async () => {
-    const { client } = await harness("agent", "rico", {
-      rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
-    });
-
-    const { payload } = await callJson(client, "agent_reflex_pointers", {
-      ...SCOPE,
-      query: "needle",
-      prior_context: [{ citation_id: "brain_record:thought:a" }],
-    });
-
-    const pointers = payload.pointers as Record<string, unknown>;
-    expect(
-      (pointers.items as Array<{ citation_id: string }>).map(
-        (item) => item.citation_id,
-      ),
-    ).toEqual(["brain_record:thought:b"]);
-  });
-});
-
-/**
- * #535 — a caller mistake must never look like a successful answer.
- *
- * Operator directive (Rico, 2026-08-03): "Should be more than just keep it or
- * drop it. It should be fail loudly and make us think about it."
- *
- * The defect these tests pin: the MCP SDK validates against a plain
- * `z.object()` built from the raw shape, which STRIPS undeclared keys. Sending
- * `sections` (the near-miss spelling of `requested_sections`) left the parsed
- * args with no section selection at all, so the pack returned its
- * working_set-only default with `status: "ok"`. A typo read as a correct
- * minimal request, twice at real cost (#439, #526).
- *
- * RED PROOF: with `rejectUnknownRequestKeys` removed from
- * `parseAgentContextPackArgs`, the first test fails on
- * `expect(isError).toBe(true)` — the call succeeds and returns the default
- * pack, which is exactly the old behavior.
- */
-describe("an unknown request key fails loudly instead of returning a default pack", () => {
-  /**
-   * The rejection arrives as an `isError` tool result carrying the JSON-RPC
-   * -32602 InvalidParams text, because the SDK rejects before dispatch and the
-   * client surfaces that as an error result rather than a throw. Reading the
-   * message is reading exactly what a caller sees on the wire.
-   */
-  async function rejectionMessage(
-    client: Client,
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<string> {
-    const result = await client.callTool({ name, arguments: args });
-    const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-    if (result.isError !== true) {
-      throw new Error(
-        `${name} accepted the request instead of rejecting it — ` +
-          `the silent-default defect is back. Payload: ${text.slice(0, 200)}`,
-      );
-    }
-    return text;
-  }
-
-  test("agent_context_pack rejects `sections` by name and lists the accepted keys", async () => {
-    const { client, queries } = await harness("agent", "rico");
-
-    // The exact near-miss from #439/#526: correct intent, wrong key.
-    const message = await rejectionMessage(client, "agent_context_pack", {
-      ...SCOPE,
-      sections: ["durable_memory", "repo_facts"],
-    });
-
-    // Named rejection, not a generic parse failure: the offending key and the
-    // accepted vocabulary are both present so the caller can correct toward it.
-    expect(message).toContain("unrecognized_keys");
-    expect(message).toContain("sections");
-    expect(message).toContain("Accepted keys");
-    expect(message).toContain("requested_sections");
-    expect(message).toContain("include_unreviewed_recovery");
-
-    // The old behavior's tell was a success-shaped body. There must be none.
-    expect(message).not.toContain("openbrain.agent_context_pack.v1");
-
-    // Rejection happens before dispatch, so no retrieval ran for a bad request.
-    expect(recallStackCount(queries)).toBe(0);
-  });
-
-  test("agent_reflex_pointers rejects a pack-only key rather than ignoring it", async () => {
-    const { client } = await harness("agent", "rico");
-
-    // `requested_sections` is valid on the pack and NOT on the reflex, which is
-    // the near-miss this surface actually sees. Ignoring it would silently
-    // change nothing while the caller believed it had selected sections.
-    const message = await rejectionMessage(client, "agent_reflex_pointers", {
-      ...SCOPE,
-      query: "needle",
-      requested_sections: ["durable_memory"],
-    });
-
-    expect(message).toContain("requested_sections");
-    expect(message).toContain("Accepted keys");
-  });
-
-  test("an unknown VALUE inside requested_sections names the accepted vocabulary", async () => {
-    const { client } = await harness("agent", "rico");
-
-    // Singular `repo_fact` — the section name is `repo_facts`. Already enforced
-    // by the enum; pinned here so the guarantee cannot regress silently.
-    const message = await rejectionMessage(client, "agent_context_pack", {
-      ...SCOPE,
-      requested_sections: ["repo_fact"],
-    });
-
-    expect(message).toContain("repo_facts");
-    expect(message).toContain("candidate_memory");
-  });
-
-  test("the advertised schema declares that unknown keys are refused", async () => {
-    const { client } = await harness("agent", "rico");
-
-    // `additionalProperties: false` in tools/list is how a caller learns the
-    // rule BEFORE breaking it, rather than from a failed call.
-    const { tools } = await client.listTools();
-    for (const name of ["agent_context_pack", "agent_reflex_pointers"]) {
-      const tool = tools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
-      expect(
-        (tool?.inputSchema as { additionalProperties?: boolean })
-          .additionalProperties,
-      ).toBe(false);
-    }
-  });
-
-  test("a correctly spelled request is unaffected", async () => {
-    const { client } = await harness("agent", "rico");
-
-    const { payload, isError } = await callJson(client, "agent_context_pack", {
-      ...SCOPE,
-      requested_sections: ["working_set", "candidate_memory"],
-    });
-
-    expect(isError).toBe(false);
-    expect(payload.status).toBe("ok");
-    expect(Object.keys(sectionsOf(payload)).sort()).toEqual([
-      "candidate_memory",
-      "working_set",
-    ]);
-  });
-});
-
-/**
- * #535 receipt — what was asked for, against what came back.
- *
- * Unknown keys and unknown section values are both rejected above. What neither
- * catches is a section spelled correctly, accepted, and then dropped downstream
- * (budget eviction is the live case). That still reads as a success-shaped
- * short answer, so the pack states the difference in its own payload rather
- * than leaving the caller to diff `sections` against their request from memory.
- */
-describe("the pack names requested vs served sections in its receipt", () => {
-  test("a fully served request reports no shortfall", async () => {
-    const { client } = await harness("agent", "rico");
-
-    const { payload } = await callJson(client, "agent_context_pack", {
-      ...SCOPE,
-      requested_sections: ["working_set", "candidate_memory"],
-    });
-
-    const receipt = payload.sections_receipt as {
-      requested: string[];
-      served: string[];
-      requested_not_served: string[];
-    };
-    expect(receipt.requested).toEqual(["working_set", "candidate_memory"]);
-    expect(receipt.served.sort()).toEqual(["candidate_memory", "working_set"]);
-    expect(receipt.requested_not_served).toEqual([]);
-  });
-
-  test("the default (no requested_sections) is distinguishable from an explicit request", async () => {
-    const { client } = await harness("agent", "rico");
-
-    const { payload } = await callJson(client, "agent_context_pack", {
-      ...SCOPE,
-    });
-
-    const receipt = payload.sections_receipt as {
-      requested: string[] | null;
-      served: string[];
-      requested_not_served: string[];
-    };
-    // `null`, not `[]`: the caller asked for nothing and took the documented
-    // default, which is not the same as asking for nothing. That default
-    // serves working_set AND durable_memory since #744
-    // (docs/agent-context-pack-contract.md:88).
-    expect(receipt.requested).toBeNull();
-    expect(receipt.served).toEqual(["working_set", "durable_memory"]);
-    expect(receipt.requested_not_served).toEqual([]);
-  });
-
-  test("a requested section that does not arrive is named in the receipt", async () => {
-    const { client } = await harness("agent", "rico");
-
-    // `recovery` is admitted only with the explicit opt-in, so requesting it
-    // without `include_unreviewed_recovery` is a request that cannot be served.
-    // Before this receipt existed, that shortfall was invisible in the payload.
-    const { payload } = await callJson(client, "agent_context_pack", {
-      ...SCOPE,
-      requested_sections: ["working_set", "recovery"],
-    });
-
-    const receipt = payload.sections_receipt as {
-      requested: string[];
-      served: string[];
-      requested_not_served: string[];
-    };
-    expect(receipt.requested_not_served).toEqual(["recovery"]);
-    expect(receipt.served).not.toContain("recovery");
   });
 });

@@ -97,9 +97,7 @@
     {
       "id": "probe-solstice-cache",
       "query": "What is the solstice cache eviction policy for tariff pricing lookups?",
-      "relevant": [
-        { "id": "solstice-cache-policy", "grade": 2 }
-      ],
+      "relevant": [{ "id": "solstice-cache-policy", "grade": 2 }],
       "forbidden_ids": []
     }
   ]

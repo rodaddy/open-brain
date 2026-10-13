@@ -33,9 +33,7 @@
 import type { AgentContextPackArgs } from "./context-pack-args.ts";
 
 /** One declared section name, as `requested_sections` spells it. */
-type SectionName = NonNullable<
-  AgentContextPackArgs["requested_sections"]
->[number];
+type SectionName = NonNullable<AgentContextPackArgs["requested_sections"]>[number];
 
 /** Which sections this call will build. */
 export interface SectionSelection {
@@ -55,11 +53,9 @@ export interface SectionSelection {
 
 export function selectSections(args: AgentContextPackArgs): SectionSelection {
   const requested = args.requested_sections;
-  const optIn = (name: SectionName): boolean =>
-    requested?.includes(name) === true;
+  const optIn = (name: SectionName): boolean => requested?.includes(name) === true;
 
-  const durableMemorySection =
-    !requested || requested.includes("durable_memory");
+  const durableMemorySection = !requested || requested.includes("durable_memory");
   const pointers = optIn("pointers");
 
   return {

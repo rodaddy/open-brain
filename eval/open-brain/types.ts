@@ -9,7 +9,8 @@ export type EvalCategory =
   | "codex"
   | "scale";
 
-export type CorpusEntryType = "thought" | "decision" | "relationship" | "project" | "session";
+export type CorpusEntryType =
+  "thought" | "decision" | "relationship" | "project" | "session";
 
 export interface EvalSourceRef {
   source: "brain";

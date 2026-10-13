@@ -41,73 +41,94 @@ interface CanaryRow {
   last_error_category: string | null;
 }
 
-async function main(): Promise<void> {
-  const apply = process.argv.includes("--apply");
-
-  const pool = new pg.Pool({
+/** Build the pool from the same libpq/DB_* env pair the rest of the repo reads. */
+function createCanaryPool(): pg.Pool {
+  return new pg.Pool({
     host: process.env.DB_HOST ?? process.env.PGHOST ?? "127.0.0.1",
-    port: Number.parseInt(
-      process.env.DB_PORT ?? process.env.PGPORT ?? "5432",
-      10,
-    ),
+    port: Number.parseInt(process.env.DB_PORT ?? process.env.PGPORT ?? "5432", 10),
     database: process.env.DB_NAME ?? process.env.PGDATABASE,
     user: process.env.DB_USER ?? process.env.PGUSER,
     ...(process.env.DB_PASSWORD ? { password: process.env.DB_PASSWORD } : {}),
   });
+}
 
-  try {
-    const { rows } = await pool.query<CanaryRow>(
-      `SELECT id, job_kind, state, attempts, idempotency_key,
+async function selectCanaryRows(pool: pg.Pool): Promise<CanaryRow[]> {
+  const { rows } = await pool.query<CanaryRow>(
+    `SELECT id, job_kind, state, attempts, idempotency_key,
               last_error_category
          FROM maintenance_jobs
         WHERE idempotency_key LIKE $1
         ORDER BY created_at`,
-      [`${CANARY_KEY_PREFIX}%`],
+    [`${CANARY_KEY_PREFIX}%`],
+  );
+  return rows;
+}
+
+/**
+ * Report every canary row, then return the dead-lettered subset. Content-free:
+ * kinds, states, counts, and the key. The key is an operator-authored label,
+ * never payload content.
+ */
+function reportCanaryRows(rows: CanaryRow[]): CanaryRow[] {
+  for (const row of rows) {
+    console.log(
+      `${row.idempotency_key}  kind=${row.job_kind} state=${row.state} ` +
+        `attempts=${row.attempts} category=${row.last_error_category ?? "-"}`,
     );
+  }
 
-    if (rows.length === 0) {
-      console.log("no canary jobs found; nothing to retire");
-      return;
-    }
+  const retirable = rows.filter((row) => row.state === "dead_letter");
+  const live = rows.filter((row) => row.state !== "dead_letter");
+  for (const row of live) {
+    console.log(
+      `SKIP ${row.idempotency_key}: state=${row.state} is not dead_letter; ` +
+        `not this script's call to retire`,
+    );
+  }
+  return retirable;
+}
 
-    // Content-free reporting: kinds, states, counts, and the key. The key is an
-    // operator-authored label, never payload content.
-    for (const row of rows) {
-      console.log(
-        `${row.idempotency_key}  kind=${row.job_kind} state=${row.state} ` +
-          `attempts=${row.attempts} category=${row.last_error_category ?? "-"}`,
-      );
-    }
-
-    const retirable = rows.filter((row) => row.state === "dead_letter");
-    const live = rows.filter((row) => row.state !== "dead_letter");
-    for (const row of live) {
-      console.log(
-        `SKIP ${row.idempotency_key}: state=${row.state} is not dead_letter; ` +
-          `not this script's call to retire`,
-      );
-    }
-
-    if (retirable.length === 0) {
-      console.log("no dead-lettered canary jobs; nothing to retire");
-      return;
-    }
-
-    if (!apply) {
-      console.log(
-        `\nDRY RUN: ${retirable.length} dead-lettered canary job(s) would be ` +
-          `deleted. Re-run with --apply to retire them.`,
-      );
-      return;
-    }
-
-    const { rowCount } = await pool.query(
-      `DELETE FROM maintenance_jobs
+async function deleteDeadLetteredCanaries(pool: pg.Pool): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM maintenance_jobs
         WHERE idempotency_key LIKE $1
           AND state = 'dead_letter'`,
-      [`${CANARY_KEY_PREFIX}%`],
+    [`${CANARY_KEY_PREFIX}%`],
+  );
+  console.log(`\nretired ${rowCount ?? 0} dead-lettered canary job(s)`);
+}
+
+async function retireCanaries(pool: pg.Pool, apply: boolean): Promise<void> {
+  const rows = await selectCanaryRows(pool);
+
+  if (rows.length === 0) {
+    console.log("no canary jobs found; nothing to retire");
+    return;
+  }
+
+  const retirable = reportCanaryRows(rows);
+
+  if (retirable.length === 0) {
+    console.log("no dead-lettered canary jobs; nothing to retire");
+    return;
+  }
+
+  if (!apply) {
+    console.log(
+      `\nDRY RUN: ${retirable.length} dead-lettered canary job(s) would be ` +
+        `deleted. Re-run with --apply to retire them.`,
     );
-    console.log(`\nretired ${rowCount ?? 0} dead-lettered canary job(s)`);
+    return;
+  }
+
+  await deleteDeadLetteredCanaries(pool);
+}
+
+async function main(): Promise<void> {
+  const apply = process.argv.includes("--apply");
+  const pool = createCanaryPool();
+  try {
+    await retireCanaries(pool, apply);
   } finally {
     await pool.end();
   }

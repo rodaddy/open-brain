@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 /**
  * Prove the linter and the type checker actually reject what the standard says
  * they reject.
@@ -30,26 +32,30 @@
  * deliberate deltas for this repo:
  *   1. `bun:test` rather than `node:test` + `node:assert` -- open-brain runs on
  *      bun (a Node 24 migration is filed as #751 and is not this file's job).
- *   2. Scratch snippets go under `{temp_workspace}/open-brain/_scratch/`, never
- *      `os.tmpdir()`. `/tmp` and `$TMPDIR` are sandbox-local: a runner, a Codex
- *      sandbox, and the host each see a different one. The exemplar's
- *      `mkdtempSync(tmpdir())` is the one line of it that does not port.
+ *   2. Scratch snippets go through `scripts/test-support/scratch-dir.ts`, the
+ *      repo's one resolver for where a test may write. The sandbox-local paths
+ *      the exemplar reaches for are invisible across a runner, a Codex sandbox,
+ *      and the host, so that one line of it does not port.
  *
  * See also:
  * - `_DOCS/STANDARDS-typescript.md` ## Control flow
  * - `.oxlintrc.json` -- the config under test, owned by another lane
  */
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { testScratchDir } from "../scripts/test-support/scratch-dir.ts";
+
 /**
- * Repo root. `import.meta.dir` is this file's directory (`<root>/tests`), so
+ * Repo root. `dirname(fileURLToPath(import.meta.url))` is this file's directory (`<root>/tests`), so
  * one level up is the root that holds `.oxlintrc.json`.
  */
-const PROJECT_ROOT = resolve(import.meta.dir, "..");
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const OXLINT_BIN = join(PROJECT_ROOT, "node_modules", ".bin", "oxlint");
+const TSC_BIN = join(PROJECT_ROOT, "node_modules", "typescript", "bin", "tsc");
 
 /**
  * The config under test. Another lane owns this file. When it is absent every
@@ -63,29 +69,19 @@ const CONFIG_PRESENT = existsSync(OXLINT_CONFIG);
 /**
  * Scratch directory for snippets.
  *
- * NOT `os.tmpdir()`, and not the repo. The repo is wrong because a normal lint
- * run would then find these deliberately-broken files and fail the build on
- * them; `/tmp` is wrong because it is sandbox-local and invisible to every
- * other process. The temp workspace is the sanctioned third option.
+ * The sandbox-local paths are wrong because a runner, a Codex sandbox, and the
+ * host each resolve a different one; the repo itself is wrong because a normal
+ * lint run would then find these deliberately-broken files and fail the build
+ * on them. `testScratchDir` is the repo's one resolver that gets both right,
+ * and it creates the directory it returns.
  *
- * The workspace root is resolved from the environment because the hard-coded
- * `/Volumes/...` path is a Mac-only volume and a Linux CI runner cannot create
- * it. `RUNNER_TEMP` is accepted first on CI: the runner owns that directory for
- * the life of the job and nothing else reads it, so it carries none of the
- * cross-process invisibility that rules out `/tmp`.
- *
- * The directory is created in `beforeAll` rather than at module load so that
- * merely importing this file can never throw.
+ * It is called in `beforeAll` rather than at module load so that merely
+ * importing this file can never throw.
  */
-const SCRATCH = join(
-  process.env.RUNNER_TEMP ??
-    process.env.OPENBRAIN_TEMP_WORKSPACE ??
-    "/Volumes/ThunderBolt/_tmp/open-brain",
-  "_scratch/enforcement",
-);
+let SCRATCH = "";
 
 beforeAll(() => {
-  mkdirSync(SCRATCH, { recursive: true });
+  SCRATCH = testScratchDir("enforcement-");
 });
 
 /** Counter backing `lint`'s unique default snippet name. See `lint`. */
@@ -140,7 +136,7 @@ function lint(source: string, filename?: string): Set<string> {
 
   let output: string;
   try {
-    output = execFileSync("bunx", ["oxlint", "--no-ignore", target], {
+    output = execFileSync(OXLINT_BIN, ["--no-ignore", target], {
       cwd: PROJECT_ROOT,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -201,7 +197,7 @@ function expectFired(rules: Set<string>, rule: string, hint: string): void {
  * @returns The configured `max`, or `undefined` if the rule is absent/off.
  */
 function ceiling(rule: string): number | undefined {
-  const raw = execFileSync("bunx", ["oxlint", "--print-config"], {
+  const raw = execFileSync(OXLINT_BIN, ["--print-config"], {
     cwd: PROJECT_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -273,9 +269,9 @@ function typecheck(source: string): string {
 
   try {
     execFileSync(
-      "bunx",
+      process.execPath,
       [
-        "tsc",
+        TSC_BIN,
         "--noEmit",
         "--strict",
         "--noUncheckedIndexedAccess",

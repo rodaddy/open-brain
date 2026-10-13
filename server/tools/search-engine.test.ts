@@ -1,14 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "vitest";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import {
   executeSearch,
   executeSearchWithSharedFallback,
+  hybridSearch,
 } from "./search-engine.ts";
+import { rrfArmContribution } from "./search-engine-fusion.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import {
   DEFAULT_SEARCH_EMBEDDING_TIMEOUT_MS,
   type SearchDependencies,
+  type SearchRow,
 } from "./search-engine-types.ts";
 
 /**
@@ -174,5 +177,246 @@ describe("shared-namespace name injection on the search path", () => {
     await expect(namespaceEmittedWith(undefined)).rejects.toThrow(
       /sharedNamespaceNames/,
     );
+  });
+});
+
+function rankedRow(id: string, lexicalCoverage?: number, queryLexemeCount?: number) {
+  return {
+    id,
+    source_type: "thought",
+    namespace: "test",
+    content_preview: id,
+    tags: null,
+    created_by: "test",
+    created_at: new Date().toISOString(),
+    usefulness: 0.5,
+    lexical_coverage: lexicalCoverage,
+    query_lexeme_count: queryLexemeCount,
+  };
+}
+
+function jevDependencies(rows: SearchRow[], fetchFn: typeof fetch): SearchDependencies {
+  const client = { query: async () => ({ rows }), release: () => {} };
+  return {
+    pool: {
+      connect: async () => client,
+      query: async () => ({ rows: [] }),
+    } as unknown as Pool,
+    embedFn: async () => [1],
+    logger: {
+      warn: () => {},
+      debug: () => {},
+      info: () => {},
+      error: () => {},
+    } as unknown as Logger,
+    jev: {
+      config: {
+        enabled: true,
+        apiKey: "test",
+        baseUrl: "https://example.test/systemone",
+        model: "jev-1.13.0",
+        timeoutMs: 100,
+        maxRequestBytes: 64_000,
+        maxStateQuestionBytes: 32_000,
+      },
+      fetchFn,
+    },
+  };
+}
+
+const JEV_HYBRID_REQUEST = {
+  tables: ["thoughts"] as const,
+  query: "q",
+  limit: 1,
+  mode: "hybrid" as const,
+  tier: undefined,
+  offset: 0,
+  namespace: "test",
+  ftsConfig: "english" as const,
+};
+
+describe("hybrid fusion metadata", () => {
+  test("lets Jev promote a fused candidate below the requested RRF limit", async () => {
+    const vectorRows = [rankedRow("a"), rankedRow("b"), rankedRow("c")];
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            model: "jev-1.13.0",
+            answers: {
+              r0_c0: { type: "noul", noul: 0.1 },
+              r1_c0: { type: "noul", noul: 0.2 },
+              r2_c0: { type: "noul", noul: 0.9 },
+            },
+            usage: { input_tokens: 10, output_tokens: 3 },
+          }),
+        ),
+    );
+    const dependencies = jevDependencies(vectorRows, fetchFn);
+    expect(
+      (await hybridSearch(dependencies, JEV_HYBRID_REQUEST, [1])).map((row) => row.id),
+    ).toEqual(["c"]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  test("batches the fused pool once before offset and falls back as one stable pool", async () => {
+    const vectorRows = [rankedRow("a"), rankedRow("b")];
+    const client = { query: async () => ({ rows: vectorRows }), release: () => {} };
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            model: "jev-1.13.0",
+            answers: {
+              r0_c0: { type: "noul", noul: 0.1 },
+              r1_c0: { type: "noul", noul: 0.9 },
+            },
+            usage: { input_tokens: 10, output_tokens: 3 },
+          }),
+        ),
+    );
+    const dependencies: SearchDependencies = {
+      pool: {
+        connect: async () => client,
+        query: async () => ({ rows: [] }),
+      } as unknown as Pool,
+      embedFn: async () => [1],
+      logger: {
+        warn: () => {},
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+      } as unknown as Logger,
+      jev: {
+        config: {
+          enabled: true,
+          apiKey: "test",
+          baseUrl: "https://example.test/systemone",
+          model: "jev-1.13.0",
+          timeoutMs: 100,
+          maxRequestBytes: 64_000,
+          maxStateQuestionBytes: 32_000,
+        },
+        fetchFn,
+      },
+    };
+    const request = {
+      tables: ["thoughts"] as const,
+      query: "q",
+      limit: 1,
+      mode: "hybrid" as const,
+      tier: undefined,
+      offset: 1,
+      namespace: "test",
+      ftsConfig: "english" as const,
+    };
+    expect(
+      (await hybridSearch(dependencies, request, [1])).map((row) => row.id),
+    ).toEqual(["a"]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+
+    if (!dependencies.jev) throw new Error("expected Jev dependencies");
+    const fallbackDependencies: SearchDependencies = {
+      ...dependencies,
+      jev: {
+        ...dependencies.jev,
+        fetchFn: async () =>
+          new Response(
+            JSON.stringify({
+              model: "jev-1.13.0",
+              answers: { r0_c0: { type: "noul", noul: 0.1 } },
+            }),
+          ),
+      },
+    };
+    expect(
+      (await hybridSearch(fallbackDependencies, request, [1])).map((row) => row.id),
+    ).toEqual(["b"]);
+  });
+});
+
+describe("hybrid fusion metadata propagation", () => {
+  test("keeps positional votes equal while rejecting malformed lexical metadata", () => {
+    const full = rankedRow("full", 4, 4);
+    const partial = rankedRow("partial", 1, 4);
+
+    expect(rrfArmContribution(full, 0, "lexical")).toBe(1);
+    expect(rrfArmContribution(partial, 0, "lexical")).toBe(1);
+    expect(rrfArmContribution(partial, 0, "vector")).toBe(1);
+    expect(() => rrfArmContribution(rankedRow("missing"), 0, "lexical")).toThrow(
+      /Invalid hybrid lexical coverage metadata/,
+    );
+  });
+
+  test("retains coverage on observed arms without leaking it through public hybrid rows", async () => {
+    const vectorRows = [rankedRow("vector")];
+    const lexicalRows = [rankedRow("partial", 1, 2)];
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes("SELECT * FROM (")) return { rows: vectorRows };
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const dependencies = {
+      pool: {
+        connect: async () => client,
+        query: async () => ({ rows: lexicalRows }),
+      } as unknown as Pool,
+      embedFn: async () => [1],
+      logger: {
+        warn: () => {},
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+      } as unknown as Logger,
+    } satisfies SearchDependencies;
+    let observed: { vectorRows: SearchRow[]; ftsRows: SearchRow[] } | undefined;
+
+    const publicRows = await hybridSearch(
+      dependencies,
+      {
+        tables: ["thoughts"],
+        query: "alpha beta",
+        limit: 2,
+        mode: "hybrid",
+        tier: undefined,
+        offset: 0,
+        namespace: "test",
+        ftsConfig: "english",
+      },
+      [1],
+      (arms) => {
+        observed = arms;
+      },
+    );
+
+    expect(observed?.ftsRows[0]).toMatchObject({
+      lexical_coverage: 1,
+      query_lexeme_count: 2,
+    });
+    expect(publicRows[0]).not.toHaveProperty("lexical_coverage");
+    expect(publicRows[0]).not.toHaveProperty("query_lexeme_count");
+    expect(observed?.ftsRows[0]).toHaveProperty("lexical_coverage", 1);
+  });
+});
+
+describe("Jev rerank fallback log (issue 1461)", () => {
+  test("names the reason and status and carries no response body", async () => {
+    const secretBody = "provider body text that must never be logged";
+    const fetchFn = vi.fn(async () => new Response(secretBody, { status: 503 }));
+    const warn = vi.fn();
+    const base = jevDependencies([rankedRow("a"), rankedRow("b")], fetchFn);
+    const dependencies: SearchDependencies = {
+      ...base,
+      logger: { ...base.logger, warn } as unknown as Logger,
+    };
+    const rows = await hybridSearch(dependencies, JEV_HYBRID_REQUEST, [1]);
+    expect(rows.map((row) => row.id)).toEqual(["a"]);
+    const call = warn.mock.calls.find(
+      ([, message]) => message === "jev_rerank_failed_fallback_rrf",
+    );
+    expect(call?.[0]).toEqual({ candidate_count: 2, reason: "http", status: 503 });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(secretBody);
   });
 });

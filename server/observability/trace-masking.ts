@@ -82,8 +82,11 @@ function maskTraceArray(value: unknown[]): unknown {
  * Returns `undefined` when `value` is not one of them, which is how the caller
  * distinguishes "handled here" from "fall through to plain-object masking" —
  * no built-in normalization of these types ever legitimately yields undefined.
+ * The return type is `unknown` rather than `unknown | undefined` because
+ * `unknown` already admits `undefined`; the sentinel is the contract above,
+ * not something the type can express separately.
  */
-function maskBuiltinContainer(value: object): unknown | undefined {
+function maskBuiltinContainer(value: object): unknown {
   if (ArrayBuffer.isView(value)) return binaryViewMarker(value);
   if (value instanceof Map) {
     return maskTraceValue(

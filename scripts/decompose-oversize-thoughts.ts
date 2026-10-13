@@ -1,13 +1,13 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 import { parseArgs } from "node:util";
 import { Pool, type PoolClient } from "pg";
-import { contentHash } from "../src/embedding.ts";
+import { normalizedContentHash } from "./settings.ts";
 import {
   planEntryDecomposition,
   type DecompositionPlan,
   type ReplacementProposal,
-} from "../src/decomposition.ts";
+} from "./settings.ts";
 
 export const REMEDIATION_VERSION = "issue-604-v1";
 const TARGET_SOURCE = "planning-skippy-agentspace";
@@ -129,7 +129,7 @@ function sourceReference(
     document_id: target.row.id,
     title: `Archived Claude Code transcript dump ${target.row.id}`,
     section: `chunk:${proposal.chunk_index}`,
-    source_hash: contentHash(target.row.content),
+    source_hash: normalizedContentHash(target.row.content),
   };
 }
 
@@ -191,7 +191,7 @@ async function writeProposal(
   target: TargetPlan,
   proposal: ReplacementProposal,
 ): Promise<{ id: string; written: boolean }> {
-  const hash = contentHash(proposal.content);
+  const hash = normalizedContentHash(proposal.content);
   const reference = sourceReference(target, proposal);
   const provenance = promotedFrom(target, proposal);
   const { rows } = await client.query<{ id: string }>(
@@ -287,7 +287,10 @@ async function archiveOriginal(
   };
 }
 
-async function applyTargets(pool: Pool, targets: TargetPlan[]): Promise<AppliedTarget[]> {
+async function applyTargets(
+  pool: Pool,
+  targets: TargetPlan[],
+): Promise<AppliedTarget[]> {
   const client = await pool.connect();
   const applied: AppliedTarget[] = [];
   try {

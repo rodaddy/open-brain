@@ -19,32 +19,25 @@
  * updates an existing candidate, and ob_raw_turns is never modified at all.
  */
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
+// Importing settings.ts also registers the EMBEDDING_* settings reader on this
+// process. That registration used to arrive transitively through
+// src/embedding.ts, which the sweep no longer imports now that it reads
+// server/embedding/provider.ts directly (issue 864).
+import { createPool } from "./settings.ts";
+import { arg, createConsoleLogger, has } from "./run-support/argv.ts";
 import {
   runExchangeSweep,
   backfillExchangeEmbeddings,
-} from "../src/distill-exchange-run.ts";
+} from "../server/maintenance/distill-exchange-run.ts";
 import {
   buildExchanges,
   prepareExchange,
   EXCHANGE_DISTILLER_NAME,
-} from "../src/distill-exchange.ts";
-import { DISTILL_ORDER_BY, type DistillTurn } from "../src/distill-window.ts";
+} from "../server/maintenance/distill-exchange.ts";
+import { DISTILL_ORDER_BY, type DistillTurn } from "../server/domain/distill-window.ts";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
-const has = (name: string) => process.argv.includes(name);
-
-const logger = {
-  info: (msg: string, fields: Record<string, string | number>) =>
-    console.log(msg, JSON.stringify(fields)),
-  warn: (msg: string, fields: Record<string, string | number>) =>
-    console.warn(msg, JSON.stringify(fields)),
-  error: (msg: string, fields: Record<string, string | number>) =>
-    console.error(msg, JSON.stringify(fields)),
-};
+const logger = createConsoleLogger();
 
 /**
  * The measurement that motivated 041, recomputed live.
@@ -135,17 +128,10 @@ async function dryRun(pool: Pool, show: number): Promise<void> {
   const anchored = prepared.filter((c) => c.anchor_turn_id !== null).length;
   const parts = prepared.filter((c) => c.chunk_index !== null).length;
   console.log("turns read        :", turns.length);
-  console.log(
-    "sessions          :",
-    new Set(turns.map((t) => t.session_ref)).size,
-  );
+  console.log("sessions          :", new Set(turns.map((t) => t.session_ref)).size);
   console.log("exchanges cut     :", exchanges.length);
   console.log("candidates        :", prepared.length);
-  console.log(
-    "  continuation parts:",
-    parts,
-    "(044 split; 0 = nothing was too long)",
-  );
+  console.log("  continuation parts:", parts, "(044 split; 0 = nothing was too long)");
   console.log("  operator-anchored:", anchored);
   // 043. Called out separately because before it, ALL SIX AskUserQuestion turns
   // on the live corpus headed nothing -- each swept into the agent body of
@@ -156,10 +142,7 @@ async function dryRun(pool: Pool, show: number): Promise<void> {
     prepared.filter((c) => c.anchor_kind === "askuserquestion").length,
   );
   console.log("  orphans          :", prepared.length - anchored);
-  console.log(
-    "  uncertain        :",
-    prepared.filter((c) => c.uncertain).length,
-  );
+  console.log("  uncertain        :", prepared.filter((c) => c.uncertain).length);
 
   const byType = new Map<string, number>();
   for (const c of prepared) {
@@ -170,9 +153,7 @@ async function dryRun(pool: Pool, show: number): Promise<void> {
     console.log(`  ${t.padEnd(11)}: ${n}`);
   }
 
-  for (const c of prepared
-    .filter((x) => x.anchor_turn_id !== null)
-    .slice(0, show)) {
+  for (const c of prepared.filter((x) => x.anchor_turn_id !== null).slice(0, show)) {
     console.log(
       `\n--- ${c.candidate_type}${c.uncertain ? " (uncertain)" : ""} | ${c.source_turn_ids.length} turns`,
     );
@@ -198,42 +179,44 @@ async function sample(pool: Pool, n: number): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const pool = new Pool({
-    host: process.env.DB_HOST ?? "127.0.0.1",
-    port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD || undefined,
+/** Fill NULL vectors on already-written exchange rows and report the counts. */
+async function backfillEmbeddings(pool: Pool): Promise<void> {
+  const s = await backfillExchangeEmbeddings({ pool, logger });
+  console.log("=== embedding backfill ===");
+  for (const [k, v] of Object.entries(s)) console.log(k.padEnd(12), ":", v);
+}
+
+/** The writing path: sweep, then print the summary and the live stats. */
+async function sweep(pool: Pool): Promise<void> {
+  const summary = await runExchangeSweep({
+    pool,
+    logger,
+    ...(has("--no-embed") ? { skipEmbeddings: true } : {}),
   });
 
+  console.log("\n=== exchange sweep ===");
+  console.log("model                :", EXCHANGE_DISTILLER_NAME);
+  for (const [k, v] of Object.entries(summary)) {
+    console.log(k.padEnd(21), ":", v);
+  }
+  console.log();
+  await stats(pool);
+}
+
+/** Pick the mode named on the command line. A bare run sweeps. */
+async function dispatch(pool: Pool): Promise<void> {
+  if (has("--stats")) return await stats(pool);
+  if (has("--sample")) return await sample(pool, Number(arg("--sample") ?? 5));
+  if (has("--dry-run")) return await dryRun(pool, Number(arg("--dry-run") ?? 3));
+  if (has("--backfill-embeddings")) return await backfillEmbeddings(pool);
+  return await sweep(pool);
+}
+
+async function main(): Promise<void> {
+  const pool = createPool();
+
   try {
-    if (has("--stats")) return await stats(pool);
-    if (has("--sample"))
-      return await sample(pool, Number(arg("--sample") ?? 5));
-    if (has("--dry-run"))
-      return await dryRun(pool, Number(arg("--dry-run") ?? 3));
-
-    if (has("--backfill-embeddings")) {
-      const s = await backfillExchangeEmbeddings({ pool, logger });
-      console.log("=== embedding backfill ===");
-      for (const [k, v] of Object.entries(s)) console.log(k.padEnd(12), ":", v);
-      return;
-    }
-
-    const summary = await runExchangeSweep({
-      pool,
-      logger,
-      ...(has("--no-embed") ? { skipEmbeddings: true } : {}),
-    });
-
-    console.log("\n=== exchange sweep ===");
-    console.log("model                :", EXCHANGE_DISTILLER_NAME);
-    for (const [k, v] of Object.entries(summary)) {
-      console.log(k.padEnd(21), ":", v);
-    }
-    console.log();
-    await stats(pool);
+    await dispatch(pool);
   } finally {
     await pool.end();
   }

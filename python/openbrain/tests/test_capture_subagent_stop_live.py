@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from conftest import operator_line, write_lines
+from conftest import Secret, operator_line, scoped_capture_key, write_lines
 from openbrain.apps.capture.watermark import WatermarkStore
 from openbrain.apps.hooks.session import SubagentStopHook, run_subagent_stop
 from openbrain.config import CaptureSettings
@@ -45,7 +45,7 @@ REQUIRED_ENV = (
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -58,7 +58,7 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
 def fetch_content(database_url: str, turn_uuid: str) -> str | None:
@@ -77,7 +77,7 @@ class TestSubagentStopLandsUnderItsOwnKey:
     """run_subagent_stop with the default factory delivers and keys per subagent."""
 
     async def test_the_subagent_turn_reaches_the_row_and_the_parent_key_is_untouched(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # Distinct parent session and subagent id so the derived key
         # (session_id:agent_id) is provably different from the bare session_id.
@@ -95,8 +95,8 @@ class TestSubagentStopLandsUnderItsOwnKey:
         )
 
         settings = CaptureSettings(
-            base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-            token=live_env["OPENBRAIN_TEST_TOKEN"],
+            base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+            token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
             watermark_path=tmp_path / "wm.sqlite",
         )
         payload = SubagentStopHook(
@@ -111,12 +111,15 @@ class TestSubagentStopLandsUnderItsOwnKey:
         assert result is not None
         assert result.delivered == 1
         # The subagent turn is in the row store, whole.
-        stored = fetch_content(live_env["OPENBRAIN_TEST_DATABASE_URL"], turn_id)
+        stored = fetch_content(live_env["OPENBRAIN_TEST_DATABASE_URL"].get(), turn_id)
         assert stored == subagent_text
 
         # Watermark isolation, live: the per-subagent key advanced to what the
         # delivery reported, and the bare parent session key -- which the main
         # Stop owns -- was never advanced by this subagent send.
         store = WatermarkStore(settings.watermark_path)
-        assert await store.offset_for(derived_key) == result.next_offset
-        assert await store.offset_for(parent_session) == 0
+        assert (
+            await store.offset_for(scoped_capture_key(settings, derived_key))
+            == result.next_offset
+        )
+        assert await store.offset_for(scoped_capture_key(settings, parent_session)) == 0

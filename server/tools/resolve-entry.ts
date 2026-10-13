@@ -10,10 +10,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import {
   authIdentity,
@@ -22,6 +19,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { ALL_TABLES } from "./curation-helpers.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
 
 const NOT_AUTHENTICATED = "Permission denied: cannot resolve entries";
 
@@ -47,8 +45,7 @@ const resolveEntryAnnotations = {
   idempotentHint: true,
 };
 
-type ResolveStatus =
-  "found" | "archived" | "not_found_or_unreadable" | "not_readable";
+type ResolveStatus = "found" | "archived" | "not_found_or_unreadable" | "not_readable";
 
 interface ResolvedEntry {
   resolved: boolean;
@@ -128,24 +125,19 @@ async function findRow(
   dependencies: MemoryToolDependencies,
   request: ProbeRequest,
 ): Promise<ProbeHit | null> {
-  const { identity, id, tables, requestedNamespace, archived, checkedTables } =
-    request;
+  const { identity, id, tables, requestedNamespace, archived, checkedTables } = request;
+  const repository = createEntryReadRepository(dependencies.pool);
   for (const table of tables) {
     checkedTables.push(table);
-    const { params, clause } = scopeParameters(
-      identity,
-      id,
-      requestedNamespace,
-    );
-    const { rows } = await dependencies.pool.query(
-      `SELECT id, namespace FROM ${table}
-        WHERE id = $1 AND archived_at IS ${archived ? "NOT NULL" : "NULL"}${clause}
-        FETCH FIRST 1 ROW ONLY`,
+    const { params, clause } = scopeParameters(identity, id, requestedNamespace);
+    const rows = await repository.probeEntryById({
+      table,
+      archivedIsClause: archived ? "NOT NULL" : "NULL",
+      scopeClause: clause,
       params,
-    );
+    });
     const row = rows[0] as { namespace?: unknown } | undefined;
-    if (typeof row?.namespace === "string")
-      return { table, namespace: row.namespace };
+    if (typeof row?.namespace === "string") return { table, namespace: row.namespace };
   }
   return null;
 }
@@ -222,16 +214,11 @@ async function resolveEntry(
   args: { id: string; namespace?: string | undefined },
 ): Promise<ResolvedEntry> {
   const namespace = args.namespace;
-  if (
-    namespace !== undefined &&
-    !canTargetNamespace(identity, "read", namespace)
-  ) {
+  if (namespace !== undefined && !canTargetNamespace(identity, "read", namespace)) {
     return unresolved("not_readable", args.id, [], namespace);
   }
 
-  const readableTables = ALL_TABLES.filter((table) =>
-    canRead(identity.role, table),
-  );
+  const readableTables = ALL_TABLES.filter((table) => canRead(identity.role, table));
   if (readableTables.length === 0) {
     return unresolved("not_readable", args.id, [], namespace ?? null);
   }

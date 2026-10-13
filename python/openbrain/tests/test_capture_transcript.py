@@ -155,6 +155,58 @@ def write_lines(path: Path, lines: list[str]) -> None:
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
 
+def codex_session_line(session_id: str) -> str:
+    return json.dumps(
+        {
+            "timestamp": "2026-09-14T12:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": session_id, "session_id": session_id},
+        }
+    )
+
+
+def codex_user_line(content: str) -> str:
+    return json.dumps(
+        {
+            "timestamp": "2026-09-14T12:00:01.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": content,
+                "images": [],
+                "local_images": [],
+                "audio": [],
+                "local_audio": [],
+                "text_elements": [],
+            },
+        }
+    )
+
+
+class TestCodexSessionScopedIdentity:
+    """Derived user IDs include the rollout identity available at this boundary."""
+
+    async def test_identical_user_records_are_scoped_to_their_session(
+        self, tmp_path: Path
+    ) -> None:
+        """Line-only UUID derivation makes this fail by colliding both sessions."""
+        first_path = tmp_path / "first.jsonl"
+        second_path = tmp_path / "second.jsonl"
+        shared_user_line = codex_user_line("same operator message")
+        write_lines(first_path, [codex_session_line("session-one"), shared_user_line])
+        write_lines(second_path, [codex_session_line("session-two"), shared_user_line])
+
+        first = (await read_since(first_path, BEGINNING_OF_FILE)).turns
+        second = (await read_since(second_path, BEGINNING_OF_FILE)).turns
+        replay = (await read_since(first_path, BEGINNING_OF_FILE)).turns
+
+        assert len(first) == len(second) == len(replay) == 1
+        assert first[0].session_ref == "session-one"
+        assert second[0].session_ref == "session-two"
+        assert first[0].turn_uuid != second[0].turn_uuid
+        assert replay[0].turn_uuid == first[0].turn_uuid
+
+
 class TestNothingIsLostRegardlessOfEntryCount:
     """#418 acceptance: the entry count of a turn stops mattering."""
 

@@ -11,7 +11,7 @@
  * would be indistinguishable from a genuine no-match.
  */
 import { errorResult } from "./types.ts";
-import type { NamespaceFilter } from "./read-scope.ts";
+import type { NamespaceFilter } from "../domain/read-scope.ts";
 
 /** The subset of the tool dependencies this helper needs. */
 interface FailureLogger {

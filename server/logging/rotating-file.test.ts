@@ -1,16 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { testScratchDir } from "../../scripts/test-support/scratch-dir.ts";
 import { createRotatingFileSink } from "./rotating-file.ts";
 
 // Black-box: drive the sink through its public write() API in a throwaway temp
@@ -20,7 +19,7 @@ import { createRotatingFileSink } from "./rotating-file.ts";
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "ob-rotating-"));
+  dir = testScratchDir("ob-rotating-");
 });
 
 afterEach(() => {

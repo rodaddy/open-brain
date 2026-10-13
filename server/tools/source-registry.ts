@@ -38,6 +38,7 @@ import {
 } from "../capture/drop-folder-collector.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
+import { createDropFolderRepository } from "../db/drop-folder-repository.ts";
 
 /**
  * Convert the server's identity into the registry module's shape.
@@ -486,7 +487,11 @@ function registerCollectDropFolder(
         // The collector proves eligibility AND write authority for the target
         // namespace before it reads a single file.
         const result = await collectDropFolder(
-          { pool: dependencies.pool, embedFn: dependencies.embedFn },
+          {
+            pool: dependencies.pool,
+            repository: createDropFolderRepository(dependencies.pool),
+            embedFn: dependencies.embedFn,
+          },
           registryAuth(identity),
           args,
           dependencies.dropCollectorBounds

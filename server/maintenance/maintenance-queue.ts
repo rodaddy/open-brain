@@ -1,10 +1,18 @@
+/**
+ * The durable `maintenance_jobs` queue: enqueue, claim, lease renewal,
+ * completion, and failure. Every lease transition is guarded by the (id, lease
+ * token) the claim minted, and the retry/dead-letter decision is derived from
+ * the durable row rather than from any caller-supplied object.
+ *
+ * The statements themselves live in ../db/maintenance-queue-repository.ts and
+ * the transaction in ../db/transaction.ts (issue 1209); this class owns the
+ * ordering, the guards, and the semantics documented below.
+ */
 import type pg from "pg";
 
 import {
   assertPositiveInteger,
   enqueueSemanticsDiverge,
-  JOB_COLUMNS,
-  jobColumns,
   MAX_CLAIM_LIMIT,
   safeMaintenanceErrorCategory,
   toJob,
@@ -15,38 +23,41 @@ import type {
   EnqueueMaintenanceJob,
   MaintenanceErrorCategory,
   MaintenanceJob,
-  MaintenanceJobRow,
   MaintenanceQueuePort,
 } from "./maintenance-job.ts";
+import {
+  createMaintenanceQueueRepository,
+  type EnqueueJobValues,
+  type MaintenanceQueueRepository,
+} from "../db/maintenance-queue-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 
 export class MaintenanceQueue implements MaintenanceQueuePort {
-  constructor(private readonly pool: Pick<pg.Pool, "query" | "connect">) {}
+  private readonly repository: MaintenanceQueueRepository;
+  private readonly pool: pg.Pool;
+
+  constructor(pool: pg.Pool) {
+    this.pool = pool;
+    this.repository = createMaintenanceQueueRepository(pool);
+  }
 
   async enqueue(input: EnqueueMaintenanceJob): Promise<MaintenanceJob> {
     const job = validateEnqueue(input);
-    const inserted = await this.pool.query<MaintenanceJobRow>(
-      `INSERT INTO maintenance_jobs (
-         job_kind, job_version, payload, idempotency_key, run_after,
-         max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (job_kind, idempotency_key)
-         WHERE state IN ('queued', 'running') DO NOTHING
-       RETURNING ${JOB_COLUMNS}`,
-      [
-        job.kind,
-        job.version,
-        JSON.stringify(job.payload),
-        job.idempotencyKey,
-        job.runAfter,
-        job.maxAttempts,
-        job.backoffBaseMs,
-        job.backoffMaxMs,
-        job.namespace,
-        job.provenance === null ? null : JSON.stringify(job.provenance),
-      ],
-    );
-    if (inserted.rows[0]) {
-      return { ...toJob(inserted.rows[0]), enqueueOutcome: "created" };
+    const values: EnqueueJobValues = {
+      kind: job.kind,
+      version: job.version,
+      payload: job.payload,
+      idempotencyKey: job.idempotencyKey,
+      runAfter: job.runAfter,
+      maxAttempts: job.maxAttempts,
+      backoffBaseMs: job.backoffBaseMs,
+      backoffMaxMs: job.backoffMaxMs,
+      namespace: job.namespace,
+      provenance: job.provenance,
+    };
+    const inserted = await this.repository.insertJob(values);
+    if (inserted) {
+      return { ...toJob(inserted), enqueueOutcome: "created" };
     }
 
     // Scoped to LIVE states, matching the partial index the insert conflicts
@@ -54,14 +65,10 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     // any point in history, and enqueue would hand the caller a job that
     // finished days ago as though it were the one holding the key -- the same
     // confusion 047 exists to remove, reintroduced one statement later.
-    const existing = await this.pool.query<MaintenanceJobRow>(
-      `SELECT ${JOB_COLUMNS}
-         FROM maintenance_jobs
-        WHERE job_kind = $1 AND idempotency_key = $2
-          AND state IN ('queued', 'running')`,
-      [job.kind, job.idempotencyKey],
-    );
-    const existingRow = existing.rows[0];
+    const existingRow = await this.repository.selectLiveJobByIdempotencyKey({
+      kind: job.kind,
+      idempotencyKey: job.idempotencyKey,
+    });
     if (!existingRow) {
       // The live holder reached a terminal state between the insert and this
       // lookup, so the key is free again. Under the blanket constraint this
@@ -72,29 +79,9 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
       // Retried exactly once. A second drop means a new live job took the key
       // in between, which is genuine contention and not this race; falling
       // through to the throw keeps an unbounded retry loop out of the queue.
-      const retried = await this.pool.query<MaintenanceJobRow>(
-        `INSERT INTO maintenance_jobs (
-           job_kind, job_version, payload, idempotency_key, run_after,
-           max_attempts, backoff_base_ms, backoff_max_ms, namespace, provenance
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (job_kind, idempotency_key)
-           WHERE state IN ('queued', 'running') DO NOTHING
-         RETURNING ${JOB_COLUMNS}`,
-        [
-          job.kind,
-          job.version,
-          JSON.stringify(job.payload),
-          job.idempotencyKey,
-          job.runAfter,
-          job.maxAttempts,
-          job.backoffBaseMs,
-          job.backoffMaxMs,
-          job.namespace,
-          job.provenance === null ? null : JSON.stringify(job.provenance),
-        ],
-      );
-      if (retried.rows[0]) {
-        return { ...toJob(retried.rows[0]), enqueueOutcome: "created" };
+      const retried = await this.repository.insertJob(values);
+      if (retried) {
+        return { ...toJob(retried), enqueueOutcome: "created" };
       }
       throw new Error("maintenance queue idempotency lookup failed");
     }
@@ -126,68 +113,37 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     }
     assertPositiveInteger(input.leaseMs, "lease duration");
     const now = input.now ?? new Date();
-    const client = await this.pool.connect();
     const leaseToken = crypto.randomUUID();
 
-    try {
-      await client.query("BEGIN");
-      // A queued-due row and an expired running row are both eligible, but an
-      // expired running row whose already-consumed execution attempts have
-      // reached max_attempts must terminate, not be reclaimed for another
-      // handler run — otherwise a job that keeps blowing its lease is retried
-      // forever, past its bound. `attempts` counts execution leases: a running
-      // row already ran `attempts` handler executions, so attempts >= max means
-      // no budget is left. Such rows dead-letter in the same statement (clearing
-      // the lease, stamping terminal/dead-letter timestamps, and recording the
-      // content-free `lease_expired` category) and are excluded from RETURNING
-      // so the runner never treats a terminated job as claimed.
-      const claimed = await client.query<MaintenanceJobRow>(
-        `WITH eligible AS (
-           SELECT id, state, attempts, max_attempts
-             FROM maintenance_jobs
-            WHERE (state = 'queued' AND run_after <= $1)
-               OR (state = 'running' AND lease_until <= $1)
-            ORDER BY run_after, created_at, id
-            FOR UPDATE SKIP LOCKED
-            LIMIT $2
-         ),
-         reclaim AS (
-           SELECT id FROM eligible
-            WHERE state = 'queued' OR attempts < max_attempts
-         ),
-         expire AS (
-           SELECT id FROM eligible
-            WHERE state = 'running' AND attempts >= max_attempts
-         ),
-         dead AS (
-           UPDATE maintenance_jobs AS job
-              SET state = 'dead_letter',
-                  lease_token = NULL,
-                  lease_until = NULL,
-                  last_error_category = 'lease_expired',
-                  terminal_at = $1,
-                  dead_lettered_at = $1
-             FROM expire
-            WHERE job.id = expire.id
-         )
-         UPDATE maintenance_jobs AS job
-            SET state = 'running',
-                lease_token = $3::uuid,
-                lease_until = $1 + ($4 * interval '1 millisecond'),
-                attempts = job.attempts + 1
-           FROM reclaim
-          WHERE job.id = reclaim.id
-         RETURNING ${jobColumns("job")}`,
-        [now, input.limit, leaseToken, input.leaseMs],
-      );
-      await client.query("COMMIT");
-      return claimed.rows.map(toJob);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    // A queued-due row and an expired running row are both eligible, but an
+    // expired running row whose already-consumed execution attempts have
+    // reached max_attempts must terminate, not be reclaimed for another
+    // handler run — otherwise a job that keeps blowing its lease is retried
+    // forever, past its bound. `attempts` counts execution leases: a running
+    // row already ran `attempts` handler executions, so attempts >= max means
+    // no budget is left. Such rows dead-letter in the same statement (clearing
+    // the lease, stamping terminal/dead-letter timestamps, and recording the
+    // content-free `lease_expired` category) and are excluded from RETURNING
+    // so the runner never treats a terminated job as claimed.
+    //
+    // onRollbackFailure is deliberately a no-op: this path swallowed rollback
+    // errors with `.catch(() => undefined)` before the transaction moved to
+    // ../db/transaction.ts, and the hook keeps that behavior visible rather
+    // than changing it under a refactor.
+    //
+    // The pool is a pg.Pool by declaration (issue 1209, session 35).
+    const claimed = await withTransaction({
+      pool: this.pool,
+      onRollbackFailure: () => undefined,
+      run: async (tx) =>
+        createMaintenanceQueueRepository(tx).claimDueJobs({
+          now,
+          limit: input.limit,
+          leaseToken,
+          leaseMs: input.leaseMs,
+        }),
+    });
+    return claimed.map(toJob);
   }
 
   async renew(
@@ -205,15 +161,13 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     // can only ever push the deadline forward for a lease we still own. The
     // maintenance_jobs_lease_shape CHECK is preserved: a running row keeps a
     // non-null lease_token and lease_until throughout.
-    const renewed = await this.pool.query(
-      `UPDATE maintenance_jobs
-          SET lease_until = $3::timestamptz + ($4 * interval '1 millisecond')
-        WHERE id = $1
-          AND state = 'running'
-          AND lease_token = $2::uuid`,
-      [jobId, leaseToken, now, leaseMs],
-    );
-    return (renewed.rowCount ?? 0) === 1;
+    const renewed = await this.repository.renewLease({
+      jobId,
+      leaseToken,
+      now,
+      leaseMs,
+    });
+    return renewed === 1;
   }
 
   async complete(
@@ -221,19 +175,12 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     leaseToken: string,
     now = new Date(),
   ): Promise<boolean> {
-    const completed = await this.pool.query(
-      `UPDATE maintenance_jobs
-          SET state = 'succeeded',
-              lease_token = NULL,
-              lease_until = NULL,
-              last_error_category = NULL,
-              terminal_at = $3
-        WHERE id = $1
-          AND state = 'running'
-          AND lease_token = $2::uuid`,
-      [jobId, leaseToken, now],
-    );
-    return (completed.rowCount ?? 0) === 1;
+    const completed = await this.repository.completeJob({
+      jobId,
+      leaseToken,
+      now,
+    });
+    return completed === 1;
   }
 
   async fail(input: {
@@ -258,9 +205,10 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     // maxAttempts/backoff before throwing; deriving the transition from
     // `input.job.maxAttempts`/`backoffBaseMs`/`backoffMaxMs` would let that
     // mutation override the persisted policy and bypass the terminal bound.
-    // `attempts`, `max_attempts`, `backoff_base_ms`, and `backoff_max_ms` below
-    // are the row's own columns; `input.job` is used only for the lease-token
-    // guard (id + lease_token), which claimDueJobs minted and no handler owns.
+    // `attempts`, `max_attempts`, `backoff_base_ms`, and `backoff_max_ms` in the
+    // statement are the row's own columns; `input.job` is used only for the
+    // lease-token guard (id + lease_token), which claimDueJobs minted and no
+    // handler owns.
     //
     // The SQL backoff mirrors maintenanceBackoffMs() exactly: the first retry
     // (attempts = 1) uses backoff_base_ms, the exponent is (attempts - 1)
@@ -270,37 +218,18 @@ export class MaintenanceQueue implements MaintenanceQueuePort {
     //
     // The dead-letter branch fires when the row has exhausted its bounded retry
     // budget (attempts >= max_attempts) OR the caller flagged the failure
-    // terminal ($5). A terminal failure short-circuits to dead_letter on this
+    // terminal. A terminal failure short-circuits to dead_letter on this
     // attempt without consulting attempts/max_attempts and without scheduling a
     // backoff retry; an ordinary failure keeps the persisted bounded-retry
     // policy verbatim. The stale-lease guard (state='running' AND lease_token)
     // and content-free category are preserved on both paths.
-    const failed = await this.pool.query<MaintenanceJobRow>(
-      `UPDATE maintenance_jobs
-          SET state = CASE WHEN $5::boolean OR attempts >= max_attempts
-                           THEN 'dead_letter' ELSE 'queued' END,
-              run_after = CASE WHEN $5::boolean OR attempts >= max_attempts
-                               THEN run_after
-                               ELSE $3::timestamptz + (
-                                 LEAST(
-                                   backoff_base_ms::numeric
-                                     * (2 ^ LEAST(GREATEST(attempts - 1, 0), 30)),
-                                   backoff_max_ms::numeric
-                                 ) * interval '1 millisecond'
-                               ) END,
-              lease_token = NULL,
-              lease_until = NULL,
-              last_error_category = $4,
-              terminal_at = CASE WHEN $5::boolean OR attempts >= max_attempts
-                                 THEN $3::timestamptz ELSE NULL END,
-              dead_lettered_at = CASE WHEN $5::boolean OR attempts >= max_attempts
-                                      THEN $3::timestamptz ELSE NULL END
-        WHERE id = $1
-          AND state = 'running'
-          AND lease_token = $2::uuid
-       RETURNING ${JOB_COLUMNS}`,
-      [input.job.id, input.job.leaseToken, now, errorCategory, terminal],
-    );
-    return failed.rows[0] ? toJob(failed.rows[0]) : null;
+    const failed = await this.repository.failJob({
+      jobId: input.job.id,
+      leaseToken: input.job.leaseToken,
+      now,
+      errorCategory,
+      terminal,
+    });
+    return failed ? toJob(failed) : null;
   }
 }

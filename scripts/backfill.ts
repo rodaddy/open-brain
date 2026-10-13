@@ -4,10 +4,10 @@
  */
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
-import { createPool } from "../src/db/pool.ts";
-import { generateEmbedding, EMBEDDING_MODEL } from "../src/embedding.ts";
-import { getEmbeddingTarget } from "../src/embedding-targets.ts";
-import { logger } from "../src/logger.ts";
+import { createPool } from "./settings.ts";
+import { generateEmbedding, EMBEDDING_MODEL } from "./settings.ts";
+import { getEmbeddingTarget } from "./settings.ts";
+import { logger } from "./settings.ts";
 
 type EmbedFn = (text: string) => Promise<number[] | null>;
 
@@ -52,9 +52,7 @@ const DELAY_MS = Number.isNaN(rawDelay) || rawDelay < 0 ? 150 : rawDelay;
 // Capped at 8 to stay under the pg pool max (10).
 const rawConcurrency = parseInt(process.env.BACKFILL_CONCURRENCY ?? "1", 10);
 const CONCURRENCY =
-  Number.isNaN(rawConcurrency) || rawConcurrency < 1
-    ? 1
-    : Math.min(rawConcurrency, 8);
+  Number.isNaN(rawConcurrency) || rawConcurrency < 1 ? 1 : Math.min(rawConcurrency, 8);
 
 interface BackfillResult {
   processed: number;

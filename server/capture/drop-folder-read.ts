@@ -7,8 +7,8 @@
  */
 import { open } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
 import { DROP_SOURCE_KIND } from "./drop-folder-contract.ts";
 import type { DiscoveredFile } from "./drop-folder-discovery.ts";
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   buildScorecard,
   namespaceLeaks,
@@ -9,6 +9,7 @@ import {
   scoreProbeMetric,
 } from "../metrics.ts";
 import { parseLiveFixture } from "../fixtures.ts";
+import { expectDefined } from "../../../../scripts/test-support/expect-defined.ts";
 import type { LiveFixture, LiveThresholds } from "../types.ts";
 
 const FIXTURE: LiveFixture = parseLiveFixture({
@@ -116,9 +117,11 @@ describe("deterministic ranking metrics", () => {
     expect(namespaceLeaks(["a", "b"], ["neg"])).toBe(0);
     expect(namespaceLeaks(["a", "b"], [])).toBe(0);
   });
+});
 
+describe("deterministic probe and scorecard scoring", () => {
   it("scores a probe deterministically for a known ranking", () => {
-    const probe = FIXTURE.probes[0]!;
+    const probe = expectDefined(FIXTURE.probes[0], "first fixture probe");
     const metric = scoreProbeMetric(probe, ["a", "d", "b"], 3);
     expect(metric).toEqual({
       probe_id: "p1",
@@ -152,9 +155,7 @@ describe("deterministic ranking metrics", () => {
     expect(scorecard.passed).toBe(false);
     expect(scorecard.recall_at_k).toBeLessThan(0.9);
     expect(scorecard.mrr).toBeLessThan(0.8);
-    expect(scorecard.failures.some((f) => f.startsWith("recall_at_k"))).toBe(
-      true,
-    );
+    expect(scorecard.failures.some((f) => f.startsWith("recall_at_k"))).toBe(true);
     expect(scorecard.failures.some((f) => f.startsWith("mrr"))).toBe(true);
   });
 
@@ -165,9 +166,7 @@ describe("deterministic ranking metrics", () => {
     });
     expect(scorecard.namespace_leaks).toBe(1);
     expect(scorecard.passed).toBe(false);
-    expect(
-      scorecard.failures.some((f) => f.startsWith("namespace_leaks")),
-    ).toBe(true);
+    expect(scorecard.failures.some((f) => f.startsWith("namespace_leaks"))).toBe(true);
   });
 
   it("scores a missing probe as an empty (worst-case) retrieval", () => {

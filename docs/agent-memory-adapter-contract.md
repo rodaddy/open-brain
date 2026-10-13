@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the local Open Brain adapter contract for Codex, Hermes,
+This document defines the local Open Brain adapter contract for Codex,
 thin clients, and future Closed Brain workflows. It is the issue-sized contract
 for #207 and #210. Runtime adapters may wrap these calls, but Open Brain remains
 the server authority for auth, namespace isolation, storage, promotion policy,
@@ -38,7 +38,7 @@ with `share_candidate=true`.
 
 The TypeScript wrapper in `src/agent-memory.ts` uses a caller-provided
 `callTool(name, args)` transport and validates local call shape and metadata
-safety. The Python package exposes the same Hermes-facing facade through
+safety. The Python package exposes the same facade through
 `openbrain_memory.AgentMemory`, including session start/recall/write,
 compaction, receipt recording, repo fact helpers, and OKF-like disclosure bundle
 export. Normal convenience methods do not expose caller-selected namespace
@@ -108,7 +108,7 @@ All adapter calls should carry:
 - `agent`: local agent identity, such as `codex`, `bilby`, or `skippy`.
 - `project`: repository or project slug when known.
 - `namespace`: optional override only when the token is authorized.
-- `source`: runtime source, such as `codex`, `hermes`, `mcp2cli`, or `n8n`.
+- `source`: runtime source, such as `codex`, `mcp2cli`, or `n8n`.
 - `channel_id` and `thread_id`: external conversation identifiers when
   available.
 - `metadata`: bounded JSON for color, display labels, OKF hooks, caller version,
@@ -131,7 +131,7 @@ servers, channels, threads, or sessions.
 
 Structured append failures use the `error` classes `retryable_outage`,
 `auth_denied`, `scope_validation`, `unsupported_operation`, and
-`conflict_retry`, plus `retryable` so Hermes can decide whether to spool/retry
+`conflict_retry`, plus `retryable` so clients can decide whether to spool/retry
 or stop. Clients should not parse generic text such as "lane not found" for
 control flow.
 
@@ -153,7 +153,7 @@ edge-profile compatibility hook under `metadata.okf`, including unknown keys,
 but imports are staging-only until a separate reviewer/promoter chooses what is
 safe to store or share.
 
-Hermes adapters should also preserve platform identity, Discord channel/thread
+Adapters should also preserve platform identity and channel/thread
 mapping, and agent profile metadata. Codex adapters should preserve current
 branch, dirty state, validation receipts, and next-step handoff context when
 wrapping.
@@ -173,43 +173,6 @@ or stop abruptly. A Codex adapter should:
 
 `scripts/codex-memory-smoke.ts` is the repo-local dry-run/live smoke for this
 profile. Dry-run mode prints command JSON without writing memory.
-
-### Hermes Lifecycle Profile
-
-Hermes remains the owner of live platform loops, profile policy, Discord
-gateway state, and deployment. The Open Brain-side contract requires a Hermes
-adapter to map platform identity into lane metadata without importing Hermes
-runtime code into this repo:
-
-- `agent`: Hermes agent identity such as `bilby` or `skippy`;
-- `platform`: platform label such as `discord` — stored as the lane `source`
-  column and compared on subsequent scoped appends;
-- `server_id`: server/guild identity — stored in `metadata.server_id` and
-  compared on subsequent scoped appends;
-- `channel_id` and `thread_id`: Discord channel/thread identifiers;
-- `metadata.agent_profile`: profile/config identifier safe to store;
-- `metadata.transport`: `openbrain-memory`, `mcp2cli`, or direct provider path;
-- `record_receipt`: external channel, spool, validation, and handoff receipts.
-
-First-class lifecycle callers pass agent, platform, server, channel, thread,
-and session coordinates to `session_start`; checkpoint/wrap calls repeat them.
-The server atomically attaches only previously unasserted coordinates and fails
-closed on any asserted mismatch. Once agent/platform/server/channel are set, a
-null thread is an asserted unthreaded scope, never a wildcard for a later
-threaded caller. Legacy callers may still omit exact-scope fields, but package
-runtime durable-success receipts require the returned lane to prove every
-coordinate.
-
-For Nagatha-style realtime Discord writes, Hermes should call
-`append_session_event` with `create_if_missing=true` and the Discord exact scope.
-Missing lanes are normal first-write state. Hermes should spool and retry
-`retryable_outage` failures, stop on `auth_denied` or `scope_validation`, and
-avoid falling back from scoped session events to unscoped `log_thought`.
-
-Open Brain local tests may fixture these call shapes through fake transports.
-Actual rtech-hermes runtime/plugin changes, hosted verification, and live
-Hermes canaries belong to the consuming Hermes issue (rtech-hermes#276) unless
-Rico explicitly approves that rollout phase.
 
 ## Lightweight Receipt Schema
 

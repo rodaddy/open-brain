@@ -21,19 +21,16 @@ export const DEFAULT_MIN_SHARE_LENGTH = 24;
 /**
  * Secret detectors now live in the import-free `secret-patterns.ts` leaf so the
  * logger can redact without a circular import (see that module's header).
- * Re-exported here because this is where callers have always found them.
+ * SECRET_PATTERNS is re-exported here because this is where callers have always
+ * found it.
  */
-import { SECRET_DETECTORS, SECRET_PATTERNS } from "../../src/secret-patterns.ts";
+import { SECRET_DETECTORS, SECRET_PATTERNS } from "../security/secret-patterns.ts";
 
-export {
-  SECRET_DETECTORS,
-  SECRET_PATTERNS,
-  type SecretPatternDetector,
-} from "../../src/secret-patterns.ts";
+export { SECRET_PATTERNS } from "../security/secret-patterns.ts";
 
-export const SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS = 2;
+const SHARE_REJECTION_MAX_RESUBMIT_ATTEMPTS = 2;
 
-export interface ShareRejectionDetail {
+interface ShareRejectionDetail {
   category: "reject-secret" | "reject-private";
   matched_kind: string;
   span_count: number;
@@ -44,7 +41,7 @@ export interface ShareRejectionDetail {
   resubmit_blocked_reason?: "max_attempts" | "invalid_resubmit_root";
 }
 
-export interface ShareRejectionDetailOptions {
+interface ShareRejectionDetailOptions {
   resubmit_attempt?: number;
   resubmit_blocked_reason?: "max_attempts" | "invalid_resubmit_root";
 }
@@ -121,7 +118,7 @@ export interface ShareCandidateInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface ClassifyShareOptions {
+interface ClassifyShareOptions {
   /** Minimum trimmed content length to be share-eligible. */
   minLen?: number;
 }

@@ -4,41 +4,58 @@
  * ob_links stand-in that honors both partial-unique indexes, and the
  * canonical auth/input fixtures.
  */
-import type { DeriveGraphInput, GraphDerivationPool } from "./graph-derivation.ts";
-import { logger } from "../../src/logger.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type {
+  DeriveGraphInput,
+  GraphDerivationRepository,
+} from "./graph-derivation.ts";
+import type pg from "pg";
+import { createGraphDerivationRepository } from "../db/graph-derivation-repository.ts";
+import type { AuthInfo } from "../types.ts";
+
+type LogMethod = (message: string, extra?: Record<string, unknown>) => void;
+
+/** The structural surface this harness patches: any object with the four levels. */
+export type PatchableLogger = {
+  info: LogMethod;
+  debug: LogMethod;
+  warn: LogMethod;
+  error: LogMethod;
+};
 
 /**
  * Capture every field the primitive hands the logger during `fn`, then restore
- * the real logger. Used by the content-free sentinel tests: the derivation
- * primitive must never emit a namespace value, a content/derivation hash value,
- * an anchor id, or any extracted term through observability. Only stable
- * categories (anchor_type / status) and structural counts may leave the server.
+ * the target's own methods. The caller hands in the logger the derivation
+ * primitive writes to, so this harness names no logging module of its own.
+ * Used by the content-free sentinel tests: the derivation primitive must never
+ * emit a namespace value, a content/derivation hash value, an anchor id, or any
+ * extracted term through observability. Only stable categories (anchor_type /
+ * status) and structural counts may leave the server.
  */
 export async function captureLoggerFields(
+  target: PatchableLogger,
   fn: () => Promise<void>,
 ): Promise<Record<string, unknown>[]> {
   const captured: Record<string, unknown>[] = [];
   const original = {
-    info: logger.info,
-    debug: logger.debug,
-    warn: logger.warn,
-    error: logger.error,
+    info: target.info,
+    debug: target.debug,
+    warn: target.warn,
+    error: target.error,
   };
   const record = (extra?: Record<string, unknown>) => {
     if (extra) captured.push(extra);
   };
-  logger.info = (_m, extra) => record(extra);
-  logger.debug = (_m, extra) => record(extra);
-  logger.warn = (_m, extra) => record(extra);
-  logger.error = (_m, extra) => record(extra);
+  target.info = (_m, extra) => record(extra);
+  target.debug = (_m, extra) => record(extra);
+  target.warn = (_m, extra) => record(extra);
+  target.error = (_m, extra) => record(extra);
   try {
     await fn();
   } finally {
-    logger.info = original.info;
-    logger.debug = original.debug;
-    logger.warn = original.warn;
-    logger.error = original.error;
+    target.info = original.info;
+    target.debug = original.debug;
+    target.warn = original.warn;
+    target.error = original.error;
   }
   return captured;
 }
@@ -46,13 +63,16 @@ export async function captureLoggerFields(
 /** Postgres-style unique-violation surfaced when an unarbitrated index collides. */
 export class FakeUniqueViolation extends Error {
   code = "23505";
-  constructor(public constraint: string) {
+  public constraint: string;
+
+  constructor(constraint: string) {
     super(`duplicate key value violates unique constraint "${constraint}"`);
+    this.constraint = constraint;
     this.name = "FakeUniqueViolation";
   }
 }
 
-export interface FakeEntityRow {
+interface FakeEntityRow {
   id: string;
   namespace: string;
   entity_type: string;
@@ -62,7 +82,7 @@ export interface FakeEntityRow {
 }
 
 /** Link row keyed by the (namespace, from, to, relation) live identity. */
-export interface FakeLinkRow {
+interface FakeLinkRow {
   id: string;
   namespace: string;
   from_id: string;
@@ -92,7 +112,7 @@ interface FakeQueryResult {
  * is what lets the rename regression below observe the canonical-index breach
  * that a name-only fake would silently swallow. `is_new` mirrors `(xmax = 0)`.
  */
-export class FakeGraph implements GraphDerivationPool {
+export class FakeGraph implements Pick<pg.Pool, "query"> {
   rows: FakeEntityRow[] = [];
   // Link rows carry archived state so the prune UPDATE (soft-delete) and the
   // partial-unique WHERE archived_at IS NULL revive-on-conflict are both
@@ -323,13 +343,22 @@ export class FakeGraph implements GraphDerivationPool {
 
   // `pg.Pool["query"]` is a wide overload set; the fake implements only the
   // (sql, params) form the primitive actually calls.
-  query: GraphDerivationPool["query"] = (async (
+  query: pg.Pool["query"] = (async (
     sql: string,
     params: unknown[] = [],
   ): Promise<FakeQueryResult> => {
     this.calls.push({ sql, params });
     return this.dispatch(String(sql), params);
-  }) as unknown as GraphDerivationPool["query"];
+  }) as unknown as pg.Pool["query"];
+}
+
+/**
+ * The repository port the primitive takes, built over a fake (or real) query
+ * surface. Every statement still routes through that surface's `query`, so a
+ * suite that swaps `query` after construction still sees its own override.
+ */
+export function asRepository(store: { query: unknown }): GraphDerivationRepository {
+  return createGraphDerivationRepository(store as Pick<pg.Pool, "query">);
 }
 
 export const auth: AuthInfo = {

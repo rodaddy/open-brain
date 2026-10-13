@@ -14,7 +14,7 @@ marked **TESTED** (with the test that proves it) or **DOCUMENTED-ONLY**.
 
 | Requirement | Value | Rationale |
 |---|---|---|
-| RPO (max acceptable loss window) | **24 hours** | LAN-local, single-operator deployment on core01. Durable memory accretes at human pace (session lanes, thoughts, promotions); a day of loss is recoverable from client spools, session transcripts, and qmd-derived facts. Sub-daily backup adds operational surface without a matching risk. |
+| RPO (max acceptable loss window) | **24 hours** | LAN-local, single-operator deployment on the Mini (10.0.1.20). Durable memory accretes at human pace (session lanes, thoughts, promotions); a day of loss is recoverable from client spools, session transcripts, and qmd-derived facts. Sub-daily backup adds operational surface without a matching risk. |
 | RTO (max acceptable restore time) | **1 hour** | createdb + verify + `pg_restore` + forward migrations on the current data volume completes in minutes; one hour budgets operator time, a re-point of the launchd service, and a smoke check. |
 | Retention | **7 daily + 4 weekly** | One week of fine-grained rollback for bad writes/migrations, one month of coarse history for slow-burn corruption. Retention pruning is operator-run (see stale-backup alerting below); the verify CLI treats every set in the backups root independently. |
 | Encryption | **REQUIRED for any off-host copy; NOT applied at rest locally.** Local at-rest encryption is intentionally not layered on, per the standing LAN-local policy: local infra is not over-secured with ceremonies that add failure modes without threat-model backing (same policy as no pre-prod key rotation). Any copy that leaves the host (cloud, portable disk, another site) MUST be encrypted first, e.g. `tar -C <backups-root> -cf - <set-dir> \| age -r <recipient> > set.tar.age` (or `openssl enc -aes-256-cbc -pbkdf2` where `age` is unavailable). |
@@ -54,7 +54,7 @@ argv, and never appear in receipts.
 
 ```bash
 DB_HOST=127.0.0.1 DB_USER=openbrain DB_NAME=open_brain \
-  bun run scripts/backup.ts --out /Volumes/ThunderBolt/open-brain/backups/$(date +%Y%m%d-%H%M%S)
+  node --env-file-if-exists=.env scripts/backup.ts --out /srv/open-brain/backups/$(date +%Y%m%d-%H%M%S)
 ```
 
 Non-mutating for the source (pg_dump reads only). Refuses to overwrite an
@@ -65,9 +65,9 @@ existing set without `--force`. Emits a single-line content-free receipt
 
 ```bash
 # One set:
-bun run scripts/backup-verify.ts --dir <set-dir>
+node scripts/backup-verify.ts --dir <set-dir>
 # All sets under a backups root, with a staleness gate:
-bun run scripts/backup-verify.ts --dir <backups-root> --max-age-hours 26
+node scripts/backup-verify.ts --dir <backups-root> --max-age-hours 26
 ```
 
 Detects, distinctly: missing manifest/dump, unparseable manifest, unknown
@@ -103,7 +103,7 @@ rejected. No migration row or file is renamed, removed, or mutated.
 
 ```bash
 createdb -h 127.0.0.1 -U openbrain open_brain_restored
-bun run scripts/restore.ts --dir <set-dir> \
+node --env-file-if-exists=.env scripts/restore.ts --dir <set-dir> \
   --target-db-url postgres://openbrain@127.0.0.1:5432/open_brain_restored
 ```
 
@@ -159,12 +159,13 @@ That is deliberately a DIFFERENT question from "did tonight's run succeed":
 a job that has been failing silently for a week passes the per-set check on
 the night it finally works and still fails this one.
 
-### Scheduled backup on core01 (#677) — WRITTEN, not yet RUNNING
+### Scheduled backup (#677) — WRITTEN, never installed
 
-**Status: the wiring SHIPS in this repo and is proven locally; it has NOT been
-installed on core01.** Everything below is the cutover-runbook step, to be run
-BY THE OPERATOR ON CORE01. Nothing in this section has been executed against
-core01 by any agent.
+**Status: the wiring SHIPS in this repo and is proven locally; it was never
+installed on any host. Part B Lane 3
+(issue 1594) moves
+backups to CNPG native.** The step below is the install as written, kept as
+the record.
 
 Issue #677 (cutover blocker B4) measured the gap this closes: the backup
 substrate was real, tested, and CI-drilled, and had **never been invoked** —
@@ -180,19 +181,18 @@ What ships:
 | `scripts/backup-scheduled-run.sh` | what launchd runs: dated set, env load, backup, verify, staleness alert |
 | `scripts/deploy-lock.ts` | the deploy-overlap guard shared by backup and deploy |
 
-**The core01 install step (operator, on core01):**
+**The install step as written (never run):**
 
 ```bash
-cd /Volumes/ThunderBolt/open-brain/app
+cd /srv/open-brain/app
 bash scripts/install-backup-launchagent.sh
 # Prove the wiring immediately — do not wait for 03:00:
 launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-backup
 # Then confirm a set landed and verifies:
-bun run scripts/backup-verify.ts --dir /Volumes/ThunderBolt/open-brain/backups --max-age-hours 26
+node scripts/backup-verify.ts --dir /srv/open-brain/backups --max-age-hours 26
 ```
 
-Note that `/Volumes/ThunderBolt/open-brain/backups/` does not exist on core01
-today (#677 confirmed its absence); the runner creates it on first run.
+The runner creates `/srv/open-brain/backups/` on first run.
 
 **`DB_NAME` is required, not defaulted.** The runner refuses to start without
 it. `DB_NAME` selects *which brain* gets backed up, and #676 records that it
@@ -215,10 +215,7 @@ operations touch — the same primitive `server/db/migrations.ts` already uses t
 serialize migrations, with a distinct key (`:openbrain-deploy`). It is
 deliberately asymmetric:
 
-- **`scripts/core01-deploy-local.sh` takes and HOLDS the lock** for the whole
-  deploy, acquired after the env file is sourced and before staging, migrate,
-  and the runtime swap. It waits (bounded) rather than refusing: a deploy is
-  attended, and queueing behind a running backup is correct.
+- **The deploy takes and HOLDS the lock**, waiting (bounded) rather than refusing. `scripts/local-clone-deploy.sh`, the live deploy path, takes it after loading the env file and before staging, migrating, or swapping the runtime (issue 1643).
 - **`scripts/backup.ts` REFUSES immediately** if the lock is held, exits `4`,
   and writes nothing. It is an unattended job; skipping to the next clean run
   beats holding a connection open against a database being migrated. The

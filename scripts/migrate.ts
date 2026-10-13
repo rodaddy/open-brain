@@ -1,9 +1,12 @@
-import { createPool } from "../src/db/pool.ts";
-import { runMigrations } from "../src/db/migrate.ts";
-import { logger } from "../src/logger.ts";
+import { createPool } from "./settings.ts";
+import { runMigrations } from "../server/db/migrate.ts";
+import { logger } from "./settings.ts";
 
 async function main(): Promise<void> {
-  const pool = createPool();
+  // No pgvector registration here: DDL never reads vector values, and on a
+  // fresh database the extension does not exist until a migration creates it
+  // (issue 1515).
+  const pool = createPool(undefined, { registerVectorTypes: false });
 
   try {
     const applied = await runMigrations(pool);
@@ -25,4 +28,4 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+void main();

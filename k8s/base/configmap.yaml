@@ -1,0 +1,76 @@
+# Open Brain — base ConfigMap (issue 762).
+#
+# STATUS: WRITTEN. Nothing here is applied.
+#
+# NON-SECRET configuration only. Anything carrying a password, token, key or
+# DSN goes in a Secret applied out of band from your secret store — never here,
+# because this file is in git and a ConfigMap is plaintext to anyone with read
+# access to the namespace.
+#
+# The line is not "is it sensitive" but "would I paste it in a PR". A database
+# HOST is fine here; a database URL with the password in it is not, which is
+# why the credential half is a secretKeyRef in the Deployment and only the
+# non-secret half appears below.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-brain-config
+  labels:
+    app.kubernetes.io/name: open-brain
+data:
+  # Bind 0.0.0.0, never loopback. A loopback bind passes every local test and
+  # then serves nobody through a Service, because the kubelet's probe and the
+  # Service both dial the pod IP. This is the variable the app's transport
+  # reads (server/main.ts references OPEN_BRAIN_BIND_HOST).
+  OPEN_BRAIN_BIND_HOST: "0.0.0.0"
+
+  # 3100 is this app's documented port. NOT 3000 — hard fleet rule. Must equal
+  # the Dockerfile's EXPOSE and the Deployment's containerPort.
+  PORT: "3100"
+
+  NODE_ENV: "production"
+
+  # ---------------------------------------------------------------------------
+  # IN-CLUSTER DNS — MIND THE TRAILING DOT.
+  #
+  # The cluster's resolv.conf sets `ndots:5`. A bare 4-dot FQDN like
+  # `general-rw.databases.svc.cluster.local` has FEWER than 5 dots, so it walks
+  # every search domain first — and under musl (this is an alpine-based image)
+  # that walk FAILS, while `nslookup` from the same pod succeeds because
+  # nslookup does not use the same resolver path. That contradiction is the
+  # tell, and it is the most expensive way to spend an afternoon.
+  #
+  # Two safe spellings, and they are the only two:
+  #   short:           general-rw.databases
+  #   absolute (dot):  general-rw.databases.svc.cluster.local.
+  #
+  # The dangerous spelling is the one that looks most correct — no trailing
+  # dot. The absolute form is used here.
+  # ---------------------------------------------------------------------------
+  DB_HOST: "general-rw.databases.svc.cluster.local."
+  DB_PORT: "5432"
+  DB_NAME: "open_brain"
+
+  # Migrations run on boot for the server Deployment only. The NATS worker
+  # Deployment overrides this to "0" so two Deployments never race the same
+  # migration — the same shape the repo already uses for extra workers.
+  OPEN_BRAIN_RUN_MIGRATIONS: "1"
+
+  # The fleet embedding endpoint. 768-dim `embed-gemma-dense`, matching the
+  # stored vector space. Trailing dot for the reason above.
+  EMBEDDING_BASE_URL: "http://llama-swap.ai.svc.cluster.local.:8080/v1"
+  EMBEDDING_MODEL: "embed-gemma-dense"
+  EMBEDDING_DIMENSIONS: "768"
+
+  # There is no local embedding daemon in a pod to bounce, so the watchdog
+  # restart hook stays empty — the same posture as the retired MLX server.
+  EMBEDDING_WATCHDOG_RESTART_SCRIPT: ""
+
+  # Scratch path. Must match the Dockerfile's mkdir and the Deployment's
+  # volumeMount, and it is deliberately NOT /tmp: the container's own /tmp is
+  # backed by node ephemeral storage with no ceiling, so a runaway intermediate
+  # fills the NODE and evicts unrelated pods. The Deployment mounts a bounded
+  # emptyDir here.
+  TMPDIR: "/var/lib/app/scratch"
+  OPENBRAIN_SCRATCH_DIR: "/var/lib/app/scratch"

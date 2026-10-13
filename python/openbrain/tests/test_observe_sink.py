@@ -35,6 +35,8 @@ from openbrain.apps.hooks.session import (
     StartedLane,
     StopHook,
     SubagentStopHook,
+    _capture_origin,
+    _scoped_watermark_key,
     run_stop,
     run_subagent_stop,
 )
@@ -275,7 +277,11 @@ class TestRunStopObservationWiring:
         # raw lane's advanced normally.
         store = WatermarkStore(watermark)
         assert await store.offset_for(OBSERVE_KEY_PREFIX + "sess") == 0
-        assert await store.offset_for("sess") == transcript.stat().st_size
+        origin = _capture_origin(settings)
+        assert origin is not None
+        assert await store.offset_for(
+            _scoped_watermark_key(origin, "sess")
+        ) == transcript.stat().st_size
 
     async def test_an_inactive_sink_never_builds_an_emitter(
         self, tmp_path: Path
@@ -466,7 +472,7 @@ class TestTheSuiteNeverInheritsAnOperatorsSink:
     ``CaptureSettings`` but resolves the OBSERVATION section itself, from the
     live process environment, on every call. On a machine whose shell carries
     the four provisioned coordinates -- which the operator env file
-    ``claudex-observation.env`` supplies, so any hook-configured host has them
+    ``openbrain.env`` supplies, so any hook-configured host has them
     -- the unit suite built a real ``LangfuseEmitter`` and posted its fixture
     transcripts to the fleet server. ``emit`` ends in ``client.shutdown()``,
     which BLOCKS draining the OpenTelemetry batch worker, so

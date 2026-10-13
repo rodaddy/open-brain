@@ -1,4 +1,7 @@
-import type { Table } from "../../src/types.ts";
+// The column list each memory table is SELECTed with, declared once so every
+// read boundary projects the same shape. Names only; no query is built here.
+
+import type { Table } from "../types.ts";
 
 export const TABLE_COLUMNS: Record<Table, string> = {
   thoughts:

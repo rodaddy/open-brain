@@ -1,56 +1,22 @@
 /**
  * Canonical embed-text and source-hash builders shared by the live write paths
- * and the embedding-repair registry.
+ * and the embedding-repair registry. These helpers are the ONE implementation
+ * both sides call, and every function here is pure and free of DB/provider
+ * imports so the repair registry and the tool handlers can import it without a
+ * cycle; where a value cannot be decoded it exposes a predicate
+ * (`undecidableStringArray`) rather than logging.
  *
- * The stale-embedding repair primitive (src/embedding-repair.ts) decides that a
- * row drifted by recomputing its source hash and comparing it to the stored
- * `content_hash`, and regenerates the embedding from the embed text. If the
- * repair side and the write side compute either string differently -- even by a
- * separator -- repair will (a) falsely flag freshly written rows as drifted,
- * (b) regenerate a DIFFERENT embedding than the writer produced, and (c) write a
- * different `content_hash`, corrupting the dedup key. These helpers are the ONE
- * implementation both sides call, so a formula can only change in a single place.
- *
- * Keep every function here pure and free of DB/provider imports so both the
- * registry and the tool handlers can import it without cycles. That rule is why
- * this module reports nothing itself; where a value cannot be decoded, it
- * exposes a predicate (`undecidableStringArray`) so the callers that do have a
- * logger can report it. See coerceStringArray for the one case that matters.
+ * See docs/decisions/embedding-canonical-one-implementation-both-sides.md
  */
 
 /**
  * Coerce a `jsonb` array column (e.g. `decisions.alternatives`) or an in-memory
- * `string[]` argument into a `string[]`. node-postgres parses a jsonb column
- * into a JS value, so a healthy row arrives as an array; but a legacy row could
- * hold a JSON-encoded string, `null`, or a non-array jsonb scalar. This never
- * throws: anything that is not a usable array of strings collapses to `[]` so
- * the caller degrades to "no optional field".
+ * `string[]` argument into a `string[]`. Anything that is not a usable array of
+ * strings collapses to `[]`; this never throws. The one collapse that is not
+ * benign -- a non-empty string that fails to parse -- is made detectable via
+ * `undecidableStringArray()` below rather than logged or thrown.
  *
- * ONE COLLAPSE IS NOT BENIGN, AND IT IS NOT SILENT ANY MORE.
- *
- * The other collapses are honest: `null`, a number, or an object genuinely
- * carries no strings, so `[]` is the true answer and the hash built from it is
- * the right hash. But a value that is a non-empty STRING which fails to parse is
- * different -- it may well be an array whose text is damaged, and collapsing it
- * drops content that belongs in the canonical text. Since the canonical text is
- * what `content_hash` is baked from, that row then hashes differently here than
- * its writer computed, which the embedding-repair registry reads as
- * `source_drift`: it regenerates a different vector and rewrites the dedup key,
- * every pass, forever. That is the exact corruption this module exists to
- * prevent, and the header's claim that collapsing degrades "rather than
- * corrupting the hash" was wrong for this one case.
- *
- * This module cannot log it: the file header requires it stay pure and
- * import-free so the repair registry and the tool handlers can both import it
- * without a cycle. So instead of logging, the case is made DETECTABLE --
- * `undecidableStringArray()` below answers the same question without a logger,
- * and `src/embedding-repair.ts` consults it and reports before it can be
- * mistaken for drift.
- *
- * It also deliberately does NOT throw. `target.sourceHash(row)` is called inside
- * the drift-detection loop with no try/catch, so throwing here would abort an
- * entire repair scan on one damaged legacy row -- turning a one-row problem into
- * a total outage. Detectable-and-reported is the correct shape; fail-fast is not.
+ * See docs/decisions/embedding-canonical-one-implementation-both-sides.md
  */
 export function coerceStringArray(value: unknown): string[] {
   let v = value;
@@ -59,6 +25,9 @@ export function coerceStringArray(value: unknown): string[] {
     try {
       v = JSON.parse(v);
     } catch {
+      // Deliberate fail-open, per the doc comment above: the caller with a
+      // logger asks the same question through undecidableStringArray (:81) and
+      // reports it, so this stays pure and never aborts a repair scan.
       return [];
     }
   }
@@ -85,6 +54,8 @@ export function undecidableStringArray(value: unknown): boolean {
     JSON.parse(value);
     return false;
   } catch {
+    // Deliberate: the parse failure is the predicate's answer, not an error.
+    // canonicalDroppedFields (:103) turns it into the reported field list.
     return true;
   }
 }
@@ -103,6 +74,26 @@ export function undecidableCanonicalFields(source: Record<string, unknown>): str
   return fields.filter((field) => undecidableStringArray(source[field]));
 }
 
+/**
+ * Render one canonical text field from an untyped column value.
+ *
+ * Mirrored byte-for-byte by `canonicalField` in `server/tools/entry-text.ts`; the
+ * two must change together for the same reason every other formula here must.
+ *
+ * A string passes through unchanged, so every well-formed row produces exactly
+ * the byte sequence it produced before this helper existed and no stored
+ * `content_hash` moves. `null`/`undefined` is the empty string, as it always
+ * was. Anything else renders as JSON rather than through default object
+ * stringification, which collapsed every distinct object to the single token
+ * `[object Object]` -- so two damaged rows with different content hashed
+ * identically and were indistinguishable to the repair registry. JSON keeps them
+ * apart. Primitives such as numbers and booleans render identically either way.
+ */
+function canonicalField(value: unknown): string {
+  if (value == null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 export interface DecisionSource {
   title?: unknown;
   rationale?: unknown;
@@ -114,24 +105,11 @@ export interface DecisionSource {
 
 /**
  * Deterministically normalize a decision tag set: dedupe and sort into a fixed
- * order WITHOUT mutating the caller's input. Returns a fresh array.
+ * codepoint order WITHOUT mutating the caller's input. Returns a fresh array.
+ * This is the owning-boundary rule for tag order in the canonical text; the
+ * stored `tags` COLUMN is unaffected.
  *
- * This is the owning-boundary rule for tag order in the canonical text. The
- * decision `content_hash` is baked from this text at INSERT time, but the
- * `ON CONFLICT DO UPDATE` merge stores `array_agg(DISTINCT tag)`, whose order is
- * NOT guaranteed by Postgres. If the canonical text folded tags in raw array
- * order, a post-conflict row (with its arbitrarily-ordered merged tags) would
- * recompute a different source hash than the stored one and the embedding-repair
- * registry would flag it as false `source_drift` — regenerating a different
- * vector and rewriting the dedup key on every repair pass (churn).
- *
- * Sorting by codepoint order (a strict total order — no locale/collation
- * ambiguity that could tie two distinct tags and leave their relative order
- * platform-dependent) makes the folded tag segment identical for any permutation
- * or duplication of the same tag set, so the INSERT hash, the merged-row repair
- * recompute, and the update_entry writer all converge on one string regardless
- * of tag ordering. The stored `tags` COLUMN is unaffected — only the string fed
- * to embed/hash is normalized.
+ * See docs/decisions/embedding-canonical-decision-tags-are-order-independent.md
  */
 function normalizeDecisionTags(tags: string[]): string[] {
   return [...new Set(tags)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -153,8 +131,8 @@ function normalizeDecisionTags(tags: string[]): string[] {
  * ON CONFLICT merge does not reorder it; only `tags` is merged via array_agg.
  */
 export function decisionCanonicalText(source: DecisionSource): string {
-  const title = source.title == null ? "" : String(source.title);
-  const rationale = source.rationale == null ? "" : String(source.rationale);
+  const title = canonicalField(source.title);
+  const rationale = canonicalField(source.rationale);
   const parts: string[] = [title, rationale];
 
   const context = typeof source.context === "string" ? source.context : undefined;
@@ -185,8 +163,8 @@ export interface SessionSource {
  * is richer (see sessionEmbedText).
  */
 export function sessionSourceHashInput(source: SessionSource): string {
-  const summary = source.summary == null ? "" : String(source.summary);
-  const project = source.project == null ? "" : String(source.project);
+  const summary = canonicalField(source.summary);
+  const project = canonicalField(source.project);
   return `${summary}|${project}`;
 }
 
@@ -203,7 +181,7 @@ export function sessionSourceHashInput(source: SessionSource): string {
  * whichever fields a caller has.
  */
 export function sessionEmbedText(source: SessionSource): string {
-  const summary = source.summary == null ? "" : String(source.summary);
+  const summary = canonicalField(source.summary);
   const parts: string[] = [summary];
 
   const keyDecisions = coerceStringArray(source.key_decisions);

@@ -8,14 +8,15 @@
  * the pool.
  */
 
+import { writeFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPool } from "../src/db/pool.ts";
+import { createPool } from "./settings.ts";
 
-// NEVER /Volumes/collab. That is the SHARED volume: its README documents a
+// NEVER /srv/shared. That is the SHARED volume: its README documents a
 // 3-folder-per-agent structure, and root-level scratch is not part of it. This
-// line wrote `/Volumes/collab/rem-bakeoff-items.json` and was one of 37 files
+// line wrote `/srv/shared/rem-bakeoff-items.json` and was one of 37 files
 // this repo left in that root -- which the operator, in a sandboxed session,
 // could not even `ls` to find out what was going on. Nothing here runs remotely;
 // there was never a reason to use the share. Local work, repo-local output.
@@ -48,11 +49,11 @@ try {
       WHERE agent_turns >= 2 AND operator_len >= 40 AND len < 3990
       ORDER BY md5(id::text)
       LIMIT $1`,
-    [TARGET - auq.rowCount!],
+    [TARGET - (auq.rowCount ?? 0)],
   );
 
   const rows = [...auq.rows, ...typed.rows];
-  await Bun.write(OUT, JSON.stringify(rows, null, 2));
+  await writeFile(OUT, JSON.stringify(rows, null, 2));
   console.log(
     `wrote ${rows.length} items to ${OUT} (${auq.rowCount} auq, ${typed.rowCount} typed)`,
   );

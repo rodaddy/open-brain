@@ -8,16 +8,18 @@
  * self-contained and takes what it needs as an argument.
  */
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import type pg from "pg";
-import { embeddingBaseUrl, embeddingApiKey } from "../../src/embedding.ts";
-import { readMcpAuditConfig } from "../../src/audit-log.ts";
+import { embeddingBaseUrl, embeddingApiKey } from "../embedding/provider.ts";
+import { readMcpAuditConfig } from "../security/audit-log.ts";
+import { mcpAuditEnvironment } from "../config.ts";
 import { resolveQmdPath } from "../config/qmd-path.ts";
-import { logger } from "../../src/logger.ts";
-import { describeError } from "../../src/observability/index.ts";
-import type { QmdIndexProbeResult } from "../../src/qmd-index-probe-worker.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { describeError } from "../observability/log-surface.ts";
+import type { QmdIndexProbeResult } from "./qmd-index-probe-worker.ts";
 import {
   classifyDistillationLag,
   OPTIONAL_TIMEOUT_MS,
@@ -29,8 +31,6 @@ import {
 const MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
-  "..",
-  "src",
   "db",
   "migrations",
 );
@@ -58,7 +58,7 @@ export function resetCachedServiceVersion(): void {
 export async function readServiceVersion(fallback: string): Promise<string> {
   if (cachedServiceVersion !== null) return cachedServiceVersion;
   try {
-    const pkg = (await Bun.file(PACKAGE_JSON_PATH).json()) as {
+    const pkg = JSON.parse(await readFile(PACKAGE_JSON_PATH, "utf8")) as {
       version?: unknown;
     };
     cachedServiceVersion =
@@ -105,8 +105,8 @@ export async function withTimeout<T>(
 }
 
 /**
- * Is an HTTP endpoint answering OK? Exported because `/health` in `src/index.ts`
- * asks the same question of the same provider and had its own byte-identical
+ * Is an HTTP endpoint answering OK? Exported because the `/health` route asks
+ * the same question of the same provider and had its own byte-identical
  * private copy -- including the bare `catch { return false }` this one no longer
  * has. A REST sibling drifting from the module that owns the logic is the exact
  * shape of the PR #277 failure recorded in docs/sme/correctness.md:475, so the
@@ -209,7 +209,7 @@ export async function readMigrationStatus(
 export async function readAuditStorageStatus(
   pool: pg.Pool,
 ): Promise<OperatorDoctorStatus["log_audit"]["audit_storage"]> {
-  if (!readMcpAuditConfig().enabled) return "not_available";
+  if (!readMcpAuditConfig(mcpAuditEnvironment()).enabled) return "not_available";
 
   const query: pg.QueryConfig<[string]> & { query_timeout: number } = {
     text: "SELECT to_regclass($1) AS table_name",
@@ -220,7 +220,12 @@ export async function readAuditStorageStatus(
     pool
       .query(query)
       .then(({ rows }) => rows[0]?.table_name != null)
-      .catch(() => false),
+      .catch((error: unknown) => {
+        // "not_available" is the right answer for the operator, but it reads
+        // the same whether the table is absent or the query never landed.
+        logger.warn("doctor_audit_storage_query_failed", describeError(error));
+        return false;
+      }),
     false,
   );
   return reachable ? "available" : "not_available";
@@ -347,20 +352,15 @@ function spawnQmdIndexProbe(path: string): {
   task: Promise<QmdIndexProbeResult>;
   terminate: () => void;
 } {
-  const worker = new Worker(
-    new URL("../../src/qmd-index-probe-worker.ts", import.meta.url),
-    { type: "module" },
-  );
+  const worker = new Worker(new URL("./qmd-index-probe-worker.ts", import.meta.url), {
+    execArgv: process.execArgv.filter((arg) => !arg.startsWith("--input-type")),
+  });
   const task = new Promise<QmdIndexProbeResult>((resolve, reject) => {
-    worker.onmessage = (event: MessageEvent<QmdIndexProbeResult>) => {
-      resolve(event.data);
-    };
-    worker.onerror = (event: ErrorEvent) => {
-      reject(event.error ?? new Error(event.message));
-    };
+    worker.once("message", resolve);
+    worker.once("error", reject);
     worker.postMessage({ path });
   });
-  return { task, terminate: () => worker.terminate() };
+  return { task, terminate: () => void worker.terminate() };
 }
 
 function startQmdIndexProbe(path: string): {
@@ -376,7 +376,9 @@ function startQmdIndexProbe(path: string): {
   });
   // Keep the shared promise from surfacing as an unhandled rejection when the
   // only awaiting caller has already timed out.
-  shared.catch(() => {});
+  shared.catch((error: unknown) => {
+    logger.debug("doctor_qmd_index_probe_rejected", describeError(error));
+  });
   inFlightQmdIndexProbes.set(path, shared);
   return { task: shared, terminate: () => {} };
 }

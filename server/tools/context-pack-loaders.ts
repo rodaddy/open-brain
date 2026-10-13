@@ -28,6 +28,7 @@ import {
 import type { PackAllocator } from "./context-pack-allocator.ts";
 import type { SectionSelection } from "./context-pack-selection.ts";
 import type { MemoryToolDependencies } from "./types.ts";
+import { createContextPackRepository } from "../db/context-pack-repository.ts";
 
 export type StructuredSectionQuery = (
   sql: string,
@@ -37,18 +38,12 @@ export type StructuredSectionQuery = (
 export function structuredSectionQueryFor(
   dependencies: MemoryToolDependencies,
 ): StructuredSectionQuery {
-  return async (sql, params) => {
-    const result = await dependencies.pool.query(sql, params);
-    return { rows: result.rows as Array<Record<string, unknown>> };
-  };
+  const repository = createContextPackRepository(dependencies.pool);
+  return async (sql, params) => await repository.runSectionQuery({ sql, params });
 }
 
-export type DurableLaneContext = Awaited<
-  ReturnType<typeof loadDurableLaneContext>
->;
-export type DurableMemoryContext = Awaited<
-  ReturnType<typeof loadDurableMemoryContext>
->;
+export type DurableLaneContext = Awaited<ReturnType<typeof loadDurableLaneContext>>;
+export type DurableMemoryContext = Awaited<ReturnType<typeof loadDurableMemoryContext>>;
 
 /** Load `durable_lane_context`, seeded with its content allowance. */
 export function loadLaneContext(options: {
@@ -105,7 +100,7 @@ export async function admitGuidanceSections(options: {
     if (!request.include) continue;
     const fragment = await loadGuidanceSection(
       { section: request.section, namespace: options.readNamespace },
-      { query: options.query },
+      { repository: createContextPackRepository(options.dependencies.pool) },
       options.dependencies.logger,
     );
     admitStructuredSection({
@@ -180,8 +175,7 @@ export function admitPointerSections(options: {
   durableIdentities: string[];
 }): void {
   const { accumulator, allocator, selection, memoryContext } = options;
-  let warningsPending =
-    selection.durableMemory && !selection.durableMemorySection;
+  let warningsPending = selection.durableMemory && !selection.durableMemorySection;
   const foldSharedRecallWarnings = (fragment: SectionFragment): void => {
     if (!warningsPending) return;
     warningsPending = false;

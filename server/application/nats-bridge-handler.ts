@@ -1,11 +1,13 @@
 import type { AuthInfo } from "../types.ts";
-import type { ToolDeps } from "../../src/tools/index.ts";
+import type { ToolDeps } from "../tools/tool-deps.ts";
 import { findAuthInfoForToken } from "./auth.ts";
-import { logger } from "../../src/logger.ts";
-import {
-  buildAgentContextPackPayload,
-  parseAgentContextPackArgs,
-} from "../../src/tools/agent-context-pack.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import { buildAgentContextPackPayload } from "../tools/agent-context-pack.ts";
+import { parseAgentContextPackArgs } from "../tools/context-pack-args.ts";
+import { authIdentityFor, memoryToolDependenciesFor } from "../tools/legacy-deps.ts";
+import { sharedNamespaceConfig } from "../security/shared-namespace.ts";
+import { loadServerConfig, sharedNamespaceEnvironment } from "../config.ts";
+import type { MemoryToolDependencies } from "../tools/types.ts";
 import type {
   FleetEnvelope,
   NamespaceSource,
@@ -65,7 +67,7 @@ const NAMESPACE_TOKEN_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
  *
  * Returns the rejection source on the error branch so it can still be stamped.
  */
-export function resolveLaneBinding(
+function resolveLaneBinding(
   payload: NatsContextPackRequestPayload,
   envelope: FleetEnvelope,
   boundary: NatsRuntimeBoundary,
@@ -143,7 +145,7 @@ function rawAuthorizationHeader(
   );
 }
 
-export function authFromHeaders(
+function authFromHeaders(
   headers: Record<string, string | undefined> | undefined,
   tokenMap: Map<string, AuthInfo>,
 ): AuthInfo | null {
@@ -198,6 +200,23 @@ function notifyResolvedBinding(
 }
 
 /**
+ * Compose the server-shaped dependencies the context-pack twin takes.
+ *
+ * The retired pre-move adapter derived the shared-namespace names and the
+ * recovery WAL path from the environment on every call, and the tests that
+ * cover this path set those variables per case, so both are read per call here
+ * rather than memoized at module level. Every value flows through
+ * `server/config.ts`; this module reads no environment of its own.
+ */
+function contextPackDependencies(deps: ToolDeps): MemoryToolDependencies {
+  return memoryToolDependenciesFor(
+    deps,
+    sharedNamespaceConfig(sharedNamespaceEnvironment()),
+    loadServerConfig().recovery.walPath,
+  );
+}
+
+/**
  * Build the pack for a bound request and shape it into a response envelope.
  */
 async function buildBoundResponse(
@@ -212,8 +231,8 @@ async function buildBoundResponse(
     // be a second, un-vetted source). On the require_auth path the token's own
     // namespace governs and the wire namespace is dropped for the same reason.
     parseAgentContextPackArgs(mapRequestPayloadToToolArgs(payload)),
-    binding.auth,
-    deps,
+    binding.auth ? authIdentityFor(binding.auth) : undefined,
+    contextPackDependencies(deps),
   );
 
   if (result.isError) {

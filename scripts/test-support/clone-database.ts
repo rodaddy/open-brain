@@ -22,12 +22,12 @@
  * per-run database is dropped.
  *
  * The role's password comes from `DB_PASSWORD_LOCAL_CLONE` when the caller
- * supplies one (matching the CI variable name), otherwise one is generated. A
- * role that ALREADY exists has its password set to the value this run will use:
- * a shared role's stored password is not knowable from here, and refusing
- * instead would make every run after the first impossible on a given cluster.
- * Every such decision is announced by the caller -- nothing is adjusted
- * silently (operator ruling 2026-08-08).
+ * supplies one (matching the CI variable name). A role that ALREADY exists
+ * requires that explicit value: a shared role's stored password is not
+ * knowable from here, and resetting it to a generated value would strand the
+ * existing local runtimes. A newly created role may still receive a generated
+ * password for this run. Every such decision is announced by the caller --
+ * nothing is adjusted silently (operator ruling 2026-08-08).
  *
  * This module lives under `scripts/` deliberately: `.oxlintrc.json` scopes
  * `node/no-process-env` to `server/**` only.
@@ -35,6 +35,8 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { EXTENSION_BOOTSTRAP_SQL } from "./extension-bootstrap.ts";
+import { sqlTemplateClause } from "./test-template-db.ts";
 
 /** The exact role `scripts/local-clone.test.ts` demands. Not configurable. */
 export const CLONE_ROLE = "open_brain_local_clone";
@@ -59,10 +61,21 @@ export interface CloneProvision {
   notices: string[];
 }
 
+/** Supply the clone credential from parsed file values only when the caller omitted it. */
+export function propagateClonePassword(
+  env: NodeJS.ProcessEnv,
+  fileEnv: Readonly<Record<string, string>>,
+): void {
+  const key = "DB_PASSWORD_LOCAL_CLONE";
+  if (env[key] !== undefined || !Object.hasOwn(fileEnv, key)) return;
+  env[key] = fileEnv[key];
+}
+
 function runPsql(
   admin: AdminConnection,
   database: string,
   sql: string,
+  sensitiveValues: readonly string[] = [],
 ): { ok: boolean; stdout: string; stderr: string } {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (admin.password) env.PGPASSWORD = admin.password;
@@ -80,15 +93,19 @@ function runPsql(
       "-At",
       "-v",
       "ON_ERROR_STOP=1",
-      "-c",
-      sql,
     ],
-    { env, encoding: "utf-8" },
+    { env, encoding: "utf-8", input: sql },
   );
+  const redactions = [admin.password, ...sensitiveValues].filter(Boolean);
+  const redact = (value: string): string =>
+    redactions.reduce(
+      (redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"),
+      value,
+    );
   return {
     ok: !result.error && result.status === 0,
-    stdout: (result.stdout || "").trim(),
-    stderr: (result.error?.message ?? result.stderr ?? "").trim(),
+    stdout: redact((result.stdout || "").trim()),
+    stderr: redact((result.error?.message ?? result.stderr ?? "").trim()),
   };
 }
 
@@ -107,6 +124,52 @@ export function adminUrl(admin: AdminConnection): string {
   return `postgres://${auth}@${admin.host}:${admin.port}/postgres`;
 }
 
+/** The Postgres error text that means another run won the same catalog write. */
+const CONCURRENT_UPDATE = "tuple concurrently updated";
+
+/**
+ * Block this thread for `ms`. `ensureCloneRole` is synchronous and is called
+ * from a synchronous provisioning path, so there is nowhere to await; this uses
+ * `Atomics.wait`, which is standard and needs no runtime-specific API.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function sqlStringLiteral(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+/**
+ * Set the shared role's password, retrying only a concurrent catalog update.
+ *
+ * The role is cluster-wide, so two overlapping runs write the same `pg_authid`
+ * tuple and the loser fails with "tuple concurrently updated" (#1346). That is
+ * transient by definition -- the winner's write succeeded -- so re-issuing the
+ * SAME statement after a short randomised wait converges. Every retry is
+ * announced through `notices`; nothing is adjusted silently. Any other error,
+ * and exhaustion after the third attempt, are returned unchanged.
+ */
+function resetRolePassword(
+  admin: AdminConnection,
+  password: string,
+  notices: string[],
+): { ok: boolean; stdout: string; stderr: string } {
+  const escapedPassword = sqlStringLiteral(password);
+  const sql = `ALTER ROLE ${CLONE_ROLE} LOGIN PASSWORD '${escapedPassword}';`;
+  const totalAttempts = 3;
+  let reset = runPsql(admin, "postgres", sql, [password, escapedPassword]);
+  for (let attempt = 2; attempt <= totalAttempts; attempt += 1) {
+    if (reset.ok || !reset.stderr.includes(CONCURRENT_UPDATE)) return reset;
+    notices.push(
+      `role ${CLONE_ROLE} password reset retried (attempt ${attempt} of ${totalAttempts}) after: ${CONCURRENT_UPDATE}`,
+    );
+    sleepSync(100 + Math.floor(Math.random() * 300));
+    reset = runPsql(admin, "postgres", sql, [password, escapedPassword]);
+  }
+  return reset;
+}
+
 function ensureCloneRole(
   admin: AdminConnection,
   notices: string[],
@@ -121,45 +184,50 @@ function ensureCloneRole(
   }
 
   const supplied = process.env.DB_PASSWORD_LOCAL_CLONE;
+
+  if (existing.stdout === "1" && !supplied) {
+    return {
+      error: `role ${CLONE_ROLE} exists but DB_PASSWORD_LOCAL_CLONE is unset; refusing to reset its password or create a clone database`,
+    };
+  }
+
   const password = supplied || randomBytes(18).toString("base64url");
 
   if (existing.stdout === "1") {
     // The role is shared and outlives every run, so its stored password is not
-    // knowable from here. Rather than fail -- which would make a second run on
-    // any cluster impossible -- the admin connection SETS the password it is
-    // about to use. This is announced, never silent: an operator who had their
-    // own password on this role needs to see that it changed.
-    const reset = runPsql(
-      admin,
-      "postgres",
-      `ALTER ROLE ${CLONE_ROLE} LOGIN PASSWORD '${password}';`,
-    );
+    // knowable from here. The explicit caller value lets the admin connection
+    // SET the password it is about to use. This is announced, never silent: an
+    // operator who had their own password on this role needs to see that it
+    // changed.
+    // A concurrent catalog update from an overlapping run is retried inside
+    // resetRolePassword and announced there (#1346).
+    const reset = resetRolePassword(admin, password, notices);
     if (!reset.ok) {
-      return { error: `role ${CLONE_ROLE} exists but its password could not be set: ${reset.stderr}` };
+      return {
+        error: `role ${CLONE_ROLE} exists but its password could not be set: ${reset.stderr}`,
+      };
     }
     notices.push(
-      supplied
-        ? `role ${CLONE_ROLE} already existed; its password was RESET to the DB_PASSWORD_LOCAL_CLONE value so this run can log in (the role is shared and is never dropped here)`
-        : `role ${CLONE_ROLE} already existed; DB_PASSWORD_LOCAL_CLONE was unset, so its password was RESET to a freshly generated one for this run (the role is shared and is never dropped here). Export DB_PASSWORD_LOCAL_CLONE to keep a stable password instead`,
+      `role ${CLONE_ROLE} already existed; its password was RESET to the DB_PASSWORD_LOCAL_CLONE value so this run can log in (the role is shared and is never dropped here)`,
     );
     return { password };
   }
 
+  const escapedPassword = sqlStringLiteral(password);
   const created = runPsql(
     admin,
     "postgres",
-    `CREATE ROLE ${CLONE_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password}';`,
+    `CREATE ROLE ${CLONE_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${escapedPassword}';`,
+    [password, escapedPassword],
   );
-  if (!created.ok) return { error: `could not create ${CLONE_ROLE}: ${created.stderr}` };
+  if (!created.ok)
+    return { error: `could not create ${CLONE_ROLE}: ${created.stderr}` };
 
   notices.push(
     supplied
       ? `role ${CLONE_ROLE} created with the DB_PASSWORD_LOCAL_CLONE password; it is shared and is NOT dropped on exit`
       : `role ${CLONE_ROLE} created with a generated password; DB_PASSWORD_LOCAL_CLONE was unset. The role is shared and is NOT dropped on exit -- export that password on later runs, or reset it via ALTER ROLE`,
   );
-  if (!supplied) {
-    notices.push(`generated ${CLONE_ROLE} password for this cluster: ${password}`);
-  }
   return { password };
 }
 
@@ -168,11 +236,15 @@ function ensureCloneRole(
  *
  * @param admin  the runner's own admin connection
  * @param suffix the unique per-run suffix, so the clone shares the run's identity
+ * @param useTestTemplate false when the clone server is not the main one
+ *   (see clone-admin.ts): the database is created from template0 regardless
+ *   of OPENBRAIN_TEST_TEMPLATE_DB, which names a template on the main server
  * @returns the provisioned clone, or `{ error }` describing what stopped it
  */
 export function provisionCloneDatabase(
   admin: AdminConnection,
   suffix: string,
+  useTestTemplate = true,
 ): CloneProvision | { error: string } {
   const notices: string[] = [];
   const role = ensureCloneRole(admin, notices);
@@ -182,19 +254,19 @@ export function provisionCloneDatabase(
   const created = runPsql(
     admin,
     "postgres",
-    `CREATE DATABASE ${database} OWNER ${CLONE_ROLE} ENCODING 'UTF8' TEMPLATE template0;`,
+    // #1667: OPENBRAIN_TEST_TEMPLATE_DB, when set, replaces template0.
+    `CREATE DATABASE ${database} OWNER ${CLONE_ROLE} ENCODING 'UTF8'${useTestTemplate ? sqlTemplateClause(" TEMPLATE template0") : " TEMPLATE template0"};`,
   );
   if (!created.ok) return { error: `could not create ${database}: ${created.stderr}` };
 
   // Administrative bootstrap only, exactly as ci.yml:222-225 does it: the
   // clone role stays a non-superuser and cannot install extensions itself.
-  const extensions = runPsql(
-    admin,
-    database,
-    "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_stat_statements;",
-  );
+  // #1667: pg_stat_statements only where the server provides it (migration 008).
+  const extensions = runPsql(admin, database, EXTENSION_BOOTSTRAP_SQL);
   if (!extensions.ok) {
-    return { error: `could not install extensions in ${database}: ${extensions.stderr}` };
+    return {
+      error: `could not install extensions in ${database}: ${extensions.stderr}`,
+    };
   }
 
   // The test asserts literal loopback, so the host is 127.0.0.1 regardless of

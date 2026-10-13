@@ -48,6 +48,27 @@
  * absence, which is worse than omitting the section. The timeline carries it in
  * three shapes, all handled by resolutionOf() below.
  *
+ * ADDITIVE BY DEFAULT; `--rewrite-all` IS THE LOSSY OPT-IN. Operator ruling,
+ * 2026-09-03 (issue 1109): "Additive only. No lossy full re-sync of
+ * _plans/issues/; mirrors regenerate additively from here (new files, existing
+ * Resolution sections untouched)."
+ *
+ * The reason is a property of the MIGRATED forge, not of this renderer. It
+ * serves no user record for pre-migration authors and returns no timeline for
+ * 115 closed issues, so a faithful full re-run renders those mirrors WITHOUT
+ * the Resolution sections that are already committed. The old write path
+ * overwrote every file unconditionally and deleted every file outside the
+ * current keep set, which turns that gap into permanent loss of the reasoning
+ * the mirrors exist to preserve --
+ * docs/decisions/archaeology-survives-the-squash.md forbids exactly that.
+ *
+ * So by default this writes only files that are ABSENT, skips every file that
+ * already exists, and leaves stale files in place. Passing `--rewrite-all`
+ * restores the original overwrite-and-prune behavior; it is lossy against a
+ * forge that cannot serve the timelines, and is only correct when the operator
+ * has decided the re-render is faithful. Either way the counts are announced,
+ * per this repo's "nothing is adjusted silently" rule.
+ *
  * CROSS-REFERENCES ARE NOT A LIST OF CLOSING PRs. #659 is cross-referenced by
  * four PRs and closed by one. They are used ONLY to resolve a closing COMMIT to
  * the PR whose merge commit it is. Listing candidates would put several
@@ -55,7 +76,27 @@
  * which -- an ambiguous answer fails the ruling as surely as a missing one.
  */
 
-const OUT_DIR = "_plans/issues";
+import { existsSync, globSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  forgeGet,
+  forgeListComments,
+  forgeListPaged,
+  type ForgeComment,
+} from "./forge-api.ts";
+
+/**
+ * Where the mirror is written. Overridable so a fixture run can prove the
+ * sweep end to end without writing into the repository's own mirror.
+ */
+const OUT_DIR = process.env.SYNC_ISSUES_OUT_DIR ?? "_plans/issues";
+
+/**
+ * The lossy opt-in. Absent (the default), the sweep is additive: absent files
+ * are written, existing files are left exactly as committed, and stale files
+ * are left in place. See the header for why the default is not a full mirror.
+ */
+const REWRITE_ALL = process.argv.includes("--rewrite-all");
 
 /**
  * The sweep runs only when this file is EXECUTED, never when it is imported.
@@ -71,6 +112,12 @@ type TimelineNode = {
   __typename: string;
   // ClosedEvent
   createdAt?: string;
+  /**
+   * True when the closer was INFERRED rather than reported. Forgejo records no
+   * closer on a close event, so it is recovered from the merged cross-
+   * references; the rendered linkage says which of the two it was.
+   */
+  closerInferred?: boolean;
   actor?: { login: string } | null;
   stateReason?: string | null;
   closer?:
@@ -110,9 +157,29 @@ type Issue = {
   timeline?: TimelineNode[];
 };
 
+/**
+ * The retired production host, removed from everything the mirror writes.
+ *
+ * Rico ruling 2026-10-04 (issue 1678): the host is retired and its name leaves
+ * the tree. Forge titles and bodies still carry it, so redacting the mirror by
+ * hand would be undone on the next sync; the generator does it instead. The
+ * name and address are built from parts, the same family the purge checks in
+ * scripts/done-means/retired-host-purge-*.sh match, so this file does not name
+ * the host either. The address match refuses a trailing digit, so a
+ * neighbouring address is left alone.
+ */
+const RETIRED_HOST_NAME = new RegExp("oldhost" + "01", "gi");
+const RETIRED_HOST_IP = new RegExp("10\\.0\\.1\\." + "21(?!\\d)", "g");
+
+export function redactRetiredHost(text: string): string {
+  return text
+    .replace(RETIRED_HOST_NAME, "retired-host")
+    .replace(RETIRED_HOST_IP, "retired-host-ip");
+}
+
 /** Filesystem-safe, stable, and readable in a search hit. */
-function slug(title: string): string {
-  return title
+export function slug(title: string): string {
+  return redactRetiredHost(title)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
@@ -138,102 +205,242 @@ function slug(title: string): string {
  * critical self-review -- so a link without it would record that something
  * happened while losing the reasoning this whole artifact exists to preserve.
  */
+/** A field the forge may not have recorded, rendered without inventing one. */
+function orUnknown(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "unknown";
+  return value;
+}
+
+/** When the issue was closed, preferring the timeline event over the row. */
+function closedAtOf(i: Issue, closedEvent: TimelineNode | undefined): string {
+  return orUnknown(closedEvent?.createdAt ?? i.closedAt);
+}
+
+/** Who closed the issue, per the timeline event. */
+function closedByOf(closedEvent: TimelineNode | undefined): string {
+  return orUnknown(closedEvent?.actor?.login);
+}
+
+/** Why the issue was closed, preferring the timeline event over the row. */
+function stateReasonOf(i: Issue, closedEvent: TimelineNode | undefined): string {
+  return orUnknown(closedEvent?.stateReason ?? i.stateReason);
+}
+
+/** The closing pull request and the sentence explaining how it was linked. */
+type Closure = { pr: TimelineNode["source"] | null; linkage: string };
+
+/** Cross-referenced pull requests, the only source of a closing PR's body. */
+function crossReferencedPulls(timeline: TimelineNode[]): TimelineNode[] {
+  return timeline.filter(
+    (n) =>
+      n.__typename === "CrossReferencedEvent" && n.source?.__typename === "PullRequest",
+  );
+}
+
+/** The last ClosedEvent on the timeline, or undefined when there is none. */
+function closedEventOf(timeline: TimelineNode[]): TimelineNode | undefined {
+  return timeline.filter((n) => n.__typename === "ClosedEvent").pop();
+}
+
+/**
+ * Resolve the closer to a pull request.
+ *
+ * A PullRequest closer carries only its number, so the cross-reference is what
+ * supplies title and body; when the reference is absent the number is still the
+ * truth and is rendered alone. A Commit closer is correlated by merge SHA.
+ */
+/** The pull-request-closer branch: the cross-reference supplies title and body. */
+function closureFromPull(
+  number: number,
+  crossRefs: TimelineNode[],
+  inferred: boolean,
+): Closure {
+  const found = crossRefs.find((n) => n.source?.number === number)?.source;
+  return {
+    pr: found ?? { __typename: "PullRequest", number },
+    linkage: inferred
+      ? "Inferred: the forge records no closer on a close event, and this is the last pull request merged at or before the close."
+      : "The forge recorded this pull request as the closer.",
+  };
+}
+
+/** The commit-closer branch: correlate the SHA against merge commits. */
+function closureFromCommit(sha: string, crossRefs: TimelineNode[]): Closure {
+  const pr = crossRefs.find((n) => n.source?.mergeCommit?.oid === sha)?.source ?? null;
+  return {
+    pr,
+    linkage: pr
+      ? `Closed by commit \`${sha}\`, which is the merge commit of this pull request.`
+      : `Closed by commit \`${sha}\`. No cross-referenced pull request has that merge commit, so the PR could not be identified from the timeline.`,
+  };
+}
+
+/**
+ * Resolve the closer to a pull request.
+ *
+ * A PullRequest closer carries only its number, so the cross-reference is what
+ * supplies title and body; when the reference is absent the number is still the
+ * truth and is rendered alone. A Commit closer is correlated by merge SHA.
+ */
+function closureOf(
+  closer: NonNullable<TimelineNode["closer"]> | null,
+  crossRefs: TimelineNode[],
+  inferred = false,
+): Closure {
+  if (closer?.__typename === "PullRequest") {
+    return closureFromPull(closer.number, crossRefs, inferred);
+  }
+  if (closer?.__typename === "Commit") {
+    return closureFromCommit(closer.oid, crossRefs);
+  }
+  return { pr: null, linkage: "" };
+}
+
+/**
+ * The closing PR's body, quoted line by line.
+ *
+ * Reproduced BYTE-FOR-BYTE, and quoted rather than inlined. Both halves matter
+ * and were found by this change's own check:
+ *
+ *  - Byte-for-byte: even trimming the trailing newline makes the artifact a
+ *    paraphrase of the PR rather than a copy of it, and the whole point is that
+ *    the reasoning survives intact.
+ *
+ *  - Quoted: PR bodies in this repo carry their OWN `## Summary`,
+ *    `## Verification`, `## Critical Self-Review` headings. Inlined, those
+ *    become top-level sections of the artifact, so the PR's structure
+ *    masquerades as the issue's and a reader (or a section-scoped search)
+ *    cannot tell where the quoted body ends. Blockquoting keeps every line
+ *    inside the Resolution while leaving the text readable and searchable.
+ */
+function quotedBody(body: string): string {
+  return body
+    .split("\n")
+    .map((line) => (line.length ? `> ${line}` : ">"))
+    .join("\n");
+}
+
+/** The header facts of a resolved closure, one bullet each. */
+function resolvedHeader(
+  i: Issue,
+  pr: NonNullable<TimelineNode["source"]>,
+  linkage: string,
+  closedEvent: TimelineNode | undefined,
+): string[] {
+  const title = pr.title ? ` — ${pr.title}` : "";
+  return [
+    `Closed by **PR #${pr.number}**${title}`,
+    "",
+    `- Linkage: ${linkage}`,
+    `- Merge commit: \`${orUnknown(pr.mergeCommit?.oid)}\``,
+    `- Merged at: ${orUnknown(pr.mergedAt)}`,
+    `- PR state: ${orUnknown(pr.state)}`,
+    `- Issue closed: ${closedAtOf(i, closedEvent)} by ${closedByOf(closedEvent)} (${stateReasonOf(i, closedEvent)})`,
+    "",
+  ];
+}
+
+/** The quoted PR body, or the statement that there is none to quote. */
+function resolvedBody(pr: NonNullable<TimelineNode["source"]>): string[] {
+  if (!pr.body?.trim()) {
+    return [
+      `_The closing PR has no body, so the reasoning behind this direction was never written down._`,
+      "",
+    ];
+  }
+  return [
+    `### Direction taken and why — PR #${pr.number} body`,
+    "",
+    quotedBody(pr.body),
+    "",
+  ];
+}
+
+/** The Resolution body for a closed issue that names a pull request. */
+function resolvedLines(
+  i: Issue,
+  pr: NonNullable<TimelineNode["source"]>,
+  linkage: string,
+  closedEvent: TimelineNode | undefined,
+): string[] {
+  return [...resolvedHeader(i, pr, linkage, closedEvent), ...resolvedBody(pr)];
+}
+
+/** Where the closing rationale might be, when no pull request closed it. */
+function rationalePointer(i: Issue): string[] {
+  const lastComment = i.comments?.[i.comments.length - 1];
+  if (!lastComment) return [];
+  const who = orUnknown(lastComment.author?.login);
+  return [
+    `The closing rationale, if it was written anywhere, is in the discussion below — most recently by ${who} on ${lastComment.createdAt}.`,
+    "",
+  ];
+}
+
+/**
+ * The Resolution body for a closed issue no pull request closed.
+ *
+ * States what the timeline actually has and names no PR: an issue closed
+ * without one is a real outcome, and saying so is the honest artifact.
+ */
+function unresolvedLines(
+  i: Issue,
+  closer: NonNullable<TimelineNode["closer"]> | null,
+  linkage: string,
+  closedEvent: TimelineNode | undefined,
+): string[] {
+  const commit = closer?.__typename === "Commit" ? [`- ${linkage}`, ""] : [];
+  return [
+    "Closed without a pull request.",
+    "",
+    `- Issue closed: ${closedAtOf(i, closedEvent)} by ${closedByOf(closedEvent)}`,
+    `- State reason: ${stateReasonOf(i, closedEvent)}`,
+    "",
+    ...commit,
+    ...rationalePointer(i),
+  ];
+}
+/**
+ * The Resolution section for a closed issue: the direction taken and why.
+ *
+ * Returns "" for an open issue, or for a closed one whose timeline was never
+ * fetched -- an artifact that cannot see the timeline must stay silent rather
+ * than assert the issue resolved itself.
+ *
+ * Three shapes: the closer is a pull request, the closer is a commit whose SHA
+ * matches a cross-referenced PR's merge commit, or there is no closer at all
+ * (closed by hand). The third renders what the timeline actually has and names
+ * no PR.
+ *
+ * The closing PR's BODY is reproduced IN FULL. It is the direction-and-why
+ * payload -- in this repo it carries the done-means RED/GREEN evidence and the
+ * critical self-review -- so a link without it would record that something
+ * happened while losing the reasoning this whole artifact exists to preserve.
+ */
 function resolutionOf(i: Issue): string {
   if (i.state !== "CLOSED" || !i.timeline?.length) return "";
 
-  const closedEvent = i.timeline
-    .filter((n) => n.__typename === "ClosedEvent")
-    .pop();
-  const crossRefs = i.timeline.filter(
-    (n) => n.__typename === "CrossReferencedEvent" && n.source?.__typename === "PullRequest",
+  const closedEvent = closedEventOf(i.timeline);
+  const closer = closedEvent?.closer ?? null;
+  const { pr, linkage } = closureOf(
+    closer,
+    crossReferencedPulls(i.timeline),
+    closedEvent?.closerInferred === true,
   );
 
-  const closer = closedEvent?.closer ?? null;
-  let pr: TimelineNode["source"] | null = null;
-  let linkage = "";
+  const body = pr?.number
+    ? resolvedLines(i, pr, linkage, closedEvent)
+    : unresolvedLines(i, closer, linkage, closedEvent);
 
-  if (closer?.__typename === "PullRequest") {
-    pr = crossRefs.find((n) => n.source?.number === closer.number)?.source ?? null;
-    // The cross-reference carries the PR's title/body; the closer carries only
-    // its number. If the reference is absent the number is still the truth.
-    if (!pr) pr = { __typename: "PullRequest", number: closer.number };
-    linkage = "GitHub recorded this pull request as the closer.";
-  } else if (closer?.__typename === "Commit") {
-    const sha = closer.oid;
-    pr = crossRefs.find((n) => n.source?.mergeCommit?.oid === sha)?.source ?? null;
-    linkage = pr
-      ? `Closed by commit \`${sha}\`, which is the merge commit of this pull request.`
-      : `Closed by commit \`${sha}\`. No cross-referenced pull request has that merge commit, so the PR could not be identified from the timeline.`;
-  }
-
-  const lines: string[] = ["## Resolution", ""];
-
-  if (pr?.number) {
-    lines.push(
-      `Closed by **PR #${pr.number}**${pr.title ? ` — ${pr.title}` : ""}`,
-      "",
-      `- Linkage: ${linkage}`,
-      `- Merge commit: \`${pr.mergeCommit?.oid ?? "unknown"}\``,
-      `- Merged at: ${pr.mergedAt ?? "unknown"}`,
-      `- PR state: ${pr.state ?? "unknown"}`,
-      `- Issue closed: ${closedEvent?.createdAt ?? i.closedAt ?? "unknown"} by ${closedEvent?.actor?.login ?? "unknown"} (${closedEvent?.stateReason ?? i.stateReason ?? "unknown"})`,
-      "",
-    );
-    if (pr.body?.trim()) {
-      // The body is reproduced BYTE-FOR-BYTE, and it is quoted rather than
-      // inlined. Both halves matter and were found by this change's own check:
-      //
-      //  - Byte-for-byte: even trimming the trailing newline makes the artifact
-      //    a paraphrase of the PR rather than a copy of it, and the whole point
-      //    is that the reasoning survives intact.
-      //
-      //  - Quoted: PR bodies in this repo carry their OWN `## Summary`,
-      //    `## Verification`, `## Critical Self-Review` headings. Inlined, those
-      //    become top-level sections of the artifact, so the PR's structure
-      //    masquerades as the issue's and a reader (or a section-scoped search)
-      //    cannot tell where the quoted body ends. Blockquoting keeps every line
-      //    inside the Resolution while leaving the text readable and searchable.
-      const quoted = pr.body
-        .split("\n")
-        .map((line) => (line.length ? `> ${line}` : ">"))
-        .join("\n");
-      lines.push(
-        `### Direction taken and why — PR #${pr.number} body`,
-        "",
-        quoted,
-        "",
-      );
-    } else {
-      lines.push(
-        `_The closing PR has no body, so the reasoning behind this direction was never written down._`,
-        "",
-      );
-    }
-  } else {
-    // No PR: state what the timeline has, and say plainly that no PR closed it.
-    lines.push(
-      "Closed without a pull request.",
-      "",
-      `- Issue closed: ${closedEvent?.createdAt ?? i.closedAt ?? "unknown"} by ${closedEvent?.actor?.login ?? "unknown"}`,
-      `- State reason: ${closedEvent?.stateReason ?? i.stateReason ?? "unknown"}`,
-      "",
-    );
-    if (closer?.__typename === "Commit") {
-      lines.push(`- ${linkage}`, "");
-    }
-    const lastComment = i.comments?.[i.comments.length - 1];
-    if (lastComment) {
-      lines.push(
-        `The closing rationale, if it was written anywhere, is in the discussion below — most recently by ${lastComment.author?.login ?? "unknown"} on ${lastComment.createdAt}.`,
-        "",
-      );
-    }
-  }
-
-  return lines.join("\n");
+  return ["## Resolution", "", ...body].join("\n");
 }
 
+/** One issue as mirror markdown, with the retired host redacted throughout. */
 export function render(i: Issue): string {
+  return redactRetiredHost(renderRaw(i));
+}
+
+function renderRaw(i: Issue): string {
   const labels = i.labels.map((l) => l.name).join(", ") || "none";
   const closed = i.closedAt ? `\nClosed: ${i.closedAt}` : "";
   const milestone = i.milestone ? `\nMilestone: ${i.milestone.title}` : "";
@@ -266,8 +473,7 @@ ${i.body?.trim() || "_(no body)_"}
   // thing it corrects.
   const thread = i.comments
     .map(
-      (c) =>
-        `### ${c.author?.login ?? "unknown"} — ${c.createdAt}\n\n${c.body.trim()}`,
+      (c) => `### ${c.author?.login ?? "unknown"} — ${c.createdAt}\n\n${c.body.trim()}`,
     )
     .join("\n\n---\n\n");
 
@@ -275,185 +481,414 @@ ${i.body?.trim() || "_(no body)_"}
 }
 
 /** Run a command to completion, returning stdout and failing loudly. */
-async function run(cmd: string[]): Promise<string> {
-  const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
-  const out = await new Response(proc.stdout).text();
-  const exit = await proc.exited;
-  if (exit !== 0) {
-    console.error(await new Response(proc.stderr).text());
-    process.exit(1);
-  }
-  return out;
+/**
+ * ---------------------------------------------------------------------------
+ * READING THE FORGE
+ * ---------------------------------------------------------------------------
+ * This repo moved off GitHub on 2026-08-30; `origin` is git.example.internal and
+ * `gh` does not reach it, so the three shell-outs this script used to make --
+ * `gh issue list`, `gh api graphql` for timelines, and `gh repo view` for the
+ * owner/name -- returned nothing at all. Every read now goes through
+ * scripts/forge-api.ts, which owns the base URL, the auth header and the error
+ * shape in one place.
+ *
+ * WHAT FORGEJO ACTUALLY RETURNS, measured against git.example.internal on
+ * 2026-08-30 rather than assumed. Three differences drive the code below:
+ *
+ *  1. `/issues` MIXES PULL REQUESTS IN. `gh issue list` returned issues only;
+ *     Forgejo's list returned 23 pull requests among 30 rows on page 1. A row
+ *     carrying a `pull_request` object is a PR and is dropped, otherwise the
+ *     mirror would fill with PR files nobody asked for and the counts would lie.
+ *
+ *  2. THE TIMELINE HAS NO CLOSER. Forgejo's `close` event carries an empty
+ *     `ref_commit_sha` and a null `ref_issue` -- measured on issues 1011 and
+ *     1018, whose closing pull requests 1023 and 1032 are recorded nowhere on
+ *     the close event itself. GitHub's `closer { PullRequest | Commit }` has no
+ *     equivalent here, so the closing PR is resolved from the MERGED `pull_ref`
+ *     rows instead: the last one merged at or before the close time.
+ *
+ *  3. THE CROSS-REFERENCE CARRIES NO MERGE COMMIT. A `pull_ref` row's
+ *     `ref_issue.pull_request` has `merged`, `merged_at`, `draft` and
+ *     `html_url` -- no SHA. The rendered `Merge commit:` line therefore reads
+ *     `unknown` on this forge, which is honest; inventing a SHA would be worse.
+ *
+ * The renderer is UNCHANGED and still consumes the internal `TimelineNode`
+ * shape. Forgejo's rows are adapted into it by `adaptTimeline` below, so the
+ * recorded fixtures in scripts/done-means/fixtures/ keep measuring the same
+ * renderer they always did.
+ */
+
+/** One row of Forgejo's `/issues/{n}/timeline`. */
+type ForgeTimelineRow = {
+  type: string;
+  created_at: string;
+  body?: string | null;
+  user?: { login?: string } | null;
+  ref_commit_sha?: string | null;
+  ref_issue?: {
+    number: number;
+    title?: string;
+    state?: string;
+    body?: string;
+    pull_request?: { merged?: boolean; merged_at?: string | null } | null;
+  } | null;
+};
+
+/** One row of Forgejo's `/issues?state=all` list. */
+type ForgeIssueRow = {
+  id: number;
+  number: number;
+  title: string;
+  state: string;
+  body?: string | null;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string | null;
+  user?: { login?: string } | null;
+  labels?: { name: string }[] | null;
+  milestone?: { title: string } | null;
+  pull_request?: unknown;
+};
+
+/** Forgejo says "open"/"closed"; the renderer and its fixtures say "CLOSED". */
+function upperState(state: string): string {
+  return state.toUpperCase();
 }
 
-const TIMELINE_QUERY = `
-query($owner:String!,$repo:String!,$cursor:String) {
-  repository(owner:$owner,name:$repo) {
-    issues(first:50, states:CLOSED, orderBy:{field:CREATED_AT,direction:DESC}, after:$cursor) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number
-        stateReason
-        timelineItems(last:60, itemTypes:[CLOSED_EVENT,CROSS_REFERENCED_EVENT]) {
-          nodes {
-            __typename
-            ... on ClosedEvent {
-              createdAt
-              actor { login }
-              stateReason
-              closer {
-                __typename
-                ... on PullRequest { number }
-                ... on Commit { oid }
-              }
-            }
-            ... on CrossReferencedEvent {
-              source {
-                __typename
-                ... on PullRequest { number title state mergedAt mergeCommit { oid } body }
-              }
-            }
-          }
-        }
-      }
+/**
+ * Forgejo timeline rows, adapted to the internal shape the renderer consumes.
+ *
+ * Only the event types the renderer actually reads are mapped. `close` becomes
+ * a ClosedEvent, and each merged `pull_ref` becomes a CrossReferencedEvent
+ * carrying the pull request's title, state, merged-at and body. Everything else
+ * on the timeline -- comments, pushes, branch deletions, label changes -- is
+ * dropped, because the renderer has no use for it and carrying it would only
+ * widen the surface a future reader has to reason about.
+ */
+/** A Forgejo `close` row, as the ClosedEvent the renderer consumes. */
+function closeNode(row: ForgeTimelineRow): TimelineNode {
+  return {
+    __typename: "ClosedEvent",
+    createdAt: row.created_at,
+    actor: row.user?.login ? { login: row.user.login } : null,
+    // Forgejo records no state reason on a close, and no closer either. The
+    // closer is recovered from the merged pull_ref rows instead.
+    stateReason: null,
+    closer: null,
+  };
+}
+
+/** A Forgejo `pull_ref` row, as the CrossReferencedEvent the renderer reads. */
+function pullRefNode(
+  ref: NonNullable<ForgeTimelineRow["ref_issue"]>,
+  createdAt: string,
+): TimelineNode {
+  const pull = ref.pull_request;
+  return {
+    __typename: "CrossReferencedEvent",
+    createdAt,
+    source: {
+      __typename: "PullRequest",
+      number: ref.number,
+      title: ref.title,
+      state: ref.state ? upperState(ref.state) : undefined,
+      mergedAt: pull?.merged ? (pull.merged_at ?? null) : null,
+      // Forgejo's cross-reference carries no merge SHA. Left absent rather than
+      // guessed; the renderer prints "unknown" for it.
+      mergeCommit: null,
+      body: ref.body,
+    },
+  };
+}
+
+/**
+ * Forgejo timeline rows, adapted to the internal shape the renderer consumes.
+ *
+ * Only the event types the renderer actually reads are mapped. `close` becomes
+ * a ClosedEvent, and each `pull_ref` becomes a CrossReferencedEvent carrying
+ * the pull request's title, state, merged-at and body. Everything else on the
+ * timeline -- comments, pushes, branch deletions, label changes -- is dropped,
+ * because the renderer has no use for it and carrying it would only widen the
+ * surface a future reader has to reason about.
+ */
+function adaptTimeline(rows: ForgeTimelineRow[]): TimelineNode[] {
+  const nodes: TimelineNode[] = [];
+  for (const row of rows) {
+    if (row.type === "close") {
+      nodes.push(closeNode(row));
+    } else if (row.type === "pull_ref" && row.ref_issue) {
+      nodes.push(pullRefNode(row.ref_issue, row.created_at));
     }
   }
-}`;
+  return nodes;
+}
+
+/**
+ * Point the ClosedEvent at the pull request that actually closed the issue.
+ *
+ * Forgejo does not record a closer, so it is inferred: of the merged pull
+ * requests cross-referencing this issue, the last one merged at or before the
+ * close. Issue 1021 cross-references two merged pull requests (1023 and 1032)
+ * and issue 1011 exactly one, which is why "the merged one" is not enough and
+ * the close time is the discriminator.
+ *
+ * When nothing qualifies the closer stays null and the renderer says the issue
+ * was closed without a pull request -- the honest answer, not a guess.
+ */
+function attachInferredCloser(nodes: TimelineNode[]): TimelineNode[] {
+  const closed = nodes.find((n) => n.__typename === "ClosedEvent");
+  if (!closed) return nodes;
+
+  const closedAt = Date.parse(closed.createdAt ?? "");
+  const merged = nodes
+    .filter((n) => n.__typename === "CrossReferencedEvent" && n.source?.mergedAt)
+    .map((n) => ({ node: n, at: Date.parse(n.source?.mergedAt ?? "") }))
+    .filter((m) => Number.isFinite(m.at))
+    .sort((a, b) => a.at - b.at);
+
+  const inWindow = Number.isFinite(closedAt)
+    ? merged.filter((m) => m.at <= closedAt)
+    : merged;
+  const chosen = (inWindow.length ? inWindow : merged).pop();
+  if (chosen?.node.source?.number) {
+    closed.closer = {
+      __typename: "PullRequest",
+      number: chosen.node.source.number,
+    };
+    closed.closerInferred = true;
+  }
+  return nodes;
+}
 
 /**
  * Timelines for every CLOSED issue, keyed by number.
  *
- * Paged at 50 issues per request because that is the shape of the connection,
- * not a spending decision: the whole repo costs ~14 rate-limit points (measured
- * 2026-08-09 -- 1 point returned 25 issues with their timeline items), against
- * a 5,000-point hourly budget GitHub grants. The sweep runs often, so the cost
- * was measured rather than assumed; it is noise.
- *
- * Only closed issues are queried. An open issue has no resolution to render, so
- * fetching its timeline would buy nothing.
+ * Only closed issues are fetched: an open issue has no resolution to render, so
+ * reading its timeline would buy nothing. One request per closed issue is the
+ * shape Forgejo offers -- there is no batch timeline endpoint -- and the reads
+ * are sequential so a sweep never opens a burst of connections at the forge.
  */
-async function fetchTimelines(
-  owner: string,
-  repo: string,
-): Promise<Map<number, { stateReason: string | null; timeline: TimelineNode[] }>> {
-  const byNumber = new Map<number, { stateReason: string | null; timeline: TimelineNode[] }>();
-  let cursor: string | null = null;
-  let pages = 0;
-
-  for (;;) {
-    const args = [
-      "gh", "api", "graphql",
-      "-f", `query=${TIMELINE_QUERY}`,
-      "-F", `owner=${owner}`,
-      "-F", `repo=${repo}`,
-    ];
-    if (cursor) args.push("-F", `cursor=${cursor}`);
-
-    const page = JSON.parse(await run(args));
-    const conn = page?.data?.repository?.issues;
-    if (!conn) {
-      console.error("timeline query returned no issues connection:", JSON.stringify(page).slice(0, 400));
-      process.exit(1);
+async function fetchTimelines(numbers: number[]): Promise<Map<number, TimelineNode[]>> {
+  const byNumber = new Map<number, TimelineNode[]>();
+  for (const n of numbers) {
+    const rows = await forgeGet<ForgeTimelineRow[]>(`/issues/${n}/timeline`);
+    if (!Array.isArray(rows)) {
+      // Measured against git.example.internal on 2026-08-31: this endpoint returns
+      // a bare `null` for some migrated issues (#9 among them) rather than an
+      // empty array. Announced, never silent, and skipped rather than fatal --
+      // aborting the whole sweep over one unreadable timeline would leave the
+      // mirror half-written, and the renderer already stays silent about a
+      // Resolution it cannot see.
+      console.log(
+        `note: the forge returned no timeline for #${n}; it renders without a Resolution`,
+      );
+      continue;
     }
-    for (const node of conn.nodes) {
-      byNumber.set(node.number, {
-        stateReason: node.stateReason ?? null,
-        timeline: node.timelineItems.nodes as TimelineNode[],
-      });
-    }
-    pages++;
-    if (!conn.pageInfo.hasNextPage) break;
-    cursor = conn.pageInfo.endCursor;
+    byNumber.set(n, attachInferredCloser(adaptTimeline(rows)));
+  }
+  console.log(`timelines: ${byNumber.size} closed issue(s)`);
+  return byNumber;
+}
+
+/**
+ * A comment row as the forge returns it.
+ *
+ * `ForgeComment` from forge-api.ts carries the fields every caller needs; the
+ * author is read here as well, so the local shape widens it rather than casting
+ * at each use.
+ */
+type ForgeCommentRow = ForgeComment & { user?: { login?: string } | null };
+
+/** An author login, as the renderer's optional actor shape. */
+function loginOf(user: { login?: string } | null | undefined) {
+  return user?.login ? { login: user.login } : null;
+}
+
+/** A Forgejo issue row, adapted to the shape the renderer consumes. */
+function adaptIssue(row: ForgeIssueRow, comments: ForgeCommentRow[]): Issue {
+  return {
+    number: row.number,
+    title: row.title,
+    state: upperState(row.state),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    closedAt: row.closed_at ?? null,
+    author: loginOf(row.user),
+    labels: (row.labels ?? []).map((l) => ({ name: l.name })),
+    milestone: row.milestone ? { title: row.milestone.title } : null,
+    body: row.body ?? "",
+    comments: comments.map((c) => ({
+      author: loginOf(c.user),
+      createdAt: c.created_at,
+      body: c.body,
+    })),
+  };
+}
+
+/**
+ * Every issue in the repo, pull requests excluded, each with its comments.
+ *
+ * `forgeListPaged` owns the walk, including the stop condition this forge needs
+ * (its list endpoints ignore `?page=` and repeat page 1). Rows are keyed by
+ * `id`, which is unique across issues and pull requests alike.
+ */
+async function fetchIssues(): Promise<Issue[]> {
+  const rows = await forgeListPaged<ForgeIssueRow>(
+    "/issues?state=all",
+    (row) => row.id,
+  );
+  const issuesOnly = rows.filter((row) => !row.pull_request);
+  const dropped = rows.length - issuesOnly.length;
+  if (dropped > 0) {
+    // Announced, never silent: the forge list mixes pull requests in and the
+    // reader is told how many were dropped rather than left to infer it.
+    console.log(
+      `note: ${dropped} of ${rows.length} rows from /issues were pull requests and were not mirrored`,
+    );
   }
 
-  console.log(`timelines: ${byNumber.size} closed issues over ${pages} page(s)`);
-  return byNumber;
+  const issues: Issue[] = [];
+  for (const row of issuesOnly) {
+    const comments = await forgeListComments(row.number);
+    issues.push(adaptIssue(row, comments));
+  }
+  return issues;
+}
+
+/**
+ * `--check`: prove the forge is readable and the rows have the shape the
+ * renderer needs, WITHOUT writing anything.
+ *
+ * One page, not the whole sweep. The question a check answers is whether the
+ * reader still works against the live forge -- credentials, base URL, row
+ * shape -- and a full sweep would answer it slowly while rewriting 400 files
+ * as a side effect, which is exactly what a check must not do.
+ */
+async function checkOnly(): Promise<number> {
+  const rows = await forgeGet<ForgeIssueRow[]>("/issues?state=all&page=1");
+  if (!Array.isArray(rows) || rows.length === 0) {
+    console.error("check: /issues?state=all returned no rows");
+    return 1;
+  }
+  const issuesOnly = rows.filter((row) => !row.pull_request);
+  const sample = issuesOnly[0] ?? rows[0];
+  if (
+    !sample ||
+    typeof sample.number !== "number" ||
+    typeof sample.title !== "string"
+  ) {
+    console.error("check: the first row has no number/title; the row shape changed");
+    return 1;
+  }
+  console.log(
+    `check: ${rows.length} rows on page 1 (${issuesOnly.length} issues, ` +
+      `${rows.length - issuesOnly.length} pull requests); shape ok, nothing written`,
+  );
+  return 0;
 }
 
 if (!IS_MAIN) {
   // Imported for its renderer (done-means checks do this). Nothing below runs.
+} else if (process.argv.includes("--check")) {
+  process.exit(await checkOnly());
 } else {
+  const issues = await fetchIssues();
+  issues.sort((a, b) => a.number - b.number);
 
-const listed = await run([
-  "gh",
-  "issue",
-  "list",
-  "--state",
-  "all",
-  "--limit",
-  "1000",
-  "--json",
-  "number,title,state,createdAt,updatedAt,closedAt,author,labels,milestone,body,comments",
-]);
+  // Attach timelines so closed issues can render their Resolution. A closed issue
+  // missing from this map renders no Resolution rather than a false one -- the
+  // silence is deliberate and is pinned by the done-means check.
+  const closedNumbers = issues.filter((i) => i.state === "CLOSED").map((i) => i.number);
+  const timelines = await fetchTimelines(closedNumbers);
 
-const issues: Issue[] = JSON.parse(listed);
-issues.sort((a, b) => a.number - b.number);
-
-// Attach timelines so closed issues can render their Resolution. A closed issue
-// missing from this map renders no Resolution rather than a false one -- the
-// silence is deliberate and is pinned by the done-means check.
-const repoNwo = (await run(["gh", "repo", "view", "--json", "owner,name", "-q", ".owner.login + \"/\" + .name"])).trim();
-const [owner, repoName] = repoNwo.split("/");
-if (!owner || !repoName) {
-  // Loud, not asserted away: an unparseable repo name would otherwise send the
-  // timeline query somewhere undefined and render every issue resolution-less.
-  console.error(`could not parse owner/name from \`gh repo view\`: ${JSON.stringify(repoNwo)}`);
-  process.exit(1);
-}
-const timelines = await fetchTimelines(owner, repoName);
-
-let resolved = 0;
-let unresolved = 0;
-for (const i of issues) {
-  if (i.state !== "CLOSED") continue;
-  const t = timelines.get(i.number);
-  if (!t) {
-    unresolved++;
-    continue;
+  let unresolved = 0;
+  for (const i of issues) {
+    if (i.state !== "CLOSED") continue;
+    const timeline = timelines.get(i.number);
+    if (!timeline) {
+      unresolved++;
+      continue;
+    }
+    i.timeline = timeline;
   }
-  i.stateReason = t.stateReason;
-  i.timeline = t.timeline;
-  resolved++;
-}
-if (unresolved > 0) {
-  // Announced, never silent: a closed issue with no timeline renders without a
-  // Resolution, and the reader is told how many rather than left to infer it.
-  console.log(`note: ${unresolved} closed issue(s) had no timeline in the query result; they render without a Resolution`);
-}
-
-// A retitled issue would otherwise leave its old file behind as a stale
-// duplicate that still answers searches. Keep exactly one file per number.
-const keep = new Set(issues.map((i) => `${i.number}-${slug(i.title)}.md`));
-const existing = new Bun.Glob("*.md").scanSync({
-  cwd: OUT_DIR,
-  onlyFiles: true,
-});
-let stale = 0;
-for (const f of existing) {
-  if (!keep.has(f)) {
-    await Bun.file(`${OUT_DIR}/${f}`).delete();
-    stale++;
+  if (unresolved > 0) {
+    // Announced, never silent: a closed issue with no timeline renders without a
+    // Resolution, and the reader is told how many rather than left to infer it.
+    console.log(
+      `note: ${unresolved} closed issue(s) had no timeline in the query result; they render without a Resolution`,
+    );
   }
-}
 
-let comments = 0;
-let withResolution = 0;
-for (const i of issues) {
-  comments += i.comments.length;
-  const text = render(i);
-  if (text.includes("\n## Resolution\n")) withResolution++;
-  await Bun.write(`${OUT_DIR}/${i.number}-${slug(i.title)}.md`, text);
-}
+  // OUT_DIR must exist before either the scan below or the writes further down.
+  // The Bun-runtime writer this replaced created missing parents implicitly;
+  // writeFile does not, so on a fresh checkout -- or with SYNC_ISSUES_OUT_DIR
+  // pointed at a new fixture directory -- the sweep would fail with ENOENT.
+  await mkdir(OUT_DIR, { recursive: true });
 
-const open = issues.filter((i) => i.state === "OPEN").length;
-console.log(
-  `${issues.length} issues (${open} open, ${issues.length - open} closed), ` +
-    `${comments} comments, ${withResolution} with a Resolution -> ${OUT_DIR}/` +
-    (stale ? `, removed ${stale} stale` : ""),
-);
-// Two steps, both required: `update` re-indexes the files, `embed` builds the
-// vectors semantic search needs. Skipping embed leaves the new files findable
-// by keyword and invisible to `qmd query`.
-console.log("Now run: qmd update -c open-brain && qmd embed");
+  // A retitled issue would otherwise leave its old file behind as a stale
+  // duplicate that still answers searches. Keep exactly one file per number.
+  const keep = new Set(issues.map((i) => `${i.number}-${slug(i.title)}.md`));
+  const existing = globSync("*.md", {
+    cwd: OUT_DIR,
+    withFileTypes: false,
+  });
+  let stale = 0;
+  let staleLeft = 0;
+  for (const f of existing) {
+    if (keep.has(f)) continue;
+    if (REWRITE_ALL) {
+      await rm(`${OUT_DIR}/${f}`);
+      stale++;
+    } else {
+      // Additive default: a file outside the keep set is NOT proof of a retitle.
+      // It is equally a mirror this run could not see, and deleting it destroys
+      // the committed Resolution it carries. Counted and reported, never removed.
+      staleLeft++;
+    }
+  }
 
+  let comments = 0;
+  let withResolution = 0;
+  let written = 0;
+  let skipped = 0;
+  for (const i of issues) {
+    comments += i.comments.length;
+    const path = `${OUT_DIR}/${i.number}-${slug(i.title)}.md`;
+    if (!REWRITE_ALL && existsSync(path)) {
+      // The committed file may carry a Resolution this run cannot re-derive.
+      // Skipping it is the whole point of the additive default.
+      skipped++;
+      continue;
+    }
+    const text = render(i);
+    if (text.includes("\n## Resolution\n")) withResolution++;
+    await writeFile(path, text);
+    written++;
+  }
+
+  const open = issues.filter((i) => i.state === "OPEN").length;
+  console.log(
+    `${issues.length} issues (${open} open, ${issues.length - open} closed), ` +
+      `${comments} comments -> ${OUT_DIR}/`,
+  );
+  // Nothing is adjusted silently: the reader is told what this run did and did
+  // NOT do, and which flag would have made it do the rest.
+  if (REWRITE_ALL) {
+    console.log(
+      `mode --rewrite-all (LOSSY): wrote ${written} file(s), ` +
+        `${withResolution} with a Resolution, removed ${stale} stale`,
+    );
+  } else {
+    console.log(
+      `mode additive (default): wrote ${written} new file(s), ` +
+        `${withResolution} of them with a Resolution; ` +
+        `skipped ${skipped} file(s) that already exist; ` +
+        `left ${staleLeft} stale file(s) in place ` +
+        `(pass --rewrite-all to overwrite and remove them -- lossy, see the header)`,
+    );
+  }
+  // Two steps, both required: `update` re-indexes the files, `embed` builds the
+  // vectors semantic search needs. Skipping embed leaves the new files findable
+  // by keyword and invisible to `qmd query`.
+  console.log("Now run: qmd update -c open-brain && qmd embed");
 }

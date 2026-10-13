@@ -1,6 +1,6 @@
 import type { AuthInfo } from "../types.ts";
 import type { BackgroundTraceEmitter } from "./background-tracing.ts";
-import type { ToolDeps } from "../../src/tools/index.ts";
+import type { ToolDeps } from "../tools/tool-deps.ts";
 import type { NamespaceSource, NatsRuntimeBoundary } from "./nats-runtime.ts";
 
 export interface NatsRequestMessage {

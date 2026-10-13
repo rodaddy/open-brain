@@ -712,11 +712,32 @@ class TestALockedLatchNeverStallsTheHook:
     def test_a_held_lock_does_not_push_the_hook_past_its_deadline(
         self, tmp_path: Path
     ) -> None:
-        """The latch's WAIT: a locked latch file degrades to silence, fast."""
+        """The latch's WAIT: a locked latch file degrades to silence, fast.
+
+        The timing is asserted RELATIVE to a baseline Stop measured in this same
+        run, not against a fixed wall-clock number. The property is that a held
+        latch degrades to silence instead of waiting on the lock -- a ratio, not
+        a duration, and a loaded runner scales both sides equally (issue 634,
+        same shape as issue 769). The absolute figure below is a hang backstop
+        only: on the 30s lock wait this measured over 30s and the harness would
+        have killed the hook.
+        """
         transcript = tmp_path / "t.jsonl"
         write_lines(transcript, [operator_line("u1", "hi", session="sess")])
-        watermark = tmp_path / "wm.sqlite"
 
+        # Baseline: the same unconfigured Stop with no latch contention. Its own
+        # file, so the two runs share no latch state.
+        free_watermark = tmp_path / "free" / "wm.sqlite"
+        free_watermark.parent.mkdir()
+        start = time.monotonic()
+        stop.capture_stop_with(
+            io.StringIO(stop_payload(transcript)),
+            unconfigured(free_watermark),
+            notices=io.StringIO(),
+        )
+        baseline = time.monotonic() - start
+
+        watermark = tmp_path / "wm.sqlite"
         with latch_held(outage_module.latch_path(watermark)):
             start = time.monotonic()
             stop.capture_stop_with(
@@ -726,9 +747,13 @@ class TestALockedLatchNeverStallsTheHook:
             )
             elapsed = time.monotonic() - start
 
-        # Well under the 5s Stop deadline. On the 30s lock wait this measured
-        # over 30s and the harness would have killed the hook.
-        assert elapsed < 2.0
+        # A small multiple of an uncontended Stop, not a serialized wait. The
+        # floor keeps a very fast baseline from making the ratio meaningless on
+        # a loaded runner.
+        assert elapsed <= max(baseline * 10.0, 1.0)
+        # And a hang backstop at the Stop deadline itself, so a genuine stall
+        # fails loudly either way.
+        assert elapsed < 5.0
 
     def test_the_lock_wait_is_under_the_stop_deadline(self) -> None:
         """The constant itself, so the reason survives a future edit.
@@ -769,9 +794,30 @@ class TestTheLatchCannotBlockTheDeliveryPath:
         time, the delivery, and the exit code. Any one alone passes for the
         wrong reason; a hook that returns instantly having delivered nothing
         satisfies the timing.
+
+        The timing is asserted RELATIVE to a baseline Stop measured in this same
+        run, not against a fixed wall-clock number. The property is that a held
+        latch does not serialize delivery behind the outage path -- a ratio, not
+        a duration. A fixed 2.0s failed CI at 2.059s on a shared runner while
+        other jobs ran, which measured the runner, not the code (issue 769). The
+        30s figure below is a hang backstop only: it is the stall the shared
+        file produced (31.4s), so anything at or past it is the defect itself
+        rather than a busy machine.
         """
         transcript = tmp_path / "t.jsonl"
         write_lines(transcript, [operator_line("u1", "hi", session="sess")])
+
+        # Baseline: the same configured, reachable Stop with no latch contention.
+        # Its own file, so the two runs share no watermark state.
+        free_watermark = tmp_path / "free" / "wm.sqlite"
+        free_watermark.parent.mkdir()
+        monkeypatch.setattr(
+            stop, "_loaded_capture", lambda: reachable(free_watermark)
+        )
+        start = time.monotonic()
+        assert stop.main(io.StringIO(stop_payload(transcript))) == 0
+        baseline = time.monotonic() - start
+
         watermark = tmp_path / "wm.sqlite"
         monkeypatch.setattr(stop, "_loaded_capture", lambda: reachable(watermark))
 
@@ -780,11 +826,17 @@ class TestTheLatchCannotBlockTheDeliveryPath:
             exit_code = stop.main(io.StringIO(stop_payload(transcript)))
             elapsed = time.monotonic() - start
 
-        # (a) Well inside the 5s Stop deadline. The shared file measured 31.4s.
-        assert elapsed < 2.0
+        # (a) The held latch costs a small multiple of an uncontended Stop, not
+        # a serialized wait. On the shared file this ran 31.4s against a
+        # baseline of milliseconds. The floor keeps a very fast baseline from
+        # making the ratio meaningless on a loaded runner.
+        assert elapsed <= max(baseline * 10.0, 1.0)
+        # And a hang backstop, so a genuine stall fails loudly either way.
+        assert elapsed < 30.0
         # (b) The turn LANDED. This is the assertion the old test could not
-        # make: on the shared file the lane received zero batches.
-        assert len(brain.lane.batches) == 1
+        # make: on the shared file the lane received zero batches. Two here --
+        # the baseline Stop above delivered the first.
+        assert len(brain.lane.batches) == 2
         # (c) And the hook still reported success.
         assert exit_code == 0
 
@@ -809,6 +861,7 @@ class TestTheLatchCannotBlockTheDeliveryPath:
             reachable(watermark),
             notices=io.StringIO(),
         )
+        tables_after_failure = table_names(watermark)
         brain.up = True
         stop.capture_stop_with(
             io.StringIO(stop_payload(transcript)),
@@ -820,7 +873,8 @@ class TestTheLatchCannotBlockTheDeliveryPath:
         assert latch_file != watermark
         assert latch_file.exists()
         assert watermark.exists()
-        assert table_names(watermark) == {"watermark"}
+        assert tables_after_failure == {"watermark", "pending_capture"}
+        assert table_names(watermark) == tables_after_failure
         assert "capture_outage" in table_names(latch_file)
 
     def test_an_old_watermark_table_is_left_alone_not_dropped(

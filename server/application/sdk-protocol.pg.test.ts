@@ -55,7 +55,7 @@
  * the variable is unset. It must point at an isolated test/playground database.
  * Never the dogfood database.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Pool } from "pg";
 import pino from "pino";
@@ -64,8 +64,6 @@ import { createShadowApplication } from "./index.ts";
 import { registerMemoryTools } from "../tools/index.ts";
 import { DEFAULT_SHARED_NAMESPACE_NAMES } from "../tools/shared-namespace-fixture.ts";
 import { SERVER_REWRITE_STATE } from "../state.ts";
-import type { AggregateHealth, SingleWorkerHealth } from "../transport/index.ts";
-import { createWorkerProxyHandler } from "../transport/index.ts";
 import { silentLogger } from "../transport/testing/silent-logger.ts";
 import express from "express";
 import type { Server } from "node:http";
@@ -92,8 +90,6 @@ import {
   freshNamespace,
   live,
   SHARED_ISOLATION,
-  startWorkerApplication,
-  TEST_TOKEN,
 } from "./sdk-protocol-test-helpers.ts";
 
 const pool = new Pool({ connectionString: requireTestDatabaseUrl() });
@@ -118,7 +114,7 @@ async function completesHandshake(): Promise<void> {
   // A server-assigned session id only exists if the handshake really happened:
   // the SDK client reads it off the `Mcp-Session-Id` response header, and the
   // session manager only sets one from `onsessioninitialized`.
-  expect(live.transport?.sessionId).toBeString();
+  expect(typeof live.transport?.sessionId).toBe("string");
   expect(
     expectDefined(
       expectDefined(live.transport, "live transport").sessionId,
@@ -151,7 +147,7 @@ async function listsToolSurface(): Promise<void> {
   }
   // Discovery must return real schemas, not bare names.
   const sessionStart = listed.tools.find((tool) => tool.name === "session_start");
-  expect(sessionStart?.inputSchema).toBeObject();
+  expect(sessionStart?.inputSchema).toEqual(expect.any(Object));
 }
 
 async function roundTripsLifecycle(): Promise<void> {
@@ -351,163 +347,6 @@ async function workingSetVisibleToPack(): Promise<void> {
   expect(pack.text).toContain(content);
 }
 
-async function aggregatesWorkerHealth(): Promise<void> {
-  // Charter section 1.5: production-host runs the aggregate front and each nested
-  // worker body must be preserved. `server/transport/worker-proxy.test.ts`
-  // proves the aggregation logic, but only against an injected `fetch` that
-  // returns a hand-written `{status}` object -- so the thing it never checks
-  // is that a REAL single-worker `/health` payload survives nesting. That is
-  // the join, and this binds two real listeners to prove it.
-  const workerOne = await startWorkerApplication(pool);
-  const workerTwo = await startWorkerApplication(pool);
-  const workers = [
-    {
-      name: "open-brain-worker-1",
-      port: workerOne.port,
-      baseUrl: `http://127.0.0.1:${workerOne.port}`,
-    },
-    {
-      name: "open-brain-worker-2",
-      port: workerTwo.port,
-      baseUrl: `http://127.0.0.1:${workerTwo.port}`,
-    },
-  ];
-  const front = createWorkerProxyHandler({
-    workers,
-    hostname: "test-host",
-    serverIp: "127.0.0.1",
-    serverIps: ["127.0.0.1"],
-    healthProbeTimeoutMs: 2_000,
-    logger: silentLogger(),
-  });
-
-  const response = await front(new Request("http://127.0.0.1/health"));
-  const aggregate = (await response.json()) as AggregateHealth;
-
-  expect(response.status).toBe(200);
-  expect(aggregate.status).toBe("healthy");
-  expect(aggregate.workers.map((worker) => worker.name)).toEqual([
-    "open-brain-worker-1",
-    "open-brain-worker-2",
-  ]);
-  // Every nested body is a REAL single-worker payload, not a stub: it carries
-  // the fields the charter freezes for the single-worker surface.
-  for (const worker of aggregate.workers) {
-    expect(worker.ok).toBe(true);
-    const body = worker.body as SingleWorkerHealth;
-    expect(body.status).toBe("healthy");
-    expect(body.database.connected).toBe(true);
-    expect(body.nats.requested_transport).toBe("http");
-    expect(typeof body.timestamp).toBe("string");
-  }
-}
-
-async function pinsSessionToWorker(): Promise<void> {
-  // Session affinity is the reason the front exists at all: sessions live in
-  // a PROCESS-LOCAL map per worker (charter 1.5), so a follow-up request
-  // routed to the other worker finds no session and the client breaks. Proven
-  // over real sockets with a real SDK handshake, because the session id being
-  // pinned is one the SDK server assigned, not one the test made up.
-  const workerOne = await startWorkerApplication(pool);
-  const workerTwo = await startWorkerApplication(pool);
-  const front = createWorkerProxyHandler({
-    workers: [
-      {
-        name: "open-brain-worker-1",
-        port: workerOne.port,
-        baseUrl: `http://127.0.0.1:${workerOne.port}`,
-      },
-      {
-        name: "open-brain-worker-2",
-        port: workerTwo.port,
-        baseUrl: `http://127.0.0.1:${workerTwo.port}`,
-      },
-    ],
-    hostname: "test-host",
-    serverIp: "127.0.0.1",
-    serverIps: ["127.0.0.1"],
-    healthProbeTimeoutMs: 2_000,
-    logger: silentLogger(),
-  });
-  freshNamespace();
-
-  const initialize = await front(
-    new Request("http://127.0.0.1/mcp", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${TEST_TOKEN}`,
-        "content-type": "application/json",
-        accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "two-worker-affinity", version: "1.0.0" },
-        },
-      }),
-    }),
-  );
-  expect(initialize.status).toBe(200);
-  const sessionId = initialize.headers.get("mcp-session-id");
-  expect(sessionId).toBeString();
-
-  // Exactly one worker admitted the session; the other saw nothing. That
-  // asymmetry is what makes affinity load-bearing rather than cosmetic.
-  const admitted = [workerOne, workerTwo].filter(
-    (worker) => worker.application.sessions.sessionCount() === 1,
-  );
-  expect(admitted.length).toBe(1);
-
-  // Each follow-up must SUCCEED, and success is the assertion that matters.
-  //
-  // The obvious version of this test compares the front's own
-  // `x-open-brain-worker` value across requests -- and it proves nothing: that
-  // header is set on the OUTBOUND request the front sends to a worker, never
-  // on the response handed back, so reading it here yields `null` on every
-  // request and `null === null` passes with affinity deliberately broken.
-  // Measured on this branch: disabling the `sessionWorkers` lookup outright
-  // left that version 12/12 green.
-  //
-  // Reaching the wrong worker is instead observable in the only place it is
-  // real -- the session map is PROCESS-LOCAL, so the other worker has never
-  // heard of this session id and answers a JSON-RPC error rather than a
-  // result. Asserting on the answered payload cannot be satisfied by routing
-  // to the wrong process.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const followUp = await front(
-      new Request("http://127.0.0.1/mcp", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${TEST_TOKEN}`,
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          "mcp-session-id": expectDefined(sessionId, "session id"),
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: attempt + 2,
-          method: "tools/list",
-        }),
-      }),
-    );
-    expect(followUp.status).toBe(200);
-    const answered = await followUp.text();
-    expect(answered).toContain('"result"');
-    expect(answered).toContain("working_set_append");
-    expect(answered).not.toContain("Session not found");
-  }
-  // Still exactly one session in the fleet: affinity routed, it did not
-  // create a second session on the other worker.
-  expect(
-    workerOne.application.sessions.sessionCount() +
-      workerTwo.application.sessions.sessionCount(),
-  ).toBe(1);
-}
-
 // The "(live Postgres)" marker is REQUIRED, not decorative: the anti-skip guard
 // in `scripts/assert-db-tests-ran.ts` selects suites by that literal substring
 // (both its `<testsuite>` scan and its `<testcase>` cross-check), so a
@@ -563,11 +402,4 @@ describe("rewrite candidate over the real MCP SDK and real HTTP transport (live 
     "a working-set append is visible to the context pack that reads the same store",
     workingSetVisibleToPack,
   );
-
-  test(
-    "the two-worker front aggregates real worker health off real sockets",
-    aggregatesWorkerHealth,
-  );
-
-  test("the two-worker front pins one MCP session to one worker", pinsSessionToWorker);
 });

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Retire the legacy `collab` namespace (issue #167).
  *
@@ -43,21 +43,19 @@
  *   4. Verify un-mirrored count is 0 and the audit is clean.
  *   5. Deploy the code that removes the legacy fallback.
  */
-import { createPool } from "../src/db/pool.ts";
+import { createPool } from "./settings.ts";
 
 // Canonical values. Kept as literal allowlist constants, not taken from args
 // or env, so this script cannot be pointed at arbitrary namespaces/tables.
 const LEGACY_NAMESPACE = "collab";
 const SHARED_NAMESPACE = "shared-kb";
 const REPO_FACT_ENTITY_TYPE = "repo_fact";
-export const COLLAB_RETIRE_APPROVAL_ENV =
-  "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
-// NOT a hostname reference to scrub: this is a fixed handshake token the
-// operator types verbatim, and `docs/collab-retirement-preflight.md` (an
-// internal runbook, allowlisted) instructs them to export exactly this string.
-// Renaming it here without the runbook silently breaks the safety gate, so the
-// literal stays and the neutrality allowlist covers this one line.
-export const COLLAB_RETIRE_APPROVAL_VALUE = "core01-live-db-after-backup";
+export const COLLAB_RETIRE_APPROVAL_ENV = "OPENBRAIN_COLLAB_RETIRE_RELEASE_APPROVED";
+// A fixed handshake token the operator types verbatim:
+// `docs/collab-retirement-preflight.md` instructs them to export exactly this
+// string. Change it here and in the runbook together, or the safety gate
+// silently breaks.
+export const COLLAB_RETIRE_APPROVAL_VALUE = "live-db-after-backup";
 const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Content tables affected by the legacy fallback removal (allowlist). */
@@ -176,7 +174,7 @@ export interface Queryable {
 function usage(exitCode = 2): never {
   console.error(
     [
-      "Usage: bun run scripts/retire-collab-migration.ts [--execute]",
+      "Usage: node scripts/retire-collab-migration.ts [--execute]",
       "       [--acknowledge-out-of-scope] [--thoughts] [--entities] [--lanes]",
       "",
       "Dry-run is the DEFAULT. Pass --execute to mutate.",
@@ -512,11 +510,7 @@ export async function migrateLanes(
   };
 }
 
-async function runSteps(
-  db: Queryable,
-  args: Args,
-  report: Report,
-): Promise<void> {
+async function runSteps(db: Queryable, args: Args, report: Report): Promise<void> {
   if (args.steps.has("thoughts")) {
     report.thoughts = await migrateThoughts(db, args.execute);
   }
@@ -609,13 +603,11 @@ export async function runMigration(
 }
 
 if (import.meta.main) {
-  const args = parseArgs(Bun.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
   // createPool connects via DB_HOST/DB_USER/DB_NAME (the repo's pool config),
   // not DATABASE_URL. Fail fast with a clear message if they are unset.
   if (!process.env.DB_HOST || !process.env.DB_USER) {
-    console.error(
-      "DB_HOST and DB_USER are required (DB_NAME defaults to open_brain).",
-    );
+    console.error("DB_HOST and DB_USER are required (DB_NAME defaults to open_brain).");
     process.exit(1);
   }
   const pool = createPool({

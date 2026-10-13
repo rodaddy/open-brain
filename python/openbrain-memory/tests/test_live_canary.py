@@ -232,7 +232,9 @@ def test_live_optional_repo_fact_write_canary(live_client: OpenBrainClient):
             "https://github.com/rodaddy/open-brain/blob/"
             f"{commit}/python/openbrain-memory/tests/test_live_canary.py"
         ),
-        "verified_at": datetime.now(UTC).isoformat(),
+        # The server schema is zod `.datetime()`, which accepts only the `Z`
+        # suffix; the same conversion as openbrain_memory.agent's clock.
+        "verified_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "confidence": 1,
         "staleness_policy": "refresh_required",
         "refresh_hint": "Re-run OPENBRAIN_LIVE_CANARY_REPO_FACT_WRITE=1 pytest canary.",

@@ -5,8 +5,8 @@ introduced in #341 (PR #368) and hardened by the #368 post-merge fixes:
 enabling a non-English deployment default, what each role sees, the cost
 profile of the unindexed path, monitoring, and rollback.
 
-Audience: whoever operates a hosted Open Brain deployment (launchd service on
-core01, or any environment that sets the process env).
+Audience: whoever operates a hosted Open Brain deployment (any environment that
+sets the process env).
 
 ## What the knob does
 
@@ -82,8 +82,7 @@ runs inside a transaction with a transaction-scoped
    OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS=5000
    ```
 
-2. Restart the service (hosted core01: `launchctl kickstart -k` the
-   `com.rico.open-brain` job, or the deployment SOP's restart step).
+2. Restart the service (the deployment SOP's restart step).
 
 3. Verify:
    - An `admin`/`ob-admin` keyword search returns language-stemmed matches

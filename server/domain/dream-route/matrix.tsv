@@ -1,0 +1,6 @@
+# name	line	commits
+rule	a standing rule or lasting preference about how the operator wants work done	true
+decision	a choice the operator made or approved, with or without its reason	true
+fact	a lasting fact about a system, a repository, a tool, or a person	true
+correction	the operator correcting something the agent did, said, or recorded	true
+steering	a go-ahead, an acknowledgement, a passing question, or a fragment with nothing lasting in it	false

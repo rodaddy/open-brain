@@ -1,11 +1,11 @@
-import { logger } from "../../src/logger.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import { logger } from "../logging/legacy-logger.ts";
+import type { AuthInfo } from "../types.ts";
 import { deriveEntities, derivationHash } from "./graph-derivation-model.ts";
 import type {
   DeriveGraphInput,
   DerivationReceipt,
   DerivationStatus,
-  GraphDerivationPool,
+  GraphDerivationRepository,
 } from "./graph-derivation-model.ts";
 import {
   assertNamespaceWritable,
@@ -35,7 +35,7 @@ interface GraphWriteCounts {
  * anchor->term edges whose target dropped out of this derivation's term set.
  */
 async function persistDerivedGraph(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   auth: AuthInfo,
   identity: AnchorIdentity,
   work: {
@@ -54,13 +54,13 @@ async function persistDerivedGraph(
   const liveTargetIds = new Set<string>([anchorEntityId]);
   const { namespace } = identity;
   for (const entity of entities) {
-    const node = await upsertDerivedEntity(pool, auth, namespace, entity);
+    const node = await upsertDerivedEntity(repository, auth, namespace, entity);
     counts.entitiesUpserted += 1;
     if (node.isNew) counts.entitiesNew += 1;
     // Self-link guard: an anchor that is itself a derived term would violate
     // the ob_links CHECK (from_type <> to_type OR from_id <> to_id). Skip it.
     if (anchorEntityId === node.id) continue;
-    const link = await upsertAnchorLink(pool, auth, namespace, {
+    const link = await upsertAnchorLink(repository, auth, namespace, {
       anchorEntityId,
       nodeId: node.id,
     });
@@ -69,7 +69,7 @@ async function persistDerivedGraph(
     liveTargetIds.add(node.id);
   }
   counts.linksArchived = await pruneObsoleteAnchorLinks(
-    pool,
+    repository,
     namespace,
     anchorEntityId,
     liveTargetIds,
@@ -101,18 +101,18 @@ function unchangedReceipt(input: DeriveGraphInput, hash: string): DerivationRece
  * Transaction-agnostic: this primitive opens NO transaction of its own. It runs
  * every statement — the prior-hash read, the anchor upsert that stamps the
  * derivation/content hash, the entity+link upserts, and the stale-edge prune —
- * through the `query` of whatever `pool` it is handed, in call order. Hand it a
- * bare pool and each statement auto-commits independently (fine for a
+ * through the `repository` it is handed, in call order. Build that repository
+ * over a bare pool and each statement auto-commits independently (fine for a
  * durable-memory anchor with no cross-statement atomicity need, and what the
- * unit tests inject). Hand it a checked-out client that is mid-transaction — as
- * the maintenance handler does under its source-row lock — and ALL of these
+ * unit tests inject). Build it over a checked-out client that is mid-transaction
+ * — as the maintenance handler does under its source-row lock — and ALL of these
  * writes, including the hash stamp, become part of that caller's transaction and
  * roll back together on any error. The caller owns BEGIN/COMMIT/ROLLBACK; this
- * primitive never touches them, which is why passing a client (whose surface is
- * a superset of GraphDerivationPool) needs no signature change.
+ * primitive never touches them, which is why a client (whose surface is a
+ * superset of what the repository needs) needs no signature change.
  */
 export async function deriveGraphFromMetadata(
-  pool: GraphDerivationPool,
+  repository: GraphDerivationRepository,
   auth: AuthInfo,
   input: DeriveGraphInput,
 ): Promise<DerivationReceipt> {
@@ -130,7 +130,7 @@ export async function deriveGraphFromMetadata(
   const hash = derivationHash(namespace, anchorType, anchorId, entities);
 
   const prior = await readPriorAnchorState(
-    pool,
+    repository,
     namespace,
     anchorType,
     identity.anchorCanonical,
@@ -142,7 +142,7 @@ export async function deriveGraphFromMetadata(
     // are independent anchor state. Refresh either when it drifted so a pure
     // title rename does not leave stale graph display data behind.
     if (unchangedAnchorNeedsRefresh(identity, prior, anchorContentHash)) {
-      await refreshUnchangedAnchor(pool, identity, anchorContentHash);
+      await refreshUnchangedAnchor(repository, identity, anchorContentHash);
     }
     // Content-free: no namespace value, no derivation_hash value, no anchor id.
     // Only the stable anchor_type category and the status leave the server.
@@ -155,7 +155,7 @@ export async function deriveGraphFromMetadata(
 
   const status: DerivationStatus = previousHash === undefined ? "new" : "changed";
 
-  const anchorNode = await upsertAnchorEntity(pool, auth, identity, {
+  const anchorNode = await upsertAnchorEntity(repository, auth, identity, {
     derivationHash: hash,
     anchorContentHash,
   });
@@ -167,7 +167,7 @@ export async function deriveGraphFromMetadata(
     linksArchived: 0,
   };
 
-  await persistDerivedGraph(pool, auth, identity, {
+  await persistDerivedGraph(repository, auth, identity, {
     anchorEntityId: anchorNode.id,
     entities,
     counts,

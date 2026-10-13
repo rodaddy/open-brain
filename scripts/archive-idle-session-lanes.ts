@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Archive idle session lanes.
  *
@@ -9,7 +9,7 @@
  * - Idempotent: already archived/wrapped lanes are skipped.
  */
 import type pg from "pg";
-import { createPool } from "../src/db/pool.ts";
+import { createPool } from "./settings.ts";
 
 type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -43,6 +43,42 @@ export interface ArchiveIdleLaneReport {
   archived: number;
 }
 
+function applyValueFlag(
+  args: ArchiveIdleLaneArgs,
+  arg: string,
+  next: () => string,
+): boolean {
+  if (arg === "--older-than-days") {
+    args.olderThanDays = parsePositiveInt(next(), arg);
+  } else if (arg === "--limit") {
+    args.limit = parsePositiveInt(next(), arg);
+  } else if (arg === "--source") {
+    const value = next();
+    args.source = value === "*" ? undefined : value;
+  } else if (arg === "--namespace") {
+    args.namespace = next();
+  } else if (arg === "--session-key-prefix") {
+    args.sessionKeyPrefix = next();
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function applyFlag(args: ArchiveIdleLaneArgs, arg: string, next: () => string): void {
+  if (arg === "--execute") {
+    args.execute = true;
+    return;
+  }
+  if (arg === "--help" || arg === "-h") {
+    printUsage();
+    process.exit(0);
+  }
+  if (!applyValueFlag(args, arg, next)) {
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+}
+
 export function parseArgs(argv: string[]): ArchiveIdleLaneArgs {
   const args: ArchiveIdleLaneArgs = {
     execute: false,
@@ -53,30 +89,14 @@ export function parseArgs(argv: string[]): ArchiveIdleLaneArgs {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === undefined) continue;
     const next = () => {
       const value = argv[++i];
       if (!value) throw new Error(`${arg} requires a value`);
       return value;
     };
 
-    if (arg === "--execute") args.execute = true;
-    else if (arg === "--older-than-days") {
-      args.olderThanDays = parsePositiveInt(next(), arg);
-    } else if (arg === "--limit") {
-      args.limit = parsePositiveInt(next(), arg);
-    } else if (arg === "--source") {
-      const value = next();
-      args.source = value === "*" ? undefined : value;
-    } else if (arg === "--namespace") {
-      args.namespace = next();
-    } else if (arg === "--session-key-prefix") {
-      args.sessionKeyPrefix = next();
-    } else if (arg === "--help" || arg === "-h") {
-      printUsage();
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+    applyFlag(args, arg, next);
   }
 
   if (!args.source && !args.namespace && !args.sessionKeyPrefix) {
@@ -204,30 +224,34 @@ Options:
 `);
 }
 
+async function runSweep(args: ArchiveIdleLaneArgs): Promise<void> {
+  const pool = createPool({
+    max: 2,
+    statement_timeout: 60000,
+    application_name: "openbrain-archive-idle-session-lanes",
+  });
+  try {
+    const report = await archiveIdleSessionLanes(pool, args);
+    console.log(JSON.stringify(report, null, 2));
+    if (report.dry_run) {
+      console.error(
+        "\nDRY-RUN complete. No rows were mutated. Re-run with --execute to apply.",
+      );
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 if (import.meta.main) {
   try {
-    const args = parseArgs(Bun.argv.slice(2));
+    const args = parseArgs(process.argv.slice(2));
     if (!process.env.DB_HOST || !process.env.DB_USER) {
       throw new Error(
         "DB_HOST and DB_USER are required (DB_NAME defaults to open_brain).",
       );
     }
-    const pool = createPool({
-      max: 2,
-      statement_timeout: 60000,
-      application_name: "openbrain-archive-idle-session-lanes",
-    });
-    try {
-      const report = await archiveIdleSessionLanes(pool, args);
-      console.log(JSON.stringify(report, null, 2));
-      if (report.dry_run) {
-        console.error(
-          "\nDRY-RUN complete. No rows were mutated. Re-run with --execute to apply.",
-        );
-      }
-    } finally {
-      await pool.end();
-    }
+    await runSweep(args);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     printUsage();

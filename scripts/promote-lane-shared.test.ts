@@ -1,7 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { testScratchDir } from "./test-support/scratch-dir.ts";
 import { Pool } from "pg";
 import { runSharedPromoter } from "./promote-lane-shared.ts";
 import { requireTestDatabaseUrl } from "./test-support/require-test-database.ts";
@@ -81,9 +81,10 @@ describe("runSharedPromoter cursor-stall fix (live Postgres)", () => {
     // Defend against a PRIOR crashed test leaving residue that a namespace-wide
     // scan (nominatedTableRows has no namespace filter) would re-pick up.
     await h.cleanupNs();
-    // DEV_TMP (macOS dev) when set; otherwise the OS temp dir so this runs on
-    // the Linux CI runner (the Mac /Volumes path does not exist there).
-    tmpDir = mkdtempSync(join(process.env.DEV_TMP ?? tmpdir(), "promote-lane-shared-"));
+    // The shared helper owns base resolution: the ambient override when set,
+    // otherwise a repo-relative base that exists on the Linux CI runner too
+    // (the Mac /Volumes path does not).
+    tmpDir = testScratchDir("promote-lane-shared-");
     stateFile = join(tmpDir, "state.json");
   });
 

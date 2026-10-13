@@ -1795,6 +1795,70 @@ def test_agent_reflex_pointers_is_a_known_help_tool():
     assert client.tool_help("agent_reflex_pointers")
 
 
+def test_promote_reviewed_candidate_preserves_server_authority_contract():
+    transport = FakeTransport()
+    transport.tool_results["promote_reviewed_candidate"] = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "status": "promoted",
+                        "candidate_id": "4be2fdef-a1da-4e1f-ac55-908eda714771",
+                        "candidate_type": "fact",
+                        "namespace": "shared-kb",
+                        "dry_run": False,
+                        "would_insert": True,
+                        "is_new": True,
+                        "thought_id": "8f5c752f-a039-4ced-b76d-63335be49279",
+                    }
+                ),
+            }
+        ]
+    }
+    client = make_client(transport)
+
+    preview = client.promote_reviewed_candidate(
+        candidate_id="1341037e-91ea-4fc6-bd61-32904e302cd5",
+    )
+    result = client.promote_reviewed_candidate(
+        candidate_id="4be2fdef-a1da-4e1f-ac55-908eda714771",
+        namespace="shared-kb",
+        dry_run=False,
+    )
+
+    calls = tool_requests(transport)
+    assert len(calls) == 2
+    assert calls[0]["json"]["params"] == {
+        "name": "promote_reviewed_candidate",
+        "arguments": {
+            "candidate_id": "1341037e-91ea-4fc6-bd61-32904e302cd5",
+        },
+    }
+    assert calls[1]["json"]["params"] == {
+        "name": "promote_reviewed_candidate",
+        "arguments": {
+            "candidate_id": "4be2fdef-a1da-4e1f-ac55-908eda714771",
+            "namespace": "shared-kb",
+            "dry_run": False,
+        },
+    }
+    assert calls[0]["headers"]["Mcp-Session-Id"] == "session-123"
+    assert calls[1]["headers"]["Mcp-Session-Id"] == "session-123"
+    assert "X-Namespace" not in calls[1]["headers"]
+    assert preview == result
+    assert result == {
+        "status": "promoted",
+        "candidate_id": "4be2fdef-a1da-4e1f-ac55-908eda714771",
+        "candidate_type": "fact",
+        "namespace": "shared-kb",
+        "dry_run": False,
+        "would_insert": True,
+        "is_new": True,
+        "thought_id": "8f5c752f-a039-4ced-b76d-63335be49279",
+    }
+
+
 def test_all_registered_tool_wrappers_call_matching_tool_names():
     transport = FakeTransport()
     client = make_client(transport)
@@ -1833,6 +1897,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
         "log_decision",
         "log_thought",
         "promote_entry",
+        "promote_reviewed_candidate",
         "rate_entry",
         "recovery_wal_append",
         "recovery_wal_mark",
@@ -1863,7 +1928,7 @@ def test_all_registered_tool_wrappers_call_matching_tool_names():
 
 
 def test_required_contract_tools_have_first_class_wrappers_and_help():
-    assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v24"
+    assert CURRENT_CONTRACT_VERSION == "2026-08-09.memory-tools.v25"
     assert set(REQUIRED_CONTRACT_TOOLS) <= set(CURRENT_TOOL_HELP)
 
     for tool_name in REQUIRED_CONTRACT_TOOLS:

@@ -2,24 +2,21 @@
  * The non-MCP HTTP surface: CORS, request logging, and the REST routers.
  *
  * Design authority: `_plans/463-server-rewrite-charter.md` section 3 gives
- * `server/transport/` the HTTP routes that `src/index.ts:58-253` currently owns
- * inline. This module is the transport half of that move; the entrypoint
+ * `server/transport/` the HTTP routes the pre-rewrite entrypoint owned inline.
+ * This module is the transport half of that move; the entrypoint
  * (`server/main.ts`) composes it.
  *
- * WHY THE ROUTER BODIES ARE STILL IMPORTED FROM `src/`. The charter's strangler
- * rule is that behavior moves only behind a parity test that proves the moved
- * copy answers identically (§4 Phase 2/3). `server/transport/rest-api.ts` and
- * `src/rest-promotion.ts` are 990 lines of namespace-predicated SQL with no
- * rewrite-side coverage yet, so copying them here would be a 990-line unproven
- * fork of a security boundary — precisely the thing the charter's "no old
- * module is retired" gate exists to prevent. What IS wrong today is that
- * `server/` cannot serve them at all, and that is what this file fixes: the
- * COMPOSITION is owned here, the bodies are still owned by their current
- * module, and each body moves later behind its own parity test.
+ * COMPOSITION IS WHAT THIS FILE OWNS. The router bodies live in their own
+ * sibling modules (`rest-api.ts`, `rest-promotion.ts`) — ~990 lines of
+ * namespace-predicated SQL — and this file only wires them onto the HTTP
+ * surface alongside CORS and request logging.
  *
- * The seam is deliberately narrow: both routers accept `{ pool, embedFn }` and
- * read identity from `req.auth`, which `server/auth/middleware.ts` sets in the
- * same shape the current middleware does. Nothing else crosses.
+ * The seam is deliberately narrow: both routers accept
+ * `{ pool, embedFn, logger, searchEmbeddingTimeoutMs, sharedNamespaceNames }`
+ * and read identity from `req.auth`, which `server/auth/middleware.ts` sets.
+ * Nothing else crosses. The last three exist because the read routes call the
+ * modern search engine, which takes its collaborators by injection rather than
+ * reading them ambiently.
  */
 import cors from "cors";
 import { Router } from "express";
@@ -28,13 +25,36 @@ import type { Logger } from "pino";
 import type { Pool } from "pg";
 import { createRestRouter } from "./rest-api.ts";
 import { createPromotionRouter } from "./rest-promotion.ts";
+import { createPromotionRepository } from "../db/promotion-repository.ts";
 import { requestAuth } from "../auth/middleware.ts";
+import type { SharedNamespaceGroup } from "../config/env-groups.ts";
+import type { JevConfig } from "../integrations/jev.ts";
 
 export interface RestSurfaceInput {
   readonly pool: Pool;
   readonly embedFn: (text: string) => Promise<number[] | null>;
   readonly authenticate: RequestHandler;
   readonly logger: Logger;
+  /**
+   * Milliseconds the search route's query-embedding call may take, from
+   * `config.search.embeddingTimeoutMs`.
+   *
+   * Injected rather than read ambiently by the engine: the entrypoint owns
+   * configuration, and passing it down the same seam as the pool keeps the
+   * value provable at this boundary.
+   */
+  readonly searchEmbeddingTimeoutMs: number;
+  readonly jev?: { config: JevConfig };
+  /**
+   * The validated shared-namespace names, from `config.sharedNamespaceNames`.
+   *
+   * Same seam and same reason as the timeout: the modern engine takes the name
+   * set by injection and throws rather than defaulting when it is missing, so
+   * the entrypoint supplies it and this module only forwards it.
+   */
+  readonly sharedNamespaceNames: SharedNamespaceGroup;
+  /** The promotion kill switch, read at call time; injected by the entrypoint. */
+  readonly promotionKillSwitch: () => boolean;
   /**
    * The operator-diagnostics probe, injected rather than imported.
    *
@@ -51,7 +71,7 @@ export interface RestSurfaceInput {
 /**
  * Which roles may read operator diagnostics.
  *
- * Same rule as `src/operator-doctor.ts:64` — the doctor names hosts, migration
+ * Same rule the operator doctor applies — it names hosts, migration
  * state, and provider reachability, which is deployment shape, not memory. It
  * is admin/ob-admin only for the same reason `/health` is deliberately thinner
  * than it is.
@@ -65,7 +85,7 @@ function canReadDoctor(role: string | undefined): boolean {
  *
  * A 500's body is a fixed string on purpose: a pg error message can carry a
  * table name, a constraint, or a fragment of the offending row. The 23505
- * mapping to 409 is preserved from `src/index.ts:196-198` because clients
+ * mapping to 409 is preserved from the pre-rewrite entrypoint because clients
  * depend on it to distinguish "already exists" from "broken".
  */
 function restErrorStatus(error: unknown): number {
@@ -103,7 +123,7 @@ export function createRequestLogger(logger: Logger): RequestHandler {
  * Parse the CORS allowlist from its configured string form.
  *
  * An unset or empty value yields an EMPTY allowlist, not a wildcard. That is
- * the behavior in `src/index.ts:78` and it is the safe direction: this server
+ * the pre-rewrite behavior and it is the safe direction: this server
  * answers bearer-authenticated agents, not browsers, so a missing config should
  * permit no origin rather than every origin.
  */
@@ -178,9 +198,23 @@ export function createRestSurface(input: RestSurfaceInput): Router {
       },
     );
   }
-  const deps = { pool: input.pool, embedFn: input.embedFn };
+  const deps = {
+    pool: input.pool,
+    embedFn: input.embedFn,
+    logger: input.logger,
+    searchEmbeddingTimeoutMs: input.searchEmbeddingTimeoutMs,
+    jev: input.jev,
+    sharedNamespaceNames: input.sharedNamespaceNames,
+    promotionKillSwitch: input.promotionKillSwitch,
+  };
   router.use(input.authenticate, createRestRouter(deps));
-  router.use(input.authenticate, createPromotionRouter(deps));
+  router.use(
+    input.authenticate,
+    createPromotionRouter({
+      ...deps,
+      promotion: createPromotionRepository(input.pool),
+    }),
+  );
   router.use(
     (error: unknown, _request: Request, response: Response, next: NextFunction) => {
       // Express identifies an error handler by arity, so `next` must stay in the

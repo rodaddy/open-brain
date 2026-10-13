@@ -1,11 +1,9 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  authIdentity,
-  textResult,
-  type MemoryToolDependencies,
-} from "./types.ts";
+import { authIdentity, textResult, type MemoryToolDependencies } from "./types.ts";
 import { namespacePredicate } from "../auth/namespace-policy.ts";
+import { createSessionRepository } from "../db/session-repository.ts";
+import { insertEntryAccessLog } from "../db/access-log-repository.ts";
 import {
   authorize,
   contentHash,
@@ -54,19 +52,9 @@ async function saveSession(
   args: SaveArgs,
 ): Promise<{ id: unknown; merged: boolean; embedded: boolean }> {
   const embedded = await embeddingFields(dependencies, sessionEmbedText(args));
-  const rows = await dependencies.pool.query(
-    `INSERT INTO sessions
-       (session_id, project, summary, tags, blockers, next_steps, key_decisions,
-        created_by, namespace, embedding, content_hash, embedded_at, embedding_model)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     ON CONFLICT (namespace, session_id) WHERE session_id IS NOT NULL
-     DO UPDATE SET summary = EXCLUDED.summary, tags = EXCLUDED.tags,
-       blockers = EXCLUDED.blockers, next_steps = EXCLUDED.next_steps,
-       key_decisions = EXCLUDED.key_decisions, embedding = EXCLUDED.embedding,
-       content_hash = EXCLUDED.content_hash, embedded_at = EXCLUDED.embedded_at,
-       embedding_model = EXCLUDED.embedding_model, updated_at = NOW()
-     RETURNING id, (xmax = 0) AS is_new`,
-    [
+  const repository = createSessionRepository(dependencies.pool);
+  const row = await repository.upsertSavedSession({
+    values: [
       args.session_id ?? null,
       args.project ?? null,
       args.summary,
@@ -81,8 +69,7 @@ async function saveSession(
       embedded.embeddedAt,
       embedded.model,
     ],
-  );
-  const row = rows.rows[0];
+  });
   return { id: row.id, merged: !row.is_new, embedded: embedded.embedded };
 }
 
@@ -150,15 +137,37 @@ async function loadSessions(
     : "";
   const predicate = namespacePredicate(identity, "read", values.length + 1);
   values.push(...predicate.values);
-  const rows = await dependencies.pool.query(
-    `SELECT id, project, summary, tags, blockers, next_steps, key_decisions,
-            created_by, created_at
-       FROM sessions
-      WHERE archived_at IS NULL${projectClause}${predicate.clause}
-      ORDER BY created_at DESC`,
+  const repository = createSessionRepository(dependencies.pool);
+  return repository.selectSavedSessions({
+    projectClause,
+    namespaceClause: predicate.clause,
     values,
-  );
-  return rows.rows;
+  });
+}
+
+/**
+ * Log the loaded session to `entry_access_log` with context 'session_load'
+ * (issue 1486), restoring the write the legacy `logSessionAccess` made.
+ *
+ * Fire-and-forget, as the removed writer was: the insert never delays or fails
+ * the load. A failure is logged without content and swallowed.
+ */
+function logSessionAccess(
+  dependencies: MemoryToolDependencies,
+  sessionId: string,
+  accessedBy: string,
+): void {
+  insertEntryAccessLog(dependencies.pool, {
+    entries: [{ id: sessionId, table: "sessions" }],
+    queryText: null,
+    context: "session_load",
+    accessedBy,
+  }).catch((error: unknown) => {
+    dependencies.logger.warn(
+      { error_code: (error as { code?: unknown }).code ?? null },
+      "session_load_access_log_error",
+    );
+  });
 }
 
 function registerSessionLoad(
@@ -193,11 +202,13 @@ function registerSessionLoad(
             : "No sessions found",
         );
       }
+      const loaded = rows[0];
+      logSessionAccess(dependencies, String(loaded?.id), auth.identity.clientId);
       dependencies.logger.info(
         { tool: "session_load", project: args.project ?? null },
         "tool_result",
       );
-      return textResult(rows[0]);
+      return textResult(loaded);
     },
   );
 }

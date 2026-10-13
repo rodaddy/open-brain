@@ -5,15 +5,9 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { SessionStore, sameIdentity } from "./session-store.ts";
-import type {
-  SessionIdentity,
-  SessionTransportConfig,
-} from "./session-store.ts";
+import type { SessionIdentity, SessionTransportConfig } from "./session-store.ts";
 
-export type {
-  SessionIdentity,
-  SessionTransportConfig,
-} from "./session-store.ts";
+export type { SessionIdentity, SessionTransportConfig } from "./session-store.ts";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -69,9 +63,7 @@ function rejectIdentity(
   sessionId: string,
 ): void {
   context.logger.warn({ session_id: sessionId }, "session_identity_rejected");
-  response
-    .status(403)
-    .json({ error: "Request identity does not match session" });
+  response.status(403).json({ error: "Request identity does not match session" });
 }
 
 function rejectAdmission(context: HandlerContext, response: Response): void {
@@ -306,8 +298,7 @@ export function createSessionTransportHandlers(input: {
   return {
     handlePost: (request, response) => handlePost(context, request, response),
     handleGet: (request, response) => handleGet(context, request, response),
-    handleDelete: (request, response) =>
-      handleDelete(context, request, response),
+    handleDelete: (request, response) => handleDelete(context, request, response),
     sessionCount: () => context.store.size,
     pendingInitializeCount: () => context.store.pendingCount,
     async close() {

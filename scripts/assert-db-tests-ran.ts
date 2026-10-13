@@ -8,7 +8,7 @@
  * job still goes green with ZERO coverage of the exact SQL paths that shipped
  * the #162 lane_upsert bugs.
  *
- * This guard parses the JUnit XML emitted by `bun test --reporter=junit` and
+ * This guard parses the JUnit XML emitted by Vitest's JUnit reporter and
  * FAILS the job unless every required live-Postgres suite actually executed:
  *   - each required suite is present,
  *   - it ran at least its expected number of testcases,
@@ -16,8 +16,8 @@
  *   - none of its testcases failed or errored.
  *
  * Usage:
- *   bun test --reporter=junit --reporter-outfile=junit.xml
- *   bun run scripts/assert-db-tests-ran.ts junit.xml
+ *   npm test -- --reporter=junit --outputFile=junit.xml
+ *   node scripts/assert-db-tests-ran.ts junit.xml
  */
 
 import { readFileSync } from "node:fs";
@@ -29,100 +29,19 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   name: string;
   minTests: number;
 }> = [
-  { name: "lane_upsert (live Postgres)", minTests: 2 },
-  {
-    name: "029 maintenance_jobs terminal category compat (live Postgres)",
-    minTests: 3,
-  },
-  { name: "promote_shared (live Postgres)", minTests: 1 },
-  { name: "tier_lane (live Postgres)", minTests: 2 },
-  {
-    name: "append_session_event create_if_missing (live Postgres)",
-    minTests: 8,
-  },
   { name: "runSharedPromoter cursor-stall fix (live Postgres)", minTests: 1 },
   {
     name: "runSharedPromoter clustering and cursor loops (live Postgres)",
     minTests: 8,
-  },
-  {
-    name: "resumable file-source sync plan, checkpoint, and concurrency (live Postgres)",
-    minTests: 4,
-  },
-  {
-    name: "resumable file-source sync idempotence and isolation (live Postgres)",
-    minTests: 6,
-  },
-  {
-    name: "search_brain relational retrieval eval fixture (live Postgres)",
-    minTests: 2,
-  },
-  {
-    name: "search_brain language-aware FTS ranking (live Postgres)",
-    minTests: 4,
-  },
-  {
-    name: "language-aware FTS covers every migration-007 source field (live Postgres)",
-    minTests: 1,
-  },
-  {
-    name: "declared source language selects the real search config via explicit request (live Postgres)",
-    minTests: 3,
   },
   { name: "local clone real PostgreSQL boundary (live Postgres)", minTests: 1 },
   {
     name: "retire-collab-migration scratch Postgres real migrations (live Postgres)",
     minTests: 6,
   },
-  // The cross-provider parity fixtures (#878). Every recorded tool response for
-  // both providers is replayed here, so this is the single suite that proves the
-  // two implementations still answer identically. It was env-gated and never
-  // registered, which meant a Postgres misconfiguration skipped all 75 of those
-  // comparisons and the job stayed green having compared nothing.
-  {
-    name: "server parity fixtures by implemented provider capability (live Postgres)",
-    minTests: 75,
-  },
-  // Migration 025 in-place normalization (#878). Env-gated like every suite
-  // above and never registered here, so a Postgres misconfiguration silently
-  // skipped both proofs: that the migration converges the accepted shapes, and
-  // that it leaves every rejected one byte-for-byte unchanged. Split by subject
-  // in #878, so both halves are named here -- registering one would let the
-  // other vanish unnoticed.
-  {
-    name: "025 normalize legacy Development lanes (live Postgres)",
-    minTests: 1,
-  },
-  {
-    name: "025 leaves unrecognized lane shapes unchanged (live Postgres)",
-    minTests: 1,
-  },
-  // Migration 026's maintenance queue (#878). Env-gated like the suites above
-  // and never registered here, so a Postgres misconfiguration silently skipped
-  // every proof this queue has: idempotent enqueue, single-claimant leasing,
-  // deterministic retry scheduling, and the dead-letter transition. Split by
-  // subject in #878 into enqueue/claim and retry/dead-letter, so both halves
-  // are named here -- registering one would let the other vanish unnoticed.
-  {
-    name: "026 maintenance queue enqueue and claim (live Postgres)",
-    minTests: 6,
-  },
-  {
-    name: "026 maintenance queue retry and dead-letter (live Postgres)",
-    minTests: 6,
-  },
   {
     name: "server ID queries enforce namespace isolation (live Postgres)",
     minTests: 4,
-  },
-  // The #297 negative matrix against real Postgres (#878). Converted from an
-  // env-gated self-skip, so it is registered here for the same reason as every
-  // suite above: it is the only proof that the namespace predicate is evaluated
-  // by Postgres itself, and its allow half is what keeps the deny half from
-  // being vacuous.
-  {
-    name: "#297 namespace isolation negative matrix (live Postgres)",
-    minTests: 2,
   },
   // The charter Phase 5 real-SDK protocol proof. Registered here for the same
   // reason as every suite above: it is env-gated on OPENBRAIN_TEST_DATABASE_URL,
@@ -131,7 +50,7 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // HTTP -- and the job would stay green while proving nothing.
   {
     name: "rewrite candidate over the real MCP SDK and real HTTP transport (live Postgres)",
-    minTests: 12,
+    minTests: 10,
   },
   // Skill/canon usage telemetry (#469). Registered for the same reason as every
   // suite above: it is env-gated on OPENBRAIN_TEST_DATABASE_URL, so without this
@@ -143,23 +62,6 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   // halves together cover exactly what that one entry did, so both are named
   // here. Registering only one would let the other vanish unnoticed.
   { name: "skill usage recording and reporting (live Postgres)", minTests: 4 },
-  // decompose_entry against a real database (#878). One suite split by subject
-  // into three: planning that must not write, apply that must, and the
-  // duplicate classification only a real transaction can distinguish. It read
-  // the environment itself and skipped when it was unset, so it was never
-  // registered here and a Postgres misconfiguration silently skipped all five.
-  {
-    name: "decompose_entry planning writes nothing (live Postgres)",
-    minTests: 2,
-  },
-  {
-    name: "decompose_entry apply writes replacements (live Postgres)",
-    minTests: 1,
-  },
-  {
-    name: "decompose_entry duplicate classification (live Postgres)",
-    minTests: 2,
-  },
   {
     name: "skill usage isolation and permissions (live Postgres)",
     minTests: 5,
@@ -175,14 +77,6 @@ export const REQUIRED_SUITES: ReadonlyArray<{
   {
     name: "source registry isolation and retirement (live Postgres)",
     minTests: 3,
-  },
-  // The issue #337 tag-clobber regression, which shares migration 027's file
-  // and its database. It was never registered here, so a Postgres
-  // misconfiguration skipped it silently -- and a lost tag is exactly the kind
-  // of defect that leaves no trace at the exit code.
-  {
-    name: "backgroundExtract tag merge against live row (live Postgres)",
-    minTests: 2,
   },
   // The maintenance queue runner's lease boundary, proven through the composed
   // `server/` runtime. These entries matter more than most: the invariants they
@@ -230,107 +124,6 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "rewrite entrypoint startup and shutdown ordering (live Postgres)",
     minTests: 3,
   },
-  // Migration 028's upgrade-path repair (#878). The defect it covers exists
-  // ONLY on a database upgraded across an earlier revision of 026, so a fresh
-  // schema proves nothing and a skipped run proves less: the queue's
-  // dead-letter category would be rejected in production while CI stayed
-  // green. Registered here so the run is proven, not assumed.
-  {
-    name: "028 maintenance_jobs lease_expired compat (live Postgres)",
-    minTests: 3,
-  },
-  // from a permanent all-status UNIQUE constraint to a running-only partial
-  // index. Registered because the upgrade path it repairs exists only in
-  // Postgres: the suite rewinds a real schema to the legacy shape and proves
-  // the converged one, which no text assertion over the SQL can do.
-  {
-    name: "031 ob_source_sync_runs running-only uniqueness compat (live Postgres)",
-    minTests: 6,
-  },
-  // Migration 032's raw-turn structural guarantees, split by subject over one
-  // shared fixture. Registered by #878 when the suite stopped skipping itself
-  // without a database, so a vanished raw-turn constraint fails the run rather
-  // than reporting a silent zero.
-  { name: "032 raw turns role contract (live Postgres)", minTests: 2 },
-  { name: "032 raw turns identity (live Postgres)", minTests: 4 },
-  { name: "032 raw turns conversation thread (live Postgres)", minTests: 4 },
-  {
-    name: "032 raw turns retention and provenance (live Postgres)",
-    minTests: 7,
-  },
-  // Migrations 038/039. The CHECK constraints, the dedupe unique index, and the
-  // ON DELETE CASCADE are database guarantees a fake cannot enforce, so an
-  // unnoticed non-run here means nothing is proving them. The file's suites are
-  // FLAT for this guard's sake: its testcase-level cross-check keys on the JUnit
-  // `classname`, which for a nested suite carries the inner name only, so a
-  // wrapping describe would register here as a suite that executed nothing and
-  // fail even on a fully green run. All four are named; registering a subset
-  // would let the rest vanish unnoticed.
-  {
-    name:
-      "the operator queue is enforced by the database, not by convention " +
-      "(live Postgres)",
-    minTests: 6,
-  },
-  { name: "039 said-at timestamps (live Postgres)", minTests: 4 },
-  { name: "038 candidate_reinforcement writes (live Postgres)", minTests: 5 },
-  {
-    name: "038 candidate_reinforcement lifecycle (live Postgres)",
-    minTests: 4,
-  },
-  // The 001_init schema proof (#878). It reads the catalog back after the
-  // migration runs, so it is the only place a halfvec column that came back as
-  // a plain vector, or an HNSW index built with `vector_cosine_ops`, is caught
-  // at all -- and a schema defect is exactly the kind that stays invisible
-  // until data has already been written against it. Registered as six suites
-  // because the file is six independent subjects over one shared schema; naming
-  // only some of them would let the rest vanish unnoticed.
-  { name: "001_init table existence (live Postgres)", minTests: 2 },
-  { name: "001_init embedding columns (live Postgres)", minTests: 5 },
-  { name: "001_init indexes (live Postgres)", minTests: 2 },
-  { name: "001_init projects table schema (live Postgres)", minTests: 2 },
-  { name: "001_init entity graph schema (live Postgres)", minTests: 4 },
-  { name: "001_init vector round-trip (live Postgres)", minTests: 1 },
-  // The bulk_set_tier live-Postgres proofs (#878). Previously env-gated and
-  // never registered here, so a Postgres misconfiguration silently skipped the
-  // ONE suite that proves the per-row write predicate actually excludes foreign
-  // and archived rows -- the fake-pool suite cannot show that. Split by subject
-  // in #878, so all three halves are named here; registering one would let the
-  // others vanish unnoticed.
-  {
-    name: "bulk_set_tier write predicate reach (live Postgres)",
-    minTests: 3,
-  },
-  { name: "bulk_set_tier reported counts (live Postgres)", minTests: 1 },
-  {
-    name: "bulk_set_tier transaction atomicity (live Postgres)",
-    minTests: 3,
-  },
-  // list_stale, the dream planner's candidate query (#878). A fake pool hands
-  // back a pre-sorted array, so the staleness cutoff, the COALESCE fallback,
-  // and the ordering are all supplied by the fixture rather than computed --
-  // only these live suites exercise the query itself. Registered as three
-  // subject-split entries: threshold, ordering, scoping.
-  {
-    name: "list_stale staleness threshold (live Postgres)",
-    minTests: 2,
-  },
-  { name: "list_stale result ordering (live Postgres)", minTests: 1 },
-  { name: "list_stale scoping predicates (live Postgres)", minTests: 3 },
-  // The exact-scope checkpoint lifecycle (#878). The lane row, its metadata,
-  // and the predicate that rejects a hostile scope claim on an owned session
-  // key exist only in Postgres, so a skipped run leaves the isolation half of
-  // `session_start`/`session_wrap` entirely unexercised while CI reports green.
-  // Registered here as that suite stopped skipping itself.
-  {
-    name: "exact-scope checkpoint lifecycle (live Postgres)",
-    minTests: 2,
-  },
-  // The maintenance sweep idempotency suite, registered by #878 when it stopped
-  // skipping itself without a database. Its one testcase drives the
-  // UNIQUE(job_kind, idempotency_key) conflict path, which exists only in
-  // Postgres and reported a silent zero before.
-  { name: "maintenance sweep idempotency (live Postgres)", minTests: 1 },
   // The #346 graph-derivation regressions, proven against the real partial-unique
   // indexes rather than the in-memory FakeGraph. Registered by #878 when the file
   // stopped skipping itself without a database.
@@ -346,102 +139,6 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "deriveGraphFromMetadata stale-edge prune (live Postgres)",
     minTests: 1,
   },
-  // The agent_context_pack guidance + repo_facts proofs (#878), registered as
-  // that file stopped skipping itself. The sibling fake-pool suite supplies its
-  // own rows, so only these live cases evaluate the ::float8
-  // candidate_confidence cast, the candidate_scope.key JSON path, and the exact
-  // repo + namespace binds. Split by subject in #878 -- the two section loaders,
-  // then the pack's citation/non-fallback output contract -- so both halves are
-  // named here; registering one would let the other vanish unnoticed.
-  {
-    name: "agent_context_pack guidance + repo_facts (live Postgres)",
-    minTests: 2,
-  },
-  {
-    name: "agent_context_pack citations + non-fallback (live Postgres)",
-    minTests: 2,
-  },
-  // The ingest_raw_turn tool test carries pure isHarnessNoise cases that run
-  // everywhere plus these live suites, covering the write/replay path, stored
-  // provenance, the per-namespace session_seq recompute, and the namespace and
-  // auth boundary. Split by subject in #878 as that file stopped skipping
-  // itself, so all four are named here; registering one would let the others
-  // vanish unnoticed.
-  {
-    name: "ingest_raw_turn write path (live Postgres)",
-    minTests: 4,
-  },
-  {
-    name: "ingest_raw_turn provenance (live Postgres)",
-    minTests: 1,
-  },
-  {
-    name: "ingest_raw_turn session_seq recompute (live Postgres)",
-    minTests: 2,
-  },
-  {
-    name: "ingest_raw_turn namespace and auth boundary (live Postgres)",
-    minTests: 3,
-  },
-  // The get_entry tool test's live suite proves the compact render reads the
-  // full stored content through real Postgres, which the mock-pool suite in
-  // the sibling file cannot execute. Split into its own file in #878 as that
-  // file stopped skipping itself.
-  {
-    name: "get_entry compact render (live Postgres)",
-    minTests: 1,
-  },
-  // The ingest_conversation_facts tool test proves the write path and the
-  // isolation/concurrency behavior against real SQL. Split by subject in #878
-  // as that file stopped skipping itself, so both halves are named here;
-  // registering one would let the other vanish unnoticed.
-  {
-    name: "ingest_conversation_facts write path (live Postgres)",
-    minTests: 3,
-  },
-  {
-    name: "ingest_conversation_facts isolation and concurrency (live Postgres)",
-    minTests: 3,
-  },
-  {
-    name: "graph derivation handler selection and convergence (live Postgres)",
-    minTests: 4,
-  },
-  {
-    name: "graph derivation handler isolation and atomicity (live Postgres)",
-    minTests: 3,
-  },
-  // #878 split the agent_context_pack durable lane file by subject; the live
-  // half is the only one that reaches Postgres, and it stopped skipping itself.
-  {
-    name: "agent_context_pack durable lane reads (live Postgres)",
-    minTests: 2,
-  },
-  // The #345 stale-embedding repair tests were split by subject in #878 as that
-  // file stopped skipping itself: scope-and-drift stayed in
-  // src/embedding-repair.pg.test.ts and the writer-parity suites moved to
-  // src/embedding-repair-formula.pg.test.ts. All five are named here; register
-  // only some and the rest could vanish without the guard noticing.
-  {
-    name: "embedding repair scope and drift (live Postgres)",
-    minTests: 6,
-  },
-  {
-    name: "embedding repair decisions by the live formula (live Postgres)",
-    minTests: 3,
-  },
-  {
-    name: "embedding repair decision tag merge (live Postgres)",
-    minTests: 2,
-  },
-  {
-    name: "embedding repair sessions by the live formula (live Postgres)",
-    minTests: 3,
-  },
-  {
-    name: "embedding repair through the real maintenance queue (live Postgres)",
-    minTests: 2,
-  },
   // The live backup/restore drill was split into a full-run half and a
   // snapshot/refusals/upgrade half (#878, #938) as that file stopped skipping
   // itself, so both halves are named here; registering one would let the other
@@ -454,70 +151,348 @@ export const REQUIRED_SUITES: ReadonlyArray<{
     name: "backup restore drill snapshot, refusals, and upgrade (live Postgres)",
     minTests: 5,
   },
+  {
+    name: "session_wrap exact-scope checkpoint validation (live Postgres)",
+    minTests: 4,
+  },
+  // The first suite of issue #1054's rebuilt server/ program (issue 831):
+  // session_save's write path proven against the stored row rather than the
+  // response envelope. Registered here for the usual reason — it is env-gated
+  // on OPENBRAIN_TEST_DATABASE_URL, and its namespace-isolation test is the
+  // kind that fails silently when skipped.
+  {
+    name: "session_save writes the row it claims (live Postgres)",
+    minTests: 4,
+  },
+  // The restored `entry_access_log` writers (issue 1486). The log went quiet
+  // for six weeks with nothing failing, because the only thing that notices a
+  // missing write is a test that reads the log back. Skipped, these two report
+  // nothing and the tiering promotion scan goes blind again unnoticed.
+  {
+    name: "entry_access_log writer (live Postgres)",
+    minTests: 2,
+  },
+  // The server/db transaction owner (issue 1209). Registered here because its
+  // third test is the one only a real connection can produce: a backend killed
+  // mid-transaction, so the ROLLBACK itself fails. Skipped, that path reports
+  // nothing, and the rollback-failure hook the four maintenance sites depend on
+  // would go unproven while the job stayed green.
+  {
+    name: "server/db withTransaction against real Postgres (live Postgres)",
+    minTests: 3,
+  },
+  // The three OPTIONAL shapes withTransaction grew for the tools-tier ports
+  // (issue 1209), in a sibling file because four more cases in the suite above
+  // exceed oxlint's max-lines-per-function. Registered for the same reason as
+  // its sibling and then some: every assertion here is the SERVER's behavior --
+  // a refused write in a READ ONLY transaction, a statement cancelled by
+  // statement_timeout, and whether set_config was transaction-local. Skipped,
+  // all three report nothing and the two tools ports would build on unproven
+  // ground.
+  {
+    name: "server/db withTransaction options against real Postgres (live Postgres)",
+    minTests: 4,
+  },
+  // `update_entry`'s early-return guards after the port onto withTransaction
+  // (issue 1209). Registered because these three are the ONLY assertions on
+  // those refusal strings: the guards used to hand-roll a mid-transaction
+  // ROLLBACK-and-return and now call `control.abort`, and skipped, a guard that
+  // silently stopped answering would leave the job green.
+  {
+    name: "update_entry early-return guards (live Postgres)",
+    minTests: 3,
+  },
+  // `citation_recall`'s neighbor split after the port onto
+  // selectCitationNeighbors (issue 1209). Registered because these two are the
+  // ONLY assertions on which side each neighbor lands: the two statements used
+  // to differ by a hand-written comparison operator and ORDER BY, and the port
+  // collapsed them into one method parameterized by side. Skipped, a swapped
+  // operator reports nothing and the job stays green.
+  {
+    name: "citation_recall neighbor split (live Postgres)",
+    minTests: 2,
+  },
+  // The recall fixture set's live-row half (issue 1412), split out of
+  // `fixtures.test.ts` so the structural checks can run in CI while these two
+  // stay pointed at the dogfood corpus. Registered for this guard's exact
+  // reason: they are the ONLY assertions that the 32 uuids in
+  // `eval/recall/fixtures.json` name rows that still exist. Skipped, a fixture
+  // file full of archived-away ids reports nothing and every recall eval built
+  // on it measures a retrieval stack against rows that are not there.
+  {
+    name: "recall fixture ids resolve in the dogfood corpus (live Postgres)",
+    minTests: 2,
+  },
+  // The two reporting tools' live halves (issue 1421). The parity fixture
+  // freezes their shapes on an EMPTY namespace, where a wrong aggregate, a
+  // wrong trend band, and an unscoped access-log read all return zeros and
+  // pass. These are the ONLY assertions that exercise the arithmetic on real
+  // rows -- and, because `entry_access_log` has no namespace column of its
+  // own, the only ones proving the log is scoped by joining back to the
+  // owning row. Skipped, a boundary regression reports nothing.
+  {
+    name: "access_report (live Postgres)",
+    minTests: 5,
+  },
+  {
+    name: "get_stats (live Postgres)",
+    minTests: 4,
+  },
+  // The `authority_tier` fill (issue 1469 State 4). Registered for this
+  // guard's exact reason: it is the ONLY place the SQL form of the R3 rule is
+  // exercised against real rows. `authority.test.ts` proves the TypeScript
+  // form and runs without Postgres, so a skip here leaves the SQL predicate
+  // -- the one that actually writes 287,471 rows -- asserted nowhere, and a
+  // mis-tiered backfill is a silent authority downgrade.
+  {
+    name: "fillAuthorityTiers (live Postgres)",
+    minTests: 3,
+  },
+  // The apply-step run-schema mirrors (issue 1469). Registered for this
+  // guard's exact reason: `CREATE TABLE ... (LIKE public.<t>)` is DDL whose
+  // survival depends on the live column types, and the suite's fourth case is
+  // the only assertion that a mirror write path leaves `public` alone. Skipped,
+  // a mirror that had started writing to the real tables would report nothing.
+  {
+    name: "dream route apply mirrors (live Postgres)",
+    minTests: 5,
+  },
+  // The apply step itself (issue 1469). Registered for this guard's exact
+  // reason: these are the only assertions that a routing run writes into the
+  // run-schema mirrors and nowhere else, and that a second call writes
+  // nothing. Skipped, an apply step that had started writing to `public` or
+  // double-applying a run would report nothing and the job would stay green.
+  {
+    name: "dream route apply step (live Postgres)",
+    minTests: 7,
+  },
+  // The labelled matrix case store (issue 1469). Registered because its
+  // refusals -- a candidate outside the cohort, a dest that disagrees with its
+  // own yes/no answers -- are enforced against the real table's constraints,
+  // and its keying by candidate and matrix fingerprint only means anything
+  // against a live unique index. Skipped, a store that silently accepted
+  // either would report nothing.
+  {
+    name: "dream route matrix case store (live Postgres)",
+    minTests: 5,
+  },
+  // The route signals step (issue 1469). Registered for this guard's exact
+  // reason: these are the only assertions that a contradicts_canon candidate
+  // is never applied, and that a reverses_rule signal writes a relegate
+  // lifecycle event and a tier_moves row only when the candidate is
+  // operator-anchored. Skipped, a signals step that had started applying a
+  // contradicted candidate -- or relegating on an observed one -- would report
+  // nothing and the job would stay green.
+  {
+    name: "dream route apply signals (live Postgres)",
+    minTests: 5,
+  },
+  // Graduation to always-known and its undo (issue 1469). Registered because
+  // the distinct-session count is read across the frozen snapshot's source
+  // turn ids through `ob_raw_turns.session_ref`, a join only real rows
+  // exercise, and because the undo path's proof is that nothing is deleted.
+  // Skipped, a threshold that had started counting repeats rather than
+  // sessions would promote on a single session and report nothing.
+  {
+    name: "dream route graduation and undo (live Postgres)",
+    minTests: 8,
+  },
+  // Candidate dedupe runs in every REM pass (issue 1488). Its only proof that
+  // the nearest-survivor lookup is index-served is an EXPLAIN against the real
+  // schema; skipped, a plan that fell back to scanning every unreviewed
+  // candidate would load the database and report nothing.
+  {
+    name: "candidate dedupe pairing uses the HNSW index (live Postgres)",
+    minTests: 1,
+  },
+  // Public routing history tables (issue 1525). Registered because the foreign
+  // key, the per-run candidate uniqueness, and the reader indexes exist only
+  // in a migrated database; skipped, a migration that had lost one would
+  // report nothing.
+  {
+    name: "public routing history tables (live Postgres)",
+    minTests: 4,
+  },
+  // Tier-move insert helper and insertThought source/tier (issue 1525).
+  // Registered because both write real rows; skipped, a helper that had lost
+  // a column or a default would report nothing.
+  {
+    name: "tier move insert and thought source (live Postgres)",
+    minTests: 4,
+  },
+  // Public DREAM apply repository (issue 1525). Registered because the
+  // thought/event dedupe and the tier move exist only in a migrated database;
+  // skipped, an apply that wrote twice would report nothing.
+  {
+    name: "public DREAM apply repository (live Postgres)",
+    minTests: 8,
+  },
+  // Public DREAM routing repository (issue 1525): the unrouted-slice read and
+  // the run-history write. Skipped, a broken skip-already-routed predicate
+  // would re-route every candidate on every run and report nothing.
+  {
+    name: "public DREAM routing repository (live Postgres)",
+    minTests: 5,
+  },
+  // The scheduled dream.route handler (issue 1525): slice read, one run's
+  // history, the apply step, and the spend refusal in one transaction.
+  {
+    name: "dream.route handler (live Postgres)",
+    minTests: 6,
+  },
+  // The dream.route producer facts (issue 1525): a dead letter counts as the
+  // last terminal time, and "unrouted" flips once every candidate is routed.
+  {
+    name: "route signal facts (live Postgres)",
+    minTests: 3,
+  },
+  // Embedding repair survives a content_hash unique violation (issue 1462).
+  // Only a real unique index raises 23505, so a skipped run proves nothing.
+  {
+    name: "embedding repair content_hash collision (live Postgres)",
+    minTests: 1,
+  },
+  { name: "sessions collision evidence (live Postgres)", minTests: 4 },
+  // The missing-embedding drain advances past colliding rows (issue 1612).
+  {
+    name: "repair-embeddings drain advances past content_hash collisions (live Postgres)",
+    minTests: 2,
+  },
+  // createPool finishes pgvector registration before a new client runs the
+  // caller's first query (issue 1502).
+  {
+    name: "createPool pgvector registration ordering (live Postgres)",
+    minTests: 3,
+  },
+  // The capture observer's namespace check (issue 682). A misspelled
+  // capture-health namespace read as a quiet night and kept /health green;
+  // skipped, this suite reports nothing and the typo goes silent again.
+  {
+    name: "capture liveness namespace check (live Postgres)",
+    minTests: 2,
+  },
+  // The scenario teardown archives memory-kind records through the served
+  // archive_entry tool (issue 672). Skipped, a teardown that leaves thoughts,
+  // decisions, or sessions behind would go unnoticed.
+  {
+    name: "scenario teardown archives memory-kind records (live Postgres)",
+    minTests: 1,
+  },
+  // Live Postgres suites that were never named here (issue 683): skipped,
+  // each would report nothing and CI would stay green.
+  {
+    name: "nats worker composes a LIVE embed watermark observer by default (#724 item 3)",
+    minTests: 4,
+  },
+  { name: "parent + chunk entry storage (live Postgres)", minTests: 3 },
+  { name: "chunk write duplicate and fallback handling (live Postgres)", minTests: 3 },
+  { name: "rewrite entrypoint embedding provenance (live Postgres)", minTests: 1 },
+  { name: "automatic REM serving composition (live Postgres)", minTests: 1 },
+  { name: "raw turn to reviewed durable memory (live Postgres)", minTests: 3 },
+  { name: "decompose_entry planning (live Postgres)", minTests: 4 },
+  { name: "decompose_entry applying (live Postgres)", minTests: 3 },
+  { name: "entity and link tools (live Postgres)", minTests: 6 },
+  { name: "people tools (live Postgres)", minTests: 3 },
+  { name: "get_entity namespace isolation (live Postgres)", minTests: 3 },
+  { name: "list_stale staleness predicate (live Postgres)", minTests: 4 },
+  {
+    name: "list_stale envelope, paging and namespace boundary (live Postgres)",
+    minTests: 4,
+  },
+  { name: "promote_shared promotion rules (live Postgres)", minTests: 5 },
+  { name: "promotion identity rules and list_namespaces (live Postgres)", minTests: 3 },
+  { name: "hybrid lexical distinct-query-term coverage (live Postgres)", minTests: 5 },
+  { name: "hybrid lexical compound normalization (live Postgres)", minTests: 3 },
+  { name: "hybrid lexical numeric aliases (live Postgres)", minTests: 2 },
+  { name: "hybrid lexical document-length normalization (live Postgres)", minTests: 2 },
+  { name: "keyword lexical matching (live Postgres)", minTests: 2 },
+  { name: "promote_reviewed_candidate (live Postgres)", minTests: 6 },
+  { name: "session lifecycle event bounds (#515)", minTests: 4 },
+  { name: "session_start exact-scope establishment (#646)", minTests: 2 },
+  { name: "tier_recommendations (live Postgres)", minTests: 3 },
+  { name: "loadCanonEntriesForNamespace (live Postgres)", minTests: 3 },
 ];
 
 // Absolute floor on total executed (non-skipped) live-Postgres testcases,
-// independent of the per-suite breakdown above. Tracks the sum of the
-// `minTests` values above (32 before the Phase 5 real-SDK protocol suite added
-// its 8, then 12 once that suite also covered the realtime append tools and the
-// two-worker front, then 44 -> 53 when the #469 skill-usage telemetry suite
-// added its 9, then 53 -> 58 when the maintenance lease-boundary suite added
-// its 5, then 58 -> 65 when the two entrypoint suites added their 5 and 2, then
-// 65 -> 74 when #878 registered the two source-registry suites (8) and the
-// entrypoint split redistributed its own tests to 3 + 2 + 3, then 74 -> 77 when
-// #878 registered the migration 028 lease_expired compat suite's 3, then
-// 77 -> 79 when #878 registered the two migration-025 suites at 1 each, then
-// 79 -> 80 when #889 split the maintenance lease-boundary suite by subject and
-// its single entry of 5 became four entries summing to 6, then 80 -> 83 when
-// #878 registered the migration 029 terminal-category compat suite's 3 as that
-// suite stopped skipping itself, then 83 -> 85 when #878 also registered the
-// backgroundExtract tag-merge suite that shares migration 027's file and had
-// never been named here, then 85 -> 91 when #878 registered the migration 031
-// upgrade-path suite and its 6, then 91 -> 108 when #878 registered the four
-// migration 032 raw-turns suites' 2 + 4 + 4 + 7, then 108 -> 127 when #878
-// registered the migrations 038/039 reinforcement + said-at file's four
-// flattened suites at 6 + 4 + 5 + 4, then 127 -> 143 when #878 converted the
-// 001_init schema proof and registered its six suites' 16, then 143 -> 218 when
-// #878 registered the cross-provider parity suite's 75, then 218 -> 223 when
-// #878 registered the three decompose_entry suites (2 + 1 + 2) as that file
-// stopped skipping itself, then 223 -> 230 when #878 registered the three
-// bulk_set_tier suites (3 + 1 + 3) as that file stopped skipping itself, then
-// 230 -> 236 when #878 registered the three subject-split list_stale suites
-// (2 + 1 + 3) as that file stopped skipping itself, then 236 -> 238 when
-// #878 registered the exact-scope checkpoint lifecycle suite's 2 as it too
-// stopped skipping itself, then 238 -> 240 when #878 registered the #297
-// namespace isolation negative matrix suite's 2 as that suite stopped skipping
-// itself, then 240 -> 241 when #878 registered the maintenance sweep
-// idempotency suite's 1, then 241 -> 245 when #878 registered the three
-// graph-derivation suites' 1 + 2 + 1, then 245 -> 249 when #878 registered the
-// two subject-split agent_context_pack guidance/repo_facts suites' 2 + 2 as
-// that file stopped skipping itself, then 249 -> 255 when #904 registered the
-// retire-collab scratch-migration suite's 6 as that file stopped skipping
-// itself, then 255 -> 265 when #878 registered the four ingest_raw_turn
-// suites' 4 + 1 + 2 + 3 as that file stopped skipping itself, then 265 -> 266
-// when #878 registered the get_entry compact render suite's 1 as that file
-// stopped skipping itself, then 266 -> 272 when #878 registered the two
-// subject-split ingest_conversation_facts write-path and isolation suites'
-// 3 + 3 as that file stopped skipping itself, then 272 -> 284 when #878
-// registered the two 026 maintenance queue suites' 6 + 6 as that file
-// stopped skipping itself, then 284 -> 285 when #878 re-measured the
-// runSharedPromoter cursor-stall suite at its emitted 1 and registered the
-// clustering and cursor loops suite's 8 as that file stopped skipping
-// itself, then 285 -> 292 when #878 registered the two subject-split graph
-// derivation handler selection/convergence and isolation/atomicity suites'
-// 4 + 3 as that file stopped skipping itself, then 292 -> 302 when #878
-// registered the two subject-split source-sync plan/checkpoint/concurrency
-// and idempotence/isolation suites' 4 + 6 as that file stopped skipping
-// itself, then 302 -> 304 when #878 registered the agent_context_pack durable
-// lane live-reads suite's 2 as that file stopped skipping itself, then
-// 304 -> 320 when #878 registered the five subject-split embedding repair
-// suites' 6 + 3 + 2 + 3 + 2 as that file stopped skipping itself, then
-// 320 -> 328 when #878 registered the two split backup/restore drill
-// suites' 3 + 5 as that file stopped skipping itself, then 328 -> 332 when
-// #878 split append-session-event.test.ts into nine files and the live suite's
-// emitted 8 replaced the 4 the entry had carried), so the global floor
-// cannot silently fall behind the per-suite one.
-export const MIN_TOTAL_LIVE_TESTCASES = 332;
+// independent of the per-suite breakdown above. It tracks the sum of the
+// `minTests` values above, so the global floor cannot silently fall behind
+// the per-suite one; the sum-invariant test in assert-db-tests-ran.test.ts
+// enforces the equality.
+//
+// Recomputed 332 -> 150 for issue 1054 (Rico ruling 2026-08-30): all 175
+// *.test.ts files under src/ were retired, which took 61 of the 84 entries
+// above with them. The 23 that remain are the suites still emitted by test
+// files outside src/. The long addition-by-addition history that used to sit
+// here narrated entries that no longer exist; the git history keeps it.
+//
+// Recomputed 150 -> 75 for issue 864: the server parity fixture suite (75) was
+// retired along with the fixtures it replayed, so its entry left this list and
+// the sum moved with it.
+//
+// Recomputed 75 -> 79 for issue 864: the restored session_wrap exact-scope
+// suite emits 4 testcases, so its entry raised the sum by that count.
+//
+// Recomputed 79 -> 83 for issue 831: the new session_save write-path suite
+// emits 4 testcases, so its entry raised the sum by that count.
+// Recomputed 83 -> 86 for issue 1209: the new server/db withTransaction suite
+// emits 3 testcases, so its entry raised the sum by that count.
+// Recomputed 86 -> 90 for issue 1209: the withTransaction options suite emits
+// 4 testcases, so its entry raised the sum by that count.
+// Recomputed 90 -> 93 for issue 1209: the new update_entry early-return guard
+// suite emits 3 testcases, so its entry raised the sum by that count.
+// Recomputed 93 -> 95 for issue 1209: the new citation_recall neighbor-split
+// suite emits 2 testcases, so its entry raised the sum by that count.
+// Recomputed 95 -> 97 for issue 1412: the recall fixture corpus suite emits 2
+// testcases, so its entry raised the sum by that count.
+// Recomputed 97 -> 106 for issue 1421: the reporting suite's two describes
+// were never registered here at all. `access_report` emits 5 testcases and
+// `get_stats` emits 4, so the two entries raised the sum by 9.
+// Recomputed 106 -> 109 for issue 1469: the authority_tier fill suite emits 3
+// testcases, so its entry raised the sum by that count.
+// Recomputed 109 -> 114 for issue 1469: the apply-mirror suite emits 5
+// testcases, so its entry raised the sum by that count.
+// Recomputed 114 -> 126 for issue 1469: the apply-step suite emits 7 testcases
+// and the matrix case store suite emits 5, so the two entries raised the sum
+// by 12.
+// Recomputed 126 -> 139 for issue 1469: the route-signals suite emits 5
+// testcases and the graduation-and-undo suite emits 8, so the two entries
+// raised the sum by 13.
+// Recomputed 139 -> 140 for issue 1488: the candidate dedupe HNSW plan suite
+// emits 1 testcase, so its entry raised the sum by that count.
+// Recomputed 140 -> 144 for issue 1525: the public routing history tables
+// suite emits 4 testcases, so its entry raised the sum by that count.
+// Recomputed 144 -> 148 for issue 1525: the tier move insert suite emits 4
+// testcases, so its entry raised the sum by that count.
+// Recomputed 148 -> 154 for issue 1525: the public DREAM apply repository
+// suite emits 6 testcases, so its entry raised the sum by that count.
+// Recomputed 154 -> 159 for issue 1525: the public DREAM routing repository
+// suite emits 5 testcases, so its entry raised the sum by that count.
+// Recomputed 159 -> 163 for issue 1525: the dream.route handler suite emits 4
+// testcases, so its entry raised the sum by that count.
+// Recomputed 163 -> 165 for issue 1525: the dream.route handler suite gained
+// the claimUnrouted and overlapping-run tests, so its entry rose by 2.
+// Recomputed 165 -> 168 for issue 1525: the route signal facts suite emits 3
+// testcases, so its entry raised the sum by that count.
+// Recomputed 168 -> 170 for issue 1525: the public DREAM apply repository
+// suite gained 2 embedding-copy testcases (6 -> 8).
+// Recomputed 170 -> 173 for issue 1502: the createPool registration ordering
+// suite emits 3 testcases, so its entry raised the sum by that count.
+// Recomputed 176 -> 178 for issue 682: the capture liveness namespace check
+// suite emits 2 testcases, so its entry raised the sum by that count.
+// Recomputed 178 -> 179 for issue 672: the scenario teardown archive suite
+// emits 1 testcase, so its entry raised the sum by that count.
+// Recomputed 179 -> 257 for issue 683: 24 live Postgres suites that had no entry were named, at their JUnit counts.
+// Recomputed 257 -> 261 for issue 1612: the sessions collision evidence suite
+// emits 4 testcases, so its entry raised the sum by that count.
+// Recomputed 261 -> 263 for issue 1612: the repair-embeddings drain collision
+// suite emits 2 testcases, so its entry raised the sum by that count.
+// Recomputed 263 -> 264 for issue 1618: the promote_shared promotion rules
+// suite gained the Jev share-screen testcase (4 -> 5).
+// Recomputed 264 -> 267 for issue 1618 B4 L1: the canon read suite emits 3
+// testcases, so its entry raised the sum by that count.
+// Recomputed 267 -> 265 for issue 1678 (purge P3 part b): the sdk-protocol
+// suite lost its two two-worker front proofs with the front (12 -> 10).
+export const MIN_TOTAL_LIVE_TESTCASES = 265;
 
 export interface SuiteStats {
   tests: number;
@@ -538,24 +513,71 @@ function attr(tag: string, name: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+// A suite is live when its name carries the marker OR the manifest names it
+// (issue 683): a manifest entry is the stronger statement of the two.
+function isLiveSuiteName(name: string): boolean {
+  return (
+    name.includes("(live Postgres)") ||
+    REQUIRED_SUITES.some((suite) => suite.name === name)
+  );
+}
+
+function emptySuiteStats(): SuiteStats {
+  return { tests: 0, failures: 0, errors: 0, skipped: 0 };
+}
+
+function addSuiteTagStats(
+  suiteStats: Map<string, SuiteStats>,
+  name: string,
+  tag: string,
+): void {
+  const previous = suiteStats.get(name) ?? emptySuiteStats();
+  suiteStats.set(name, {
+    tests: previous.tests + Number(attr(tag, "tests") ?? "0"),
+    failures: previous.failures + Number(attr(tag, "failures") ?? "0"),
+    errors: previous.errors + Number(attr(tag, "errors") ?? "0"),
+    skipped: previous.skipped + Number(attr(tag, "skipped") ?? "0"),
+  });
+}
+
+function vitestSuiteName(open: string): string | undefined {
+  const classname = attr(open, "classname") ?? "";
+  if (isLiveSuiteName(classname)) return undefined;
+  const name = attr(open, "name") ?? "";
+  return REQUIRED_SUITES.find(
+    (suite) => name === suite.name || name.startsWith(`${suite.name} &gt; `),
+  )?.name;
+}
+
+function addVitestTestcaseStats(
+  suiteStats: Map<string, SuiteStats>,
+  block: string,
+): void {
+  const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
+  const name = vitestSuiteName(open);
+  if (!name) return;
+  const previous = suiteStats.get(name) ?? emptySuiteStats();
+  suiteStats.set(name, {
+    tests: previous.tests + 1,
+    failures: previous.failures + (/<failure\b/.test(block) ? 1 : 0),
+    errors: previous.errors + (/<error\b/.test(block) ? 1 : 0),
+    skipped:
+      previous.skipped +
+      (/<skipped\b/.test(block) || attr(open, "skipped") === "true" ? 1 : 0),
+  });
+}
+
 // Collect per-suite stats from <testsuite ...> opening tags.
 function collectSuiteStats(xml: string): Map<string, SuiteStats> {
   const suiteStats = new Map<string, SuiteStats>();
   for (const tag of xml.match(/<testsuite\b[^>]*>/g) ?? []) {
     const name = attr(tag, "name");
-    if (!name || !name.includes("(live Postgres)")) continue;
-    const prev = suiteStats.get(name) ?? {
-      tests: 0,
-      failures: 0,
-      errors: 0,
-      skipped: 0,
-    };
-    suiteStats.set(name, {
-      tests: prev.tests + Number(attr(tag, "tests") ?? "0"),
-      failures: prev.failures + Number(attr(tag, "failures") ?? "0"),
-      errors: prev.errors + Number(attr(tag, "errors") ?? "0"),
-      skipped: prev.skipped + Number(attr(tag, "skipped") ?? "0"),
-    });
+    if (!name || !isLiveSuiteName(name)) continue;
+    addSuiteTagStats(suiteStats, name, tag);
+  }
+  const testcaseRe = /<testcase\b[^>]*?(\/>|>[\s\S]*?<\/testcase>)/g;
+  for (const block of xml.match(testcaseRe) ?? []) {
+    addVitestTestcaseStats(suiteStats, block);
   }
   return suiteStats;
 }
@@ -575,9 +597,15 @@ interface TestcaseTally {
 function executedLiveSuiteName(block: string): string | undefined {
   const open = block.match(/<testcase\b[^>]*>/)?.[0] ?? block;
   const classname = attr(open, "classname") ?? "";
-  if (!classname.includes("(live Postgres)")) return undefined;
+  const name = attr(open, "name") ?? "";
+  const suiteName = isLiveSuiteName(classname)
+    ? classname
+    : REQUIRED_SUITES.find(
+        (suite) => name === suite.name || name.startsWith(`${suite.name} &gt; `),
+      )?.name;
+  if (!suiteName) return undefined;
   const isSkipped = /<skipped\b/.test(block) || attr(open, "skipped") === "true";
-  return isSkipped ? undefined : classname;
+  return isSkipped ? undefined : suiteName;
 }
 
 function tallyTestcases(xml: string): TestcaseTally {

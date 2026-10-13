@@ -23,19 +23,19 @@
  * of those three statements is the reversibility guarantee.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type pg from "pg";
-import { expectDefined } from "../../scripts/test-support/expect-defined.ts";
+import { expectDefined } from "../testing/expect-defined.ts";
 import {
   CANDIDATE_DUP_DISTANCE,
   DEFAULT_DEDUPE_BATCH,
   readReinforcement,
   runCandidateDedupe,
 } from "./candidate-dedupe.ts";
+import type { CandidateDedupeLogger } from "./candidate-dedupe.ts";
 import { DEFAULT_DUP_THRESHOLD } from "./tiering.ts";
-import type { MaintenanceQueueLogger } from "../maintenance/maintenance-queue-runner.ts";
 
-const silentLogger: MaintenanceQueueLogger = {
+const silentLogger: CandidateDedupeLogger = {
   info: () => {},
   warn: () => {},
   error: () => {},
@@ -340,7 +340,7 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
         records.push({ msg, fields }),
       warn: () => {},
       error: () => {},
-    } as unknown as MaintenanceQueueLogger;
+    } as unknown as CandidateDedupeLogger;
     const { pool } = mergePool([pairRow()]);
     await runCandidateDedupe({ pool, logger });
     const done = expectDefined(

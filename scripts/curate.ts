@@ -3,18 +3,17 @@
  * Detects and handles: duplicates (HNSW nearest-neighbor), stale entries,
  * and vague/low-quality content via LLM-as-judge.
  *
- * Usage: bun run curate [--dry-run]
+ * Usage: npm run curate -- [--dry-run]
  *
  * Safe for cron -- idempotent (archived_at IS NULL prevents re-archiving).
  * Future: contradiction detection (semantic pair comparison) not yet implemented.
  */
 import type pg from "pg";
 import { toSql } from "pgvector/pg";
-import { createPool } from "../src/db/pool.ts";
-import { logger } from "../src/logger.ts";
+import { createPool } from "./settings.ts";
+import { logger } from "./settings.ts";
 
-type TableName =
-  "thoughts" | "decisions" | "relationships" | "projects" | "sessions";
+type TableName = "thoughts" | "decisions" | "relationships" | "projects" | "sessions";
 
 // No local default. Inference is a fleet service, not a process on whatever
 // machine happens to run this script: a localhost fallback silently works on
@@ -92,10 +91,7 @@ async function llmJudge(prompt: string): Promise<string> {
 // Duplicate Detection (HNSW nearest-neighbor, O(n log n))
 // ---------------------------------------------------------------------------
 
-async function findDuplicates(
-  pool: pg.Pool,
-  table: TableName,
-): Promise<number> {
+async function findDuplicates(pool: pg.Pool, table: TableName): Promise<number> {
   const preview = CONTENT_PREVIEW[table];
   let archived = 0;
 
@@ -126,8 +122,13 @@ async function findDuplicates(
     const neighbor = neighbors[0];
     if (Number(neighbor.distance) >= DUPLICATE_THRESHOLD) continue;
 
-    // Sort IDs to avoid processing both (A,B) and (B,A)
-    const pairKey = [entry.id, neighbor.neighbor_id].sort().join(":");
+    // Sort IDs to avoid processing both (A,B) and (B,A). The comparator is the
+    // default sort's own rule spelled out: compare the two ids as strings, so
+    // the pair key is identical to what the bare `.sort()` produced.
+    const neighborId = String(neighbor.neighbor_id);
+    const pairKey = [entry.id, neighborId]
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+      .join(":");
     if (seen.has(pairKey)) continue;
     seen.add(pairKey);
 
@@ -166,10 +167,7 @@ interface StaleResult {
   rated: number;
 }
 
-async function findStale(
-  pool: pg.Pool,
-  table: TableName,
-): Promise<StaleResult> {
+async function findStale(pool: pg.Pool, table: TableName): Promise<StaleResult> {
   const preview = CONTENT_PREVIEW[table];
   let archived = 0;
   let rated = 0;
@@ -207,10 +205,9 @@ async function findStale(
       archived++;
     } else if (action.includes("DOWNGRADE")) {
       if (!DRY_RUN) {
-        await pool.query(
-          `UPDATE ${table} SET usefulness_score = 0.2 WHERE id = $1`,
-          [entry.id],
-        );
+        await pool.query(`UPDATE ${table} SET usefulness_score = 0.2 WHERE id = $1`, [
+          entry.id,
+        ]);
       }
       rated++;
     }
@@ -262,10 +259,10 @@ async function findVague(pool: pg.Pool, table: TableName): Promise<number> {
     });
 
     if (!DRY_RUN) {
-      await pool.query(
-        `UPDATE ${table} SET usefulness_score = $1 WHERE id = $2`,
-        [score, entry.id],
-      );
+      await pool.query(`UPDATE ${table} SET usefulness_score = $1 WHERE id = $2`, [
+        score,
+        entry.id,
+      ]);
     }
 
     rated++;

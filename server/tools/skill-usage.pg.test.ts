@@ -20,7 +20,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground database, never the
  * dogfood database.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -57,8 +57,7 @@ async function callTool(
     embedFn: async () => null,
     logger: pino({ level: "silent" }),
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -113,10 +112,9 @@ afterAll(async () => {
         WHERE entity_id IN (SELECT id FROM ob_entities WHERE namespace = ANY($1::text[]))`,
     [[NAMESPACE, OTHER_NAMESPACE]],
   );
-  await pool.query(
-    `DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`,
-    [[NAMESPACE, OTHER_NAMESPACE]],
-  );
+  await pool.query(`DELETE FROM ob_entities WHERE namespace = ANY($1::text[])`, [
+    [NAMESPACE, OTHER_NAMESPACE],
+  ]);
   await pool.end();
 });
 
@@ -218,9 +216,7 @@ describe("skill usage isolation and permissions (live Postgres)", () => {
     // through the never-used list, which reads `ob_entities` directly and so
     // needs its own predicate.
     const report = await callTool("skill_usage_report", NAMESPACE, {});
-    const slugs = (report.body.usage as UsageRow[]).map(
-      (row) => row.skill_slug,
-    );
+    const slugs = (report.body.usage as UsageRow[]).map((row) => row.skill_slug);
     expect(slugs).not.toContain("foreign-only-skill");
     expect(report.body.never_used as string[]).not.toContain(
       "skill.foreign-only-skill",
@@ -229,9 +225,7 @@ describe("skill usage isolation and permissions (live Postgres)", () => {
     // Proven visible from its OWN namespace, so the assertion above is the
     // predicate working rather than the row simply being absent.
     const ownReport = await callTool("skill_usage_report", OTHER_NAMESPACE, {});
-    const ownSlugs = (ownReport.body.usage as UsageRow[]).map(
-      (row) => row.skill_slug,
-    );
+    const ownSlugs = (ownReport.body.usage as UsageRow[]).map((row) => row.skill_slug);
     expect(ownSlugs).toContain("foreign-only-skill");
   });
 
@@ -249,13 +243,9 @@ describe("skill usage isolation and permissions (live Postgres)", () => {
         WHERE skill_slug = 'long-idle-skill'`,
     );
     const report = await callTool("skill_usage_report", NAMESPACE, { days: 7 });
-    const slugs = (report.body.usage as UsageRow[]).map(
-      (row) => row.skill_slug,
-    );
+    const slugs = (report.body.usage as UsageRow[]).map((row) => row.skill_slug);
     expect(slugs).not.toContain("long-idle-skill");
-    expect(report.body.never_used as string[]).toContain(
-      "skill.long-idle-skill",
-    );
+    expect(report.body.never_used as string[]).toContain("skill.long-idle-skill");
   });
 
   test("reports the prior window's count so the trend is two facts, not a verdict", async () => {

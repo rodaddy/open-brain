@@ -12,10 +12,12 @@
  * test_database_required when either is unset. Nothing here skips itself.
  */
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { cp, readdir } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { cp, readdir, readFile, writeFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
-import { runMigrations } from "../../src/db/migrate.ts";
+import { runMigrations } from "../../server/db/migrate.ts";
 import { resolvePgTool } from "../backup-lib.ts";
 import { requireTestDatabaseUrl } from "../test-support/require-test-database.ts";
 import { requireLocalCloneTestDatabaseUrl } from "../test-support/require-test-database.ts";
@@ -55,16 +57,22 @@ async function snapshotAcrossConcurrentCommit(): Promise<void> {
   const releasePath = join(coordinationDir, "pg-dump-release");
   const wrapperPath = join(coordinationDir, "coordinated-pg-dump.ts");
   const realPgDump = resolvePgTool("pg_dump");
-  await Bun.write(
+  await writeFile(
     wrapperPath,
     [
-      `await Bun.write(process.env.OB_SNAPSHOT_TEST_READY!, "ready");`,
-      `while (!(await Bun.file(process.env.OB_SNAPSHOT_TEST_RELEASE!).exists())) await Bun.sleep(20);`,
+      `import { spawn } from "node:child_process";`,
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { once } from "node:events";`,
+      `import { setTimeout as delay } from "node:timers/promises";`,
+      `writeFileSync(process.env.OB_SNAPSHOT_TEST_READY!, "ready");`,
+      `while (!existsSync(process.env.OB_SNAPSHOT_TEST_RELEASE!)) await delay(20);`,
       `const tool = JSON.parse(process.env.OB_SNAPSHOT_TEST_TOOL!) as string[];`,
-      `const proc = Bun.spawn([...tool, ...Bun.argv.slice(2)], {`,
-      `  env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit",`,
+      `const [file, ...head] = tool;`,
+      `const child = spawn(file!, [...head, ...process.argv.slice(2)], {`,
+      `  env: process.env, stdio: "inherit",`,
       `});`,
-      `process.exit(await proc.exited);`,
+      `const [code] = (await once(child, "close")) as [number | null];`,
+      `process.exit(code ?? 0);`,
       "",
     ].join("\n"),
   );
@@ -72,20 +80,20 @@ async function snapshotAcrossConcurrentCommit(): Promise<void> {
   const snapshotBackupDir = join(await tempDir(ctx.tempDirs), "set-snapshot");
   const backupPromise = runCli("backup.ts", ["--out", snapshotBackupDir], {
     ...cliEnv(ctx.admin, SRC_DB),
-    OPENBRAIN_PG_DUMP_BIN: `bun ${wrapperPath}`,
+    OPENBRAIN_PG_DUMP_BIN: `${process.execPath} ${wrapperPath}`,
     OB_SNAPSHOT_TEST_READY: readyPath,
     OB_SNAPSHOT_TEST_RELEASE: releasePath,
     OB_SNAPSHOT_TEST_TOOL: JSON.stringify(realPgDump),
   });
 
   const readyDeadline = Date.now() + 30_000;
-  while (!(await Bun.file(readyPath).exists())) {
+  while (!existsSync(readyPath)) {
     if (Date.now() >= readyDeadline) {
-      await Bun.write(releasePath, "release");
+      await writeFile(releasePath, "release");
       await backupPromise;
       throw new Error("timed out waiting for coordinated pg_dump");
     }
-    await Bun.sleep(20);
+    await delay(20);
   }
 
   const concurrentHash = "drill-concurrent-after-snapshot";
@@ -100,14 +108,14 @@ async function snapshotAcrossConcurrentCommit(): Promise<void> {
     await writer.end();
     // Always unblock the wrapper, including when the concurrent write
     // fails, so the backup subprocess cannot leak into later tests.
-    await Bun.write(releasePath, "release");
+    await writeFile(releasePath, "release");
   }
 
   const backup = await backupPromise;
   expect(backup.exitCode).toBe(0);
   expect(backup.receipt?.status).toBe("ok");
   const manifest = JSON.parse(
-    await Bun.file(join(snapshotBackupDir, "manifest.json")).text(),
+    await readFile(join(snapshotBackupDir, "manifest.json"), "utf8"),
   );
 
   const restore = await runCli(
@@ -149,7 +157,7 @@ async function refusesNonEmptyTargetWithoutWipe(): Promise<void> {
       [TGT_DB],
     );
     if (rows.length === 0) {
-      await adminPool.query(`CREATE DATABASE ${TGT_DB}`);
+      await adminPool.query(`CREATE DATABASE ${TGT_DB}${ctx.templateClause}`);
     }
   } finally {
     await adminPool.end();
@@ -311,10 +319,10 @@ async function oldBackupRestoresIntoUpgradedRuntime(): Promise<void> {
 async function corruptedDumpFailsVerification(): Promise<void> {
   // Run LAST: this intentionally breaks the first drill's backup set.
   const dumpPath = join(backupDir, "openbrain.dump");
-  const original = new Uint8Array(await Bun.file(dumpPath).arrayBuffer());
+  const original = new Uint8Array(await readFile(dumpPath));
   const flipAt = Math.floor(original.length / 2);
   original[flipAt] = expectDefined(original[flipAt], "dump byte") ^ 0xff;
-  await Bun.write(dumpPath, original);
+  await writeFile(dumpPath, original);
 
   const verify = await runCli(
     "backup-verify.ts",
@@ -338,15 +346,19 @@ async function corruptedDumpFailsVerification(): Promise<void> {
   expect(restore.receipt?.error).toContain("verification failed");
 }
 
+// issue 1518: measured 46159/3314/7347 ms alone on the Mac (2026-09-26); 3x tail for concurrent pre-push load
+// (slowest hook per run; the 46 s tail was afterAll dropping the scratch databases).
+const HOOK_ALLOWANCE_MS = 150_000;
+
 describe("backup restore drill snapshot, refusals, and upgrade (live Postgres)", () => {
   beforeAll(async () => {
     ctx = await openDrill();
     ({ backupDir } = await seedAndBackup(ctx));
-  }, 60_000);
+  }, HOOK_ALLOWANCE_MS);
 
   afterAll(async () => {
     await closeDrill(ctx);
-  }, 60_000);
+  }, HOOK_ALLOWANCE_MS);
 
   it(
     "uses one exported snapshot for manifest counts and dump contents across a concurrent commit",

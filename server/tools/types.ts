@@ -1,5 +1,14 @@
+/**
+ * The shared tool-layer vocabulary: the dependency bag every memory tool
+ * registration receives, and the three result helpers every handler returns
+ * through (`authIdentity`, `textResult`, `errorResult`).
+ *
+ * Everything a handler needs from outside itself arrives through
+ * {@link MemoryToolDependencies} rather than being constructed per call, so the
+ * composition root owns pool, logger, embedding function, and the validated
+ * configuration, and a test can substitute any of them without a process.
+ */
 import type { DropCollectorBounds } from "../capture/drop-folder-contract.ts";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { AuthIdentity } from "../auth/types.ts";
@@ -8,6 +17,7 @@ import type { FtsConfig } from "./fts-config.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
 import type { WorkingSetStore } from "../realtime/working-set.ts";
 import type { RecoveryWalStore } from "../realtime/recovery-wal.ts";
+import type { JevConfig, JevFetch } from "../integrations/jev.ts";
 
 export interface MemoryToolDependencies {
   readonly pool: Pool;
@@ -17,8 +27,9 @@ export interface MemoryToolDependencies {
   /**
    * Validated shared-namespace names from the composition root.
    *
-   * Absent means the helpers in `./shared-namespace.ts` derive them from the
-   * environment as they always have; present means this one parse is in force.
+   * The helpers in `./shared-namespace.ts` read no environment of their own, so
+   * a call site that omits this set gets an error naming the function rather
+   * than a default that quietly mis-binds a namespace predicate.
    */
   readonly sharedNamespaceNames?: SharedNamespaceConfig;
   /**
@@ -79,6 +90,15 @@ export interface MemoryToolDependencies {
    * engine read the environment itself.
    */
   readonly searchEmbeddingTimeoutMs?: number;
+  /** Optional Jev reranker; absent or disabled preserves deterministic RRF. */
+  readonly jev?: { config: JevConfig };
+  /**
+   * Issue 1618 B3: the optional Jev screen in front of `promote_shared`.
+   *
+   * From `config.search.jevShareScreen`. Absent or disabled means promotion
+   * behaves exactly as before and never calls Jev.
+   */
+  readonly jevShareScreen?: { config: JevConfig; fetchFn?: JevFetch };
   /**
    * True refuses every apply-mode promotion before any write.
    *
@@ -100,18 +120,13 @@ export interface MemoryToolDependencies {
   readonly dropCollectorBounds?: DropCollectorBounds;
 }
 
-export interface McpAuthInfo {
+interface McpAuthInfo {
   readonly role: AuthIdentity["role"];
   readonly clientId: string;
   readonly tokenClientId?: string;
   readonly agentId?: string;
   readonly namespaceSource?: "token" | "header" | "delegated";
 }
-
-export type MemoryToolRegistrar = (
-  server: McpServer,
-  dependencies: MemoryToolDependencies,
-) => void;
 
 export function authIdentity(value: unknown): AuthIdentity | undefined {
   if (!value || typeof value !== "object") return undefined;

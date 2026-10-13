@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from conftest import Secret
 from openbrain.apps.hooks.session import SessionEndHook, run_session_end
 from openbrain.config import CaptureSettings
 
@@ -53,7 +54,7 @@ REQUIRED_ENV = (
 
 
 @pytest.fixture
-def live_env() -> dict[str, str]:
+def live_env() -> dict[str, Secret]:
     """The live configuration, or a FAILURE naming what is missing.
 
     A skip here would recreate the measured defect this marker exists to
@@ -66,7 +67,7 @@ def live_env() -> dict[str, str]:
             "live gate misconfigured -- refusing to pass while testing "
             f"nothing. Missing: {', '.join(missing)}"
         )
-    return {name: os.environ[name] for name in REQUIRED_ENV}
+    return {name: Secret(os.environ[name]) for name in REQUIRED_ENV}
 
 
 def rows_for_session(database_url: str, session_ref: str) -> int:
@@ -85,14 +86,14 @@ class TestSessionEndClosesTheRealLifecycleWithoutWriting:
     """run_session_end with the default factory starts and closes a live session."""
 
     async def test_the_full_lifecycle_is_accepted_and_nothing_is_written(
-        self, live_env: dict[str, str], tmp_path: Path
+        self, live_env: dict[str, Secret], tmp_path: Path
     ) -> None:
         # A fresh session id: initialize opens the slot, start_session allocates
         # it, and the closing DELETE frees it. The server must accept all three.
         session = f"session-end-live-{uuid.uuid4()}"
         settings = CaptureSettings(
-            base_url=live_env["OPENBRAIN_TEST_BASE_URL"],
-            token=live_env["OPENBRAIN_TEST_TOKEN"],
+            base_url=live_env["OPENBRAIN_TEST_BASE_URL"].get(),
+            token=live_env["OPENBRAIN_TEST_TOKEN"].get(),
             watermark_path=tmp_path / "wm.sqlite",
         )
         payload = SessionEndHook(session_id=session)
@@ -105,7 +106,7 @@ class TestSessionEndClosesTheRealLifecycleWithoutWriting:
         assert released is True
         # SessionEnd delivers nothing -- every turn was durable on each Stop
         # already. The slot was freed, not filled: no row exists for the session.
-        assert rows_for_session(live_env["OPENBRAIN_TEST_DATABASE_URL"], session) == 0
+        assert rows_for_session(live_env["OPENBRAIN_TEST_DATABASE_URL"].get(), session) == 0
 
 
 class TestSessionEndNoSessionIdMakesNoNetworkCall:

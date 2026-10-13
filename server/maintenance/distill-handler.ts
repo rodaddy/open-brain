@@ -1,13 +1,13 @@
 /**
  * DISTILL persistence and maintenance-queue integration. Issue #382.
  *
- * The sweep: claim undistilled turns, window them (src/distill-window.ts),
- * extract (src/distiller.ts), embed, write candidates, stamp the turns. This
+ * The sweep: claim undistilled turns, window them (../domain/distill-window.ts),
+ * extract (../domain/distiller.ts), embed, write candidates, stamp the turns. This
  * module owns the parts that touch the database and the job queue; the
  * extraction rules live next door and never see a connection.
  *
  * IDEMPOTENCY, on three independent levels, because the maintenance queue is
- * at-least-once (src/maintenance-queue.ts) and a re-run must be a no-op:
+ * at-least-once (./maintenance-queue.ts) and a re-run must be a no-op:
  *
  *  1. Selection is `distilled_at IS NULL`, so a completed batch is not
  *     re-selected.
@@ -20,7 +20,7 @@
  *
  * ORDER OF OPERATIONS -- deliberately embed BEFORE the transaction opens. The
  * embedding provider is an 8-second-per-attempt network call with up to 3
- * attempts (src/embedding.ts:5-12). Holding a database transaction open across
+ * attempts (the embedding provider client). Holding a database transaction open across
  * that is how a maintenance job becomes an outage. So embeddings are resolved
  * first, outside any lock, and the transaction is short.
  *
@@ -37,11 +37,11 @@ import {
   BackgroundTraceRecorder,
   backgroundSessionId,
   type BackgroundTraceEmitter,
-} from "../application/background-tracing.ts";
+} from "../observability/background-tracing.ts";
 import {
   generateEmbeddingWithMetadata,
   type EmbeddingResult,
-} from "../../src/embedding.ts";
+} from "../embedding/provider.ts";
 import { type DistillUnit } from "../domain/distill-window.ts";
 import {
   runDistillUnit,
@@ -49,15 +49,17 @@ import {
   type NamedDistillModel,
   type PreparedCandidate,
 } from "../domain/distiller.ts";
+import { MaintenanceTerminalError, type MaintenanceJob } from "./maintenance-job.ts";
 import {
-  MaintenanceTerminalError,
-  type MaintenanceJob,
   type MaintenanceJobHandler,
   type MaintenanceQueueLogger,
-} from "../../src/maintenance-queue.ts";
+} from "./maintenance-queue-runner.ts";
 import { persistBatch, resolveEmbeddingBatch } from "./distill-persist.ts";
+import { createDistillBacklogRepository } from "../db/distill-backlog-repository.ts";
 import { reportEmptyClaim } from "./distill-backlog.ts";
 import { claimBatch } from "./distill-claim.ts";
+import { retypeCandidatesWithJev } from "./distill-jev-type.ts";
+import type { JevConfig, JevFetch } from "../integrations/jev.ts";
 
 /** The job kind this stage registers under. Matches the queue's kind regex. */
 export const MEMORY_DISTILL_JOB_KIND = "memory.distill" as const;
@@ -66,12 +68,12 @@ export const MEMORY_DISTILL_JOB_VERSION = 1 as const;
 
 /**
  * The embed function shape. Identical to the one the bootstrap already threads
- * to the embedding-repair handlers (src/embedding-repair.ts EmbedWithMetaFn),
+ * to the embedding-repair handlers (the embedding-repair handler EmbedWithMetaFn),
  * restated structurally so this module does not depend on the repair module.
  *
  * The METADATA variant, not the bare one: a distiller must be able to tell a
  * retryable provider outage from an input that will never embed, and
- * `generateEmbedding` collapses both into null (src/embedding.ts:473-480).
+ * `generateEmbedding` collapses both into null (the embedding provider client).
  */
 export type DistillEmbedFn = (
   text: string,
@@ -127,6 +129,8 @@ export interface DistillSweepDeps {
   skipEmbeddings?: boolean;
   /** Recorder for the containing maintenance job trace. */
   trace?: BackgroundTraceRecorder;
+  /** Issue 1618 B1: optional Jev candidate typing; may retype, never drops. */
+  jevType?: { config: JevConfig; fetchFn?: JevFetch };
 }
 
 function emptySummary(): DistillSweepSummary {
@@ -141,12 +145,26 @@ function emptySummary(): DistillSweepSummary {
     missing_session_seq: 0,
   };
 }
+/** Issue 1618 B1: retype with Jev when configured; otherwise pass through. */
+async function applyJevType(
+  deps: DistillSweepDeps,
+  candidates: PreparedCandidate[],
+): Promise<PreparedCandidate[]> {
+  if (!deps.jevType) return candidates;
+  return retypeCandidatesWithJev({
+    candidates,
+    config: deps.jevType.config,
+    ...(deps.jevType.fetchFn ? { fetchFn: deps.jevType.fetchFn } : {}),
+    logger: deps.logger,
+  });
+}
+
 /**
  * Run one bounded distill sweep. Returns a content-free summary.
  *
  * Bounded by design: the caller loops. An unbounded sweep over a growing corpus
  * is the shape that turns a maintenance job into an outage, which is the same
- * constraint Light works under (src/dream-light.ts:62-66).
+ * constraint Light works under (./dream-light.ts:62-66).
  */
 export async function runDistillSweep(
   deps: DistillSweepDeps,
@@ -162,7 +180,7 @@ export async function runDistillSweep(
 
   if (batch.consumedTurnIds.length === 0) {
     await reportEmptyClaim({
-      pool: deps.pool,
+      backlog: createDistillBacklogRepository(deps.pool),
       logger: deps.logger,
       namespace: deps.namespace,
       laneId: deps.laneId,
@@ -176,9 +194,10 @@ export async function runDistillSweep(
     candidates.push(...(await runDistillUnit(model, unit, deps.trace)));
   }
   summary.candidates_extracted = candidates.length;
+  const typed = await applyJevType(deps, candidates);
 
   const embeddings = await resolveEmbeddingBatch({
-    candidates,
+    candidates: typed,
     embedFn,
     logger: deps.logger,
     ...(deps.skipEmbeddings !== undefined
@@ -189,7 +208,7 @@ export async function runDistillSweep(
   await persistBatch({
     pool: deps.pool,
     logger: deps.logger,
-    candidates,
+    candidates: typed,
     embeddings,
     consumedTurnIds: batch.consumedTurnIds,
     distillJobId: deps.distillJobId ?? null,
@@ -222,13 +241,15 @@ export interface MemoryDistillHandlerDeps {
   auth?: unknown;
   model?: NamedDistillModel;
   tracing?: BackgroundTraceEmitter;
+  /** Issue 1618 B1: optional Jev candidate typing, forwarded to the sweep. */
+  jevType?: { config: JevConfig; fetchFn?: JevFetch };
 }
 
 /**
  * Build the handler for {@link MEMORY_DISTILL_JOB_KIND}.
  *
  * The version gate runs BEFORE any payload read, copying the shape established
- * at src/graph-derivation-handler.ts:406-409: a job stamped with a different
+ * at the graph-derivation handler: a job stamped with a different
  * version carries a payload under a different contract, and no retry can change
  * a stamped version, so it is terminal rather than retryable.
  *
@@ -283,6 +304,7 @@ export function makeMemoryDistillHandler(
         embedFn: deps.embedFn,
         trace,
         ...(deps.model ? { model: deps.model } : {}),
+        ...(deps.jevType ? { jevType: deps.jevType } : {}),
         ...(job.namespace !== null ? { namespace: job.namespace } : {}),
         ...readJobSelection(job),
         distillJobId: job.id,
@@ -301,7 +323,7 @@ export function makeMemoryDistillHandler(
  * The idempotency key must be derived from the exact unit of work: re-enqueuing
  * the same (kind, key) with a DIFFERENT payload throws
  * "maintenance queue idempotency key reused with divergent job semantics"
- * (src/maintenance-queue.ts:403-407). A distill sweep's unit of work is "the
+ * (./maintenance-queue.ts:403-407). A distill sweep's unit of work is "the
  * due backlog at time T", which has no stable identity -- so the key carries
  * the caller's own sweep label. A caller wanting one sweep per night passes the
  * date; a caller wanting a one-off passes a unique label.
@@ -322,7 +344,7 @@ export function buildMemoryDistillEnqueue(input: {
     kind: MEMORY_DISTILL_JOB_KIND,
     version: MEMORY_DISTILL_JOB_VERSION,
     payload,
-    // Bounded well under the queue's 256-char cap (src/maintenance-queue.ts:272).
+    // Bounded well under the queue's 256-char cap (./maintenance-queue.ts:272).
     idempotencyKey: `${MEMORY_DISTILL_JOB_KIND}:${input.sweepLabel}`.slice(0, 200),
     ...(input.namespace !== undefined ? { scope: { namespace: input.namespace } } : {}),
   };

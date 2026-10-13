@@ -8,7 +8,7 @@
  * contract it claimed to implement. A check that compares a constant to itself
  * has no failing input, which is exactly why nothing caught it.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { buildContract } from "./contract.ts";
 import {
   contractRequiredTools,
@@ -33,8 +33,8 @@ describe("serverContractDeclaration", () => {
     // Pinned independently of `src/contract.test.ts`: deriving the value must
     // not quietly change what the rewrite tells downstream clients.
     expect(serverContractDeclaration(GENERATED_AT)).toEqual({
-      contractVersion: "2026-08-09.memory-tools.v24",
-      schemaHash: "4580a6813ae72bb67e4b45aa28dbfa4c3e49d685bcbd3fbd228d87ce3e3f4f7c",
+      contractVersion: "2026-08-09.memory-tools.v25",
+      schemaHash: "170f3ad8c0eeeb97a33bc2edc7df2f51af635e3500e57d1a783f39a132ede12f",
     });
   });
 });

@@ -63,9 +63,7 @@ const SCOPE_REQUIRED_FIELDS = [
   "session_key",
 ] as const;
 
-export function isNormalizedScope(
-  value: unknown,
-): value is NormalizedWorkingSetScope {
+function isNormalizedScope(value: unknown): value is NormalizedWorkingSetScope {
   if (!isRecord(value)) return false;
   if (!SCOPE_REQUIRED_FIELDS.every((field) => isNonBlankString(value[field]))) {
     return false;
@@ -93,7 +91,7 @@ const ITEM_FIELD_CHECKS: Array<[string, (value: unknown) => boolean]> = [
   ["last_action", (value) => value === null || isRecoveryWalAction(value)],
 ];
 
-export function isRecoveryWalItem(value: unknown): value is RecoveryWalItem {
+function isRecoveryWalItem(value: unknown): value is RecoveryWalItem {
   if (!isRecord(value)) return false;
   return ITEM_FIELD_CHECKS.every(([field, accepts]) => accepts(value[field]));
 }
@@ -108,9 +106,7 @@ function isMarkRecord(record: Record<string, unknown>): boolean {
   );
 }
 
-export function isRecoveryWalRecord(
-  record: unknown,
-): record is RecoveryWalRecord {
+function isRecoveryWalRecord(record: unknown): record is RecoveryWalRecord {
   if (!isRecord(record)) return false;
   if (!isNormalizedScope(record.scope)) return false;
   if (record.op === "append") return isRecoveryWalItem(record.item);
@@ -126,6 +122,10 @@ export function parseWalRecord(row: string): RecoveryWalRecord | null {
     const record: unknown = JSON.parse(row);
     if (isRecoveryWalRecord(record)) return record;
   } catch {
+    // Deliberate fail-open: a torn or hand-edited row is the trust boundary
+    // this module exists for, so `null` is the answer, not an error. The caller
+    // counts it and logs the total — recovery-wal.ts:470 increments
+    // `unparseable`, reported as `rows_unparseable` at :503.
     return null;
   }
   return null;

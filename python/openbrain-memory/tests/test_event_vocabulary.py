@@ -1,16 +1,19 @@
 """The session-event vocabulary is defined once and never redeclared (#412).
 
-The vocabulary necessarily appears in six places -- this package, the
-TypeScript client, the TypeScript server set, the `MemoryEventType` union, the
-MCP tool schema, `table-constants.ts`, and a SQL CHECK constraint -- because
-those languages cannot share one literal. So "one definition" is enforced by
-this test rather than by an import: `openbrain_memory.EVENT_TYPES` is the
-definition, and every other surface is asserted equal to it.
+The vocabulary necessarily appears in several places -- this package, the
+TypeScript client, the MCP tool schema, the tiering `EventType` union,
+`table-constants.ts`, and a SQL CHECK constraint -- because those languages
+cannot share one literal. So "one definition" is enforced by this test rather
+than by an import: `openbrain_memory.EVENT_TYPES` is the definition, and every
+other surface is asserted equal to it.
 
 The issue that prompted this named two copies. Writing the guard found four
-more, which is the argument for the guard: nobody can hold six declarations in
-their head, and the `test_vocabulary_is_declared_exactly_where_expected` check
-below exists so a seventh cannot appear unnoticed.
+more, which is the argument for the guard: nobody can hold that many
+declarations in their head, and the
+`test_vocabulary_is_declared_exactly_where_expected` check below exists so a
+new one cannot appear unnoticed. (Two of the original surfaces, the server
+`Set` and the `MemoryEventType` union, both lived in `src/agent-memory.ts` and
+went away with `src/` at issue 864 L7.)
 
 Why this is worth a test instead of a comment: the two Python/TypeScript copies
 had already drifted once. `question` was valid in Python and missing from the
@@ -103,19 +106,15 @@ def test_python_vocabulary_is_the_public_surface() -> None:
 
 
 def test_typescript_client_matches_python() -> None:
-    """`clients/ts/src/runtime.ts` carries the same set."""
-    source = (REPO_ROOT / "clients" / "ts" / "src" / "runtime.ts").read_text()
+    """`clients/ts/src/runtime-support.ts` carries the same set.
+
+    The declaration lived in `runtime.ts` until issue 736's paydown split that
+    file into sibling modules; `runtime.ts` re-exports it, but this guard reads
+    source text, so it anchors on the defining module.
+    """
+    source = (REPO_ROOT / "clients" / "ts" / "src" / "runtime-support.ts").read_text()
     found = _extract_quoted_block(source, "export const EVENT_TYPES")
     assert found == EVENT_TYPES, _drift("TypeScript client", found)
-
-
-def test_typescript_server_matches_python() -> None:
-    """`src/agent-memory.ts` carries the same set."""
-    source = (REPO_ROOT / "src" / "agent-memory.ts").read_text()
-    found = _extract_quoted_block(
-        source, "const EVENT_TYPES = new Set<MemoryEventType>"
-    )
-    assert found == EVENT_TYPES, _drift("TypeScript server", found)
 
 
 def test_mcp_tool_schema_matches_python() -> None:
@@ -137,10 +136,20 @@ def test_mcp_tool_schema_matches_python() -> None:
 
 
 def test_tiering_union_matches_python() -> None:
-    """`server/domain/tiering.ts` `EventType` matches; it decides what gets promoted."""
+    """`server/domain/tiering.ts` `EventType` matches; it decides what gets promoted.
+
+    The union is module-local since issue 1211 un-exported the residual
+    zero-importer symbols there, so the anchor carries no `export` -- it is
+    still the same declaration, just no longer part of the module surface.
+    """
     # Moved here from `src/tiering.ts` by issue 864; the old path is an adapter.
     source = (REPO_ROOT / "server" / "domain" / "tiering.ts").read_text()
-    found = _extract_union(source, "export type EventType")
+    # Anchored at line start: `type EventType` unqualified would also match a
+    # future `export type EventType`, but `\ntype` pins the module-local
+    # spelling that issue 1211 left behind. The `ReadonlySet<EventType>` and
+    # `event_type: EventType` lines below carry no `type EventType` substring,
+    # so the declaration is the only candidate either way.
+    found = _extract_union(source, "\ntype EventType")
     assert found == EVENT_TYPES, _drift("tiering EventType", found)
 
 
@@ -155,22 +164,13 @@ def test_table_constants_match_python() -> None:
     assert found == EVENT_TYPES, _drift("table-constants", found)
 
 
-def test_typescript_server_union_type_matches_python() -> None:
-    """The `MemoryEventType` union matches the runtime set it types.
-
-    The union and the `Set` are two separate declarations in the same file, so
-    they can disagree with each other as easily as with Python -- and a union
-    that is missing a value makes the corresponding `Set` entry a type error
-    rather than a silent write, which is why it is checked separately.
-    """
-    source = (REPO_ROOT / "src" / "agent-memory.ts").read_text()
-    found = _extract_union(source, "export type MemoryEventType")
-    assert found == EVENT_TYPES, _drift("MemoryEventType union", found)
-
-
 def _migration_check_constraint() -> set[str] | None:
     """The event_type CHECK constraint as declared in the migrations."""
-    migrations = REPO_ROOT / "src" / "db" / "migrations"
+    # Moved here from `src/db/migrations` by issue 864 L7. The old path made
+    # this a silent `pytest.skip` the moment `src/` went away -- the guard that
+    # the docstring above calls the one that actually matters, reporting green
+    # while checking nothing.
+    migrations = REPO_ROOT / "server" / "db" / "migrations"
     if not migrations.is_dir():
         return None
     # `CHECK (event_type IN ('fact', 'decision', ...))` as declared in
@@ -236,8 +236,14 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
     """
     known = {
         "python/openbrain-memory/src/openbrain_memory/agent.py",
-        "clients/ts/src/runtime.ts",
-        "src/agent-memory.ts",
+        # Moved here from `clients/ts/src/runtime.ts` by issue 736's paydown
+        # split; `runtime.ts` re-exports it and so declares no member names.
+        "clients/ts/src/runtime-support.ts",
+        # `src/agent-memory.ts` was here until issue 864 L7 deleted `src/`. It
+        # was a legacy surface with no server twin and nothing imported it, so
+        # it died with the directory rather than moving; the surfaces below
+        # still pin the set. Not listed, because a file that does not exist
+        # cannot appear in the sweep and listing it would weaken the census.
         # Moved here from `src/contract-schemas.ts` by issue 864; the old path
         # is a re-export shim.
         "server/contracts/schemas-events.ts",
@@ -267,6 +273,12 @@ def test_vocabulary_is_declared_exactly_where_expected() -> None:
         # that set simply never matches an event. Listed so the census keeps
         # tripping on genuinely new declarations.
         "python/openbrain/src/openbrain/apps/hooks/session_start.py",
+        # NOT a vocabulary declaration: a dry-run preview label pair
+        # (["blocker", extract.blockers], issue 864 lint hoist) that names one
+        # member to title a preview row. The authority stays
+        # openbrain_memory.EVENT_TYPES. Listed so the census keeps tripping on
+        # genuinely new declarations.
+        "scripts/ob-backfill.ts",
     }
     result = subprocess.run(
         ["git", "grep", "-l", "-E", r'"blocker"', "--", "*.py", "*.ts"],

@@ -1,6 +1,10 @@
 # DREAM — three-stage sleep cycle (Light / REM / Deep)
 
-**Status:** design, not implemented. Implementable spec.
+**Status:** design spec, implemented in part (checked 2026-09-21). Light, REM,
+and Deep exist as `server/maintenance/dream-light.ts`, `dream-rem.ts`, and
+`dream-deep.ts`; Deep is a read-only bundle builder and commits nothing on its
+own. This file remains the spec; what is proven and what is still open for v1
+is tracked on issue 1469.
 **Extracted:** 2026-07-27, from GitHub issues #389–#399 (all OPEN at extraction).
 **Program:** #320. **Epic:** #389.
 
@@ -26,7 +30,15 @@ is the spec — paraphrase loses precision and invites re-litigation.
 
 ---
 
-## ⚠️ Stale premises — read before coding (audit 2026-07-27)
+## ⚠️ Stale premises — read before coding (audit 2026-07-27, re-measured 2026-09-26)
+
+Measured 2026-09-26 against the dogfood database `open_brain_local_20260724`
+(read-only `SELECT count(*)` inside `BEGIN READ ONLY; ... ROLLBACK;`).
+
+**These numbers are a dated snapshot, not facts.** Any DREAM lane must
+re-measure before it is briefed: run the SQL in
+[Pipeline state](#pipeline-state-measured-2026-09-26) below and brief from what
+it returns today, not from this table.
 
 An audit on 2026-07-27 measured the epic's "Built | Missing" table (#389) as
 **roughly 2/5 correct**. The **design intent below is preserved as written**;
@@ -34,15 +46,53 @@ these flags mark the premises that no longer hold. Do not code against a
 falsified premise, and do not "fix" a design because its motivating example
 aged out.
 
-| Epic claim (#389) | Measured 2026-07-27 | Verdict |
-|---|---|---|
-| Maintenance runner is off (`OPEN_BRAIN_MAINTENANCE_ENABLED=0` local, unset on core01) | `maintenanceQueueEnabled()` is **opt-out** (`src/maintenance-bootstrap.ts:173-180`: `return raw !== "0" && raw !== "false"`). The var is **absent from `.env`**, so the runner is **ENABLED** | ❌ **STALE — inverted** |
-| "0.66% capture" proof case | Capture is **live**: `ob_raw_turns` 3,303 rows, `ob_session_events` 9,462 rows | ❌ **STALE — obsolete** |
-| Dream Cycle is missing "a scheduler" | **Three scheduling primitives already exist**: leased `setInterval` in `src/maintenance-queue.ts:668-676`, the session sweeper in `src/transport.ts:99-113`, and launchd `com.rico.open-brain` | ⚠️ **PARTLY STALE** — what is missing is a *dream* scheduler, not scheduling capability. Reuse one of the three |
-| `graduateLaneEvent` has no caller | It has a caller at **`scripts/tier-lane-durable.ts:352`** (plus the internal call at `src/tiering.ts:362`) | ⚠️ **PARTLY STALE** — no *automatic* caller; a script caller exists |
-| `discarded_entries` — 0 rows, no writer | Still 0 rows, still no writer | ✅ **STILL TRUE** |
-| `graduateLaneEvent` has never written a row | Still true — `thoughts WHERE promoted_from ? 'graduated_at'` is 0 | ✅ **STILL TRUE** |
-| Nothing consumes raw turns | 3,303 turns captured, **0 distilled**, and **no consumer of `ob_raw_turns` anywhere in `src/`** | ✅ **STILL TRUE — this is the real residual gap** |
+| Epic claim (#389) | Measured 2026-07-27 | Measured 2026-09-26 | Verdict |
+|---|---|---|---|
+| Maintenance runner is off (`OPEN_BRAIN_MAINTENANCE_ENABLED=0` local, unset on the retired host) | `maintenanceQueueEnabled()` is **opt-out** (`src/maintenance-bootstrap.ts:173-180`: `return raw !== "0" && raw !== "false"`). The var is **absent from `.env`**, so the runner is **ENABLED** | not re-measured (code claim, not a count) | ❌ **STALE — inverted** (as of 2026-07-27) |
+| "0.66% capture" proof case | Capture is **live**: `ob_raw_turns` 3,303 rows, `ob_session_events` 9,462 rows | `ob_raw_turns` 328,017 rows, `ob_session_events` 16,238 rows | ❌ **STALE — obsolete** |
+| Dream Cycle is missing "a scheduler" | **Three scheduling primitives already exist**: leased `setInterval` in `src/maintenance-queue.ts:668-676`, the session sweeper in `src/transport.ts:99-113`, and launchd `com.rico.open-brain` | not re-measured (code claim, not a count) | ⚠️ **PARTLY STALE** (as of 2026-07-27) — what is missing is a *dream* scheduler, not scheduling capability. Reuse one of the three |
+| `graduateLaneEvent` has no caller | It has a caller at **`scripts/tier-lane-durable.ts:352`** (plus the internal call at `src/tiering.ts:362`) | not re-measured (code claim, not a count) | ⚠️ **PARTLY STALE** (as of 2026-07-27) — no *automatic* caller; a script caller exists |
+| `discarded_entries` — 0 rows, no writer | Still 0 rows, still no writer | 4 rows; the writer was not re-checked | ❌ **STALE** — rows exist, so something has written |
+| `graduateLaneEvent` has never written a row | Still true — `thoughts WHERE promoted_from ? 'graduated_at'` is 0 | 1 row by the same query | ❌ **STALE** — one graduated row exists |
+| Nothing consumes raw turns | 3,303 turns captured, **0 distilled**, and **no consumer of `ob_raw_turns` anywhere in `src/`** | 327,216 of 328,017 turns swept by DREAM Light (`light_swept_at` set; 801 unswept); 327,993 distilled | ❌ **INVERTED** — DREAM Light runs and raw turns are consumed. The stalled stage is now **candidate review**: `candidate_memory` holds 298,553 rows and `reviewed_at IS NOT NULL` is 0 (also 0 on 2026-09-04) |
+
+### Pipeline state (measured 2026-09-26)
+
+Each number sits next to the SQL that produced it. Re-measure before briefing
+any DREAM lane; run every statement inside `BEGIN READ ONLY; ... ROLLBACK;`.
+
+| Row | 2026-09-26 |
+|---|---|
+| `ob_raw_turns` total | 328,017 |
+| `ob_raw_turns` swept by Light (`light_swept_at IS NOT NULL`) | 327,216 |
+| `ob_raw_turns` unswept (`light_swept_at IS NULL`) | 801 |
+| `ob_raw_turns` distilled (`distilled_at IS NOT NULL`) | 327,993 |
+| `candidate_memory` total | 298,553 |
+| `candidate_memory` human-reviewed (`reviewed_at IS NOT NULL`) | 0 |
+| `candidate_memory` machine-graded by REM (`machine_grade IS NOT NULL`) | 12,904 |
+| `thoughts` total | 26,460 |
+| `discarded_entries` total | 4 |
+| `ob_session_events` total | 16,238 |
+| `graduateLaneEvent` output (`thoughts` with `promoted_from ? 'graduated_at'`) | 1 |
+
+```sql
+select count(*) from ob_raw_turns;                                    -- 328017
+select count(*) from ob_raw_turns where light_swept_at is not null;   -- 327216
+select count(*) from ob_raw_turns where light_swept_at is null;       -- 801
+select count(*) from ob_raw_turns where distilled_at is not null;     -- 327993
+select count(*) from candidate_memory;                                -- 298553
+select count(*) from candidate_memory where reviewed_at is not null;  -- 0
+select count(*) from candidate_memory where machine_grade is not null; -- 12904
+select count(*) from thoughts;                                        -- 26460
+select count(*) from discarded_entries;                               -- 4
+select count(*) from ob_session_events;                               -- 16238
+select count(*) from thoughts where promoted_from ? 'graduated_at';   -- 1
+```
+
+Column sources: `light_swept_at` is the marker Light's `markSwept` stamps
+(`server/db/dream-light-repository.ts`); `machine_grade` is REM's column
+(`server/db/dream-rem-grading-repository.ts`, migration 037). The graduated
+count uses the 2026-07-27 audit's own query from the table above.
 
 **The epic's thesis survives the corrections.** Verbatim (#389):
 
@@ -50,13 +100,14 @@ aged out.
 > tools only fire when an agent remembers to fire them.** A brain that only
 > remembers when you ask it to remember is a filing cabinet.
 
-Three of five instances have moved; the defect the epic names is still the
-defect, and the strongest remaining evidence for it is the third ✅ row: capture
-works, storage works, and nothing reads the result.
+On 2026-07-27, three of five instances had moved and the strongest evidence was
+that nothing read raw turns. On 2026-09-26 that row is INVERTED: Light and
+distillation consume raw turns, and the transition that waits on someone
+remembering is now candidate review (0 of 298,553 candidates reviewed).
 
-**Also outstanding:** `docs/dream-ethereal-runs.md` records that #382's
-`candidate_memory` table **does not exist** (`to_regclass('public.candidate_memory')`
-→ NULL) while `zz_test_candidate_memory` **does**, with 214 rows. See
+**Was outstanding on 2026-07-27, now stale:** `docs/dream-ethereal-runs.md`
+records that #382's `candidate_memory` table **does not exist**. On 2026-09-26
+it exists with 298,553 rows (see the pipeline-state SQL above). See
 [Known open questions](#known-open-questions).
 
 ---
@@ -81,7 +132,7 @@ Three stages, each with a different trigger, model, and budget. Rationale (#389)
 | Stage | Trigger | Where | Model | Commits? |
 |---|---|---|---|---|
 | **Light** (#390) | none — runs in the write path | in-transaction with the raw turn insert | **none, hard requirement** | tags only |
-| **REM** (#391–#393, #396, #398) | low request rate **OR** low backlog high-water mark, **and** memory headroom; 6h starvation ceiling | core01, local model | local (small) | prepares bundles; tier flips |
+| **REM** (#391–#393, #396, #398) | low request rate **OR** low backlog high-water mark, **and** memory headroom; 6h starvation ceiling | the retired host, local model | local (small) | prepares bundles; tier flips |
 | **Deep** (#394, #396) | nightly | **off-box** (Sol/Opus) | large | **yes — not advisory** |
 
 ---
@@ -166,7 +217,7 @@ The raw-turn insert path itself. No scheduler, no queue, no worker.
 Consequences, verbatim:
 
 > - cannot fall behind ingest
-> - cannot compete for the ~3 GB budget on core01
+> - cannot compete for the ~3 GB budget on the retired host
 > - cannot fail in an interesting way
 
 ## Budget / caps
@@ -179,7 +230,7 @@ Scaling limit, verbatim:
 
 > **On the scaling limit:** if ingest volume ever gets high enough that tagging in
 > the write path is a real cost, that is a hardware conversation, not a design
-> one. Rico framing — reaching that point means core01 has been replaced by
+> one. Rico framing — reaching that point means the retired host has been replaced by
 > something much larger. Do not pre-optimize light into a queue for a load that
 > does not exist.
 
@@ -251,7 +302,7 @@ and what they reveal about the taxonomy are in `dream-ethereal-runs.md`.
 > serves. Simpler, and one less piece of state to keep correct.
 
 Confirmed in the tree: `ob_raw_turns.distilled_at` exists with the comment
-*"NULL `distilled_at` is the sweep work queue"* (`src/db/migrations/032_raw_turns.sql:137-138`).
+*"NULL `distilled_at` is the sweep work queue"* (`server/db/migrations/032_raw_turns.sql:137-138`).
 
 ## Acceptance criteria (#390, verbatim)
 
@@ -319,7 +370,7 @@ count on `ob_raw_turns`, not a counter light maintains.
 
 ### Where
 
-core01, local model. See #397 for the residency decision (resident vs
+The retired host, local model. See #397 for the residency decision (resident vs
 load-on-demand) — **unresolved, decide on measurement.**
 
 ### Budget / caps: forced runs must be a sip, not a meal
@@ -350,7 +401,7 @@ load-on-demand) — **unresolved, decide on measurement.**
 ### Thresholds are unknown — a hard warning (#389 and #391, both)
 
 > The ~2 turns/min figure from earlier analysis is the **import rate of a 2-day
-> file scrape**, not core01 load. It must not be used to tune triggers. Set the
+> file scrape**, not load on the retired host. It must not be used to tune triggers. Set the
 > dials low, measure under real full-send, adjust. They are config, not design.
 
 **Dials:** forced-slice size, backlog high-water mark, rate threshold, headroom
@@ -754,11 +805,11 @@ Nightly.
 
 ## Where — and why placement is the design
 
-> The nightly heavy pass. **Runs off-box** (Sol/Opus), not on core01.
+> The nightly heavy pass. **Runs off-box** (Sol/Opus), not on the retired host.
 >
 > That placement is the point: deep is the only stage needing a large model, and
 > moving it off-box removes the local resource-contention problem entirely rather
-> than tuning around it. core01 ~3 GB budget is then spoken for only by REM.
+> than tuning around it. The retired host's ~3 GB budget is then spoken for only by REM.
 
 ## Input: pre-packaged work, not raw candidates
 
@@ -1083,7 +1134,7 @@ them.
 | Model cold load | ~1.8 s | idle |
 | Batch outcome (20 jobs) | 20 ok, 8 resized, 8 truncated, 0 dead-letter | idle |
 
-> core01 is a base 16 GB Mac Mini with roughly 3 GB free, and that budget is
+> The retired host is a base 16 GB Mac Mini with roughly 3 GB free, and that budget is
 > already spoken for once by the generation model. It simultaneously serves Open
 > Brain, the local MLX embedding server (`embeddinggemma-300m-8bit`, ~300 MB
 > resident), Postgres and its cache, and on-demand paperless-ngx AI processing.
@@ -1103,7 +1154,7 @@ them.
 | Light adds constant load | **#390** — no model, SQL only |
 | Backlog forces a large catch-up run | **#391** — bounded slice, low high-water mark |
 
-> The stage that needs the big model no longer runs on core01, and the stage that
+> The stage that needs the big model no longer runs on the retired host, and the stage that
 > does only runs when there is room. What remains is proving it.
 
 ## 1. Concurrent-load test
@@ -1144,7 +1195,7 @@ them.
 ## 4. Establish real trigger thresholds
 
 > The ~2 turns/min figure used in earlier discussion is the **import rate of a
-> 2-day file scrape, not core01 load** and must not be used for tuning. This test
+> 2-day file scrape, not load on the retired host** and must not be used for tuning. This test
 > is where the real numbers come from: rate threshold, backlog high-water mark,
 > forced-slice size, headroom floor.
 
@@ -1332,7 +1383,7 @@ Ordered. Each item blocks the ones under it in its group.
    constraint). Verify no consumer falls back to `created_at`. Blocks #392, #393,
    #396, #398.
 6. **The `distilled_at IS NULL` backlog query and its partial index**, confirmed
-   against the live schema (`src/db/migrations/032_raw_turns.sql:137-138`).
+   against the live schema (`server/db/migrations/032_raw_turns.sql:137-138`).
    Blocks #391.
 7. **A memory-headroom check.** #397 records that none exists anywhere in the
    codebase today. Blocks #391's trigger.

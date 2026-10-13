@@ -14,8 +14,9 @@
  */
 
 /**
- * Ported from python/openbrain-memory/src/openbrain_memory/policy.py
- * SECRET_PATTERNS. Kept structurally 1:1 so the two surfaces stay in lockstep.
+ * Ported from the `openbrain_memory.policy` module's SECRET_PATTERNS in the
+ * Python client package. Kept structurally 1:1 so the two surfaces stay in
+ * lockstep.
  * Prefixes are split to avoid tripping repo secret scanners on the literals.
  */
 const SK_PREFIX = "sk" + "-";

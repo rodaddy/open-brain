@@ -12,11 +12,7 @@
  * top of {@link selectedFallbackRows}.
  */
 import { traceRetrievalSpanSync } from "../observability/langfuse-tracing.ts";
-import {
-  rowEvidence,
-  rowsEvidence,
-  type SearchRow,
-} from "./search-engine-types.ts";
+import { rowEvidence, rowsEvidence, type SearchRow } from "./search-engine-types.ts";
 
 /** Dedupe key used when topping up from the legacy namespace. */
 export function fallbackDedupeKey(row: SearchRow): string {

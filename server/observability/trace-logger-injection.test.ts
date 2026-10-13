@@ -7,7 +7,7 @@
  * statement and asserts the line arrived at the logger the caller handed in —
  * with the fields-first argument order the composition root's logger expects.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { readMcpTracingConfig } from "./trace-config.ts";
 import { shutdownSink } from "./trace-sink.ts";
 import {
@@ -23,6 +23,11 @@ interface RecordedLine {
   level: "info" | "warn";
   fields: Record<string, unknown>;
   message: string;
+}
+
+/** Module-scope predicate so the suspension lookup is not a fourth nested callback. */
+function isTracingSuspendedLine(candidate: RecordedLine): boolean {
+  return candidate.message === "mcp_tool_tracing_suspended";
 }
 
 function recordingLogger(): TracingLogger & { readonly lines: RecordedLine[] } {
@@ -162,9 +167,7 @@ describe("langfuse-tracing receives its logger", () => {
     server.registerTool("probe", {}, () => ({ ok: true }));
     expect(handler).toBeDefined();
     return Promise.resolve(handler?.({}, {})).then(() => {
-      const line = logger.lines.find(
-        (candidate) => candidate.message === "mcp_tool_tracing_suspended",
-      );
+      const line = logger.lines.find(isTracingSuspendedLine);
       expect(line).toBeDefined();
       expect(JSON.stringify(line?.fields)).not.toContain("emit-exploded");
     });

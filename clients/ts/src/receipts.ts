@@ -74,10 +74,7 @@ export interface PublicReceipt extends Json {
  * statuses (`spooled` / `failed` / `lost`) carry a bounded `error_category`;
  * no free-text error ever leaves the internal runtime receipt.
  */
-export function publicReceipt(
-  receipt: RuntimeReceipt,
-  error?: unknown,
-): PublicReceipt {
+export function publicReceipt(receipt: RuntimeReceipt, error?: unknown): PublicReceipt {
   const value: PublicReceipt = {
     schema: PUBLIC_RECEIPT_SCHEMA,
     operation: receipt.operation,

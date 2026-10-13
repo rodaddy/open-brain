@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import {
   diffTraces,
   digestOutput,
@@ -16,18 +21,70 @@ import {
   repeatChildFailureMessage,
   selectRepeatedTraceSummaries,
 } from "./langfuse-trace.ts";
+import { expectDefined } from "./test-support/expect-defined.ts";
 
 async function jsonFixture<T>(name: string): Promise<T> {
-  return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).json();
+  return JSON.parse(
+    await readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8"),
+  ) as T;
 }
 
 async function fixture(name: string): Promise<LangfuseTrace> {
   return jsonFixture<LangfuseTrace>(name);
 }
 
+/**
+ * A loopback JSON server on an ephemeral port (issue 751 replaced the previous
+ * bun-only HTTP fixture with this node:http one). `origin` is what the child
+ * process gets as OPENBRAIN_TRACING_ENDPOINT.
+ */
+async function jsonServer(
+  handler: (request: IncomingMessage) => unknown,
+): Promise<{ origin: string; stop: () => Promise<void> }> {
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(handler(request)));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    stop: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+/** Runs the CLI against `origin`, returning its exit code and streams. */
+async function runCli(
+  argv: string[],
+  origin: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = spawn(process.execPath, ["scripts/langfuse-trace.ts", ...argv], {
+    cwd: new URL("../", import.meta.url).pathname,
+    env: {
+      ...process.env,
+      OPENBRAIN_TRACING_ENDPOINT: origin,
+      OPENBRAIN_TRACING_PUBLIC_KEY: "fixture-public",
+      OPENBRAIN_TRACING_SECRET_KEY: "fixture-secret",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const out: string[] = [];
+  const err: string[] = [];
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => out.push(chunk));
+  child.stderr.on("data", (chunk: string) => err.push(chunk));
+  const [code] = (await once(child, "close")) as [number | null];
+  return { exitCode: code ?? 0, stdout: out.join(""), stderr: err.join("") };
+}
+
 function comparison(equivalent: boolean | null): TraceComparison {
   return {
     equivalent,
+    evidenceIncomplete: false,
     toolA: "search_brain",
     toolB: "search_brain",
     releaseA: "a",
@@ -42,39 +99,15 @@ async function runCliSession(
   tracePage: unknown,
   trace: unknown,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const payload = new URL(request.url).pathname === "/api/public/traces"
-        ? tracePage
-        : trace;
-      return Response.json(payload);
-    },
-  });
+  const server = await jsonServer((request) =>
+    new URL(request.url ?? "/", "http://127.0.0.1").pathname === "/api/public/traces"
+      ? tracePage
+      : trace,
+  );
   try {
-    const child = Bun.spawn(
-      ["bun", "scripts/langfuse-trace.ts", "session", "fixture-session", "-n", "1"],
-      {
-        cwd: new URL("../", import.meta.url).pathname,
-        env: {
-          ...process.env,
-          OPENBRAIN_TRACING_ENDPOINT: server.url.origin,
-          OPENBRAIN_TRACING_PUBLIC_KEY: "fixture-public",
-          OPENBRAIN_TRACING_SECRET_KEY: "fixture-secret",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    return { exitCode, stdout, stderr };
+    return await runCli(["session", "fixture-session", "-n", "1"], server.origin);
   } finally {
-    server.stop(true);
+    await server.stop();
   }
 }
 
@@ -82,37 +115,16 @@ async function runCliDiff(
   traceA: unknown,
   traceB: unknown,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      const id = new URL(request.url).pathname.split("/").at(-1);
-      return Response.json(id === "trace-a" ? traceA : traceB);
-    },
-  });
+  const server = await jsonServer((request) =>
+    new URL(request.url ?? "/", "http://127.0.0.1").pathname.split("/").at(-1) ===
+    "trace-a"
+      ? traceA
+      : traceB,
+  );
   try {
-    const child = Bun.spawn(
-      ["bun", "scripts/langfuse-trace.ts", "diff", "trace-a", "trace-b"],
-      {
-        cwd: new URL("../", import.meta.url).pathname,
-        env: {
-          ...process.env,
-          OPENBRAIN_TRACING_ENDPOINT: server.url.origin,
-          OPENBRAIN_TRACING_PUBLIC_KEY: "fixture-public",
-          OPENBRAIN_TRACING_SECRET_KEY: "fixture-secret",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    return { exitCode, stdout, stderr };
+    return await runCli(["diff", "trace-a", "trace-b"], server.origin);
   } finally {
-    server.stop(true);
+    await server.stop();
   }
 }
 
@@ -140,7 +152,9 @@ describe("Langfuse trace forensics", () => {
     expect(output).toContain("name=search_brain");
     expect(output).toContain("release=abc1234");
     expect(output).toContain("sessionId=session-569");
-    expect(output).toContain("caller=user=rico client=rico token_client=rico agent=trace-fixture role=agent");
+    expect(output).toContain(
+      "caller=user=rico client=rico token_client=rico agent=trace-fixture role=agent",
+    );
     expect(output).toContain("status=success");
     expect(vectorIndex).toBeGreaterThan(0);
     expect(rankIndex).toBeGreaterThan(vectorIndex);
@@ -149,7 +163,11 @@ describe("Langfuse trace forensics", () => {
   });
 
   test("orders tied timestamps by end time then observation id and renders missing starts last", async () => {
-    const lines = renderTimeline(await fixture("langfuse-trace-timeline-degenerate.json")).split("\n").slice(5);
+    const lines = renderTimeline(
+      await fixture("langfuse-trace-timeline-degenerate.json"),
+    )
+      .split("\n")
+      .slice(5);
 
     expect(lines[0]).toContain("tied-same-end-a");
     expect(lines[1]).toContain("tied-same-end-b");
@@ -162,26 +180,33 @@ describe("Langfuse trace forensics", () => {
     const right = structuredClone(left);
     right.id = "trace-equivalent";
     right.release = "different-release";
-    const root = right.observations?.find((observation) => !observation.parentObservationId);
+    const root = right.observations?.find(
+      (observation) => !observation.parentObservationId,
+    );
     if (root?.metadata) {
       root.metadata.duration_ms = 999;
       root.metadata.resolved_namespace = ["rico"];
     }
-    const rank = right.observations?.find((observation) => observation.name === "retrieval.rank_rrf");
-    const candidate = (rank?.output as { candidates?: Array<Record<string, unknown>> })?.candidates?.[0];
+    const rank = right.observations?.find(
+      (observation) => observation.name === "retrieval.rank_rrf",
+    );
+    const candidate = (rank?.output as { candidates?: Array<Record<string, unknown>> })
+      ?.candidates?.[0];
     if (candidate) candidate.rrf_score = 0.5;
 
     const result = diffTraces(left, right);
 
-    expect(result.equivalent).toBeTrue();
+    expect(result.equivalent).toBe(true);
     expect(traceDiffExitCode(result)).toBe(0);
     expect(result.releaseB).toBe("different-release");
     expect(result.namespaceB).toBe("rico");
-    expect(result.stages.find((stage) => stage.name === "retrieval.rank_rrf")?.scoreDeltas).toContain(
-      "row-1.rrf_score: 0.03 -> 0.5 delta=0.47",
-    );
+    expect(
+      result.stages.find((stage) => stage.name === "retrieval.rank_rrf")?.scoreDeltas,
+    ).toContain("row-1.rrf_score: 0.03 -> 0.5 delta=0.47");
   });
+});
 
+describe("Langfuse trace forensics evidence comparison", () => {
   test("non-equivalent fixture pair reports evidence changes and the diff exit path", async () => {
     const result = diffTraces(
       await fixture("langfuse-trace-a.json"),
@@ -189,7 +214,7 @@ describe("Langfuse trace forensics", () => {
     );
     const output = renderTraceDiff(result);
 
-    expect(result.equivalent).toBeFalse();
+    expect(result.equivalent).toBe(false);
     expect(traceDiffExitCode(result)).toBe(1);
     expect(output).toContain("equivalent=false");
     expect(output).toContain("release A=abc1234 B=def5678");
@@ -206,7 +231,7 @@ describe("Langfuse trace forensics", () => {
       await fixture("langfuse-trace-duplicates-b.json"),
     );
 
-    expect(result.equivalent).toBeFalse();
+    expect(result.equivalent).toBe(false);
     expect(traceDiffExitCode(result)).toBe(1);
     expect(result.stages.map((stage) => stage.name)).toEqual([
       "retrieval.fallback_dedupe[1]",
@@ -222,10 +247,14 @@ describe("Langfuse trace forensics", () => {
 
     expect(result.equivalent).toBeNull();
     expect(traceDiffExitCode(result)).toBe(2);
-    expect(renderTraceDiff(result)).toContain("equivalent=unknown (no retrieval evidence found)");
+    expect(renderTraceDiff(result)).toContain(
+      "equivalent=unknown (no retrieval evidence found)",
+    );
 
     const rootOnly = structuredClone(await fixture("langfuse-trace-empty-a.json"));
-    rootOnly.observations = [{ id: "root", name: "search_brain", output: { content: "not evidence" } }];
+    rootOnly.observations = [
+      { id: "root", name: "search_brain", output: { content: "not evidence" } },
+    ];
     expect(diffTraces(rootOnly, rootOnly).equivalent).toBeNull();
   });
 
@@ -234,9 +263,9 @@ describe("Langfuse trace forensics", () => {
       await fixture("langfuse-trace-degraded-a.json"),
       await fixture("langfuse-trace-degraded-b.json"),
     );
-    const stage = result.stages[0]!;
+    const stage = expectDefined(result.stages[0], "degraded stage 0");
 
-    expect(result.equivalent).toBeFalse();
+    expect(result.equivalent).toBe(false);
     expect(stage.basis).toBe("counts+degradation");
     expect(stage.countDifferences).toContain("counts.values: 10 -> 11");
     expect(stage.degradationDifferences).toContain(
@@ -245,23 +274,108 @@ describe("Langfuse trace forensics", () => {
     expect(renderTraceDiff(result)).toContain("basis=counts+degradation");
   });
 
+  test("reads compact row evidence nested in a degraded span", () => {
+    const traceA: LangfuseTrace = {
+      id: "compact-a",
+      name: "search_brain",
+      observations: [
+        {
+          name: "retrieval.vector_query",
+          metadata: { payload_degraded: true },
+          output: {
+            counts: { values: 12, string_bytes: 524_336 },
+            evidence: {
+              count: 2,
+              row_ids: ["row-a", "row-b"],
+              candidates: [{ row_id: "row-a" }, { row_id: "row-b" }],
+            },
+          },
+        },
+      ],
+    };
+    const traceB = structuredClone(traceA);
+    traceB.id = "compact-b";
+    const output = expectDefined(traceB.observations, "trace B observations")[0]
+      ?.output as { evidence: { row_ids: string[]; candidates: unknown[] } };
+    output.evidence.row_ids = ["row-a", "row-c"];
+    output.evidence.candidates = [{ row_id: "row-a" }, { row_id: "row-c" }];
+
+    const result = diffTraces(traceA, traceB);
+    const stage = expectDefined(result.stages[0], "compact stage");
+    expect(stage.basis).toBe("row_ids");
+    expect(stage.candidateAdded).toEqual(["row-c"]);
+    expect(stage.candidateRemoved).toEqual(["row-b"]);
+    expect(result.equivalent).toBe(false);
+  });
+});
+
+describe("Langfuse trace forensics incomplete evidence", () => {
+  test("returns unknown when both stages explicitly drop retrieval evidence", () => {
+    const trace = (id: string, metadataOnly = false): LangfuseTrace => ({
+      id,
+      name: "search_brain",
+      observations: [
+        {
+          name: "retrieval.vector_query",
+          metadata: {
+            payload_degraded: true,
+            payload_degradation_reason: "active_span_bytes_limit",
+            payload_limit_bytes: 262_144,
+            ...(metadataOnly ? { payload_evidence_truncated: true } : {}),
+          },
+          output: {
+            counts: { values: 5_000, arrays: 2, objects: 5_000 },
+            ...(metadataOnly
+              ? {}
+              : { evidence_complete: false, evidence_truncated: true }),
+          },
+        },
+      ],
+    });
+
+    const result = diffTraces(trace("incomplete-a"), trace("incomplete-b"));
+
+    expect(result.equivalent).toBeNull();
+    expect(traceDiffExitCode(result)).toBe(2);
+    expect(renderTraceDiff(result)).toContain(
+      "equivalent=unknown (incomplete retrieval evidence)",
+    );
+
+    const metadataResult = diffTraces(
+      trace("metadata-incomplete-a", true),
+      trace("metadata-incomplete-b", true),
+    );
+    expect(metadataResult.equivalent).toBeNull();
+    expect(traceDiffExitCode(metadataResult)).toBe(2);
+  });
+});
+
+describe("Langfuse trace forensics ranking and rendering", () => {
   test("treats chosen rows as an ordered ranking", () => {
     const left: LangfuseTrace = {
       id: "ordered-a",
       name: "search_brain",
-      observations: [{ name: "retrieval.rank_rrf", output: { selected_row_ids: ["row-1", "row-2"] } }],
+      observations: [
+        {
+          name: "retrieval.rank_rrf",
+          output: { selected_row_ids: ["row-1", "row-2"] },
+        },
+      ],
     };
     const right = structuredClone(left);
     right.id = "ordered-b";
-    right.observations![0]!.output = { selected_row_ids: ["row-2", "row-1"] };
+    expectDefined(
+      expectDefined(right.observations, "right observations")[0],
+      "right observation 0",
+    ).output = { selected_row_ids: ["row-2", "row-1"] };
 
     const result = diffTraces(left, right);
-    const stage = result.stages[0]!;
+    const stage = expectDefined(result.stages[0], "ordered stage 0");
 
-    expect(result.equivalent).toBeFalse();
+    expect(result.equivalent).toBe(false);
     expect(stage.chosenAdded).toEqual([]);
     expect(stage.chosenRemoved).toEqual([]);
-    expect(stage.chosenReordered).toBeTrue();
+    expect(stage.chosenReordered).toBe(true);
     expect(renderTraceDiff(result)).toContain("reordered=true");
   });
 
@@ -271,7 +385,7 @@ describe("Langfuse trace forensics", () => {
       await fixture("langfuse-trace-qmd-b.json"),
     );
 
-    expect(result.equivalent).toBeFalse();
+    expect(result.equivalent).toBe(false);
     expect(result.stages[0]?.candidateRemoved).toEqual(["docs/a.md#1", "docs/b.md#2"]);
     expect(result.stages[0]?.candidateAdded).toEqual(["docs/c.md#1", "docs/d.md#2"]);
   });
@@ -280,12 +394,16 @@ describe("Langfuse trace forensics", () => {
     const left: LangfuseTrace = {
       id: "control-a",
       name: "search_brain",
-      observations: [{ name: "retrieval.vector_query", output: { row_ids: ["row-safe"] } }],
+      observations: [
+        { name: "retrieval.vector_query", output: { row_ids: ["row-safe"] } },
+      ],
     };
     const right: LangfuseTrace = {
       id: "control-b",
       name: "search_brain",
-      observations: [{ name: "retrieval.vector_query", output: { row_ids: ["row\nforged"] } }],
+      observations: [
+        { name: "retrieval.vector_query", output: { row_ids: ["row\nforged"] } },
+      ],
     };
 
     const output = renderTraceDiff(diffTraces(left, right));
@@ -308,9 +426,17 @@ describe("Langfuse trace forensics", () => {
     const second = await fixture("langfuse-trace-b.json");
     const output = renderSessionTraces([second, first]);
 
-    expect(output.split("\n")[0]).toStartWith("trace-a search_brain 2026-08-06T12:00:00.000Z");
+    expect(
+      output
+        .split("\n")[0]
+        ?.startsWith("trace-a search_brain 2026-08-06T12:00:00.000Z"),
+    ).toBe(true);
     expect(output).toContain("release=abc1234 status=success duration_ms=120");
-    expect(output.split("\n")[1]).toStartWith("trace-b search_brain 2026-08-06T12:01:00.000Z");
+    expect(
+      output
+        .split("\n")[1]
+        ?.startsWith("trace-b search_brain 2026-08-06T12:01:00.000Z"),
+    ).toBe(true);
   });
 
   test("repeat report names varying fields and repeat exits nonzero", async () => {
@@ -319,7 +445,12 @@ describe("Langfuse trace forensics", () => {
       await fixture("langfuse-trace-b.json"),
     ];
     const output = renderRepeatReport("session-569", traces);
-    const comparisons = [diffTraces(traces[0]!, traces[1]!)];
+    const comparisons = [
+      diffTraces(
+        expectDefined(traces[0], "trace a"),
+        expectDefined(traces[1], "trace b"),
+      ),
+    ];
 
     expect(output).toContain("stage=retrieval.rank_rrf VARIES");
     expect(output).toContain("candidate_row_ids");
@@ -330,7 +461,9 @@ describe("Langfuse trace forensics", () => {
     expect(repeatExitCode([comparison(true)])).toBe(0);
     expect(repeatExitCode([comparison(null)])).toBe(2);
   });
+});
 
+describe("Langfuse trace forensics repeat selection and CLI wiring", () => {
   test("selects the run's oldest fresh traces and rejects unexpected extras", () => {
     const summaries: LangfuseTrace[] = [
       { id: "newest", timestamp: "2026-08-06T12:00:03.000Z" },
@@ -339,14 +472,22 @@ describe("Langfuse trace forensics", () => {
       { id: "second", timestamp: "2026-08-06T12:00:02.000Z" },
     ];
 
-    expect(selectRepeatedTraceSummaries(summaries.slice(1), 2, "2026-08-06T12:00:00.000Z")?.map((trace) => trace.id))
-      .toEqual(["first", "second"]);
-    expect(() => selectRepeatedTraceSummaries(summaries, 2, "2026-08-06T12:00:00.000Z"))
-      .toThrow("3 fresh traces; expected exactly 2");
+    expect(
+      selectRepeatedTraceSummaries(
+        summaries.slice(1),
+        2,
+        "2026-08-06T12:00:00.000Z",
+      )?.map((trace) => trace.id),
+    ).toEqual(["first", "second"]);
+    expect(() =>
+      selectRepeatedTraceSummaries(summaries, 2, "2026-08-06T12:00:00.000Z"),
+    ).toThrow("3 fresh traces; expected exactly 2");
   });
 
   test("parses the last JSON line and preserves child stderr in failures", () => {
-    expect(parseRepeatChildOutput("uv notice\n{\"session_id\":\"session-own\"}\n")).toBe("session-own");
+    expect(parseRepeatChildOutput('uv notice\n{"session_id":"session-own"}\n')).toBe(
+      "session-own",
+    );
     expect(() => parseRepeatChildOutput("uv notice only\n")).toThrow("invalid JSON");
     expect(repeatChildFailureMessage(7, "python traceback\n")).toBe(
       "OpenBrainClient repeat failed (exit 7): python traceback",
@@ -360,7 +501,7 @@ describe("Langfuse trace forensics", () => {
     );
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toStartWith("trace-a search_brain");
+    expect(result.stdout.startsWith("trace-a search_brain")).toBe(true);
     expect(result.stderr).toBe("");
   });
 
@@ -376,7 +517,10 @@ describe("Langfuse trace forensics", () => {
   });
 
   test("CLI rejects an unexpected HTTP 200 body with exit 2", async () => {
-    const result = await runCliDiff({ error: "unexpected" }, await fixture("langfuse-trace-b.json"));
+    const result = await runCliDiff(
+      { error: "unexpected" },
+      await fixture("langfuse-trace-b.json"),
+    );
 
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");

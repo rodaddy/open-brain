@@ -60,10 +60,13 @@ export class SessionStore {
   private readonly sessions = new Map<string, SessionEntry>();
   private pendingInitializes = 0;
 
-  constructor(
-    private readonly config: SessionTransportConfig,
-    private readonly logger: Logger,
-  ) {}
+  private readonly config: SessionTransportConfig;
+  private readonly logger: Logger;
+
+  constructor(config: SessionTransportConfig, logger: Logger) {
+    this.config = config;
+    this.logger = logger;
+  }
 
   get size(): number {
     return this.sessions.size;
@@ -138,10 +141,7 @@ export class SessionStore {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     if (entry.inFlight > 0) {
-      this.logger.debug(
-        { session_id: sessionId, reason },
-        "session_expiry_deferred",
-      );
+      this.logger.debug({ session_id: sessionId, reason }, "session_expiry_deferred");
       this.armExpiry(sessionId);
       return;
     }
@@ -183,10 +183,7 @@ export class SessionStore {
   }
 
   /** Run `work` with the session marked busy, so idle expiry cannot land mid-request. */
-  async runWithSession(
-    sessionId: string,
-    work: () => Promise<void>,
-  ): Promise<void> {
+  async runWithSession(sessionId: string, work: () => Promise<void>): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       await work();

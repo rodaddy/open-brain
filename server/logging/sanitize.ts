@@ -45,9 +45,7 @@ function shape(value: object): Record<string, unknown> {
 function sanitizeObject(value: object, depth: number): unknown {
   if (depth >= 4) return shape(value);
   if (Array.isArray(value)) {
-    const items = value
-      .slice(0, 50)
-      .map((item) => sanitizeValue(item, depth + 1));
+    const items = value.slice(0, 50).map((item) => sanitizeValue(item, depth + 1));
     return value.length > 50
       ? [...items, { remaining_items: value.length - 50 }]
       : items;
@@ -56,16 +54,14 @@ function sanitizeObject(value: object, depth: number): unknown {
   const output: Record<string, unknown> = {};
   const keys = Object.keys(value);
   for (const [key, item] of Object.entries(value).slice(0, 50)) {
-    output[key] = isSensitiveKey(key)
-      ? "[REDACTED]"
-      : sanitizeValue(item, depth + 1);
+    output[key] = isSensitiveKey(key) ? "[REDACTED]" : sanitizeValue(item, depth + 1);
   }
   if (keys.length > 50) output.remaining_keys = keys.length - 50;
   return output;
 }
 
 /** Project a long string down to its safe structured form. */
-function sanitizeString(value: string): string {
+export function sanitizeString(value: string): string {
   return value.length > 200
     ? `${value.slice(0, 200)}…[${value.length - 200} characters omitted]`
     : value;
@@ -79,8 +75,7 @@ function sanitizeString(value: string): string {
  */
 function sanitizeNonObject(value: unknown): { projected: unknown } | undefined {
   if (typeof value === "string") return { projected: sanitizeString(value) };
-  if (value instanceof Error)
-    return { projected: { type: value.name || "Error" } };
+  if (value instanceof Error) return { projected: { type: value.name || "Error" } };
   if (typeof value === "bigint") return { projected: value.toString() };
   if (typeof value === "function" || typeof value === "symbol") {
     return { projected: { type: typeof value } };

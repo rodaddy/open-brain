@@ -8,7 +8,11 @@
  * match. A near miss is a content-free `exact_scope` denial, never a widened
  * query that finds the "closest" lane.
  */
-import type { PoolClient, QueryConfig } from "pg";
+import {
+  createContextPackRepository,
+  type ContextPackRepository,
+} from "../db/context-pack-repository.ts";
+import { openReadOnlySession } from "../db/read-only-session.ts";
 import type { AgentContextPackArgs } from "./context-pack-args.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import {
@@ -28,7 +32,7 @@ export {
   boundedText,
 } from "./context-pack-shared.ts";
 
-export type DurableLaneContextFragment = {
+type DurableLaneContextFragment = {
   section?: Record<string, unknown>;
   scopeDenials: Array<Record<string, unknown>>;
   truncation: Array<Record<string, unknown>>;
@@ -37,107 +41,25 @@ export type DurableLaneContextFragment = {
   citations: Array<Record<string, unknown>>;
 };
 
-type DurableLaneQuery = (
-  sql: string,
-  params?: unknown[],
-) => Promise<{ rows: Array<Record<string, unknown>> }>;
-
+/**
+ * The repository this section reads through, plus the session lifecycle the
+ * caller must drive when one was opened.
+ */
 type DurableLaneReader = {
-  query: DurableLaneQuery;
+  repository: ContextPackRepository;
   commit: () => Promise<void>;
   rollback: () => Promise<void>;
   release: () => void;
 };
 
 /**
- * Milliseconds left in the caller's latency budget, or a throw when it is spent.
- *
- * Throwing rather than clamping to zero is deliberate: a zero-length query
- * timeout is not "run instantly", it is "run forever" in most drivers, which is
- * precisely the failure a latency budget exists to prevent.
- */
-function remainingLatencyMs(startedAt: number, maxLatencyMs: number): number {
-  const remainingMs = Math.floor(
-    maxLatencyMs - (performance.now() - startedAt),
-  );
-  if (remainingMs < 1) {
-    throw new Error("durable lane context latency budget exhausted");
-  }
-  return remainingMs;
-}
-
-/**
- * Acquire a pooled client without letting pool exhaustion silently eat the
- * caller's whole latency budget. If the timer wins, the late-arriving client is
- * released rather than leaked — an abandoned checkout is how a pool starves.
- */
-async function acquirePoolClient(
-  dependencies: MemoryToolDependencies,
-  startedAt: number,
-  maxLatencyMs: number,
-): Promise<PoolClient> {
-  const remainingMs = remainingLatencyMs(startedAt, maxLatencyMs);
-  const connectPromise = dependencies.pool.connect();
-
-  return await new Promise<PoolClient>((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      settled = true;
-      reject(new Error("durable lane context latency budget exhausted"));
-    }, remainingMs);
-
-    void connectPromise
-      .then(
-        (client) => {
-          if (settled) {
-            client.release();
-            return;
-          }
-          settled = true;
-          clearTimeout(timeout);
-          resolve(client);
-        },
-        (error: unknown) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          reject(error);
-        },
-      )
-      .catch(() => undefined);
-  });
-}
-
-type TimedQueryConfig = QueryConfig<unknown[]> & { query_timeout: number };
-
-async function queryWithinLatencyBudget(options: {
-  client: PoolClient;
-  startedAt: number;
-  maxLatencyMs: number;
-  text: string;
-  values?: unknown[];
-}): Promise<{ rows: Array<Record<string, unknown>> }> {
-  const { client, startedAt, maxLatencyMs, text, values } = options;
-  const config: TimedQueryConfig = {
-    text,
-    values,
-    query_timeout: remainingLatencyMs(startedAt, maxLatencyMs),
-  };
-  const result = await client.query(config);
-  return { rows: result.rows as Array<Record<string, unknown>> };
-}
-
-/**
  * Open the read path.
  *
  * With no latency budget this is just the pool — no transaction, no dedicated
- * client, nothing to leak. With one, it takes a dedicated client inside a
- * `READ ONLY` transaction carrying a server-side `statement_timeout`, so a query
- * that outlives the budget is cancelled by Postgres itself rather than merely
- * abandoned by the driver while the backend keeps burning CPU.
- *
- * A client that errored is released WITH the error, which destroys it instead of
- * returning a connection in an unknown transaction state to the pool.
+ * client, nothing to leak. With one, `server/db/read-only-session.ts` owns the
+ * deadline-bounded connect, the `READ ONLY` transaction, the per-statement
+ * timeout, and the release-with-error path; those are pool-lifecycle mechanics
+ * and belong to server/db, not to this tool.
  */
 async function openDurableLaneReader(
   dependencies: MemoryToolDependencies,
@@ -145,79 +67,39 @@ async function openDurableLaneReader(
 ): Promise<DurableLaneReader> {
   if (maxLatencyMs === undefined) {
     return {
-      query: async (sql, params) => {
-        const result = await dependencies.pool.query(sql, params);
-        return { rows: result.rows as Array<Record<string, unknown>> };
-      },
+      repository: createContextPackRepository(dependencies.pool),
       commit: async () => undefined,
       rollback: async () => undefined,
       release: () => undefined,
     };
   }
 
-  const startedAt = performance.now();
-  const client = await acquirePoolClient(dependencies, startedAt, maxLatencyMs);
-  let transactionOpen = false;
-  let released = false;
-  let unsafeError: Error | undefined;
-  const markUnsafe = (error: unknown) => {
-    unsafeError =
-      error instanceof Error
-        ? error
-        : new Error("durable lane context client is unsafe");
-  };
-  const release = () => {
-    if (released) return;
-    released = true;
-    client.release(unsafeError);
-  };
-  const query = async (sql: string, params?: unknown[]) => {
-    try {
-      return await queryWithinLatencyBudget({
-        client,
-        startedAt,
-        maxLatencyMs,
-        text: sql,
-        values: params,
-      });
-    } catch (error) {
-      markUnsafe(error);
-      throw error;
-    }
-  };
-  try {
-    await query("BEGIN READ ONLY");
-    transactionOpen = true;
-    await query("SELECT set_config('statement_timeout', $1, true)", [
-      `${remainingLatencyMs(startedAt, maxLatencyMs)}ms`,
-    ]);
-  } catch (error) {
-    markUnsafe(error);
-    release();
-    throw error;
-  }
+  const session = await openReadOnlySession({
+    pool: dependencies.pool,
+    maxLatencyMs,
+    onLateArrival: (error: unknown) => {
+      dependencies.logger.warn(
+        {
+          tool: "context_pack_durable_lane",
+          errorName: error instanceof Error ? error.name : "unknown",
+        },
+        "durable_lane_client_acquire_settled_late",
+      );
+    },
+  });
 
   return {
-    query: async (sql, params) => await query(sql, params),
-    commit: async () => {
-      await query("COMMIT");
-      transactionOpen = false;
-    },
-    rollback: async () => {
-      if (!transactionOpen || unsafeError) return;
-      await query("ROLLBACK");
-      transactionOpen = false;
-    },
-    release,
+    repository: createContextPackRepository(session),
+    commit: session.commit,
+    rollback: session.rollback,
+    release: session.release,
   };
 }
 
 /** The content-free fragment returned when no lane matches all seven coordinates. */
 function laneScopeDenial(maxContentChars: number): DurableLaneContextFragment {
   return {
-    scopeDenials: [
-      { source: "durable_lane_context", reasons: ["exact_scope"] },
-    ],
+    scopeDenials: [{ source: "durable_lane_context", reasons: ["exact_scope"] }],
     truncation: [],
     degradedSources: [],
     budget: {
@@ -230,10 +112,7 @@ function laneScopeDenial(maxContentChars: number): DurableLaneContextFragment {
 }
 
 /** All seven scope coordinates, in the order every query in this file binds them. */
-function laneScopeParams(
-  args: AgentContextPackArgs,
-  namespace: string,
-): unknown[] {
+function laneScopeParams(args: AgentContextPackArgs, namespace: string): unknown[] {
   // `thread_id` uses IS NOT DISTINCT FROM so a null thread matches ONLY
   // unthreaded lanes rather than every thread in the channel.
   return [
@@ -246,35 +125,6 @@ function laneScopeParams(
     args.thread_id ?? null,
   ];
 }
-
-const LANE_SELECT_SQL = `SELECT id, session_key, status, agent, source, channel_id, thread_id,
-              project, topic, current_context_md, updated_at
-         FROM ob_session_lanes
-        WHERE namespace = $1
-          AND session_key = $2
-          AND agent = $3
-          AND source = $4
-          AND metadata->>'server_id' = $5
-          AND channel_id = $6
-          AND thread_id IS NOT DISTINCT FROM $7::text`;
-
-// Every event in the lane, newest-first. No row ceiling: the caller asked for
-// this lane's durable context, and a partial answer that reports itself as
-// complete is the silent-zero failure `docs/GOTCHAS.md` names. The join
-// re-binds all seven coordinates so a lane_id alone can never widen scope.
-const LANE_EVENTS_SQL = `SELECT e.id, e.event_type, e.content, e.source, e.importance,
-              e.artifact_path, e.transcript_ref, e.occurred_at, e.created_at
-         FROM ob_session_events e
-         JOIN ob_session_lanes l ON l.id = e.lane_id
-        WHERE e.lane_id = $1
-          AND l.namespace = $2
-          AND l.session_key = $3
-          AND l.agent = $4
-          AND l.source = $5
-          AND l.metadata->>'server_id' = $6
-          AND l.channel_id = $7
-          AND l.thread_id IS NOT DISTINCT FROM $8::text
-        ORDER BY e.created_at DESC, e.id DESC`;
 
 type LaneEventCollection = {
   events: Array<Record<string, unknown>>;
@@ -397,7 +247,9 @@ async function readLaneFragment(options: {
 }): Promise<DurableLaneContextFragment> {
   const { args, reader, scopeParams, maxContentChars } = options;
 
-  const { rows: laneRows } = await reader.query(LANE_SELECT_SQL, scopeParams);
+  const { rows: laneRows } = await reader.repository.selectContextPackLane({
+    scopeParams,
+  });
   const lane = laneRows[0] as Record<string, unknown> | undefined;
   if (!lane) {
     await reader.commit();
@@ -408,15 +260,12 @@ async function readLaneFragment(options: {
     lane.current_context_md,
     laneContextShare(maxContentChars),
   );
-  const startingChars = Math.max(
-    0,
-    maxContentChars - (context.text?.length ?? 0),
-  );
+  const startingChars = Math.max(0, maxContentChars - (context.text?.length ?? 0));
 
-  const { rows: eventRows } = await reader.query(LANE_EVENTS_SQL, [
-    lane.id,
-    ...scopeParams,
-  ]);
+  const { rows: eventRows } = await reader.repository.selectContextPackLaneEvents({
+    laneId: lane.id,
+    scopeParams,
+  });
   const collected = collectLaneEvents(eventRows, lane.id, startingChars);
 
   const truncation = laneTruncationEntries({
@@ -474,10 +323,7 @@ export async function loadDurableLaneContext(
 
   let reader: DurableLaneReader | undefined;
   try {
-    reader = await openDurableLaneReader(
-      dependencies,
-      args.budget?.max_latency_ms,
-    );
+    reader = await openDurableLaneReader(dependencies, args.budget?.max_latency_ms);
     return await readLaneFragment({
       args,
       reader,
@@ -535,13 +381,7 @@ function logDurableLaneFailure(
       requested_max_tokens: args.budget?.max_tokens ?? null,
       content_char_limit: maxContentChars,
       ...errorIdentityFields(error),
-      ...pgDiagnosticFields(error, [
-        "code",
-        "detail",
-        "hint",
-        "constraint",
-        "routine",
-      ]),
+      ...pgDiagnosticFields(error, ["code", "detail", "hint", "constraint", "routine"]),
       stack: asError(error)?.stack ?? null,
       cause: asError(error)?.cause ? String(asError(error)?.cause) : null,
     },

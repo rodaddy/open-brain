@@ -1,44 +1,17 @@
 /**
  * Skill and canon usage telemetry: record an invocation, report the counts.
  *
- * Design authority: issue #469, whose operator ruling is the whole shape of
- * this module -- "no automatic retirement. What I need is something that gives
- * me metrics so that decisions can be made on facts and not on feel." Both
- * tools here are METRICS ONLY. `record_skill_usage` appends one row per
- * invocation; `skill_usage_report` counts rows. Neither categorises,
- * recommends, rotates, shelves, nor retires anything, and neither is allowed to
- * grow a field that does -- the issue body forbids all five by name. Rico reads
- * the counts and makes those calls himself.
+ * Both tools are METRICS ONLY (issue #469), the content stream is deliberately
+ * not captured, and namespace scoping is a join through `ob_entities` rather
+ * than a column on `skill_usage_log` -- `skillUsageReadScope()` below is the
+ * single place that join is built.
  *
- * WHAT IS RECORDED, AND WHAT IS DELIBERATELY NOT.
- *
- * Four dimensions and a timestamp: which skill, which agent, which repo, which
- * session, when. NOT the tool input, NOT the tool response, NOT the prompt.
- * That content stream is the explicitly OPEN question in
- * `docs/decisions/capture-never-drops-a-turn.md` (memory versus observability),
- * and the `PostToolUse` stub's docstring warns in terms against resolving it by
- * accident. Counting invocations needs none of it, so this takes none of it.
- *
- * NAMESPACE SCOPING IS BY JOIN, NOT BY COLUMN.
- *
- * `skill_usage_log` carries no `namespace` column (046_skill_usage_log.sql),
- * exactly like `entry_access_log`. The scoping rule is the one `reporting.ts`
- * already establishes for that table: the log has no namespace of its own, so
- * every read joins back to the owning `ob_entities` row and applies the
- * auth-derived predicate THERE. Reading the log without that join would report
- * another namespace's usage pattern to any caller -- which skills another
- * tenant runs, and how often, is exactly the kind of profile this must not
- * leak. `skillUsageReadScope()` below is the single place that join is built,
- * and `skill-usage.pg.test.ts` proves the predicate holds by asserting a second
- * namespace's rows stay invisible.
+ * See docs/decisions/skill-usage-is-metrics-only.md
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { canRead, canWrite } from "../auth/permissions.ts";
-import {
-  canTargetNamespace,
-  namespacePredicate,
-} from "../auth/namespace-policy.ts";
+import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity } from "../auth/types.ts";
 import {
   authIdentity,
@@ -47,6 +20,7 @@ import {
   type MemoryToolDependencies,
 } from "./types.ts";
 import { qualifyNamespacePredicate } from "./curation-helpers.ts";
+import { createEntityReportRepository } from "../db/entity-report-repository.ts";
 
 /**
  * The `ob_entities.entity_type` skills and canon rules are seeded under.
@@ -56,7 +30,7 @@ import { qualifyNamespacePredicate } from "./curation-helpers.ts";
  * both "a named thing an agent loaded", and keeping one entity type means the
  * seed upsert and the report join have one shape instead of two.
  */
-export const SKILL_ENTITY_TYPE = "skill";
+const SKILL_ENTITY_TYPE = "skill";
 
 /** How many rows the report returns before the caller narrows its window. */
 const REPORT_LIMIT = 200;
@@ -83,13 +57,7 @@ const recordSkillUsageInputSchema = {
     .enum(["skill", "canon"])
     .optional()
     .describe("Whether a skill or a canon rule was loaded"),
-  agent: z
-    .string()
-    .trim()
-    .min(1)
-    .max(200)
-    .optional()
-    .describe("Agent that invoked it"),
+  agent: z.string().trim().min(1).max(200).optional().describe("Agent that invoked it"),
   repo: z
     .string()
     .trim()
@@ -162,17 +130,10 @@ type SkillUsageReportArgs = {
  * @param values - The running parameter list, extended with the predicate's.
  * @returns A `JOIN ... ON ...` fragment binding `sul` to entity alias `e`.
  */
-function skillUsageReadScope(
-  identity: AuthIdentity,
-  values: unknown[],
-): string {
+function skillUsageReadScope(identity: AuthIdentity, values: unknown[]): string {
   const predicate = namespacePredicate(identity, "read", values.length + 1);
   values.push(...predicate.values);
-  const scoped = qualifyNamespacePredicate(
-    predicate,
-    "e.namespace",
-    values.length,
-  );
+  const scoped = qualifyNamespacePredicate(predicate, "e.namespace", values.length);
   return ` JOIN ob_entities e
              ON e.id = sul.entity_id
             AND e.archived_at IS NULL${scoped}`;
@@ -194,25 +155,17 @@ async function seedSkillEntity(
   request: { skillSlug: string; usageKind: string; namespace: string },
 ): Promise<string | undefined> {
   const entityName = `${SKILL_ENTITY_TYPE}.${request.skillSlug}`;
-  const { rows } = await dependencies.pool.query(
-    `INSERT INTO ob_entities
-       (entity_type, name, namespace, metadata, created_by)
-     VALUES ($1, $2, $3, $4::jsonb, $5)
-     ON CONFLICT (namespace, entity_type, lower(name))
-     WHERE archived_at IS NULL
-     DO UPDATE SET updated_at = NOW()
-     RETURNING id`,
-    [
-      SKILL_ENTITY_TYPE,
-      entityName,
-      request.namespace,
-      JSON.stringify({
-        skill_slug: request.skillSlug,
-        usage_kind: request.usageKind,
-      }),
-      identity.clientId,
-    ],
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.seedSkillEntity({
+    entityType: SKILL_ENTITY_TYPE,
+    entityName,
+    namespace: request.namespace,
+    metadata: JSON.stringify({
+      skill_slug: request.skillSlug,
+      usage_kind: request.usageKind,
+    }),
+    createdBy: identity.clientId,
+  });
   return rows[0]?.id as string | undefined;
 }
 
@@ -223,22 +176,16 @@ async function appendUsageRow(
   args: RecordSkillUsageArgs,
   usageKind: string,
 ): Promise<unknown> {
-  const { rows } = await dependencies.pool.query(
-    `INSERT INTO skill_usage_log
-       (entity_id, skill_slug, agent, repo, session_id, runtime, usage_kind)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, entity_id, skill_slug, agent, repo, session_id, runtime,
-               usage_kind, invoked_at`,
-    [
-      entityId,
-      args.skill_slug,
-      args.agent ?? null,
-      args.repo ?? null,
-      args.session_id ?? null,
-      args.runtime ?? null,
-      usageKind,
-    ],
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.appendUsageRow({
+    entityId,
+    skillSlug: args.skill_slug,
+    agent: args.agent ?? null,
+    repo: args.repo ?? null,
+    sessionId: args.session_id ?? null,
+    runtime: args.runtime ?? null,
+    usageKind,
+  });
   return rows[0];
 }
 
@@ -256,22 +203,14 @@ async function queryUsageCounts(
   const kindFilter = args.usage_kind
     ? ` AND sul.usage_kind = $${values.push(args.usage_kind)}`
     : "";
-  const { rows } = await dependencies.pool.query(
-    `SELECT sul.skill_slug,
-            sul.usage_kind,
-            sul.agent,
-            sul.repo,
-            sul.runtime,
-            COUNT(*)::int          AS invocations,
-            MAX(sul.invoked_at)    AS last_used_at
-       FROM skill_usage_log sul${join}
-      WHERE sul.invoked_at >= NOW() - (${windowParameter} || ' days')::interval${kindFilter}
-      GROUP BY sul.skill_slug, sul.usage_kind, sul.agent, sul.repo,
-               sul.runtime
-      ORDER BY invocations DESC, sul.skill_slug ASC
-      LIMIT ${REPORT_LIMIT}`,
-    values,
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.usageCounts({
+    join,
+    windowParameter,
+    kindFilter,
+    reportRowCount: REPORT_LIMIT,
+    parameters: values,
+  });
   return rows;
 }
 
@@ -292,14 +231,13 @@ async function queryPriorWindow(
   const trendKindFilter = args.usage_kind
     ? ` AND sul.usage_kind = $${trendValues.push(args.usage_kind)}`
     : "";
-  const { rows } = await dependencies.pool.query(
-    `SELECT sul.skill_slug, COUNT(*)::int AS invocations
-       FROM skill_usage_log sul${trendJoin}
-      WHERE sul.invoked_at <  NOW() - (${trendWindow} || ' days')::interval
-        AND sul.invoked_at >= NOW() - (${trendWindow} || ' days')::interval * 2${trendKindFilter}
-      GROUP BY sul.skill_slug`,
-    trendValues,
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.priorWindowCounts({
+    join: trendJoin,
+    windowParameter: trendWindow,
+    kindFilter: trendKindFilter,
+    parameters: trendValues,
+  });
   const priorWindow: Record<string, number> = {};
   for (const row of rows) {
     priorWindow[String(row.skill_slug)] = Number(row.invocations);
@@ -318,11 +256,7 @@ async function queryNeverUsed(
   days: number,
 ): Promise<string[]> {
   const neverValues: unknown[] = [];
-  const neverPredicate = namespacePredicate(
-    identity,
-    "read",
-    neverValues.length + 1,
-  );
+  const neverPredicate = namespacePredicate(identity, "read", neverValues.length + 1);
   neverValues.push(...neverPredicate.values);
   const neverScoped = qualifyNamespacePredicate(
     neverPredicate,
@@ -331,23 +265,21 @@ async function queryNeverUsed(
   );
   neverValues.push(days);
   const neverWindow = `$${neverValues.length}`;
-  const { rows } = await dependencies.pool.query(
-    `SELECT e.name
-       FROM ob_entities e
-      WHERE e.entity_type = '${SKILL_ENTITY_TYPE}'
-        AND e.archived_at IS NULL${neverScoped}
-        AND NOT EXISTS (
-              SELECT 1
-                FROM skill_usage_log sul
-               WHERE sul.entity_id = e.id
-                 AND sul.invoked_at >=
-                     NOW() - (${neverWindow} || ' days')::interval
-            )
-      ORDER BY e.name ASC
-      LIMIT ${REPORT_LIMIT}`,
-    neverValues,
-  );
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.neverUsedSkills({
+    entityType: SKILL_ENTITY_TYPE,
+    scoped: neverScoped,
+    windowParameter: neverWindow,
+    reportRowCount: REPORT_LIMIT,
+    parameters: neverValues,
+  });
   return rows.map((row) => String(row.name));
+}
+
+/** Narrow one nullable text column to a string, leaving SQL NULL as null. */
+function optionalText(value: unknown): string | null {
+  if (value === null) return null;
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 /** Shape one usage row for the response, carrying its prior-window count. */
@@ -355,12 +287,15 @@ function usageEntry(
   row: Record<string, unknown>,
   priorWindow: Record<string, number>,
 ): Record<string, unknown> {
+  const agent = optionalText(row.agent);
+  const repo = optionalText(row.repo);
+  const runtime = optionalText(row.runtime);
   return {
     skill_slug: String(row.skill_slug),
     usage_kind: String(row.usage_kind),
-    agent: row.agent === null ? null : String(row.agent),
-    repo: row.repo === null ? null : String(row.repo),
-    runtime: row.runtime === null ? null : String(row.runtime),
+    agent,
+    repo,
+    runtime,
     invocations: Number(row.invocations),
     last_used_at: row.last_used_at,
     prior_window_invocations: priorWindow[String(row.skill_slug)] ?? 0,
@@ -398,12 +333,7 @@ async function buildSkillUsageReport(
 ): Promise<Record<string, unknown>> {
   const days = args.days ?? DEFAULT_REPORT_DAYS;
   const usage = await queryUsageCounts(dependencies, identity, args, days);
-  const priorWindow = await queryPriorWindow(
-    dependencies,
-    identity,
-    args,
-    days,
-  );
+  const priorWindow = await queryPriorWindow(dependencies, identity, args, days);
   const neverUsed = await queryNeverUsed(dependencies, identity, days);
   return {
     window_days: days,
@@ -451,9 +381,7 @@ function registerSkillUsageReport(
       if (!identity || !canRead(identity.role, "sessions")) {
         return errorResult("Permission denied: read access required");
       }
-      return textResult(
-        await buildSkillUsageReport(dependencies, identity, args),
-      );
+      return textResult(await buildSkillUsageReport(dependencies, identity, args));
     },
   );
 }

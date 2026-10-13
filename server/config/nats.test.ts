@@ -16,7 +16,7 @@
  * a typo" into the same silent `not_runtime_available`, which is exactly the
  * indistinguishability the src implementation logs a warning about.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { natsHealthFromConfig, parseNatsConfig } from "./nats.ts";
 
 const NATS_ON = {

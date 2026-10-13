@@ -6,7 +6,9 @@ dedupe -- is ``test_capture_deliver_live.py``, and only that file proves a
 write survives; these prove the ORDER and the composition.
 """
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -256,3 +258,49 @@ class TestContentSurvivesWhole:
 
         assert len(lane.turns[0]["content"]) == size
         assert lane.turns[0]["content"] == text
+
+
+class _SlowClockLane:
+    """A lane whose every call costs 0.7 s on a shared fake monotonic clock."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.starts: list[float] = []
+        self.sizes: list[int] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def ingest_raw_turns(self, turns: Sequence[Mapping[str, Any]]) -> object:
+        self.starts.append(self.now)
+        self.now += 0.7
+        self.sizes.append(len(turns))
+        return None
+
+
+class TestChunkedDeliveryDeadline:
+    """Issue 682: no batch starts inside the request reserve of the deadline."""
+
+    async def test_no_batch_starts_inside_the_deadline_reserve(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "t.jsonl"
+        write_lines(
+            path,
+            [operator_line(f"u{i}", f"turn {i}") for i in range(1_800)],
+        )
+        store = WatermarkStore(tmp_path / "wm.sqlite")
+        lane = _SlowClockLane()
+        monkeypatch.setattr(
+            "openbrain.apps.capture.deliver.time.monotonic", lane.monotonic
+        )
+        before = await store.offset_for("s1")
+
+        with pytest.raises(TimeoutError):
+            await deliver_new_turns(path, "s1", store, lane, deadline=5.0)
+
+        # Every request ends with the 0.3 s close margin still left.
+        assert all(start + 0.7 <= 5.0 - 0.3 for start in lane.starts), lane.starts
+        assert len(lane.starts) == 6, lane.starts
+        assert lane.sizes == [100] * 6
+        assert await store.offset_for("s1") == before

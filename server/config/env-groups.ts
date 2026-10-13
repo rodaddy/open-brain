@@ -53,6 +53,22 @@ import {
   resolveFtsConfig,
   type FtsConfig,
 } from "../tools/fts-config.ts";
+import {
+  DEFAULT_JEV_BASE_URL,
+  DEFAULT_JEV_MAX_REQUEST_BYTES,
+  DEFAULT_JEV_MAX_STATE_QUESTION_BYTES,
+  DEFAULT_JEV_MODEL,
+  type JevConfig,
+} from "../integrations/jev.ts";
+import { MaintenanceConfigError } from "./maintenance.ts";
+
+function jevConfigError(enabledFlag: string): MaintenanceConfigError {
+  const error = new MaintenanceConfigError(
+    `${enabledFlag}=1 requires OPENBRAIN_JEV_API_KEY`,
+  );
+  Object.defineProperty(error, "path", { value: "OPENBRAIN_JEV_API_KEY" });
+  return error;
+}
 
 /** Trim, and treat a blank value as absent. Present-but-empty is unset. */
 const blankAsAbsent = z.preprocess((value) => {
@@ -141,10 +157,7 @@ const permissiveBoolean = z.preprocess((value) => {
 const strictOneFlag = z.preprocess((value) => value === "1", z.boolean());
 
 /** Exactly `0` disables; every other value, absent included, enables. */
-const strictZeroDisablesFlag = z.preprocess(
-  (value) => value !== "0",
-  z.boolean(),
-);
+const strictZeroDisablesFlag = z.preprocess((value) => value !== "0", z.boolean());
 
 /**
  * Any free-text language token, mapped to a supported FTS configuration.
@@ -154,8 +167,7 @@ const strictZeroDisablesFlag = z.preprocess(
  * allowlist here would be a second opinion on the same question.
  */
 const ftsConfigEnv = z.preprocess(
-  (value) =>
-    resolveFtsConfig(typeof value === "string" ? value.trim() : undefined),
+  (value) => resolveFtsConfig(typeof value === "string" ? value.trim() : undefined),
   ftsConfigSchema,
 );
 
@@ -184,6 +196,42 @@ export const extendedEnvironmentFields = {
   // blank to absent here would let the legacy value through instead.
   OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS: z.string().optional(),
   SEARCH_EMBEDDING_TIMEOUT_MS: z.string().optional(),
+  OPENBRAIN_JEV_REM_ENABLED: strictOneFlag,
+  // Issue 1618 B5: absent (or blank) is off, which is the pre-floor behaviour
+  // exactly. A non-number or a value outside [0,1] is a config error, never a
+  // silent default.
+  OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() !== ""
+        ? Number(value.trim())
+        : undefined,
+    z.number().min(0).max(1).optional(),
+  ),
+  OPENBRAIN_JEV_SEARCH_ENABLED: strictOneFlag,
+  // Issue 1618 B3: the Jev screen in front of promote_shared. Default off;
+  // independent of OPENBRAIN_PROMOTION_KILL_SWITCH.
+  OPENBRAIN_JEV_SHARE_SCREEN_ENABLED: strictOneFlag,
+  // Issue 1618 B1: Jev candidate typing at distill. Default off; types, never drops.
+  OPENBRAIN_JEV_DISTILL_TYPE_ENABLED: strictOneFlag,
+  // Issue 1618 B4: Jev canon-conflict flag on distilled corrections. Default off; flags, never retypes.
+  OPENBRAIN_JEV_CANON_CONFLICT_ENABLED: strictOneFlag,
+  OPENBRAIN_JEV_API_KEY: blankAsAbsent,
+  OPENBRAIN_JEV_BASE_URL: z
+    .string()
+    .url()
+    .refine(
+      (value) => new URL(value).protocol === "https:",
+      "Jev endpoint must use HTTPS",
+    )
+    .default(DEFAULT_JEV_BASE_URL),
+  OPENBRAIN_JEV_MODEL: blankAsAbsent,
+  OPENBRAIN_JEV_TIMEOUT_MS: numberPositiveInteger(3_000),
+  OPENBRAIN_JEV_MAX_REQUEST_BYTES: numberPositiveInteger(
+    DEFAULT_JEV_MAX_REQUEST_BYTES,
+  ).pipe(z.number().max(DEFAULT_JEV_MAX_REQUEST_BYTES)),
+  OPENBRAIN_JEV_MAX_STATE_QUESTION_BYTES: numberPositiveInteger(
+    DEFAULT_JEV_MAX_STATE_QUESTION_BYTES,
+  ).pipe(z.number().max(DEFAULT_JEV_MAX_STATE_QUESTION_BYTES)),
   // fts — `server/tools/fts-config.ts:111`.
   OPENBRAIN_FTS_CONFIG: ftsConfigEnv,
   // qmd — `server/tools/search-all.ts:119`.
@@ -218,18 +266,35 @@ export const extendedEnvironmentFields = {
   PORT: portNumber,
 } as const;
 
-type ExtendedEnvironment = z.infer<
-  z.ZodObject<typeof extendedEnvironmentFields>
->;
+type ExtendedEnvironment = z.infer<z.ZodObject<typeof extendedEnvironmentFields>>;
 
 /** No namespace is legacy by default; #167 retired `collab`. */
 const DEFAULT_LEGACY_SHARED_NAMESPACE = "";
 /** Ruled default observation window: 6 hours (ledger item 28). */
 const DEFAULT_CAPTURE_WINDOW_MINUTES = 360;
 
+/** REM's Jev config: the shared fields plus the optional confidence floor. */
+export interface JevRemConfig extends JevConfig {
+  /** Grades whose min(label, score) confidence is below this are inconclusive. */
+  readonly confidenceFloor?: number;
+}
+
+/** Absent floor stays absent: the grader then behaves exactly as before. */
+function remConfidenceFloor(floor: number | undefined): { confidenceFloor?: number } {
+  return floor === undefined ? {} : { confidenceFloor: floor };
+}
+
 export interface SearchConfigGroup {
   /** Milliseconds the query-embedding call may take before degrading. */
   readonly embeddingTimeoutMs: number;
+  readonly jevRem: JevRemConfig;
+  readonly jevSearch: JevConfig;
+  /** Issue 1618 B3: the promote_shared screen; same Jev source as REM. */
+  readonly jevShareScreen: JevConfig;
+  /** Issue 1618 B1: candidate typing at distill; same Jev source as REM. */
+  readonly jevDistillType: JevConfig;
+  /** Issue 1618 B4: canon-conflict flag at distill; same Jev source as REM. */
+  readonly jevCanonConflict: JevConfig;
 }
 
 export interface FtsConfigGroup {
@@ -294,6 +359,8 @@ export interface HttpConfigGroup {
   readonly port: number;
   /** Empty means no origin is permitted, never every origin. */
   readonly allowedOrigins: readonly string[];
+  /** The listen bind host (OPEN_BRAIN_BIND_HOST); absent is the wildcard bind. */
+  readonly bindHost?: string;
 }
 
 /**
@@ -312,12 +379,44 @@ export interface HttpConfigGroup {
  */
 export function searchGroup(parsed: ExtendedEnvironment): SearchConfigGroup {
   const raw =
-    parsed.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS ??
-    parsed.SEARCH_EMBEDDING_TIMEOUT_MS;
-  if (!raw) return { embeddingTimeoutMs: 3_000 };
-  const value = Number.parseInt(raw, 10);
+    parsed.OPENBRAIN_SEARCH_EMBEDDING_TIMEOUT_MS ?? parsed.SEARCH_EMBEDDING_TIMEOUT_MS;
+  const value = raw ? Number.parseInt(raw, 10) : 3_000;
+  const enabledWithoutKey = [
+    ["OPENBRAIN_JEV_REM_ENABLED", parsed.OPENBRAIN_JEV_REM_ENABLED],
+    ["OPENBRAIN_JEV_SEARCH_ENABLED", parsed.OPENBRAIN_JEV_SEARCH_ENABLED],
+    ["OPENBRAIN_JEV_SHARE_SCREEN_ENABLED", parsed.OPENBRAIN_JEV_SHARE_SCREEN_ENABLED],
+    ["OPENBRAIN_JEV_DISTILL_TYPE_ENABLED", parsed.OPENBRAIN_JEV_DISTILL_TYPE_ENABLED],
+    [
+      "OPENBRAIN_JEV_CANON_CONFLICT_ENABLED",
+      parsed.OPENBRAIN_JEV_CANON_CONFLICT_ENABLED,
+    ],
+  ] as const;
+  const missingKeyFor = enabledWithoutKey.find(([, enabled]) => enabled)?.[0];
+  if (missingKeyFor && !parsed.OPENBRAIN_JEV_API_KEY) {
+    throw jevConfigError(missingKeyFor);
+  }
+  const jevBase = {
+    ...(parsed.OPENBRAIN_JEV_API_KEY ? { apiKey: parsed.OPENBRAIN_JEV_API_KEY } : {}),
+    baseUrl: parsed.OPENBRAIN_JEV_BASE_URL,
+    model: parsed.OPENBRAIN_JEV_MODEL ?? DEFAULT_JEV_MODEL,
+    timeoutMs: parsed.OPENBRAIN_JEV_TIMEOUT_MS,
+    maxRequestBytes: parsed.OPENBRAIN_JEV_MAX_REQUEST_BYTES,
+    maxStateQuestionBytes: parsed.OPENBRAIN_JEV_MAX_STATE_QUESTION_BYTES,
+  };
   return {
     embeddingTimeoutMs: Number.isNaN(value) || value < 1 ? 3_000 : value,
+    jevRem: {
+      ...jevBase,
+      enabled: parsed.OPENBRAIN_JEV_REM_ENABLED,
+      ...remConfidenceFloor(parsed.OPENBRAIN_JEV_REM_CONFIDENCE_FLOOR),
+    },
+    jevSearch: { ...jevBase, enabled: parsed.OPENBRAIN_JEV_SEARCH_ENABLED },
+    jevShareScreen: { ...jevBase, enabled: parsed.OPENBRAIN_JEV_SHARE_SCREEN_ENABLED },
+    jevDistillType: { ...jevBase, enabled: parsed.OPENBRAIN_JEV_DISTILL_TYPE_ENABLED },
+    jevCanonConflict: {
+      ...jevBase,
+      enabled: parsed.OPENBRAIN_JEV_CANON_CONFLICT_ENABLED,
+    },
   };
 }
 
@@ -329,9 +428,7 @@ export function qmdGroup(parsed: ExtendedEnvironment): QmdConfigGroup {
   return parsed.QMD_PATH ? { path: parsed.QMD_PATH } : {};
 }
 
-export function recoveryGroup(
-  parsed: ExtendedEnvironment,
-): RecoveryConfigGroup {
+export function recoveryGroup(parsed: ExtendedEnvironment): RecoveryConfigGroup {
   return { walPath: parsed.OPENBRAIN_RECOVERY_WAL_PATH ?? null };
 }
 
@@ -363,8 +460,7 @@ export function sharedNamespaceGroup(
     rawCanonical?.trim() || parsed.OPENBRAIN_SHARED_NAMESPACE || "shared-kb";
   return {
     canonicalSharedNamespace: resolvedCanonical,
-    physicalSharedNamespace:
-      parsed.SHARED_NAMESPACE_PHYSICAL ?? resolvedCanonical,
+    physicalSharedNamespace: parsed.SHARED_NAMESPACE_PHYSICAL ?? resolvedCanonical,
     legacySharedNamespace:
       parsed.SHARED_NAMESPACE_LEGACY ??
       parsed.OPENBRAIN_LEGACY_SHARED_NAMESPACE ??
@@ -389,8 +485,7 @@ export function tracingGroup(parsed: ExtendedEnvironment): TracingConfigGroup {
   const endpoint = parsed.OPENBRAIN_TRACING_ENDPOINT ?? "";
   const publicKey = parsed.OPENBRAIN_TRACING_PUBLIC_KEY ?? "";
   const secretKey = parsed.OPENBRAIN_TRACING_SECRET_KEY ?? "";
-  const complete =
-    endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
+  const complete = endpoint.length > 0 && publicKey.length > 0 && secretKey.length > 0;
   return {
     enabled: parsed.OPENBRAIN_TRACING_ENABLED && complete,
     maskingEnabled: parsed.OPENBRAIN_TRACING_MASKING_ENABLED,
@@ -400,15 +495,12 @@ export function tracingGroup(parsed: ExtendedEnvironment): TracingConfigGroup {
   };
 }
 
-export function captureHealthGroup(
-  parsed: ExtendedEnvironment,
-): CaptureHealthGroup {
+export function captureHealthGroup(parsed: ExtendedEnvironment): CaptureHealthGroup {
   const namespace = parsed.OPENBRAIN_CAPTURE_HEALTH_NAMESPACE;
   return {
     ...(namespace ? { namespace } : {}),
     windowMinutes:
-      parsed.OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES ??
-      DEFAULT_CAPTURE_WINDOW_MINUTES,
+      parsed.OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES ?? DEFAULT_CAPTURE_WINDOW_MINUTES,
     refreshMs: parsed.OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS,
   };
 }

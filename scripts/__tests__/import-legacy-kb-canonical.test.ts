@@ -6,14 +6,15 @@
  * legacy decision was immediately `source_drift`. The importer now hashes the
  * shared canonical text over the exact fields it inserts.
  */
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm, writeFile } from "node:fs/promises";
+import { testScratchDir } from "../test-support/scratch-dir.ts";
 import type pg from "pg";
 import { importDecisions } from "../import-legacy-kb.ts";
-import { contentHash } from "../../src/embedding.ts";
-import { EMBEDDING_TARGETS } from "../../src/embedding-targets.ts";
+import { normalizedContentHash } from "../../server/embedding/provider.ts";
+import { EMBEDDING_TARGETS } from "../../server/embedding/embedding-targets.ts";
+import { expectDefined } from "../test-support/expect-defined.ts";
 
 function createMockPool() {
   const calls: unknown[][] = [];
@@ -28,7 +29,7 @@ function createMockPool() {
 
 describe("import-legacy-kb importDecisions -> canonical, no source_drift", () => {
   it("stores a content_hash the decisions registry reproduces from the inserted row", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ob-legacy-kb-"));
+    const dir = testScratchDir("ob-legacy-kb-");
     try {
       const entry = {
         date: "2026-01-01",
@@ -36,12 +37,11 @@ describe("import-legacy-kb importDecisions -> canonical, no source_drift", () =>
         occurrences: 3,
         weight: 80,
         title: "Prefer pgvector halfvec",
-        summary:
-          "Storing embeddings as halfvec(768) halves the index footprint.",
+        summary: "Storing embeddings as halfvec(768) halves the index footprint.",
         tags: ["db", "vectors"],
       };
       const filePath = join(dir, "decisions-v2.json");
-      await Bun.write(filePath, JSON.stringify([entry]));
+      await writeFile(filePath, JSON.stringify([entry]));
 
       const { pool, calls } = createMockPool();
       const result = await importDecisions(pool, filePath);
@@ -63,12 +63,15 @@ describe("import-legacy-kb importDecisions -> canonical, no source_drift", () =>
         tags,
         alternatives: [] as string[],
       };
-      const registryHash = EMBEDDING_TARGETS.decisions!.sourceHash(insertedRow);
+      const registryHash = expectDefined(
+        EMBEDDING_TARGETS.decisions,
+        "EMBEDDING_TARGETS.decisions",
+      ).sourceHash(insertedRow);
       expect(storedHash).toBe(registryHash);
 
       // The old title\nrationale-only hash omitted the stored context/tags and
       // must no longer be produced.
-      const oldHash = contentHash(`${title}\n${rationale}`);
+      const oldHash = normalizedContentHash(`${title}\n${rationale}`);
       expect(storedHash).not.toBe(oldHash);
       // context/tags genuinely participate (proves the omission was real).
       expect(context).toContain("Legacy import");

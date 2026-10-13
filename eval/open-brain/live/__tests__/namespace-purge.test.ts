@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import {
   EVAL_NAMESPACE_PREFIX,
   NamespacePurgeRefused,
@@ -39,9 +39,7 @@ describe("assertPurgeableNamespace", () => {
     ["one character off the prefix", "eval-live-recal-abc123"],
     ["a different eval family", "eval-kwdiag-1889c167"],
   ])("refuses %s", (_label, namespace) => {
-    expect(() => assertPurgeableNamespace(namespace)).toThrow(
-      NamespacePurgeRefused,
-    );
+    expect(() => assertPurgeableNamespace(namespace)).toThrow(NamespacePurgeRefused);
   });
 
   test("refuses the bare prefix, which no run ever produces", () => {
@@ -178,7 +176,9 @@ describe("countNamespaceResidue", () => {
     const residueTables: string[] = [];
     const recordingResidue = {
       query: (sql: string) => {
-        residueTables.push(sql.replace(/^SELECT count\(\*\)::int AS n FROM (\w+).*$/s, "$1"));
+        residueTables.push(
+          sql.replace(/^SELECT count\(\*\)::int AS n FROM (\w+).*$/s, "$1"),
+        );
         return Promise.resolve({ rows: [{ n: 0 }] });
       },
     } as never;

@@ -1,33 +1,15 @@
-import { toSql } from "pgvector/pg";
-import type { Pool } from "pg";
-import { CHUNK_THRESHOLD, chunkText } from "../../src/chunking.ts";
-import { contentHash, EMBEDDING_MODEL } from "../../src/embedding.ts";
-import { logger } from "../../src/logger.ts";
+import type { ChunkRepository } from "../db/chunk-repository.ts";
+import { CHUNK_THRESHOLD, chunkText } from "../embedding/chunking.ts";
+import { normalizedContentHash, embeddingModel } from "../embedding/provider.ts";
+import { logger } from "../logging/legacy-logger.ts";
 
 /**
- * Write the chunk rows that accompany a long entry.
+ * Write the chunk rows that accompany a long entry: the parent keeps its
+ * COMPLETE text and its own whole-text embedding, and the chunk rows
+ * (parent_id + chunk_index) add per-section resolution on top of it. This is
+ * not `decompose_entry`'s replacement semantics -- the parent stays live.
  *
- * THE SHAPE, decided by the operator 2026-07-30: EVERYTHING IS VECTORIZED.
- * A long entry is stored as
- *
- *   parent row  -- the COMPLETE text, its own whole-text embedding
- *   chunk rows  -- parent_id + chunk_index, each with its own embedding
- *
- * The parent answers "what is this entry about" and the chunks answer "which
- * part of it says X". Neither replaces the other: a query matching an entry's
- * overall meaning may match no single chunk strongly, and a query naming a
- * detail buried at character 40,000 may not move the whole-text vector at all.
- *
- * WHAT THIS IS NOT. `decompose_entry` (src/tools/decompose-entry.ts) also
- * writes parent_id/chunk_index rows, but as REPLACEMENTS -- it archives the
- * source. That is a curation decision made deliberately by an operator or the
- * dream engine. This function never touches the parent; the parent keeps its
- * full text and stays live. Same columns, opposite intent, so they stay
- * separate rather than one growing a mode flag.
- *
- * NOTHING HERE REFUSES OR SHORTENS ANYTHING. Chunking is how all of the text
- * gets embedded, not a way of storing less of it: the parent already holds
- * every character, and the chunks add resolution on top.
+ * See docs/decisions/chunk-write-parent-plus-chunks.md
  */
 
 /** Chunk size and overlap used when an entry is split for the write path. */
@@ -59,38 +41,16 @@ export interface ChunkAttempt {
 }
 
 /**
- * THE THOUGHT-WRITE BOUNDARY (#605).
+ * The shared thought-write boundary (#605): every writer that commits a row to
+ * `thoughts` calls this immediately after. A failure here is swallowed and
+ * REPORTED -- logged as `entry_chunk_write_failed` and returned as
+ * `failed: true` -- because the parent already holds every character. Not
+ * applicable when `isNew` is false.
  *
- * Every writer that commits a row to `thoughts` calls this immediately after,
- * so "a long thought is stored as a complete parent plus per-section rows" is
- * a property of the table rather than of one code path that remembered.
- * Before #605 only src/tools/log-thought.ts chunked; the rewrite-tree
- * `log_thought` (server/tools/capture.ts), REST `POST /api/v1/thoughts`
- * (src/rest-api.ts), and lane graduation (src/tiering.ts) each wrote a parent
- * and stopped, so a long thought arriving through any of them lost its
- * per-section resolution silently.
- *
- * WHY IT SWALLOWS THE THROW. The parent is already committed and holds every
- * character, so the entry is not lost -- only its resolution is. Turning that
- * into a failed write would discard a good parent over a recoverable partial,
- * which is the opposite of the guarantee. So the failure is REPORTED: logged
- * as `entry_chunk_write_failed` here, and returned as `failed: true` so the
- * caller's receipt can say `chunking_status: "failed"`. That distinction is
- * load-bearing -- without it a failed attempt is byte-identical to a short
- * entry that was never chunked, and a repair pass has no signal.
- *
- * NOT applicable when `isNew` is false: a merge means the chunk rows were
- * written on the original insert. Note a merge does NOT repair a parent left
- * partially chunked by an earlier failure; that belongs to the embedding/chunk
- * repair pass (src/embedding-repair.ts), which is what `failed` signals to.
- *
- * This does NOT cover the paths #605 lists as intentionally separate:
- * decompose-entry writes the same columns with REPLACEMENT semantics (see the
- * header above), and raw turns / session events are their own write
- * boundaries by design.
+ * See docs/decisions/chunk-write-thought-write-boundary.md
  */
 export async function writeThoughtChunks(
-  pool: Pool,
+  repository: ChunkRepository,
   options: {
     parentId: string;
     namespace: string;
@@ -108,7 +68,7 @@ export async function writeThoughtChunks(
   if (!options.isNew) return { result: null, failed: false };
 
   try {
-    const result = await writeEntryChunks(pool, {
+    const result = await writeEntryChunks(repository, {
       table: "thoughts",
       parentId: options.parentId,
       namespace: options.namespace,
@@ -170,7 +130,7 @@ type WritableChunk = { text: string; index: number };
  *
  * An embedding failure must not cost the text. It is logged as an error and
  * the caller still writes the row unembedded, so a repair pass can find it --
- * src/embedding-repair.ts selects on embedding IS NULL.
+ * the embedding repair handler selects on embedding IS NULL.
  */
 async function embedChunkOrNull(
   chunk: WritableChunk,
@@ -195,33 +155,24 @@ async function embedChunkOrNull(
  * identical text already exists in this namespace and the insert was a no-op.
  */
 async function insertChunkRow(
-  pool: Pool,
+  repository: ChunkRepository,
   chunk: WritableChunk,
   embedding: number[] | null,
   options: ChunkWriteOptions,
 ): Promise<boolean> {
-  const { rows } = await pool.query(
-    `INSERT INTO thoughts
-       (content, tags, source, created_by, namespace, embedding, content_hash,
-        embedded_at, embedding_model, parent_id, chunk_index)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL
-     DO NOTHING
-     RETURNING id`,
-    [
-      chunk.text,
-      options.tags ?? [],
-      options.source ?? "chunk",
-      options.createdBy,
-      options.namespace,
-      embedding ? toSql(embedding) : null,
-      contentHash(chunk.text),
-      embedding ? new Date().toISOString() : null,
-      embedding ? EMBEDDING_MODEL : null,
-      options.parentId,
-      chunk.index,
-    ],
-  );
+  const rows = await repository.insertChunkRow({
+    content: chunk.text,
+    tags: options.tags ?? [],
+    source: options.source ?? "chunk",
+    createdBy: options.createdBy,
+    namespace: options.namespace,
+    embedding,
+    contentHash: normalizedContentHash(chunk.text),
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    embeddingModel: embedding ? embeddingModel() : null,
+    parentId: options.parentId,
+    chunkIndex: chunk.index,
+  });
   return typeof rows[0]?.id === "string";
 }
 
@@ -238,7 +189,7 @@ async function insertChunkRow(
  * the one outcome this whole path exists to prevent.
  */
 export async function writeEntryChunks(
-  pool: Pool,
+  repository: ChunkRepository,
   options: ChunkWriteOptions,
 ): Promise<ChunkWriteResult> {
   const result: ChunkWriteResult = {
@@ -260,7 +211,7 @@ export async function writeEntryChunks(
 
   for (const chunk of chunks) {
     const embedding = await embedChunkOrNull(chunk, options);
-    const inserted = await insertChunkRow(pool, chunk, embedding, options);
+    const inserted = await insertChunkRow(repository, chunk, embedding, options);
 
     if (inserted) {
       result.written++;

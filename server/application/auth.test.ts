@@ -1,6 +1,6 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, vi } from "vitest";
 import { buildTokenMap, verifyToken, authMiddleware } from "./auth.ts";
-import type { AuthInfo } from "../../src/types.ts";
+import type { AuthInfo } from "../types.ts";
 
 // Helper: create mock Express req/res/next
 function mockReq(headers: Record<string, string> = {}) {
@@ -110,7 +110,7 @@ describe("buildTokenMap", () => {
   test("maps named person, agent, and promoter identities from per-user tokens", () => {
     const env: Record<string, string | undefined> = {
       AUTH_TOKEN_USER_RICO: "admin:rico-token",
-      AUTH_TOKEN_USER_KEVIN: "readonly:kevin-token",
+      AUTH_TOKEN_USER_ALEX: "readonly:alex-token",
       AUTH_TOKEN_USER_BILBY: "agent:bilby-token",
       AUTH_TOKEN_USER_SKIPPY: "agent:skippy-token",
       AUTH_TOKEN_USER_OPENBRAIN_PROMOTER: "ob-admin:promoter-token",
@@ -119,9 +119,9 @@ describe("buildTokenMap", () => {
     const map = buildTokenMap(env);
 
     expect(map.get("rico-token")).toEqual({ role: "admin", clientId: "rico" });
-    expect(map.get("kevin-token")).toEqual({
+    expect(map.get("alex-token")).toEqual({
       role: "readonly",
-      clientId: "kevin",
+      clientId: "alex",
     });
     expect(map.get("bilby-token")).toEqual({
       role: "agent",
@@ -169,7 +169,7 @@ describe("authMiddleware", () => {
   test("returns 401 when no Authorization header", () => {
     const req = mockReq({});
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -181,7 +181,7 @@ describe("authMiddleware", () => {
   test("returns 401 when Authorization is not Bearer scheme", () => {
     const req = mockReq({ authorization: "Basic dXNlcjpwYXNz" });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -193,7 +193,7 @@ describe("authMiddleware", () => {
   test("returns 401 when token is invalid", () => {
     const req = mockReq({ authorization: "Bearer wrong-token" });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -216,7 +216,7 @@ describe("authMiddleware identity and namespace delegation", () => {
   test("sets req.auth and calls next for valid admin token", () => {
     const req = mockReq({ authorization: "Bearer valid-admin-token" });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -233,7 +233,7 @@ describe("authMiddleware identity and namespace delegation", () => {
   test("sets req.auth and calls next for valid agent token", () => {
     const req = mockReq({ authorization: "Bearer valid-agent-token" });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -255,7 +255,7 @@ describe("authMiddleware identity and namespace delegation", () => {
       "x-role": "agent",
     });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -286,7 +286,7 @@ describe("authMiddleware refuses namespace delegation by role", () => {
       "x-namespace": "bilby",
     });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -301,7 +301,7 @@ describe("authMiddleware refuses namespace delegation by role", () => {
       "x-namespace": "bilby",
     });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -318,7 +318,7 @@ describe("authMiddleware refuses namespace delegation by role", () => {
       "x-namespace": "bilby",
     });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -333,7 +333,7 @@ describe("authMiddleware refuses namespace delegation by role", () => {
       "x-namespace": "../bilby",
     });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(middleware, req, res, next);
 
@@ -346,7 +346,7 @@ describe("authMiddleware refuses namespace delegation by role", () => {
     const emptyMiddleware = authMiddleware(new Map());
     const req = mockReq({ authorization: "Bearer any-token" });
     const res = mockRes();
-    const next = mock(() => {});
+    const next = vi.fn(() => {});
 
     invokeMiddleware(emptyMiddleware, req, res, next);
 

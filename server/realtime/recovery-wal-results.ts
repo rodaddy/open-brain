@@ -22,10 +22,7 @@ import type {
 export interface RecoveryWalAppendResult {
   accepted: boolean;
   reason?:
-    | "content_too_large"
-    | "empty_content"
-    | "invalid_status"
-    | "metadata_too_large";
+    "content_too_large" | "empty_content" | "invalid_status" | "metadata_too_large";
   item?: RecoveryWalItem;
   counters: RecoveryWalCounters;
 }

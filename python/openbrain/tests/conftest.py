@@ -27,6 +27,8 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from openbrain.config import CaptureSettings
+
 #: Environment prefixes the settings models read, cleared for every test.
 #:
 #: ``OPENBRAIN_TEST_`` is deliberately NOT among them: the ``-m live`` tests
@@ -59,7 +61,7 @@ def _clean_environment(
     MEASURED, ON THIS BRANCH. An operator shell with the four observation
     coordinates set (``OPENBRAIN_OBSERVATION_ENABLED`` /``_ENDPOINT``
     /``_PUBLIC_KEY``/``_SECRET_KEY``, as
-    ``~/.local/share/openbrain-memory/env/claudex-observation.env`` provides)
+    ``~/.local/share/openbrain-memory/env/openbrain.env`` provides)
     made ``test_capture_outage_notice`` HANG INDEFINITELY at test 8 of 45. The
     faulthandler stack named it exactly: ``capture_stop_with`` ->
     ``LangfuseEmitter.emit`` -> ``client.shutdown()``, blocked draining an
@@ -117,6 +119,31 @@ def _clean_environment(
     # setting only the former leaves the empty-string path pointed at the real
     # home directory.
     monkeypatch.setenv("HOME", str(state_home))
+
+
+class Secret:
+    """A live-test value whose printed form never shows the value (#1485).
+
+    pytest prints a failing test's fixture arguments, so a ``live_env`` holding
+    plain strings wrote the playground database URL and token into the log the
+    day a live test broke. Read the value with :meth:`get` at the point of use.
+    """
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str) -> None:
+        """Hold ``value`` without ever printing it."""
+        self._value = value
+
+    def get(self) -> str:
+        """Return the wrapped value, for the one call that needs it."""
+        return self._value
+
+    def __repr__(self) -> str:
+        """Show the type and a mask, never the value."""
+        return "Secret('***')"
+
+    __str__ = __repr__
 
 
 #: The timestamp every helper line carries. Real transcripts always set one, and
@@ -371,3 +398,12 @@ def append_lines(path: Path, lines: list[str]) -> None:
     """Append newline-terminated transcript lines to an existing file."""
     with path.open("a", encoding="utf-8") as handle:
         handle.write("".join(f"{line}\n" for line in lines))
+
+
+def scoped_capture_key(settings: CaptureSettings, session_key: str) -> str:
+    """The auth-bound watermark key the capture spine stores positions under."""
+    from openbrain.apps.hooks.session import _capture_origin, _scoped_watermark_key
+
+    origin = _capture_origin(settings)
+    assert origin is not None
+    return _scoped_watermark_key(origin, session_key)

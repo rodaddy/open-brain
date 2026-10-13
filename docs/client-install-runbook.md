@@ -21,7 +21,7 @@ rebuilt from memory.
 | # | Artifact | Where it lives on the client | Versioned in the repo? |
 |---|---|---|---|
 | 1 | Three wheels: `openbrain`, `openbrain-memory`, `openbrain-provider` | `uv` tool environments, console scripts in `~/.local/bin/` | source is, built wheels are not |
-| 2 | The env file `claudex-observation.env` | `~/.local/share/openbrain-memory/env/` | **no** — it holds a live token |
+| 2 | The env file `openbrain.env` | `~/.local/share/openbrain-memory/env/` | **no** — it holds a live token |
 | 3 | The wrapper `openbrain-hook-env` | `~/.local/share/openbrain-memory/env/` | **no** |
 | 4 | Hook wiring in `~/.claude/settings.json` | the harness settings file | **no** |
 
@@ -143,7 +143,7 @@ exist on the box.
 `openbrain-provider` resolves the Development lane by asking the filesystem, and
 the shipped `DEFAULT_DEVELOPMENT_ROOT` is `/workspace` —
 the Mini's volume. On a client whose tree is elsewhere (the Air:
-`/Users/rico/Development`), that path is absent, `resolve_development_scope()`
+`/home/user/Development`), that path is absent, `resolve_development_scope()`
 returns `None` for every cwd, and `context_budget_gate._development_cwd()`
 composes its recovery command from the same missing root.
 
@@ -151,7 +151,7 @@ composes its recovery command from the same missing root.
 
 | Where | What |
 |---|---|
-| `claudex-observation.env` | `OPENBRAIN_DEVELOPMENT_ROOT='/this/box/Development'` — keep the single quotes; the wrapper sources this file with POSIX `. `, so an unquoted path containing a space sources to empty and redelivers the exact wedge this variable exists to prevent |
+| `openbrain.env` | `OPENBRAIN_DEVELOPMENT_ROOT='/this/box/Development'` — keep the single quotes; the wrapper sources this file with POSIX `. `, so an unquoted path containing a space sources to empty and redelivers the exact wedge this variable exists to prevent |
 | `openbrain-hook-env` | `OPENBRAIN_DEVELOPMENT_ROOT="${OPENBRAIN_DEVELOPMENT_ROOT:-}" \` in the `exec env -i` list |
 
 The wrapper starts a **clean** child, so a variable absent from its allowlist
@@ -248,7 +248,7 @@ namespace comes from `OPENBRAIN_NAMESPACE` in the environment, which is why the
 env file is sourced first and why it is not a key in the JSON:
 
 ```sh
-set -a; . ~/.local/share/openbrain-memory/env/claudex-observation.env; set +a
+set -a; . ~/.local/share/openbrain-memory/env/openbrain.env; set +a
 printf '%s' '{"operation":"recall","query":"client install proof","scope":{"agent":"setup-client","platform":"claude-code","server_id":"client-install","channel_id":"client-install","session_key":"client-install-proof"}}' \
   | openbrain-memory
 ```

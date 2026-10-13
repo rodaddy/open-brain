@@ -27,7 +27,7 @@
  *   - Both spellings are covered: `withLogging` for plain functions and
  *     closures, `logged` for class methods. The server has both shapes.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import type { DestinationStream } from "pino";
 import { withCorrelation } from "./context.ts";
@@ -72,9 +72,7 @@ function captureLogger(): {
 }
 
 /** The first entry whose level is `error`, as a flat record. */
-function firstFailure(
-  entries: Record<string, unknown>[],
-): Record<string, unknown> {
+function firstFailure(entries: Record<string, unknown>[]): Record<string, unknown> {
   const found = entries.find((entry) => entry.level === "error");
   expect(found).toBeDefined();
   return found as Record<string, unknown>;
@@ -141,12 +139,8 @@ describe("logging decoration seam", () => {
       },
     );
 
-    await expect(
-      withCorrelation(async () => add(2, 3), "driver-ok"),
-    ).resolves.toBe(5);
-    expect(capture.entries().some((entry) => entry.level === "error")).toBe(
-      false,
-    );
+    await expect(withCorrelation(async () => add(2, 3), "driver-ok")).resolves.toBe(5);
+    expect(capture.entries().some((entry) => entry.level === "error")).toBe(false);
   });
 
   it("logs a thrown error from a decorated method the same way", async () => {

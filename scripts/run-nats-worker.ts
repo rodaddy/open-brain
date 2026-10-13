@@ -1,78 +1,50 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
+// `./settings.ts` FIRST, and by side effect: it registers the embedding,
+// logger, and pool settings readers the server/ modules below take their raw
+// values through. Under L5 that registration arrived through the `src/`
+// adapters this file used to import — `src/embedding.ts` in particular came in
+// transitively via `src/nats-worker.ts`. Now that the worker lives under
+// server/ and reads no environment of its own, the entry point registers them,
+// and it must happen before any module that reads a setting at import time.
+import { createPool, logger } from "./settings.ts";
 import type pg from "pg";
-import { buildTokenMap } from "../src/auth.ts";
-import { createPool } from "../src/db/pool.ts";
+import { buildTokenMap } from "../server/application/auth.ts";
 import {
   createEmbedWatermarkObserver,
   EMBED_WATERMARK_CACHE_TTL_MS,
-} from "../src/embed-watermark-observer.ts";
-import { logger } from "../src/logger.ts";
+  type EmbedWatermarkHealth,
+} from "../server/application/embed-watermark-observer.ts";
+
+/**
+ * Re-exported from its owning module so the name still resolves from this
+ * script, which is where it used to be declared (issues 1210, 1211).
+ */
+export type { EmbedWatermarkHealth };
 import {
   natsWorkerLogSummary,
   readNatsWorkerBoundary,
   startNatsWorker,
   type NatsWorkerRuntime,
-} from "../src/nats-worker.ts";
-import type { AuthInfo } from "../src/types.ts";
+} from "../server/application/nats-worker.ts";
+import type { AuthInfo } from "../server/types.ts";
 import { createTracingRuntime } from "../server/observability/langfuse-tracing.ts";
 import { readMcpTracingConfig } from "../server/observability/trace-config.ts";
 import { tracingLoggerFrom } from "../server/observability/trace-logger-adapter.ts";
+import { serveFetch } from "../server/transport/fetch-http-server.ts";
 
 type LoggerLike = Pick<typeof logger, "error" | "info">;
-type HealthServer = { stop(force?: boolean): void };
-type ServeFn = typeof Bun.serve;
-type TracingRuntime = ReturnType<typeof createTracingRuntime>;
-
+type HealthServer = { stop(force?: boolean): void | Promise<void> };
 /**
- * The embed lane's liveness, as the worker's `/health` on 3110 reports it.
- *
- * WHY THIS IS A HEALTH INPUT AT ALL (#724 item 3). The maintenance producer
- * ticked for three days with no consumer draining the embed queue: raw rows
- * kept arriving, embedded rows stopped, and nothing anywhere COMPARED the two.
- * Every liveness surface stayed green while the corpus quietly stopped being
- * searchable. This is the #625 producer argument and the #647 capture argument
- * applied to the third background lane — the pattern those two established is
- * matched here deliberately (`server/transport/health.ts:14-33` and `:35-79`):
- * a snake_case named block, a boolean `stale` that is THE verdict, the raw
- * counters beside it, an explicit `*_threshold_*` naming the bound the verdict
- * used, and a content-free `reason`.
- *
- * WHY ON 3110 AND NOT 3100. `docs/core01-nats-worker-runbook.md` ("What
- * `/health` on 3100 does and does NOT show") is explicit that the HTTP service
- * derives its blocks from its OWN process environment
- * (`parseNatsConfig(process.env)` in `server/config/nats.ts`) and deliberately
- * never observes the separate worker process — and forbids "fixing" 3100 by
- * putting it back in the worker's business.
- *
- * `*_age_seconds` is the repo's spelling for an age
- * (`src/operator-doctor.ts:111` `oldest_undistilled_age_seconds`); `quiet_ms`
- * on the producer block is a duration, not an age, and is not the precedent.
+ * The injectable bind. `node:http` behind serveFetch since #751, so it is
+ * ASYNC: a clash on the health port arrives on an asynchronous 'error' event
+ * and serveFetch turns it into a rejection, which startNatsWorkerProcess
+ * awaits inside its try so the bridge and pool are still torn down on a failed
+ * bind -- the behaviour the "closes the bridge and pool when health server bind
+ * fails" test asserts.
  */
-export interface EmbedWatermarkHealth {
-  /**
-   * True once the embed lane is behind past its threshold WITH fresh raw rows
-   * present. Both halves are required — see `raw_rows_recent`.
-   */
-  readonly stale: boolean;
-  /** Age of the newest raw row. */
-  readonly newest_raw_age_seconds: number;
-  /** Age of the newest embedded row. */
-  readonly newest_embedded_age_seconds: number;
-  /** How far the embedded watermark trails the raw one. */
-  readonly lag_seconds: number;
-  /** The bound the `stale` verdict was taken against. */
-  readonly lag_threshold_seconds: number;
-  /**
-   * Raw rows seen recently. `stale` REQUIRES this to be positive: a quiet week
-   * produces an old embedded row too, and alarming on an idle corpus is how a
-   * check stops being read (`server/capture/liveness-observer.ts`
-   * MIN_SESSIONS_FOR_SILENCE carries the same argument for capture).
-   */
-  readonly raw_rows_recent: number;
-  /** Content-free sentence naming which condition produced the verdict. */
-  readonly reason: string;
-}
+type ServeFn = typeof serveFetch;
+type TracingRuntime = ReturnType<typeof createTracingRuntime>;
 
 /**
  * Default bound for the embed watermark lag verdict, in seconds.
@@ -96,8 +68,7 @@ export function readEmbedWatermarkThresholdSeconds(env: NodeJS.ProcessEnv): {
   source: "env" | "default" | "invalid_env_default";
   configured: string | null;
 } {
-  const configured =
-    env.OPENBRAIN_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS ?? null;
+  const configured = env.OPENBRAIN_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS ?? null;
   if (configured === null || configured.trim() === "") {
     return {
       thresholdSeconds: DEFAULT_EMBED_WATERMARK_LAG_THRESHOLD_SECONDS,
@@ -194,16 +165,16 @@ async function withTimeout<T>(
   }
 }
 
-function startHealthServer(input: {
+async function startHealthServer(input: {
   env: NodeJS.ProcessEnv;
   runtime: NatsWorkerRuntime;
   serve: ServeFn;
   embedWatermarkHealth?: () => EmbedWatermarkHealth | undefined;
-}): HealthServer | null {
+}): Promise<HealthServer | null> {
   const healthPort = healthPortFromEnv(input.env);
   if (!healthPort) return null;
 
-  return input.serve({
+  return await input.serve({
     port: healthPort,
     fetch(request) {
       const url = new URL(request.url);
@@ -225,8 +196,7 @@ function startHealthServer(input: {
           status: healthy ? "healthy" : "degraded",
           nats: {
             availability: input.runtime.health.availability,
-            context_pack_subject:
-              input.runtime.boundary.nats.context_pack_subject,
+            context_pack_subject: input.runtime.boundary.nats.context_pack_subject,
             consecutive_failures: input.runtime.health.consecutiveFailures,
             last_error: input.runtime.health.lastError ? "redacted" : null,
           },
@@ -252,20 +222,22 @@ async function closeRuntime(
       "Open Brain NATS worker bridge close timed out",
     );
   } catch (err) {
-    log.error(
-      "Open Brain NATS worker bridge close failed",
-      safeWorkerError(err),
-    );
+    log.error("Open Brain NATS worker bridge close failed", safeWorkerError(err));
   }
 }
 
-function closeHealthServer(
+async function closeHealthServer(
   healthServer: HealthServer | null,
   log: LoggerLike,
-): void {
+): Promise<void> {
   if (!healthServer) return;
   try {
-    healthServer.stop(true);
+    // `stop(true)` destroys open connections before closing. node's bare
+    // `close()` waits for keep-alive sockets to drain and would hang shutdown;
+    // awaiting the forced stop keeps the old immediate-release behaviour AND
+    // routes a close failure into the catch below instead of an unhandled
+    // rejection.
+    await healthServer.stop(true);
   } catch (err) {
     log.error(
       "Open Brain NATS worker health server close failed",
@@ -282,23 +254,84 @@ async function closeTracing(
   try {
     await tracing.shutdown();
   } catch (err) {
-    log.error(
-      "Open Brain NATS worker tracing shutdown failed",
-      safeWorkerError(err),
-    );
+    log.error("Open Brain NATS worker tracing shutdown failed", safeWorkerError(err));
   }
 }
 
-async function closePool(
-  pool: pg.Pool | undefined,
-  log: LoggerLike,
-): Promise<void> {
+async function closePool(pool: pg.Pool | undefined, log: LoggerLike): Promise<void> {
   if (!pool) return;
   try {
     await pool.end();
   } catch (err) {
     log.error("Open Brain NATS worker pool close failed", safeWorkerError(err));
   }
+}
+
+/**
+ * Resolve the embed watermark reading the health server will publish.
+ *
+ * #724 item 3: the DEPLOYED worker must construct its own observer. The option
+ * stays an override (PR #728's fixture test injects one), but its ABSENCE no
+ * longer means "no observer" — that is what left the surface in the tree and
+ * out of the serving process. The live entrypoint passes only
+ * `{ env: process.env }` and lands here.
+ *
+ * Hoisted out of `startNatsWorkerProcess` so that function stays under the
+ * repo's complexity rule; the behavior is unchanged.
+ */
+async function resolveEmbedWatermarkHealth(args: {
+  injected: (() => EmbedWatermarkHealth | undefined) | undefined;
+  pool: pg.Pool;
+  thresholdSeconds: number;
+  log: LoggerLike;
+}): Promise<() => EmbedWatermarkHealth | undefined> {
+  if (args.injected) return args.injected;
+  const observer = createEmbedWatermarkObserver({
+    pool: args.pool,
+    lagThresholdSeconds: args.thresholdSeconds,
+    log: args.log,
+  });
+  // Prime it once so the first probe answers with numbers rather than the
+  // "not measured yet" absence. A failure here composes the read-failure
+  // reading inside the observer and never throws into startup.
+  await observer.refresh();
+  return observer.read;
+}
+
+/**
+ * The structured fields the startup line announces.
+ *
+ * NOTHING IS ADJUSTED SILENTLY: the threshold in force is announced along with
+ * WHERE it came from, so an unset env key is visible as a default rather than
+ * looking like a configured value; the cache TTL is announced beside it because
+ * a cached reading is what /health actually serves, and a reader cannot
+ * interpret the block without knowing how old it may be.
+ *
+ * Hoisted for the same complexity reason as above.
+ */
+function workerStartedLogFields(args: {
+  runtime: NatsWorkerRuntime;
+  env: NodeJS.ProcessEnv;
+  embedWatermarkObserved: boolean;
+  embedWatermarkInjected: boolean;
+  embedThreshold: ReturnType<typeof readEmbedWatermarkThresholdSeconds>;
+}): Record<string, unknown> {
+  const { embedThreshold } = args;
+  return {
+    ...natsWorkerLogSummary(args.runtime.boundary),
+    availability: args.runtime.health.availability,
+    health_port: healthPortFromEnv(args.env),
+    embed_watermark_observed: args.embedWatermarkObserved,
+    embed_watermark_observer_source: args.embedWatermarkInjected
+      ? "injected"
+      : "default_pool_observer",
+    embed_watermark_cache_ttl_seconds: EMBED_WATERMARK_CACHE_TTL_MS / 1000,
+    embed_watermark_lag_threshold_seconds: embedThreshold.thresholdSeconds,
+    embed_watermark_lag_threshold_source: embedThreshold.source,
+    ...(embedThreshold.source === "invalid_env_default"
+      ? { embed_watermark_lag_threshold_configured: embedThreshold.configured }
+      : {}),
+  };
 }
 
 export async function startNatsWorkerProcess(
@@ -309,7 +342,7 @@ export async function startNatsWorkerProcess(
   const createDbPool = options.createDbPool ?? createPool;
   const startWorker = options.startWorker ?? startNatsWorker;
   const createTracing = options.createTracing ?? createTracingRuntime;
-  const serve = options.serve ?? Bun.serve;
+  const serve = options.serve ?? serveFetch;
   const env = options.env;
 
   let pool: pg.Pool | undefined;
@@ -340,66 +373,41 @@ export async function startNatsWorkerProcess(
     // observer, so the bound the observer takes its verdict against is the
     // same one announced in the startup summary below.
     const embedThreshold = readEmbedWatermarkThresholdSeconds(env);
-    // #724 item 3: the DEPLOYED worker must construct its own observer. The
-    // option stays an override (PR #728's fixture test injects one), but its
-    // ABSENCE no longer means "no observer" — that is what left the surface in
-    // the tree and out of the serving process. The live entrypoint passes only
-    // `{ env: process.env }` and needs no change: it lands here.
-    let embedWatermarkHealth = options.embedWatermarkHealth;
-    if (!embedWatermarkHealth) {
-      const observer = createEmbedWatermarkObserver({
-        pool,
-        lagThresholdSeconds: embedThreshold.thresholdSeconds,
-        log,
-      });
-      // Prime it once so the first probe answers with numbers rather than the
-      // "not measured yet" absence. A failure here composes the read-failure
-      // reading inside the observer and never throws into startup.
-      await observer.refresh();
-      embedWatermarkHealth = observer.read;
-    }
+    const embedWatermarkHealth = await resolveEmbedWatermarkHealth({
+      injected: options.embedWatermarkHealth,
+      pool,
+      thresholdSeconds: embedThreshold.thresholdSeconds,
+      log,
+    });
     runtime = await startWorker({
       env,
       pool,
       tokenMap: tokenMap as Map<string, AuthInfo>,
       ...(tracing.background ? { tracing: tracing.background } : {}),
     });
-    healthServer = startHealthServer({
+    healthServer = await startHealthServer({
       env,
       runtime,
       serve,
       embedWatermarkHealth,
     });
-    // NOTHING IS ADJUSTED SILENTLY: the threshold in force is announced at
-    // startup along with WHERE it came from, so an unset env key is visible as
-    // a default rather than looking like a configured value; the cache TTL is
-    // announced beside it because a cached reading is what /health actually
-    // serves, and a reader cannot interpret the block without knowing how old
-    // it may be.
-    log.info("Open Brain NATS worker started", {
-      ...natsWorkerLogSummary(runtime.boundary),
-      availability: runtime.health.availability,
-      health_port: healthPortFromEnv(env),
-      embed_watermark_observed: Boolean(embedWatermarkHealth),
-      embed_watermark_observer_source: options.embedWatermarkHealth
-        ? "injected"
-        : "default_pool_observer",
-      embed_watermark_cache_ttl_seconds: EMBED_WATERMARK_CACHE_TTL_MS / 1000,
-      embed_watermark_lag_threshold_seconds: embedThreshold.thresholdSeconds,
-      embed_watermark_lag_threshold_source: embedThreshold.source,
-      ...(embedThreshold.source === "invalid_env_default"
-        ? {
-            embed_watermark_lag_threshold_configured: embedThreshold.configured,
-          }
-        : {}),
-    });
+    log.info(
+      "Open Brain NATS worker started",
+      workerStartedLogFields({
+        runtime,
+        env,
+        embedWatermarkObserved: Boolean(embedWatermarkHealth),
+        embedWatermarkInjected: Boolean(options.embedWatermarkHealth),
+        embedThreshold,
+      }),
+    );
     return {
       runtime,
       pool,
       healthServer,
       shutdown: async () => {
         log.info("Shutting down Open Brain NATS worker");
-        closeHealthServer(healthServer, log);
+        await closeHealthServer(healthServer, log);
         await closeRuntime(runtime, log, shutdownTimeoutMs);
         await closeTracing(tracing, log);
         await closePool(pool, log);
@@ -410,7 +418,7 @@ export async function startNatsWorkerProcess(
       ...safeWorkerError(err),
       ...natsWorkerLogSummary(readNatsWorkerBoundary(env)),
     });
-    closeHealthServer(healthServer, log);
+    await closeHealthServer(healthServer, log);
     await closeRuntime(runtime, log, shutdownTimeoutMs);
     await closeTracing(tracing, log);
     await closePool(pool, log);
@@ -418,7 +426,13 @@ export async function startNatsWorkerProcess(
   }
 }
 
-if (import.meta.main) {
+/**
+ * The process wrapper `node scripts/run-nats-worker.ts` runs: start, wire
+ * SIGTERM/SIGINT to a drain, then park forever; a failed start exits 1.
+ * Exported so server/entry.ts (OPEN_BRAIN_ROLE=nats-worker, issue 1594) runs
+ * exactly this, not a copy.
+ */
+export async function runNatsWorkerMain(): Promise<void> {
   try {
     const processRuntime = await startNatsWorkerProcess({ env: process.env });
     const shutdown = async () => {
@@ -436,4 +450,8 @@ if (import.meta.main) {
   } catch {
     process.exit(1);
   }
+}
+
+if (import.meta.main) {
+  await runNatsWorkerMain();
 }

@@ -1,14 +1,15 @@
 /**
  * Start the candidate grading page. Issue #394.
  *
- * The operator entrypoint. A thin shell over src/grading-server.ts, exactly as
- * scripts/dream-light-run.ts is a thin shell over src/dream-light.ts -- the
- * logic and the SQL live in src/ where a test can reach them without a socket.
+ * The operator entrypoint. A thin shell over
+ * server/application/grading-server.ts, exactly as scripts/dream-light-run.ts is
+ * a thin shell over src/dream-light.ts -- the logic and the SQL live in a module
+ * a test can reach without a socket.
  *
  * Usage:
- *   bun scripts/grading-server-run.ts
- *   bun scripts/grading-server-run.ts --namespace rico --port 3400
- *   GRADED_BY="rico" bun scripts/grading-server-run.ts
+ *   node scripts/grading-server-run.ts
+ *   node scripts/grading-server-run.ts --namespace rico --port 3400
+ *   GRADED_BY="rico" node scripts/grading-server-run.ts
  *
  * Database credentials come from the environment the same way every other
  * script here reads them (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). For the
@@ -18,17 +19,14 @@
  * The listener is loopback-only and not configurable (see GRADING_BIND_HOST).
  */
 
-import { Pool } from "pg";
-import { logger } from "../src/logger.ts";
+import { createPool, logger } from "./settings.ts";
+import { loadFrozenCohort } from "./rem-ethereal-cohort.ts";
+import { createFrozenReviewHandler } from "./rem-frozen-grading-handler.ts";
 import {
-  DEFAULT_GRADING_PORT,
-  startGradingServer,
-} from "../src/grading-server.ts";
-
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+  parseGradingServerRunConfig,
+  startWithPoolCleanup,
+} from "./grading-server-run-config.ts";
+import { startGradingServer } from "../server/application/grading-server.ts";
 
 /**
  * The namespace to grade in. Required by value, never inferred from the
@@ -36,8 +34,7 @@ function arg(name: string): string | undefined {
  * change which operator's candidates are on screen when a second namespace
  * starts producing. Defaults only from an explicit env var.
  */
-const namespace =
-  arg("--namespace") ?? process.env.OB_GRADING_NAMESPACE ?? "rico";
+const { namespace, gradedBy, port, frozenSchema } = parseGradingServerRunConfig();
 
 /**
  * Who is grading. Lands in candidate_memory.graded_by, which 037:83-86 defines
@@ -45,45 +42,66 @@ const namespace =
  * measured against. src/candidate-review.ts rejects a machine-shaped value at
  * server construction rather than on the first grade.
  */
-const gradedBy = arg("--graded-by") ?? process.env.GRADED_BY ?? "rico";
+const pool = createPool();
 
-const port = Number(
-  arg("--port") ?? process.env.GRADING_PORT ?? DEFAULT_GRADING_PORT,
-);
+let probe: { rows: Array<{ ungraded: string; total: string }> } | undefined;
+let frozenReviewHandler: ((request: Request) => Promise<Response>) | undefined;
+try {
+  if (frozenSchema) {
+    // Validate count, ordering, namespace, and digest before the port exists.
+    await loadFrozenCohort(pool, frozenSchema, namespace);
+    frozenReviewHandler = createFrozenReviewHandler({
+      pool,
+      schema: frozenSchema,
+      namespace,
+      gradedBy,
+    });
+  } else {
+    // Fail before binding a port if the database is unreachable or the table is
+    // missing. An empty page after a query failure looks like an empty queue.
+    probe = await pool.query<{ ungraded: string; total: string }>(
+      `SELECT count(*) AS total, count(*) FILTER (WHERE reviewed_at IS NULL) AS ungraded
+         FROM candidate_memory WHERE namespace = $1`,
+      [namespace],
+    );
+  }
+} catch (error: unknown) {
+  await pool.end();
+  throw error;
+}
 
-const pool = new Pool({
-  host: process.env.DB_HOST ?? "127.0.0.1",
-  port: Number(process.env.DB_PORT ?? 5432),
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD || undefined,
-});
-
-// Fail before binding a port if the database is unreachable or the table is
-// missing. A listener that serves an empty page because the query throws is
-// indistinguishable from a genuinely empty queue, and the operator would grade
-// nothing while believing there was nothing to grade.
-const probe = await pool.query<{ ungraded: string; total: string }>(
-  `SELECT count(*) AS total, count(*) FILTER (WHERE reviewed_at IS NULL) AS ungraded
-     FROM candidate_memory WHERE namespace = $1`,
-  [namespace],
-);
-
-// Bun.serve throws EADDRINUSE with a stack trace when the port is taken, which
-// is a poor greeting for the one person this page exists for -- and it happens
-// in practice: an unrelated process already holds 3400 on this machine. Turn it
-// into an instruction.
+// The listener fails hard with EADDRINUSE and a stack trace when the port is
+// taken, which is a poor greeting for the one person this page exists for --
+// and it happens in practice: an unrelated process already holds 3400 on this
+// machine. Turn it into an instruction. Since #751 the bind is node:http, whose
+// clash arrives on an asynchronous 'error' event; startGradingServer surfaces
+// it as a REJECTION, so this catch needs the await and nothing else changes.
 let server;
 try {
-  server = startGradingServer({ pool, namespace, gradedBy, port, logger });
+  server = await startWithPoolCleanup(
+    () =>
+      startGradingServer({
+        pool,
+        namespace,
+        gradedBy,
+        port,
+        logger,
+        frozenReviewHandler,
+      }),
+    () => pool.end(),
+  );
 } catch (err) {
+  // `code` first: node and bun's node:http shim word the SAME clash
+  // differently ("listen EADDRINUSE: address already in use" vs "Failed to
+  // start server. Is port N in use?"), and both set code EADDRINUSE. The
+  // message tests stay as a fallback for anything that loses the code.
   const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("EADDRINUSE") || msg.includes("in use")) {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "EADDRINUSE" || msg.includes("EADDRINUSE") || msg.includes("in use")) {
     console.error(`\n  Port ${port} is already in use.`);
     console.error(
-      `  Pick another:  bun scripts/grading-server-run.ts --port ${port + 1}\n`,
+      `  Pick another:  node scripts/grading-server-run.ts --port ${port + 1}\n`,
     );
-    await pool.end();
     process.exit(1);
   }
   throw err;
@@ -95,12 +113,14 @@ console.log("  ------------------------------------------------------------");
 console.log("  URL         ", server.url);
 console.log("  namespace   ", namespace);
 console.log("  graded_by   ", gradedBy);
-console.log(
-  "  ungraded    ",
-  probe.rows[0]?.ungraded ?? "0",
-  "of",
-  probe.rows[0]?.total ?? "0",
-);
+if (probe) {
+  console.log(
+    "  ungraded    ",
+    probe.rows[0]?.ungraded ?? "0",
+    "of",
+    probe.rows[0]?.total ?? "0",
+  );
+}
 // Only bindings the page actually has. It used to advertise "u undo", which was
 // bound to nothing -- undo is a button behind a confirm dialog, deliberately, so
 // a single keystroke cannot retract a committed batch. A banner that names a key

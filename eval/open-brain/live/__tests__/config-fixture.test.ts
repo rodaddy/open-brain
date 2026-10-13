@@ -1,4 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseLiveFixture } from "../fixtures.ts";
@@ -10,15 +12,19 @@ import {
   makeRunId,
   runNamespaces,
 } from "../config.ts";
+import type { LiveFixture, LiveThresholds } from "../types.ts";
 
 const SHIPPED_FIXTURE = JSON.parse(
   readFileSync(
-    join(import.meta.dir, "../../fixtures/live-recall-v1.json"),
+    join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/live-recall-v1.json"),
     "utf8",
   ),
 );
 const SHIPPED_THRESHOLDS = JSON.parse(
-  readFileSync(join(import.meta.dir, "../../thresholds.json"), "utf8"),
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../../thresholds.json"),
+    "utf8",
+  ),
 );
 
 const BASE_ENV = {
@@ -27,14 +33,34 @@ const BASE_ENV = {
   OPEN_BRAIN_LIVE_EVAL_TOKEN: "primary-token",
 } as unknown as NodeJS.ProcessEnv;
 
+/**
+ * Best-case mean Precision@K for a fixture: mean(min(relevant, k) / k). Hoisted
+ * to module scope so the achievability assertion stays a flat expression rather
+ * than nesting a mapper inside an `it` inside a `describe`.
+ */
+function bestCaseMeanPrecision(
+  fixture: LiveFixture,
+  thresholds: LiveThresholds,
+): number {
+  const perProbe = fixture.probes.map((p) => probeBestPrecision(p, thresholds.top_k));
+  return perProbe.reduce((a, b) => a + b, 0) / perProbe.length;
+}
+
+/** Best achievable Precision@K for one probe: min(gradedRelevant, k) / k. */
+function probeBestPrecision(
+  probe: LiveFixture["probes"][number],
+  topK: number,
+): number {
+  const graded = probe.relevant.filter((r) => r.grade > 0).length;
+  return Math.min(graded, topK) / topK;
+}
+
 describe("live fixture validation", () => {
   it("parses the shipped fixture and its probes", () => {
     const fixture = parseLiveFixture(SHIPPED_FIXTURE);
     expect(fixture.fixture_id).toBe("open-brain-live-recall-v1");
     expect(fixture.probes.length).toBeGreaterThan(0);
-    expect(fixture.corpus.some((e) => e.namespace_role === "negative")).toBe(
-      true,
-    );
+    expect(fixture.corpus.some((e) => e.namespace_role === "negative")).toBe(true);
   });
 
   it("shipped thresholds apply to the shipped fixture", () => {
@@ -48,21 +74,14 @@ describe("live fixture validation", () => {
     const thresholds = parseThresholds(SHIPPED_THRESHOLDS);
     // Best-case mean Precision@K = mean(relevant_count/top_k) must clear the bar,
     // otherwise the gate can never pass no matter how good retrieval is.
-    const bestMeanPrecision =
-      fixture.probes
-        .map(
-          (p) =>
-            Math.min(
-              p.relevant.filter((r) => r.grade > 0).length,
-              thresholds.top_k,
-            ) / thresholds.top_k,
-        )
-        .reduce((a, b) => a + b, 0) / fixture.probes.length;
+    const bestMeanPrecision = bestCaseMeanPrecision(fixture, thresholds);
     expect(bestMeanPrecision).toBeGreaterThanOrEqual(
       thresholds.thresholds.min_precision_at_k,
     );
   });
+});
 
+describe("live fixture rejection cases", () => {
   it("rejects a probe that references an unknown relevant id", () => {
     expect(() =>
       parseLiveFixture({
@@ -148,16 +167,14 @@ describe("live fixture validation", () => {
 describe("live config validation", () => {
   it("is disabled unless OPEN_BRAIN_LIVE_EVAL=1", () => {
     expect(liveEvalEnabled({} as NodeJS.ProcessEnv)).toBe(false);
-    expect(
-      liveEvalEnabled({ OPEN_BRAIN_LIVE_EVAL: "0" } as NodeJS.ProcessEnv),
-    ).toBe(false);
+    expect(liveEvalEnabled({ OPEN_BRAIN_LIVE_EVAL: "0" } as NodeJS.ProcessEnv)).toBe(
+      false,
+    );
     expect(liveEvalEnabled(BASE_ENV)).toBe(true);
   });
 
   it("throws when disabled", () => {
-    expect(() => loadLiveConfig("run1", {} as NodeJS.ProcessEnv)).toThrow(
-      /disabled/,
-    );
+    expect(() => loadLiveConfig("run1", {} as NodeJS.ProcessEnv)).toThrow(/disabled/);
   });
 
   it("requires base URL and token", () => {
@@ -361,12 +378,8 @@ describe("collision-safe bounding of long run ids", () => {
     const env = {
       OPEN_BRAIN_LIVE_EVAL_RUN_ID: "x".repeat(100),
     } as NodeJS.ProcessEnv;
-    const a = runNamespaces(
-      makeRunId({ prefix: "c", randomHex: "aaaa1111", env }),
-    );
-    const b = runNamespaces(
-      makeRunId({ prefix: "c", randomHex: "bbbb2222", env }),
-    );
+    const a = runNamespaces(makeRunId({ prefix: "c", randomHex: "aaaa1111", env }));
+    const b = runNamespaces(makeRunId({ prefix: "c", randomHex: "bbbb2222", env }));
     expect(a.primary).not.toBe(b.primary);
     expect(a.negative).not.toBe(b.negative);
   });

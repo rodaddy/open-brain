@@ -8,7 +8,7 @@
  * `installToolLogging` runs comes back decorated, that its return value is
  * untouched, and that a throw still reaches the caller.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import type { DestinationStream } from "pino";
 import { createLogger } from "./logging/logger.ts";
@@ -93,9 +93,7 @@ describe("installToolLogging", () => {
       content: [{ type: "text", text: "ok" }],
     }));
 
-    const result = await (
-      fake.handlerFor("search_brain") as () => Promise<unknown>
-    )();
+    const result = await (fake.handlerFor("search_brain") as () => Promise<unknown>)();
 
     expect(result).toEqual({ content: [{ type: "text", text: "ok" }] });
     const emitted = messages(capture.entries());
@@ -103,9 +101,7 @@ describe("installToolLogging", () => {
     expect(emitted).toContain("operation_result");
     expect(emitted).not.toContain("operation_failure");
     expect(
-      capture
-        .entries()
-        .every((entry) => entry.operation === "tool.search_brain"),
+      capture.entries().every((entry) => entry.operation === "tool.search_brain"),
     ).toBe(true);
   });
 
@@ -140,9 +136,7 @@ describe("installToolLogging", () => {
     };
     fake.server.registerTool("set_tier", {}, async () => errorResult);
 
-    const result = await (
-      fake.handlerFor("set_tier") as () => Promise<unknown>
-    )();
+    const result = await (fake.handlerFor("set_tier") as () => Promise<unknown>)();
 
     expect(result).toEqual(errorResult);
     const emitted = messages(capture.entries());
@@ -153,9 +147,7 @@ describe("installToolLogging", () => {
   it("passes a non-function third argument straight through", () => {
     const capture = captureLogger();
     const fake = install(capture);
-    expect(() =>
-      fake.server.registerTool("no_callback", {}, undefined),
-    ).not.toThrow();
+    expect(() => fake.server.registerTool("no_callback", {}, undefined)).not.toThrow();
     expect(capture.entries()).toHaveLength(0);
   });
 });

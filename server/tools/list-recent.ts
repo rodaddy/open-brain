@@ -31,7 +31,7 @@ import {
   textResult,
   type MemoryToolDependencies,
 } from "./types.ts";
-import { readableNamespaces } from "./read-scope.ts";
+import { readableNamespaces } from "../domain/read-scope.ts";
 import {
   ALL_TABLES,
   CONTENT_PREVIEW,
@@ -40,6 +40,7 @@ import {
   VALID_TIERS,
   type Tier,
 } from "./search-constants.ts";
+import { createEntryReadRepository } from "../db/entry-read-repository.ts";
 
 const NO_READABLE_TABLES = "Permission denied: no readable tables";
 
@@ -60,9 +61,7 @@ function buildWhereClause(
   tier: Tier | undefined,
   namespaceParamIndex: number | undefined,
 ): string {
-  const archiveFilter = includeArchived
-    ? ""
-    : ` AND ${alias}.archived_at IS NULL`;
+  const archiveFilter = includeArchived ? "" : ` AND ${alias}.archived_at IS NULL`;
   const tierFilter = tier ? ` AND ${alias}.tier = '${tier}'` : "";
   const namespaceFilter = namespaceParamIndex
     ? ` AND ${alias}.namespace = ANY($${namespaceParamIndex}::text[])`
@@ -257,22 +256,16 @@ function buildListRecentQueries(options: {
   const countNamespaceIndex = readable ? 2 : undefined;
 
   const dataSql = `${tables
-    .map((table) =>
-      buildTableSelect(table, includeArchived, tier, dataNamespaceIndex),
-    )
+    .map((table) => buildTableSelect(table, includeArchived, tier, dataNamespaceIndex))
     .join("\nUNION ALL\n")}\nORDER BY created_at DESC\nLIMIT $2 OFFSET $3`;
 
   const countSql = `SELECT SUM(cnt)::int AS total_count FROM (${tables
-    .map((table) =>
-      buildCountSelect(table, includeArchived, tier, countNamespaceIndex),
-    )
+    .map((table) => buildCountSelect(table, includeArchived, tier, countNamespaceIndex))
     .join("\nUNION ALL\n")}) counts`;
 
   return {
     dataSql,
-    dataParams: readable
-      ? [days, limit, offset, readable]
-      : [days, limit, offset],
+    dataParams: readable ? [days, limit, offset, readable] : [days, limit, offset],
     countSql,
     countParams: readable ? [days, readable] : [days],
   };
@@ -292,17 +285,20 @@ async function runListRecentQueries(options: {
   dependencies: MemoryToolDependencies;
 }): Promise<{ rows: unknown[]; totalCount: number | null }> {
   const { queries, dependencies } = options;
-  const [dataResult, countResult] = await Promise.all([
-    dependencies.pool.query(queries.dataSql, queries.dataParams),
+  const repository = createEntryReadRepository(dependencies.pool);
+  const [dataRows, countRows] = await Promise.all([
+    repository.listRecentData({
+      sql: queries.dataSql,
+      params: queries.dataParams,
+    }),
     // Independently recoverable: the entries are the answer, the count is a
     // convenience, so a failed count yields null rather than failing the call.
-    dependencies.pool
-      .query(queries.countSql, queries.countParams)
+    repository
+      .listRecentCount({ sql: queries.countSql, params: queries.countParams })
       .catch((error: unknown) => {
         dependencies.logger.warn(
           {
-            error_message:
-              error instanceof Error ? error.message : String(error),
+            error_message: error instanceof Error ? error.message : String(error),
           },
           "list_recent_count_failed",
         );
@@ -311,10 +307,9 @@ async function runListRecentQueries(options: {
   ]);
 
   const totalCount =
-    (countResult?.rows[0] as { total_count?: number } | undefined)
-      ?.total_count ?? null;
+    (countRows?.[0] as { total_count?: number } | undefined)?.total_count ?? null;
 
-  return { rows: dataResult.rows, totalCount };
+  return { rows: dataRows, totalCount };
 }
 
 /**
@@ -337,8 +332,7 @@ function listRecentResult(options: {
     limit: request.limit,
     // Unknowable without a count, and `false` is the honest answer there:
     // it claims no knowledge of further pages rather than inventing one.
-    has_more:
-      totalCount !== null ? request.offset + rows.length < totalCount : false,
+    has_more: totalCount !== null ? request.offset + rows.length < totalCount : false,
   });
 }
 

@@ -2,12 +2,12 @@ import type { TeardownResidue, TeardownTally } from "./gate.ts";
 import type { ContextPackScope } from "./transport.ts";
 
 export type ScenarioKind =
-  | "capture_round_trip"
-  | "durable_memory_shape"
-  | "checkpoint_round_trip";
+  "capture_round_trip" | "durable_memory_shape" | "checkpoint_round_trip";
 
-export interface ScenarioScope
-  extends Omit<ContextPackScope, "namespace" | "thread_id"> {
+export interface ScenarioScope extends Omit<
+  ContextPackScope,
+  "namespace" | "thread_id"
+> {
   thread_id?: string | null;
 }
 
@@ -62,9 +62,7 @@ export interface CheckpointRoundTripScenario {
 }
 
 export type ScenarioFixtureCase =
-  | CaptureRoundTripScenario
-  | DurableMemoryShapeScenario
-  | CheckpointRoundTripScenario;
+  CaptureRoundTripScenario | DurableMemoryShapeScenario | CheckpointRoundTripScenario;
 
 export interface ScenarioFixture {
   schema_version: 1;

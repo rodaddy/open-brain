@@ -10,7 +10,7 @@
  * ruling 2026-08-27, issue #878). It must point at an isolated test/playground
  * database, never the dogfood database. `bun run test:isolated` sets it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -43,8 +43,7 @@ async function callDecompose(
     logger: pino({ level: "silent" }),
     embeddingModel: "decompose-test",
   });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const originalSend = clientTransport.send.bind(clientTransport);
   clientTransport.send = (message, options) =>
     originalSend(message, {
@@ -129,9 +128,7 @@ describe("decompose_entry planning (live Postgres)", () => {
       dry_run: false,
     });
     expect(isError).toBe(true);
-    expect(body.text).toBe(
-      "dry_run=false requires apply_mode=write_replacements",
-    );
+    expect(body.text).toBe("dry_run=false requires apply_mode=write_replacements");
     expect(await countThoughts(NAMESPACE)).toBe(before);
   });
 

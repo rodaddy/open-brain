@@ -7,7 +7,7 @@
  * Design authority: `docs/decisions/privilege-isolation-closed-brain.md`
  * requires realistic tests proving cross-client leakage fails closed.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";

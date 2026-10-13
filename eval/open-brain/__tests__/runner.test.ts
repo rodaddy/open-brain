@@ -1,37 +1,64 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { expectDefined } from "../../../scripts/test-support/expect-defined.ts";
 import codexFixture from "../fixtures/codex-workflows.json" assert { type: "json" };
 import fixture from "../fixtures/memory-smoke.json" assert { type: "json" };
 import substrateFixture from "../fixtures/memory-substrate.json" assert { type: "json" };
 import { answerForProbe, retrieve, runEvalSuite, scoreProbe } from "../runner.ts";
-import type { EvalFixture } from "../types.ts";
+import type { EvalFixture, EvalProbe } from "../types.ts";
 
 const typedFixture = fixture as EvalFixture;
 const typedCodexFixture = codexFixture as EvalFixture;
 const typedSubstrateFixture = substrateFixture as EvalFixture;
 
-describe("Open Brain memory eval runner", () => {
+function probeFrom(source: EvalFixture, id: string): EvalProbe {
+  return expectDefined(
+    source.probes.find((item) => item.id === id),
+    `probe ${id}`,
+  );
+}
+
+async function runFixtureCli(fixturePath: string): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = spawn(
+    process.execPath,
+    ["scripts/eval-open-brain-memory.ts", "--fixture", fixturePath],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const out: string[] = [];
+  const err: string[] = [];
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => out.push(chunk));
+  child.stderr.on("data", (chunk: string) => err.push(chunk));
+  const [code] = (await once(child, "close")) as [number | null];
+  return { exitCode: code ?? 0, stdout: out.join(""), stderr: err.join("") };
+}
+
+describe("Open Brain memory eval runner: retrieval and namespace guards", () => {
   it("keeps gold answers sealed outside retrieved public results", () => {
-    const probe = typedFixture.probes.find((item) => item.id === "recall-temp-root");
-    expect(probe).toBeDefined();
-    const results = retrieve(typedFixture.corpus, probe!);
+    const probe = probeFrom(typedFixture, "recall-temp-root");
+    const results = retrieve(typedFixture.corpus, probe);
     expect(results[0]?.entry.id).toBe("thought-temp-root");
     expect(results[0]).not.toHaveProperty("relevant_ids");
   });
 
   it("blocks unreadable namespace evidence", () => {
-    const probe = typedFixture.probes.find((item) => item.id === "namespace-private-leak");
-    expect(probe).toBeDefined();
-    const score = scoreProbe(typedFixture.corpus, probe!);
+    const probe = probeFrom(typedFixture, "namespace-private-leak");
+    const score = scoreProbe(typedFixture.corpus, probe);
     expect(score.passed).toBe(true);
     expect(score.retrieved_ids).not.toContain("private-secret-project");
     expect(score.retrieved_ids).toEqual([]);
   });
 
   it("fails namespace probes when readable junk is retrieved", () => {
-    const probe = typedFixture.probes.find((item) => item.id === "namespace-private-leak");
-    expect(probe).toBeDefined();
+    const probe = probeFrom(typedFixture, "namespace-private-leak");
     const score = scoreProbe(typedFixture.corpus, {
-      ...probe!,
+      ...probe,
       readable_namespaces: ["skippy", "shared-kb"],
     });
     expect(score.passed).toBe(false);
@@ -39,9 +66,8 @@ describe("Open Brain memory eval runner", () => {
   });
 
   it("fails probes that retrieve declared junk ids", () => {
-    const probe = typedFixture.probes.find((item) => item.id === "identity-rico-rika");
-    expect(probe).toBeDefined();
-    const score = scoreProbe(typedFixture.corpus, { ...probe!, top_k: 3 });
+    const probe = probeFrom(typedFixture, "identity-rico-rika");
+    const score = scoreProbe(typedFixture.corpus, { ...probe, top_k: 3 });
     expect(score.passed).toBe(false);
     expect(score.failures).toContain("retrieved declared junk person-rika");
   });
@@ -49,11 +75,11 @@ describe("Open Brain memory eval runner", () => {
   it("surfaces stale and contradictory memory as uncertainty", () => {
     const temporal = scoreProbe(
       typedFixture.corpus,
-      typedFixture.probes.find((item) => item.id === "temporal-runner-policy")!,
+      probeFrom(typedFixture, "temporal-runner-policy"),
     );
     const contradiction = scoreProbe(
       typedFixture.corpus,
-      typedFixture.probes.find((item) => item.id === "contradiction-codex-home")!,
+      probeFrom(typedFixture, "contradiction-codex-home"),
     );
     expect(temporal.uncertainty).toContain("stale");
     expect(contradiction.uncertainty).toContain("contradiction");
@@ -92,7 +118,9 @@ describe("Open Brain memory eval runner", () => {
     );
     expect(score.uncertainty).not.toContain("contradiction");
   });
+});
 
+describe("Open Brain memory eval runner: aggregate scorecards", () => {
   it("produces a passing aggregate scorecard for the smoke fixture", () => {
     const scorecard = runEvalSuite(typedFixture, {
       commit: "test",
@@ -132,15 +160,15 @@ describe("Open Brain memory eval runner", () => {
   });
 
   it("fails the memory substrate receipt probe when receipt evidence is incomplete", () => {
-    const probe = typedSubstrateFixture.probes.find(
-      (item) => item.id === "substrate-complete-receipt",
-    );
-    expect(probe).toBeDefined();
+    const probe = probeFrom(typedSubstrateFixture, "substrate-complete-receipt");
     const brokenCorpus = typedSubstrateFixture.corpus.map((entry) =>
       entry.id === "receipt-complete-report"
         ? {
             ...entry,
-            content: entry.content.replace("base template reports/base-template.pdf, ", ""),
+            content: entry.content.replace(
+              "base template reports/base-template.pdf, ",
+              "",
+            ),
             source_ref: {
               ...entry.source_ref,
               preview: entry.source_ref.preview.replace(
@@ -151,91 +179,71 @@ describe("Open Brain memory eval runner", () => {
           }
         : entry,
     );
-    const score = scoreProbe(brokenCorpus, probe!);
+    const score = scoreProbe(brokenCorpus, probe);
     expect(score.passed).toBe(false);
     expect(score.failures).toContain("missing expected answer term base-template.pdf");
   });
+});
 
+describe("Open Brain memory eval runner: Codex workflow probes", () => {
   it("prefers durable Codex preferences over one-off task instructions", () => {
-    const probe = typedCodexFixture.probes.find(
-      (item) => item.id === "codex-durable-preference-not-oneoff",
-    );
-    expect(probe).toBeDefined();
-    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    const probe = probeFrom(typedCodexFixture, "codex-durable-preference-not-oneoff");
+    const score = scoreProbe(typedCodexFixture.corpus, probe);
     expect(score.passed).toBe(true);
     expect(score.retrieved_ids).toContain("preference-thunderbolt-temp");
     expect(score.retrieved_ids).not.toContain("oneoff-use-system-tmp");
   });
 
   it("keeps current repo evidence ahead of stale memory", () => {
-    const probe = typedCodexFixture.probes.find(
-      (item) => item.id === "codex-current-repo-over-stale-memory",
-    );
-    expect(probe).toBeDefined();
-    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    const probe = probeFrom(typedCodexFixture, "codex-current-repo-over-stale-memory");
+    const score = scoreProbe(typedCodexFixture.corpus, probe);
     expect(score.passed).toBe(true);
     expect(score.retrieved_ids).toContain("repo-current-bun-runtime");
     expect(score.retrieved_ids).toContain("repo-stale-node-runtime");
     expect(score.uncertainty).toEqual(["stale"]);
     const answer = answerForProbe(
-      retrieve(typedCodexFixture.corpus, probe!).map(({ entry }) => entry),
-      probe!,
+      retrieve(typedCodexFixture.corpus, probe).map(({ entry }) => entry),
+      probe,
     );
     expect(answer).toContain("Current repo file AGENTS.md");
     expect(answer).toContain("contradicts memory ids repo-stale-node-runtime");
   });
 
   it("checks final-answer citation shape for memory-derived facts", () => {
-    const probe = typedCodexFixture.probes.find(
-      (item) => item.id === "codex-cite-memory-derived-facts",
-    );
-    expect(probe).toBeDefined();
-    const entries = retrieve(typedCodexFixture.corpus, probe!).map(({ entry }) => entry);
-    const answer = answerForProbe(entries, probe!);
-    expect(scoreProbe(typedCodexFixture.corpus, probe!).passed).toBe(true);
+    const probe = probeFrom(typedCodexFixture, "codex-cite-memory-derived-facts");
+    const entries = retrieve(typedCodexFixture.corpus, probe).map(({ entry }) => entry);
+    const answer = answerForProbe(entries, probe);
+    expect(scoreProbe(typedCodexFixture.corpus, probe).passed).toBe(true);
     expect(answer).toContain("[decision-citation-contract]");
     expect(answer).toContain("Memory-derived final answers must include citations");
   });
 
   it("refuses unreadable Codex workflow facts", () => {
-    const probe = typedCodexFixture.probes.find(
-      (item) => item.id === "codex-unreadable-namespace-refusal",
-    );
-    expect(probe).toBeDefined();
-    const score = scoreProbe(typedCodexFixture.corpus, probe!);
+    const probe = probeFrom(typedCodexFixture, "codex-unreadable-namespace-refusal");
+    const score = scoreProbe(typedCodexFixture.corpus, probe);
     expect(score.passed).toBe(true);
     expect(score.retrieved_ids).toEqual([]);
     expect(score.failures).toEqual([]);
   });
 
   it("proves the unreadable namespace probe has a positive control", () => {
-    const probe = typedCodexFixture.probes.find(
-      (item) => item.id === "codex-unreadable-namespace-refusal",
-    );
-    expect(probe).toBeDefined();
+    const probe = probeFrom(typedCodexFixture, "codex-unreadable-namespace-refusal");
     const score = scoreProbe(typedCodexFixture.corpus, {
-      ...probe!,
+      ...probe,
       readable_namespaces: ["skippy", "private-agent"],
       relevant_ids: ["private-user-secret"],
       expect_no_results: false,
     });
     expect(score.retrieved_ids).toContain("private-user-secret");
   });
+});
 
+describe("Open Brain memory eval runner: command line entry point", () => {
   it("runs the CLI against an alternate fixture", async () => {
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "run",
-        "scripts/eval-open-brain-memory.ts",
-        "--fixture",
-        "eval/open-brain/fixtures/codex-workflows.json",
-      ],
-      { stdout: "pipe", stderr: "pipe" },
+    const { exitCode, stdout, stderr } = await runFixtureCli(
+      "eval/open-brain/fixtures/codex-workflows.json",
     );
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    expect(await proc.exited).toBe(0);
+    expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain("corpus=open-brain-codex-workflows-v1");
     expect(stdout).toContain("- codex: 6/6 pass");
@@ -243,19 +251,10 @@ describe("Open Brain memory eval runner", () => {
   });
 
   it("runs the CLI against the memory substrate fixture", async () => {
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "run",
-        "scripts/eval-open-brain-memory.ts",
-        "--fixture",
-        "eval/open-brain/fixtures/memory-substrate.json",
-      ],
-      { stdout: "pipe", stderr: "pipe" },
+    const { exitCode, stdout, stderr } = await runFixtureCli(
+      "eval/open-brain/fixtures/memory-substrate.json",
     );
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    expect(await proc.exited).toBe(0);
+    expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain("corpus=open-brain-memory-substrate-v1");
     expect(stdout).toContain("- codex: 1/1 pass");
@@ -263,19 +262,10 @@ describe("Open Brain memory eval runner", () => {
   });
 
   it("returns a controlled CLI error for a missing fixture", async () => {
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "run",
-        "scripts/eval-open-brain-memory.ts",
-        "--fixture",
-        "eval/open-brain/fixtures/does-not-exist.json",
-      ],
-      { stdout: "pipe", stderr: "pipe" },
+    const { exitCode, stdout, stderr } = await runFixtureCli(
+      "eval/open-brain/fixtures/does-not-exist.json",
     );
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    expect(await proc.exited).toBe(2);
+    expect(exitCode).toBe(2);
     expect(stdout).toBe("");
     expect(stderr).toContain(
       "Failed to load Open Brain eval fixture eval/open-brain/fixtures/does-not-exist.json",

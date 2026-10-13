@@ -89,7 +89,7 @@ with the rest of our schema — a rename that keeps semantics is fine; a rename
 that quietly changes them is the failure mode.
 
 The borrow is also **tested, not just declared**.
-`src/db/migrations/032_raw_turns.test.ts:281–292` measures the drift window
+`server/db/migrations/032_raw_turns.test.ts:281–292` measures the drift window
 directly, and its comment names the source:
 
 > Bi-temporal, borrowed from Graphiti: world-time vs knowledge-time. The fact
@@ -119,7 +119,7 @@ surface.
 ## Attribution
 
 Idea only, no code. Entered in `ATTRIBUTION.md`. The borrow is additionally
-credited in-source at `src/db/migrations/032_raw_turns.test.ts:282`, which is
+credited in-source at `server/db/migrations/032_raw_turns.test.ts:282`, which is
 the practice to repeat.
 
 ## Open questions this review did not settle

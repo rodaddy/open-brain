@@ -1,29 +1,28 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // PreCompact hook: saves session state to Open Brain before context compaction
 // Uses mcp2cli for transport/auth -- no raw HTTP
 // Fires on: manual | auto compaction
 // Silent on all errors -- never blocks compaction
 
-export {};
+import { spawnSync } from "node:child_process";
 
 try {
-  const input = await Bun.stdin.json();
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const { cwd, trigger, custom_instructions } = input;
   const project = cwd.split("/").pop() || "unknown";
 
   // Extract recent git commits as key decisions
   const key_decisions: string[] = [];
   try {
-    const gitResult = Bun.spawnSync(
-      ["git", "log", "--oneline", "-5", "--no-decorate"],
-      { cwd, timeout: 3000 },
-    );
-    if (gitResult.exitCode === 0) {
-      const commits = gitResult.stdout
-        .toString()
-        .trim()
-        .split("\n")
-        .filter(Boolean);
+    const gitResult = spawnSync("git", ["log", "--oneline", "-5", "--no-decorate"], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf8",
+    });
+    if (gitResult.status === 0) {
+      const commits = gitResult.stdout.trim().split("\n").filter(Boolean);
       key_decisions.push(...commits.map((c) => c.replace(/^[a-f0-9]+ /, "")));
     }
   } catch {
@@ -33,12 +32,13 @@ try {
   // Extract branch name for context
   let branch = "";
   try {
-    const branchResult = Bun.spawnSync(["git", "branch", "--show-current"], {
+    const branchResult = spawnSync("git", ["branch", "--show-current"], {
       cwd,
       timeout: 2000,
+      encoding: "utf8",
     });
-    if (branchResult.exitCode === 0) {
-      branch = branchResult.stdout.toString().trim();
+    if (branchResult.status === 0) {
+      branch = branchResult.stdout.trim();
     }
   } catch {
     /* ignore */
@@ -47,12 +47,13 @@ try {
   // Capture dirty state so compact recovery can separate real work from noise.
   let dirtyState = "";
   try {
-    const statusResult = Bun.spawnSync(["git", "status", "--short"], {
+    const statusResult = spawnSync("git", ["status", "--short"], {
       cwd,
       timeout: 3000,
+      encoding: "utf8",
     });
-    if (statusResult.exitCode === 0) {
-      dirtyState = statusResult.stdout.toString().trim();
+    if (statusResult.status === 0) {
+      dirtyState = statusResult.stdout.trim();
     }
   } catch {
     /* no git or not a repo */
@@ -61,12 +62,22 @@ try {
   // Build summary
   const summaryParts = [`Session before ${trigger} compaction`];
   summaryParts.push(`CWD: ${cwd}`);
-  summaryParts.push("Policy state: context is stale after compaction; next agent action must refresh active routers/SOPs before risky edits, git, infra, deploy, or worker orchestration.");
-  summaryParts.push("Pony style: identify the owning boundary, make the smallest correct owned change, preserve callers/invariants, and verify.");
-  summaryParts.push("Critical mode: challenge weak assumptions, surface concrete risk, ask when ambiguity matters, then proceed.");
-  summaryParts.push("Source order: live/source files and current system state beat OB/qmd, which beat compacted memory or summaries.");
+  summaryParts.push(
+    "Policy state: context is stale after compaction; next agent action must refresh active routers/SOPs before risky edits, git, infra, deploy, or worker orchestration.",
+  );
+  summaryParts.push(
+    "Pony style: identify the owning boundary, make the smallest correct owned change, preserve callers/invariants, and verify.",
+  );
+  summaryParts.push(
+    "Critical mode: challenge weak assumptions, surface concrete risk, ask when ambiguity matters, then proceed.",
+  );
+  summaryParts.push(
+    "Source order: live/source files and current system state beat OB/qmd, which beat compacted memory or summaries.",
+  );
   if (branch) summaryParts.push(`Branch: ${branch}`);
-  summaryParts.push(dirtyState ? `Dirty state:\n${dirtyState}` : "Dirty state: clean or unavailable");
+  summaryParts.push(
+    dirtyState ? `Dirty state:\n${dirtyState}` : "Dirty state: clean or unavailable",
+  );
   if (key_decisions.length) summaryParts.push(`Recent: ${key_decisions[0]}`);
   if (custom_instructions) summaryParts.push(custom_instructions);
   const summary = summaryParts.join(". ");
@@ -82,8 +93,7 @@ try {
   ];
   if (branch) {
     const branchType = branch.split("/")[0];
-    if (["feat", "fix", "wip", "chore"].includes(branchType))
-      tags.push(branchType);
+    if (["feat", "fix", "wip", "chore"].includes(branchType)) tags.push(branchType);
   }
 
   // The policy-refresh gate lives outside this repo, so its location is
@@ -94,7 +104,7 @@ try {
   // authoritative and send the next agent to a path that exists nowhere.
   const policyGatePath =
     process.env.OPENBRAIN_POLICY_REFRESH_GATE?.trim() ||
-    "/Volumes/ThunderBolt/Development/_ob/scripts/policy-refresh-gate.ts";
+    "/srv/dev/_ob/scripts/policy-refresh-gate.ts";
 
   // Save via mcp2cli
   const params = JSON.stringify({
@@ -114,17 +124,20 @@ try {
     ],
   });
 
-  const result = Bun.spawnSync(
-    ["mcp2cli", "open-brain", "session_save", "--params", params],
-    { timeout: 12000 },
+  const result = spawnSync(
+    "mcp2cli",
+    ["open-brain", "session_save", "--params", params],
+    { timeout: 12000, encoding: "utf8" },
   );
 
-  if (result.exitCode !== 0) {
-    const stderr = result.stderr.toString().trim();
+  if (result.status !== 0) {
+    const stderr = (result.stderr ?? "").trim();
     console.error(`open-brain session_save failed: ${stderr}`);
   }
 } catch (err) {
   // Log but never block compaction
-  console.error(`open-brain pre-compact hook error: ${err}`);
+  console.error(
+    `open-brain pre-compact hook error: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
+  );
   process.exit(0);
 }

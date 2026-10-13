@@ -45,9 +45,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createPool } from "../src/db/pool.ts";
+import type pg from "pg";
+import { createPool } from "./settings.ts";
 
 const PROJECTS = `${process.env.HOME}/.claude/projects`;
 // Operator scope, 2026-07-28: "we can go back to Sunday so or Saturday night
@@ -70,21 +71,22 @@ type Turn = {
   kind: string;
 };
 
-/** The project dir name encodes the cwd: -Volumes-ThunderBolt-Development-foo */
+/** The project dir name encodes the cwd: -srv-dev-foo */
 function repoOf(dir: string): string | null {
-  const m = dir.match(/^-Volumes-ThunderBolt-Development-(.+)$/);
-  return m
-    ? (m[1] ?? null)
-    : dir === "-Volumes-ThunderBolt-Development"
-      ? "Development"
-      : null;
+  const m = dir.match(/^-srv-dev-(.+)$/);
+  return m ? (m[1] ?? null) : dir === "-srv-dev" ? "Development" : null;
 }
 
+// NUL is illegal in Postgres text at all. It is stripped with a string split
+// rather than a regex: a control escape inside a pattern is what oxlint's
+// no-control-regex flags, and both spellings remove exactly the same bytes.
+const NUL = String.fromCharCode(0);
 /** Make a string storable: no NUL, no lone surrogates, no invalid sequences. */
 function sanitize(s: string): string {
   return (
     s
-      .replace(/\u0000/g, "")
+      .split(NUL)
+      .join("")
       // Lone surrogates survive JSON.parse but are not valid UTF-8 on the wire.
       .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "")
       .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
@@ -98,57 +100,68 @@ function sanitize(s: string): string {
  * `<system-reminder>` / hook-output wrappers are injected into the user role by
  * the runtime, so role alone cannot tell them apart from something typed.
  */
+function extractString(content: string): { text: string; kind: string } | null {
+  const t = content.trim();
+  if (!t) return null;
+  // Injected machinery, not typed input.
+  if (t.startsWith("<") && /^<[a-z-]+(-[a-z]+)*>/i.test(t)) return null;
+  if (t.startsWith("Caveat:") || t.startsWith("## Development Policy Refresh")) {
+    return null;
+  }
+  return { text: sanitize(content), kind: "text" };
+}
+
+/** The text pieces of a tool_result block, whose content is string or blocks. */
+function toolResultParts(content: unknown): string[] {
+  if (typeof content === "string") return [content];
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(
+      (inner) =>
+        inner &&
+        typeof inner === "object" &&
+        (inner as { type?: string }).type === "text",
+    )
+    .map((inner) => (inner as { text?: string }).text ?? "");
+}
+
+/** One content block's contribution: its text, and the kind it implies. */
+function blockParts(block: unknown): { parts: string[]; kind?: string } {
+  if (!block || typeof block !== "object") return { parts: [] };
+  const type = (block as { type?: string }).type;
+  if (type === "text") {
+    const t = (block as { text?: string }).text ?? "";
+    return { parts: t.trim() ? [t] : [] };
+  }
+  if (type === "tool_result") {
+    return {
+      parts: toolResultParts((block as { content?: unknown }).content),
+      kind: "tool_result",
+    };
+  }
+  if (type === "tool_use") {
+    const name = (block as { name?: string }).name ?? "tool";
+    const input = JSON.stringify((block as { input?: unknown }).input ?? {});
+    return { parts: [`[${name}] ${input}`], kind: "tool_use" };
+  }
+  // `thinking` and anything unrecognised contribute nothing: not on screen, and
+  // not the operator's words.
+  return { parts: [] };
+}
+
 function extract(msg: unknown): { text: string; kind: string } | null {
   if (!msg || typeof msg !== "object") return null;
   const content = (msg as { content?: unknown }).content;
 
-  if (typeof content === "string") {
-    const t = content.trim();
-    if (!t) return null;
-    // Injected machinery, not typed input.
-    if (t.startsWith("<") && /^<[a-z-]+(-[a-z]+)*>/i.test(t)) return null;
-    if (
-      t.startsWith("Caveat:") ||
-      t.startsWith("## Development Policy Refresh")
-    )
-      return null;
-    return { text: sanitize(content), kind: "text" };
-  }
-
+  if (typeof content === "string") return extractString(content);
   if (!Array.isArray(content)) return null;
 
   const parts: string[] = [];
   let kind = "text";
   for (const b of content) {
-    if (!b || typeof b !== "object") continue;
-    const type = (b as { type?: string }).type;
-    if (type === "text") {
-      const t = (b as { text?: string }).text ?? "";
-      if (t.trim()) parts.push(t);
-    } else if (type === "tool_result") {
-      kind = "tool_result";
-      const c = (b as { content?: unknown }).content;
-      if (typeof c === "string") parts.push(c);
-      else if (Array.isArray(c)) {
-        for (const inner of c) {
-          if (
-            inner &&
-            typeof inner === "object" &&
-            (inner as { type?: string }).type === "text"
-          ) {
-            parts.push((inner as { text?: string }).text ?? "");
-          }
-        }
-      }
-    } else if (type === "tool_use") {
-      kind = "tool_use";
-      const name = (b as { name?: string }).name ?? "tool";
-      const input = JSON.stringify((b as { input?: unknown }).input ?? {});
-      parts.push(`[${name}] ${input}`);
-    } else if (type === "thinking") {
-      // Deliberately skipped: not on screen, and not the operator's words.
-      continue;
-    }
+    const got = blockParts(b);
+    parts.push(...got.parts);
+    if (got.kind) kind = got.kind;
   }
 
   // Tool output carries raw terminal bytes -- ANSI escapes, lone surrogates,
@@ -163,29 +176,33 @@ function extract(msg: unknown): { text: string; kind: string } | null {
   return { text, kind };
 }
 
-function readTranscript(
-  path: string,
-  sessionRef: string,
-  repo: string | null,
-): Turn[] {
+/** One transcript line, parsed; null for blank, unparseable, or out-of-scope. */
+function parseLine(
+  line: string,
+): { record: Record<string, unknown>; type: string; ts: string } | null {
+  if (!line.trim()) return null;
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const type = record.type as string | undefined;
+  if (type !== "user" && type !== "assistant") return null;
+  const ts = record.timestamp as string | undefined;
+  if (!ts || new Date(ts) < SINCE) return null;
+  return { record, type, ts };
+}
+
+function readTranscript(path: string, sessionRef: string, repo: string | null): Turn[] {
   const out: Turn[] = [];
   let index = 0;
-  const raw = require("node:fs").readFileSync(path, "utf8") as string;
+  const raw = readFileSync(path, "utf8");
 
   for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let j: Record<string, unknown>;
-    try {
-      j = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    const type = j.type as string | undefined;
-    if (type !== "user" && type !== "assistant") continue;
-
-    const ts = j.timestamp as string | undefined;
-    if (!ts || new Date(ts) < SINCE) continue;
+    const parsed = parseLine(line);
+    if (!parsed) continue;
+    const { record: j, type, ts } = parsed;
 
     const got = extract(j.message);
     if (!got) continue;
@@ -204,8 +221,8 @@ function readTranscript(
       repo,
       turn_index: index++,
       role: type === "user" && got.kind !== "text" ? "tool" : type,
-      // The load-bearing flag: what the operator actually typed. A tool_result
-      // arrives with role=user and is NOT a human prompt.
+      // The flag everything downstream keys on: what the operator actually
+      // typed. A tool_result arrives with role=user and is NOT a human prompt.
       is_human_prompt: type === "user" && got.kind === "text",
       content: got.text,
       occurred_at: ts,
@@ -244,64 +261,84 @@ if (DRY) {
   process.exit(0);
 }
 
-const pool = createPool();
-let inserted = 0;
-let skipped = 0;
-try {
-  for (let i = 0; i < all.length; i += 200) {
-    const batch = all.slice(i, i + 200);
-    for (const t of batch) {
-      const hash = createHash("sha256").update(t.content).digest("hex");
-      const r = await pool.query(
-        // occurred_at IS THE ORDERING KEY AND MUST BE WRITTEN.
-        //
-        // The first version named only created_at and bound the transcript
-        // timestamp to it, leaving occurred_at NULL on all 20,535 backfilled
-        // rows -- 77% of the table. Nothing failed: the insert succeeded and the
-        // row counts looked right. The rows were simply invisible to every
-        // time-windowed query, and 036:60 derives session_seq by
-        // `ORDER BY occurred_at, id`, so 17,554 rows also came out with no
-        // sequence. Measured 2026-07-28.
-        //
-        // 032:158-161 states the contract this violated: "occurred_at is
-        // Graphiti's reference_time: when the turn HAPPENED... created_at would
-        // silently scramble the conversation." A backfill is exactly the case it
-        // describes -- three days of history stored in one minute -- so writing
-        // only created_at dates the whole corpus to the moment the script ran.
-        //
-        // Both are written, deliberately: occurred_at = when it was said, from
-        // the transcript; created_at = when it was stored.
-        `INSERT INTO ob_raw_turns
+/**
+ * Insert one turn. Returns true when a row was written, false on a duplicate
+ * that `ON CONFLICT DO NOTHING` swallowed.
+ */
+async function insertTurn(db: pg.Pool, t: Turn): Promise<boolean> {
+  const hash = createHash("sha256").update(t.content).digest("hex");
+  const r = await db.query(
+    // occurred_at IS THE ORDERING KEY AND MUST BE WRITTEN.
+    //
+    // The first version named only created_at and bound the transcript
+    // timestamp to it, leaving occurred_at NULL on all 20,535 backfilled
+    // rows -- 77% of the table. Nothing failed: the insert succeeded and the
+    // row counts looked right. The rows were simply invisible to every
+    // time-windowed query, and 036:60 derives session_seq by
+    // `ORDER BY occurred_at, id`, so 17,554 rows also came out with no
+    // sequence. Measured 2026-07-28.
+    //
+    // 032:158-161 states the contract this violated: "occurred_at is
+    // Graphiti's reference_time: when the turn HAPPENED... created_at would
+    // silently scramble the conversation." A backfill is exactly the case it
+    // describes -- three days of history stored in one minute -- so writing
+    // only created_at dates the whole corpus to the moment the script ran.
+    //
+    // Both are written, deliberately: occurred_at = when it was said, from
+    // the transcript; created_at = when it was stored.
+    `INSERT INTO ob_raw_turns
            (namespace, turn_uuid, parent_turn_uuid, session_ref, repo, turn_index,
             role, is_human_prompt, content, metadata, content_hash, runtime,
             redaction_applied, created_by, retention_tier, occurred_at, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'{}'::jsonb,$13,'live',$14,$14)
          ON CONFLICT (namespace, turn_uuid) DO NOTHING
          RETURNING id`,
-        [
-          NAMESPACE,
-          t.turn_uuid,
-          t.parent_turn_uuid,
-          t.session_ref,
-          t.repo,
-          t.turn_index,
-          t.role,
-          t.is_human_prompt,
-          t.content,
-          JSON.stringify({
-            kind: t.kind,
-            backfilled: true,
-            source: "transcript",
-          }),
-          hash,
-          "claude",
-          "backfill-transcripts",
-          t.occurred_at,
-        ],
-      );
-      if (r.rowCount) inserted++;
-      else skipped++;
-    }
+    [
+      NAMESPACE,
+      t.turn_uuid,
+      t.parent_turn_uuid,
+      t.session_ref,
+      t.repo,
+      t.turn_index,
+      t.role,
+      t.is_human_prompt,
+      t.content,
+      JSON.stringify({
+        kind: t.kind,
+        backfilled: true,
+        source: "transcript",
+      }),
+      hash,
+      "claude",
+      "backfill-transcripts",
+      t.occurred_at,
+    ],
+  );
+  return Boolean(r.rowCount);
+}
+
+/** Insert one slice, returning its new-row and duplicate-row tallies. */
+async function insertBatch(
+  db: pg.Pool,
+  batch: Turn[],
+): Promise<{ inserted: number; skipped: number }> {
+  let inserted = 0;
+  let skipped = 0;
+  for (const t of batch) {
+    if (await insertTurn(db, t)) inserted += 1;
+    else skipped += 1;
+  }
+  return { inserted, skipped };
+}
+
+const pool = createPool();
+let inserted = 0;
+let skipped = 0;
+try {
+  for (let i = 0; i < all.length; i += 200) {
+    const counts = await insertBatch(pool, all.slice(i, i + 200));
+    inserted += counts.inserted;
+    skipped += counts.skipped;
     console.log(
       `  ${Math.min(i + 200, all.length)}/${all.length} (${inserted} new, ${skipped} dupe)`,
     );

@@ -4,8 +4,8 @@ import { TOOL_CONTRACTS } from "./contract-schemas.ts";
 
 // v24 (#678). The v23 string outlived three client-facing shape changes: the
 // live Zod schema for `agent_context_pack` gained `repo`, `prior_context`, and
-// `continue_from` while `src/contract-schemas.ts` — the hand-maintained mirror
-// the schema_hash is computed over — was never touched. So the version AND the
+// `continue_from` while the hand-maintained tool-contract mirror the
+// schema_hash is computed over was never touched. So the version AND the
 // hash both read identically on either side of a real contract change, and
 // docs/downstream-rollout.md's "authoritative drift receipt" recorded nothing.
 // Bumping is the client-visible half; the hash moves on its own once the mirror
@@ -16,7 +16,7 @@ import type { ContractCapability, OpenBrainContract } from "./contract-types.ts"
 export type { ContractCapability, OpenBrainContract };
 export { CONTRACT_CAPABILITIES };
 
-export const CONTRACT_VERSION = "2026-08-09.memory-tools.v24";
+export const CONTRACT_VERSION = "2026-08-09.memory-tools.v25";
 export const CONTRACT_SCHEMA_VERSION = 1;
 
 function sortValue(value: unknown): unknown {

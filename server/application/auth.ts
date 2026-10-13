@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
-import type { AuthInfo, Role } from "../../src/types.ts";
-import { logger } from "../../src/logger.ts";
+import type { AuthInfo, Role } from "../types.ts";
+import { logger } from "../logging/legacy-logger.ts";
 import type { Request, Response, NextFunction } from "express";
 
 const VALID_ROLES: Set<string> = new Set<string>([

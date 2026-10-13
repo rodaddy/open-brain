@@ -16,10 +16,14 @@
  * break the clients this port exists to keep working.
  */
 import { z } from "zod";
-import { toSql } from "pgvector/pg";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PoolClient } from "pg";
 import { canRead, canWrite } from "../auth/permissions.ts";
+import {
+  createEntryWriteRepository,
+  type DecompositionSourceRow,
+  type EntryWriteRepository,
+} from "../db/entry-write-repository.ts";
+import { withTransaction } from "../db/transaction.ts";
 import { canTargetNamespace, namespacePredicate } from "../auth/namespace-policy.ts";
 import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
 import {
@@ -139,15 +143,16 @@ async function loadSourceRow(
   dependencies: MemoryToolDependencies,
   identity: AuthIdentity,
   args: DecomposeEntryArgs,
-): Promise<{ id: unknown; namespace: unknown; content_text: unknown } | undefined> {
+): Promise<DecompositionSourceRow | undefined> {
   const predicate = namespacePredicate(identity, "read", 2);
-  const { rows } = await dependencies.pool.query(
-    `SELECT id, namespace, ${SOURCE_CONTENT_SQL[args.table]} AS content_text
-       FROM ${args.table}
-      WHERE id = $1 AND archived_at IS NULL${predicate.clause}`,
-    [args.id, ...predicate.values],
-  );
-  return rows[0];
+  const repository = createEntryWriteRepository(dependencies.pool);
+  return repository.loadDecompositionSource({
+    table: args.table,
+    contentSql: SOURCE_CONTENT_SQL[args.table],
+    id: args.id,
+    predicateClause: predicate.clause,
+    predicateValues: predicate.values,
+  });
 }
 
 /** The zeroed-but-successful apply body for a plan that proposed nothing. */
@@ -287,55 +292,57 @@ async function writeReplacementThoughts(
   namespace: string,
   plan: DecompositionPlan,
 ): Promise<ReplacementWriteResult> {
-  const client = await dependencies.pool.connect();
   const writtenIds: string[] = [];
   const skippedDuplicates: string[] = [];
   const intraBatchDuplicates: string[] = [];
   const writtenIdsByHash = new Map<string, string>();
-  try {
-    await client.query("BEGIN");
-    for (const proposal of plan.proposed_replacements) {
-      const hash = contentHash(proposal.content);
-      const alreadyWritten = writtenIdsByHash.get(hash);
-      if (alreadyWritten) {
-        intraBatchDuplicates.push(alreadyWritten);
-        continue;
+  return withTransaction({
+    pool: dependencies.pool,
+    run: async (tx) => {
+      const repository = createEntryWriteRepository(tx);
+      for (const proposal of plan.proposed_replacements) {
+        const hash = contentHash(proposal.content);
+        const alreadyWritten = writtenIdsByHash.get(hash);
+        if (alreadyWritten) {
+          intraBatchDuplicates.push(alreadyWritten);
+          continue;
+        }
+        const insertedId = await insertReplacement({
+          repository,
+          dependencies,
+          identity,
+          namespace,
+          plan,
+          proposal,
+          hash,
+        });
+        if (insertedId) {
+          writtenIds.push(insertedId);
+          writtenIdsByHash.set(hash, insertedId);
+          continue;
+        }
+        const existingId = await repository.findLiveThoughtByHash({
+          contentHash: hash,
+          namespace,
+        });
+        if (typeof existingId === "string") skippedDuplicates.push(existingId);
       }
-      const insertedId = await insertReplacement({
-        client,
-        dependencies,
-        identity,
-        namespace,
-        plan,
-        proposal,
-        hash,
-      });
-      if (insertedId) {
-        writtenIds.push(insertedId);
-        writtenIdsByHash.set(hash, insertedId);
-        continue;
-      }
-      const existing = await client.query(
-        `SELECT id FROM thoughts
-          WHERE content_hash = $1 AND namespace = $2 AND archived_at IS NULL`,
-        [hash, namespace],
-      );
-      const existingId = existing.rows[0]?.id;
-      if (typeof existingId === "string") skippedDuplicates.push(existingId);
-    }
-    await client.query("COMMIT");
-    return { writtenIds, skippedDuplicates, intraBatchDuplicates };
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+      return { writtenIds, skippedDuplicates, intraBatchDuplicates };
+    },
+    onRollbackFailure: (rollbackError) =>
+      dependencies.logger.warn(
+        {
+          tool: "decompose_entry",
+          errorName: rollbackError instanceof Error ? rollbackError.name : "unknown",
+        },
+        "decompose_replacement_rollback_failed",
+      ),
+  });
 }
 
 /** Everything one replacement insert needs; grouped so the call site stays readable. */
 interface ReplacementInsert {
-  readonly client: PoolClient;
+  readonly repository: EntryWriteRepository;
   readonly dependencies: MemoryToolDependencies;
   readonly identity: AuthIdentity;
   readonly namespace: string;
@@ -346,7 +353,7 @@ interface ReplacementInsert {
 
 /** @returns The new row id, or `undefined` when the hash already existed. */
 async function insertReplacement({
-  client,
+  repository,
   dependencies,
   identity,
   namespace,
@@ -355,32 +362,22 @@ async function insertReplacement({
   hash,
 }: ReplacementInsert): Promise<string | undefined> {
   const embedding = await dependencies.embedFn(proposal.content);
-  const { rows } = await client.query(
-    `INSERT INTO thoughts
-       (content, tags, source, created_by, namespace, embedding, content_hash,
-        embedded_at, embedding_model, promoted_from, parent_id, chunk_index)
-     VALUES ($1, $2, 'dreamengine-decomposition', $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (content_hash, namespace) WHERE content_hash IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [
-      proposal.content,
-      replacementTags(proposal),
-      identity.clientId,
-      namespace,
-      embedding ? toSql(embedding) : null,
-      hash,
-      embedding ? new Date().toISOString() : null,
-      embedding ? (dependencies.embeddingModel ?? null) : null,
-      JSON.stringify(proposal.provenance),
-      // ONLY for a `thoughts` source: the FK targets `thoughts(id)`
-      // (`011_chunking.sql`), so a decision's id here would violate it. For the
-      // other four tables the JSON provenance above stays the only lineage.
-      plan.source_ref.table === "thoughts" ? plan.source_ref.id : null,
-      proposal.chunk_index,
-    ],
-  );
-  const insertedId = rows[0]?.id;
-  return typeof insertedId === "string" ? insertedId : undefined;
+  return repository.insertDecompositionReplacement({
+    content: proposal.content,
+    tags: replacementTags(proposal),
+    createdBy: identity.clientId,
+    namespace,
+    embedding,
+    contentHash: hash,
+    embeddedAt: embedding ? new Date().toISOString() : null,
+    embeddingModel: embedding ? (dependencies.embeddingModel ?? null) : null,
+    provenance: JSON.stringify(proposal.provenance),
+    // ONLY for a `thoughts` source: the FK targets `thoughts(id)`
+    // (`011_chunking.sql`), so a decision's id here would violate it. For the
+    // other four tables the JSON provenance above stays the only lineage.
+    parentId: plan.source_ref.table === "thoughts" ? plan.source_ref.id : null,
+    chunkIndex: proposal.chunk_index,
+  });
 }
 
 function buildApplySummary(

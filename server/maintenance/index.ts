@@ -16,8 +16,8 @@
  * `BackgroundRuntime` the application can stop in dependency order.
  *
  * WHAT THIS DELIBERATELY DOES NOT OWN: the lease semantics. `MaintenanceQueue`
- * and `MaintenanceQueueRunner` are imported from `src/`, not reimplemented here,
- * and that is the load-bearing decision in this module.
+ * and `MaintenanceQueueRunner` are imported from their own sibling modules, not
+ * reimplemented here, and that is the load-bearing decision in this module.
  *
  * WHY IMPORTING IS THE PORT, AND COPYING WOULD BE THE FORK. PR #494 declined to
  * port the runner because "reimplementing it here would fork the one component
@@ -45,17 +45,18 @@
  *     executions dead-letters inside the claim statement rather than being
  *     reclaimed forever.
  *
- * `src/maintenance-queue.ts` imports nothing but `pg` types, so reaching it from
- * here pulls in no `src/` composition — this is the same strangler-direction
- * import `server/config/nats.ts` and `server/tools/source-registry.ts` already
- * use, and it leaves the eventual `src/` retirement a file move rather than a
- * reconciliation of two divergent runners.
+ * `./maintenance-queue.ts` imports nothing but `pg` types and this module's own
+ * job contract, so reaching it from here pulls in no wider composition. That is
+ * what made the eventual retirement of the legacy tree a file move (carried
+ * across in the L5 move, issue 864) rather than a reconciliation of two
+ * divergent runners.
  */
 import type pg from "pg";
 import type { Logger } from "pino";
 import type { ServerModuleBoundary } from "../module.ts";
 import type { MaintenanceConfig } from "../config/maintenance.ts";
-import type { BackgroundRuntime } from "../application/index.ts";
+import type { BackgroundRuntime } from "../domain/background-runtime.ts";
+import { createRouteSignalRepository } from "../db/route-signal-repository.ts";
 import { MaintenanceQueue } from "./maintenance-queue.ts";
 import {
   MaintenanceQueueRunner,
@@ -78,7 +79,7 @@ export const MAINTENANCE_RUNTIME_NAME = "maintenance";
 
 /**
  * Producer cadence when `OPEN_BRAIN_MAINTENANCE_POLL_MS` is unset. Matches the
- * runner's own 5s default (`src/maintenance-bootstrap.ts`), so a process that
+ * runner's own 5s default (`./maintenance-bootstrap.ts`), so a process that
  * configures neither produces and consumes on the same tick.
  */
 const DEFAULT_SWEEP_INTERVAL_MS = 5_000;
@@ -86,7 +87,7 @@ const DEFAULT_SWEEP_INTERVAL_MS = 5_000;
 export interface MaintenanceRuntimeInput {
   readonly config: MaintenanceConfig;
   readonly logger: Logger;
-  readonly pool: Pick<pg.Pool, "query" | "connect">;
+  readonly pool: pg.Pool;
   /**
    * The dispatch surface. A job kind absent from this map can never run, however
    * many jobs are enqueued under it, so registration is the whole contract
@@ -104,6 +105,10 @@ export interface MaintenanceRuntimeInput {
    * itself and needs the tick boundary to be deterministic.
    */
   readonly autoStart?: boolean;
+  /** Runtime-owned request/load measurements. Absent keeps REM fail-closed. */
+  readonly readRemSignals?: () => Promise<
+    import("./maintenance-sweep.ts").RemEligibilitySignals
+  >;
 }
 
 /**
@@ -183,17 +188,23 @@ function runnerOptions(
  * the config leaves it unset, matching how the runner knobs are forwarded. Each
  * value is re-validated inside `runMaintenanceSweep`.
  */
-function sweepOptions(
-  config: MaintenanceConfig,
-  pool: MaintenanceRuntimeInput["pool"],
-  queue: MaintenanceQueue,
-  logger: MaintenanceQueueLogger,
-): SweepOptions {
+function sweepOptions(input: {
+  config: MaintenanceConfig;
+  pool: MaintenanceRuntimeInput["pool"];
+  queue: MaintenanceQueue;
+  logger: MaintenanceQueueLogger;
+  readRemSignals?: MaintenanceRuntimeInput["readRemSignals"];
+}): SweepOptions {
+  const { config, pool, queue, logger, readRemSignals } = input;
   return {
     pool,
     queue,
     logger,
     intervalMs: config.pollIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
+    rem: config.rem ?? { enabled: false },
+    ...(readRemSignals ? { readRemSignals } : {}),
+    route: config.route ?? { enabled: false },
+    ...(config.route?.enabled ? { readRouteSignals: routeSignalReader(pool) } : {}),
     ...(config.distillBatchSize !== undefined
       ? { distillBatchSize: config.distillBatchSize }
       : {}),
@@ -203,6 +214,19 @@ function sweepOptions(
     ...(config.graphDerivationLimit !== undefined
       ? { graphDerivationLimit: config.graphDerivationLimit }
       : {}),
+  };
+}
+
+/** Built only for an enabled route config, so a disabled one never queries. */
+function routeSignalReader(pool: MaintenanceRuntimeInput["pool"]) {
+  const repository = createRouteSignalRepository(pool);
+  return async () => {
+    const facts = await repository.readFacts();
+    return {
+      nowMs: Date.now(),
+      lastRouteTerminalAtMs: facts.last_route_terminal_at?.getTime() ?? null,
+      hasUnrouted: facts.has_unrouted,
+    };
   };
 }
 
@@ -248,10 +272,10 @@ export function createMaintenanceRuntime(
   // `maintenance_sweep_complete`, with maintenance ENABLED the whole time.
   //
   // The cause was compositional, not a disabled flag. `startMaintenanceQueue`
-  // in `src/maintenance-bootstrap.ts` starts the sweep, but it is reached only
-  // from the legacy `src/index.ts`; this boundary serves `server/main.ts`, the
+  // in `./maintenance-bootstrap.ts` starts the sweep, but it was reached only
+  // from the legacy entrypoint; this boundary serves `server/main.ts`, the
   // post-Phase-6 serving entrypoint, and composed the consumer half alone. The
-  // one shared implementation now lives in `src/maintenance-sweep.ts` so the
+  // one shared implementation now lives in `./maintenance-sweep.ts` so the
   // two compositions cannot diverge on whether work gets produced at all.
   //
   // Started only when polling is (`autoStart !== false`): producing jobs no
@@ -262,7 +286,13 @@ export function createMaintenanceRuntime(
   const sweep =
     input.autoStart !== false
       ? startRecurringMaintenanceSweep(
-          sweepOptions(input.config, input.pool, queue, logger),
+          sweepOptions({
+            config: input.config,
+            pool: input.pool,
+            queue,
+            logger,
+            ...(input.readRemSignals ? { readRemSignals: input.readRemSignals } : {}),
+          }),
         )
       : undefined;
 

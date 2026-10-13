@@ -143,7 +143,7 @@ function providerPayload(
     event_type: request.event_type,
     scope: request.scope,
     config: { namespace },
-    ...(request.optional_request_fields ?? {}),
+    ...request.optional_request_fields,
   };
 }
 
@@ -215,11 +215,19 @@ async function runCaptureScenario(
   };
 }
 
-function durableSectionChecks(
+/**
+ * The durable_memory section half of the check: presence, the server-reported
+ * item count agreeing with the items actually carried, and the fixture's
+ * minimum. Split out of `durableSectionChecks` so each half stays readable and
+ * independently testable; the failure labels and check keys are unchanged.
+ */
+function durableMemorySectionReading(
   sections: Record<string, unknown>,
-  budget: Record<string, unknown>,
   minItems: number,
-): { failures: string[]; checks: Record<string, boolean | number | string> } {
+): {
+  failures: string[];
+  checks: { section_present: boolean; item_count: number; reported_item_count: number };
+} {
   const failures: string[] = [];
   const section = asRecord(sections.durable_memory);
   const items = recordArray(section?.items);
@@ -230,6 +238,33 @@ function durableSectionChecks(
     failures.push("durable_memory_item_count_mismatch");
   }
   if (items.length < minItems) failures.push("durable_memory_items_missing");
+  return {
+    failures,
+    checks: {
+      section_present: Boolean(section),
+      item_count: items.length,
+      reported_item_count: reportedItemCount ?? -1,
+    },
+  };
+}
+
+/**
+ * The whole-pack budget half of the check: the limit must be present, and the
+ * serialized sections must fit inside it. A missing limit is a distinct failure
+ * from an exceeded one -- an absent budget is unproven, not within budget.
+ */
+function durableBudgetReading(
+  sections: Record<string, unknown>,
+  budget: Record<string, unknown>,
+): {
+  failures: string[];
+  checks: {
+    serialized_chars: number;
+    content_char_limit: number;
+    within_budget: boolean;
+  };
+} {
+  const failures: string[] = [];
   const wholePack = asRecord(budget.whole_pack);
   const charLimit =
     typeof wholePack?.content_char_limit === "number"
@@ -243,13 +278,23 @@ function durableSectionChecks(
   return {
     failures,
     checks: {
-      section_present: Boolean(section),
-      item_count: items.length,
-      reported_item_count: reportedItemCount ?? -1,
       serialized_chars: serializedChars,
       content_char_limit: charLimit ?? -1,
       within_budget: charLimit !== null && serializedChars <= charLimit,
     },
+  };
+}
+
+function durableSectionChecks(
+  sections: Record<string, unknown>,
+  budget: Record<string, unknown>,
+  minItems: number,
+): { failures: string[]; checks: Record<string, boolean | number | string> } {
+  const sectionReading = durableMemorySectionReading(sections, minItems);
+  const budgetReading = durableBudgetReading(sections, budget);
+  return {
+    failures: [...sectionReading.failures, ...budgetReading.failures],
+    checks: { ...sectionReading.checks, ...budgetReading.checks },
   };
 }
 
@@ -285,6 +330,46 @@ async function runDurableMemoryScenario(
   };
 }
 
+/**
+ * Run the checkpoint call itself and read its receipt. Split out of
+ * `runCheckpointScenario` so the scenario function reads as three steps (event,
+ * checkpoint, resume) instead of one long body. Appends its own failure labels
+ * and pushes the session record in the same order as before.
+ */
+async function runCheckpointCall(
+  checkpoint: Extract<
+    ScenarioFixtureCase,
+    { kind: "checkpoint_round_trip" }
+  >["checkpoint"],
+  namespace: string,
+  transport: ScenarioTransport,
+  records: ScenarioRecord[],
+): Promise<{ execution: ProviderExecution; failures: string[] }> {
+  const request = {
+    operation: checkpoint.operation,
+    distilled: checkpoint.distilled,
+    summary: checkpoint.summary,
+    key_decisions: checkpoint.key_decisions,
+    next_steps: checkpoint.next_steps,
+    scope: checkpoint.scope,
+    config: { namespace },
+  };
+  const execution = await transport.executeProvider(request);
+  const failures = ignoredRequestFailures(execution, request);
+  if (execution.exitCode !== 0) failures.push("checkpoint_exit_nonzero");
+  if (execution.receipt?.status !== "saved") {
+    failures.push("checkpoint_receipt_not_saved");
+  }
+  if (!execution.receipt?.durable) failures.push("checkpoint_not_durable");
+  const sessionId = execution.result.session_id;
+  if (typeof sessionId === "string") {
+    records.push({ kind: "memory", table: "sessions", id: sessionId });
+  } else {
+    failures.push("checkpoint_session_id_missing");
+  }
+  return { execution, failures };
+}
+
 async function runCheckpointScenario(
   scenario: Extract<ScenarioFixtureCase, { kind: "checkpoint_round_trip" }>,
   namespace: string,
@@ -295,28 +380,14 @@ async function runCheckpointScenario(
   const eventExecution = await transport.executeProvider(eventRequest);
   collectProviderRecords(eventExecution, scenario.event.scope.session_key, records);
   const failures = providerFailures(eventExecution, eventRequest);
-  const checkpointRequest = {
-    operation: scenario.checkpoint.operation,
-    distilled: scenario.checkpoint.distilled,
-    summary: scenario.checkpoint.summary,
-    key_decisions: scenario.checkpoint.key_decisions,
-    next_steps: scenario.checkpoint.next_steps,
-    scope: scenario.checkpoint.scope,
-    config: { namespace },
-  };
-  const checkpointExecution = await transport.executeProvider(checkpointRequest);
-  failures.push(...ignoredRequestFailures(checkpointExecution, checkpointRequest));
-  if (checkpointExecution.exitCode !== 0) failures.push("checkpoint_exit_nonzero");
-  if (checkpointExecution.receipt?.status !== "saved") {
-    failures.push("checkpoint_receipt_not_saved");
-  }
-  if (!checkpointExecution.receipt?.durable) failures.push("checkpoint_not_durable");
-  const checkpointSessionId = checkpointExecution.result.session_id;
-  if (typeof checkpointSessionId === "string") {
-    records.push({ kind: "memory", table: "sessions", id: checkpointSessionId });
-  } else {
-    failures.push("checkpoint_session_id_missing");
-  }
+  const checkpoint = await runCheckpointCall(
+    scenario.checkpoint,
+    namespace,
+    transport,
+    records,
+  );
+  const checkpointExecution = checkpoint.execution;
+  failures.push(...checkpoint.failures);
 
   const context = await transport.sessionContext({
     sessionKey: scenario.checkpoint.scope.session_key,
@@ -369,6 +440,85 @@ async function runScenario(
   }
 }
 
+/**
+ * A transport throw is the case that used to be a bare label with no way to
+ * tell WHY the provider died (issue #583). Carry the child's content-free
+ * diagnostics into the verdict.
+ */
+function transportErrorVerdict(
+  scenario: ScenarioFixtureCase,
+  error: unknown,
+): ScenarioVerdict {
+  const transportError = error instanceof LiveTransportError ? error : undefined;
+  return {
+    scenario_id: scenario.id,
+    kind: scenario.kind,
+    passed: false,
+    failures: [
+      transportError
+        ? `scenario_transport_error:${transportError.label}`
+        : "scenario_transport_error",
+    ],
+    checks: {},
+    ...(transportError?.errorClass ? { error_class: transportError.errorClass } : {}),
+    ...(transportError?.stderrFirstLine
+      ? { stderr_first_line: transportError.stderrFirstLine }
+      : {}),
+  };
+}
+
+/**
+ * THE TEARDOWN VERDICT CHANNEL (issue #671).
+ *
+ * What fails the run is RESIDUE -- rows this run's namespace still owns, read
+ * back out of the database. What does NOT fail the run is `teardown.failed`,
+ * which counts cleanup CALLS THAT THREW. Those are different facts, and
+ * conflating them is what made the third credentialed #653 verify exit 1 on a
+ * database a 12-table residue query had just proven clean: two `archive_entry`
+ * calls threw, the composed namespace purge then removed every row, and no one
+ * corrected the count.
+ *
+ * The thrown calls are not swept under the rug -- they are REPORTED, by label,
+ * as a diagnostic (see `teardownCallDiagnostics`). An operator reading the
+ * receipt still learns exactly which call failed and why; they just no longer
+ * learn a wrong verdict from it.
+ */
+function residueFailures(residue: TeardownResidue): string[] {
+  if (!residue.checked) {
+    // Unchecked is unproven, not clean. Refusing to pass here is the same
+    // discipline in the opposite direction: a verdict may not rest on an
+    // observation that never ran.
+    return [
+      `teardown_residue_unchecked:${residue.unchecked_reason ?? "no reason given"}`,
+    ];
+  }
+  if (residue.rows > 0) {
+    const tables = Object.entries(residue.by_table)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([table, count]) => `${table}=${count}`)
+      .join(",");
+    // Names the table and the count, because "residue exists" without saying
+    // WHERE is the dead-end-error class this issue's sibling defect is about.
+    return [`teardown_residue:rows=${residue.rows}${tables ? `;${tables}` : ""}`];
+  }
+  return [];
+}
+
+/**
+ * DIAGNOSTIC, never a verdict input: the labels of any cleanup calls that
+ * threw. Emitted whenever there were any, INCLUDING on an otherwise-passing
+ * run -- a silent throw is how the #671 label went unrecoverable in the first
+ * place.
+ */
+function teardownCallDiagnostics(teardown: TeardownTally): string[] {
+  if (teardown.failed <= 0) return [];
+  const labels =
+    teardown.failure_labels.length > 0
+      ? `;labels=${teardown.failure_labels.join("|")}`
+      : "";
+  return [`teardown_call_failures:${teardown.failed}${labels}`];
+}
+
 export async function runScenarioGate(
   opts: RunScenarioGateOptions,
 ): Promise<ScenarioGateOutcome> {
@@ -385,33 +535,14 @@ export async function runScenarioGate(
           await runScenario(scenario, opts.namespace, opts.transport, records),
         );
       } catch (error: unknown) {
-        // A transport throw is the case that used to be a bare label with no
-        // way to tell WHY the provider died (issue #583). Carry the child's
-        // content-free diagnostics into the verdict.
-        const transportError =
-          error instanceof LiveTransportError ? error : undefined;
-        verdicts.push({
-          scenario_id: scenario.id,
-          kind: scenario.kind,
-          passed: false,
-          failures: [
-            transportError
-              ? `scenario_transport_error:${transportError.label}`
-              : "scenario_transport_error",
-          ],
-          checks: {},
-          ...(transportError?.errorClass
-            ? { error_class: transportError.errorClass }
-            : {}),
-          ...(transportError?.stderrFirstLine
-            ? { stderr_first_line: transportError.stderrFirstLine }
-            : {}),
-        });
+        verdicts.push(transportErrorVerdict(scenario, error));
       }
     }
   } finally {
     const uniqueRecords = Array.from(
-      new Map(records.map((record) => [`${record.kind}:${record.id}`, record])).values(),
+      new Map(
+        records.map((record) => [`${record.kind}:${record.id}`, record]),
+      ).values(),
     );
     const cleanup = await opts.transport.cleanup(uniqueRecords, opts.namespace);
     teardown = cleanup.tally;
@@ -422,50 +553,10 @@ export async function runScenarioGate(
     verdict.failures.map((failure) => `${verdict.scenario_id}:${failure}`),
   );
 
-  // THE TEARDOWN VERDICT CHANNEL (issue #671).
-  //
-  // What fails the run is RESIDUE -- rows this run's namespace still owns,
-  // read back out of the database. What does NOT fail the run is `teardown.failed`,
-  // which counts cleanup CALLS THAT THREW. Those are different facts, and
-  // conflating them is what made the third credentialed #653 verify exit 1 on a
-  // database a 12-table residue query had just proven clean: two `archive_entry`
-  // calls threw, the composed namespace purge then removed every row, and no
-  // one corrected the count.
-  //
-  // The thrown calls are not swept under the rug -- they are REPORTED, by label,
-  // as a diagnostic below. An operator reading the receipt still learns exactly
-  // which call failed and why; they just no longer learn a wrong verdict from it.
-  if (!residue.checked) {
-    // Unchecked is unproven, not clean. Refusing to pass here is the same
-    // discipline in the opposite direction: a verdict may not rest on an
-    // observation that never ran.
-    failures.push(
-      `teardown_residue_unchecked:${residue.unchecked_reason ?? "no reason given"}`,
-    );
-  } else if (residue.rows > 0) {
-    const tables = Object.entries(residue.by_table)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([table, count]) => `${table}=${count}`)
-      .join(",");
-    // Names the table and the count, because "residue exists" without saying
-    // WHERE is the dead-end-error class this issue's sibling defect is about.
-    failures.push(
-      `teardown_residue:rows=${residue.rows}${tables ? `;${tables}` : ""}`,
-    );
-  }
-  // DIAGNOSTIC, never a verdict input: the labels of any cleanup calls that
-  // threw. Emitted whenever there were any, INCLUDING on an otherwise-passing
-  // run -- a silent throw is how the #671 label went unrecoverable in the first
-  // place.
-  const teardownDiagnostics =
-    teardown.failed > 0
-      ? [
-          `teardown_call_failures:${teardown.failed}` +
-            (teardown.failure_labels.length > 0
-              ? `;labels=${teardown.failure_labels.join("|")}`
-              : ""),
-        ]
-      : [];
+  // See `residueFailures` for the teardown verdict channel (issue #671):
+  // residue fails the run, thrown cleanup calls are a diagnostic only.
+  failures.push(...residueFailures(residue));
+  const teardownDiagnostics = teardownCallDiagnostics(teardown);
   const passed = failures.length === 0;
   return {
     passed,

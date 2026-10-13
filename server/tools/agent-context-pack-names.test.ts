@@ -10,7 +10,7 @@
  * canonical name no environment default produces is injected, and the
  * assertions only pass if that value is what the gate actually consulted.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import type { AuthIdentity } from "../auth/types.ts";
 import type { MemoryToolDependencies } from "./types.ts";
 import type { SharedNamespaceConfig } from "./shared-namespace.ts";
@@ -48,9 +48,7 @@ const noopLogger = {
  * before any statement runs. A pool that throws turns "the gate silently let
  * this through" into a loud test failure instead of a passing one.
  */
-function dependenciesWith(
-  names?: SharedNamespaceConfig,
-): MemoryToolDependencies {
+function dependenciesWith(names?: SharedNamespaceConfig): MemoryToolDependencies {
   return {
     pool: {
       query: () => {
@@ -93,8 +91,6 @@ describe("agent_context_pack honours injected shared-namespace names", () => {
     // Authorization passed, so the denial payload is gone. Anything past the
     // gate is out of scope here; what matters is that the gate consulted the
     // injected names rather than the environment.
-    expect(JSON.stringify(result.payload)).not.toContain(
-      "cannot read namespace",
-    );
+    expect(JSON.stringify(result.payload)).not.toContain("cannot read namespace");
   });
 });

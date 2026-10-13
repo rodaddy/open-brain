@@ -13,7 +13,7 @@
  * both ship `AsyncLocalStorage`.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { setLogContextReader } from "../../src/logger.ts";
+import { setLogContextReader } from "../logging/legacy-logger.ts";
 
 /**
  * Fields inherited by every log line emitted inside a `withContext()` scope.

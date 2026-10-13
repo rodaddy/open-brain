@@ -6,10 +6,7 @@
       "name": "redacted-3",
       "timestamp": "2026-08-06T00:00:00.000Z",
       "environment": "redacted-5",
-      "tags": [
-        "redacted-6",
-        "redacted-7"
-      ],
+      "tags": ["redacted-6", "redacted-7"],
       "bookmarked": false,
       "release": "redacted-8",
       "version": null,
@@ -51,9 +48,7 @@
       },
       "createdAt": "2026-08-06T00:00:00.000Z",
       "updatedAt": "2026-08-06T00:00:00.000Z",
-      "observations": [
-        "observations-redacted-28"
-      ],
+      "observations": ["observations-redacted-28"],
       "scores": [],
       "totalCost": 0,
       "latency": 0,

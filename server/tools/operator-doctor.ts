@@ -1,10 +1,10 @@
 /**
  * `operator_doctor`: privileged diagnostics, without secrets or raw paths.
  *
- * The status payload is produced by `src/operator-doctor.ts` rather than
- * rebuilt here, for the same reason `get_contract` reuses `buildContract`: the
- * shape is a FROZEN contract. `src/operator-doctor.test.ts` locks the exact key
- * set of every section against `DOCTOR_CONTRACT_VERSION`
+ * The status payload is produced by `server/application/operator-doctor.ts`
+ * rather than rebuilt here, for the same reason `get_contract` reuses
+ * `buildContract`: the shape is a FROZEN contract. The application-layer test
+ * locks the exact key set of every section against `DOCTOR_CONTRACT_VERSION`
  * (`2026-08-05.operator-doctor.v4`), so a second implementation in the rewrite
  * would be a second payload that the lock test does not police, free to drift
  * on the first field addition. Reusing the builder keeps one answer to "how is
@@ -38,7 +38,11 @@
  *     leak would be least noticed.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getOperatorDoctorStatus } from "../../src/operator-doctor.ts";
+import { getOperatorDoctorStatus } from "../application/operator-doctor.ts";
+import {
+  doctorAmbientEnvironment,
+  rawTurnTtlSecondsFromEnvironment,
+} from "../config.ts";
 import { readNatsRuntimeBoundary } from "../application/nats-runtime.ts";
 import {
   authIdentity,
@@ -85,6 +89,11 @@ export function registerOperatorDoctorTool(
         const status = await getOperatorDoctorStatus(
           dependencies.pool,
           dependencies.natsRuntimeBoundary ?? UNCONFIGURED_NATS_BOUNDARY,
+          undefined,
+          {
+            ...doctorAmbientEnvironment(),
+            rawTurnTtlSeconds: rawTurnTtlSecondsFromEnvironment(),
+          },
         );
         dependencies.logger.info(
           { tool: "operator_doctor", status: status.status },
