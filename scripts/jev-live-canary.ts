@@ -75,7 +75,7 @@ async function getTypeSafeKey(): Promise<string> {
   if (direct) return direct;
   const command = process.env.TYPESAFE_KEY_COMMAND;
   if (!command) throw new Error("set TYPESAFE_API_KEY or TYPESAFE_KEY_COMMAND");
-  const [file, ...args] = command.split(" ");
+  const [file = command, ...args] = command.split(" ");
   const { stdout } = await execFileAsync(file, args);
   return secretFromCredentialPayload(stdout);
 }
