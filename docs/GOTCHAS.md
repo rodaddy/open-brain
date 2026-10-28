@@ -50,7 +50,7 @@ at once. `curl http://127.0.0.1:3100/health` times out (there is no `/health`
 route; it hangs rather than 404s, so that probe proves nothing either way).
 
 **Cause, measured 2026-07-28:** `scripts/local-clone-autostart.sh` — the script
-`~/Library/LaunchAgents/com.rico.open-brain-local-clone.plist` names in
+`~/Library/LaunchAgents/com.example.open-brain-local-clone.plist` names in
 `ProgramArguments` — **was missing from the working tree**. It was committed in
 `3a78156` and later vanished from `HEAD`. launchd cannot exec a file that is not
 there, so the job failed with `EX_CONFIG` (exit 78) on every restart attempt for
@@ -60,7 +60,7 @@ three days. The one process still serving traffic was the last one started
 **Checks:**
 
 ```bash
-launchctl print gui/501/com.rico.open-brain-local-clone | grep -E "state|last exit"
+launchctl print gui/501/com.example.open-brain-local-clone | grep -E "state|last exit"
 # "last exit code = 78: EX_CONFIG" + "job state = spawn failed" = the exec target is missing/unrunnable
 lsof -tiTCP:3100 -sTCP:LISTEN                    # a pid here does NOT mean it is answering
 ps -o lstart -p "$(lsof -tiTCP:3100 -sTCP:LISTEN | head -1)"   # start time days old = it never restarted
@@ -182,7 +182,7 @@ The clone database is named in `.env` (`DB_NAME`). `psql -lt` lists them if not.
 time.** A plain `psql -c "..."` fails with:
 
 ```
-FATAL:  database "rico" does not exist
+FATAL:  database "dana" does not exist
 ```
 
 Postgres defaults the database name to the OS user. The connection settings live

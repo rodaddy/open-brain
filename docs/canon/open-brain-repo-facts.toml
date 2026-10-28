@@ -44,7 +44,7 @@ fact_type = "gotcha"
 text = """
 Services run as a user, NEVER root; grant the user targeted passwordless sudo \
 where genuinely needed. The Open Brain service is a per-user LaunchAgent \
-(gui/<uid>/com.rico.open-brain-local-clone): a deploy targeting the system \
+(gui/<uid>/com.example.open-brain-local-clone): a deploy targeting the system \
 domain fails with exit 113 and SILENTLY leaves the old process running with \
 new code staged beside it. scripts/local-clone-deploy.sh restarts in the gui \
 domain — keep it that way.\
@@ -91,9 +91,9 @@ local invention. Wire = fleet Envelope v1 (compact JSON; key is `from`, not \
 `sender`; reply correlation_id echoes the REQUEST id). Subject = \
 {env}.ob.memory.context_pack (env=dev locally; the ob domain is \
 Open-Brain-owned upstream since fleet-bus 2b20f97). Local broker: \
-127.0.0.1:4222 (monitor :8222), LaunchAgent com.rico.open-brain-nats with \
+127.0.0.1:4222 (monitor :8222), LaunchAgent com.example.open-brain-nats with \
 explicit -c config — NEVER brew services, whose default binds 0.0.0.0. \
-Bridge worker: com.rico.open-brain-local-nats-worker, own health on :3110, \
+Bridge worker: com.example.open-brain-local-nats-worker, own health on :3110, \
 separate process from HTTP by design. Auth-off is legal ONLY on loopback; \
 any non-loopback broker REQUIRES OPENBRAIN_NATS_REQUIRE_AUTH=true first \
 (namespace forgery otherwise). Python: openbrain_memory/nats_wire.py defers \

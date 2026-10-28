@@ -3,7 +3,7 @@
 #
 # This launches the real Open Brain on the Mini, surviving a reboot, until the
 # k3s move (epic 762), under its own launchd label
-# (com.rico.open-brain-local-clone).
+# (com.example.open-brain-local-clone).
 #
 # The launcher does not read an env file by design, so this wrapper loads the
 # private clone environment, then hands off. It runs the read-only preflight

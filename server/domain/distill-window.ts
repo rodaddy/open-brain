@@ -279,7 +279,7 @@ export async function claimDistillBatch(
   // occurred_at, a long-running session's already-distilled history filled
   // every one of the 1500 slots and the due turns fell off the end.
   //
-  // Measured on the dogfood corpus 2026-08-25, namespace rico, with the
+  // Measured on the dogfood corpus 2026-08-25, namespace dana, with the
   // production parameters (maxSessions=4, maxTurns=1500):
   //
   //     due turns in claim     : 0

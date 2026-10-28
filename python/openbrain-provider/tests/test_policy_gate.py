@@ -24,7 +24,7 @@ from gate_harness import SESSION, run_policy_gate
 from openbrain_provider.development_scope import development_root
 
 # Derived, not a literal: a second hardcoded copy of the root disagrees with
-# the one the gate resolved against on any machine but Rico's Mac.
+# the one the gate resolved against on any machine but Dana's Mac.
 DEVELOPMENT_CWD = str(development_root())
 
 
@@ -63,7 +63,7 @@ def test_codex_startup_quotes_the_source_owned_fast_path(tmp_path: Path) -> None
     # one changed. The envelope is Codex's `hookSpecificOutput` shape.
     #
     # The AGENTS.md is written HERE rather than relying on the real one: reading
-    # Rico's file made this pass on his Mac and fail on CI, and it also meant the
+    # Dana's file made this pass on his Mac and fail on CI, and it also meant the
     # assertions were checking his file's contents instead of the extraction this
     # test is actually about. The fixture is minimal and deliberately unlike the
     # real file, so a pass means the markers were honoured.

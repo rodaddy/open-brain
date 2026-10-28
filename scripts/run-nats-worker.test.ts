@@ -76,7 +76,7 @@ function workerRuntime(
 
 /** The one configured token these cases need to get past the auth gate. */
 function testTokens(): Map<string, AuthInfo> {
-  return new Map([["secret-token", { role: "admin", clientId: "rico" }]]);
+  return new Map([["secret-token", { role: "admin", clientId: "dana" }]]);
 }
 
 /** One background trace the worker's own sink is expected to carry and drain. */

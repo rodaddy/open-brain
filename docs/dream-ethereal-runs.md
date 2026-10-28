@@ -197,7 +197,7 @@ Redoing that revert properly is outstanding work, tracked below.
 | Tier | Source | Rule |
 |---|---|---|
 | **canon** | epic / issue / ratified decision doc | overrules |
-| **decided** | an explicit Rico decision | strong |
+| **decided** | an explicit Dana decision | strong |
 | **observed** | what a session did or concluded | weak |
 
 A session finding can **never** outrank canon, no matter how recent or how

@@ -33,7 +33,7 @@ function poolThrowing(): Pool {
   } as unknown as Pool;
 }
 
-const WINDOW = { windowMinutes: 60, namespace: "rico" } as const;
+const WINDOW = { windowMinutes: 60, namespace: "dana" } as const;
 
 function observer(pool: Pool) {
   return createCaptureLivenessObserver(

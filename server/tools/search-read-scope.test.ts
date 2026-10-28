@@ -96,7 +96,7 @@ async function clientCapturingQueries(
 
 describe("search_brain binds an auth-derived namespace predicate", () => {
   test("a scoped role constrains every table arm to its own namespace and shared-kb", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "search_brain",
@@ -109,7 +109,7 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
     for (const alias of ["t", "d", "r", "p", "s"]) {
       expect(query.sql).toContain(`${alias}.namespace = ANY($4::text[])`);
     }
-    expect(query.values).toEqual(["needle", 10, 0, ["rico", "shared-kb"]]);
+    expect(query.values).toEqual(["needle", 10, 0, ["dana", "shared-kb"]]);
   });
 
   test("a global role emits no namespace predicate at all", async () => {
@@ -126,21 +126,21 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
   });
 
   test("an explicitly requested own namespace binds as a scalar, not an array", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "search_brain",
-      arguments: { query: "needle", search_mode: "keyword", namespace: "rico" },
+      arguments: { query: "needle", search_mode: "keyword", namespace: "dana" },
     });
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("t.namespace = $4");
     expect(query.sql).not.toContain("t.namespace = ANY($4::text[])");
-    expect(query.values).toEqual(["needle", 10, 0, "rico"]);
+    expect(query.values).toEqual(["needle", 10, 0, "dana"]);
   });
 
   test("an unreadable namespace is refused before any query runs", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "search_brain",
@@ -157,7 +157,7 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
   });
 
   test("the vector arm binds the same predicate as the lexical arm", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "search_brain",
@@ -169,11 +169,11 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
     for (const alias of ["t", "d", "r", "p", "s"]) {
       expect(query.sql).toContain(`${alias}.namespace = ANY($4::text[])`);
     }
-    expect(query.values[3]).toEqual(["rico", "shared-kb"]);
+    expect(query.values[3]).toEqual(["dana", "shared-kb"]);
   });
 
   test("hybrid runs both arms and scopes each of them", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "search_brain",
@@ -186,14 +186,14 @@ describe("search_brain binds an auth-derived namespace predicate", () => {
     expect(ftsQueries).toHaveLength(1);
     for (const query of [...vectorQueries, ...ftsQueries]) {
       expect(query.sql).toContain("t.namespace = ANY($4::text[])");
-      expect(query.values[3]).toEqual(["rico", "shared-kb"]);
+      expect(query.values[3]).toEqual(["dana", "shared-kb"]);
     }
   });
 });
 
 describe("search_brain gates the non-English FTS configuration", () => {
   test("an ordinary role asking for german on a keyword search is denied", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "search_brain",
@@ -212,7 +212,7 @@ describe("search_brain gates the non-English FTS configuration", () => {
   });
 
   test("vector mode ignores fts_config entirely rather than denying", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "search_brain",
@@ -288,7 +288,7 @@ describe("search_brain gates the non-English FTS configuration", () => {
 
 describe("brain_answer scopes its retrieval identically", () => {
   test("a scoped role constrains recall to its readable namespaces", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "brain_answer",
@@ -297,11 +297,11 @@ describe("brain_answer scopes its retrieval identically", () => {
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("t.namespace = ANY($4::text[])");
-    expect(query.values).toEqual(["what is known", 5, 0, ["rico", "shared-kb"]]);
+    expect(query.values).toEqual(["what is known", 5, 0, ["dana", "shared-kb"]]);
   });
 
   test("an unreadable namespace is refused before any query runs", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "brain_answer",
@@ -315,7 +315,7 @@ describe("brain_answer scopes its retrieval identically", () => {
 
 describe("list_recent scopes both its data and its count query", () => {
   test("the two queries bind the same namespaces at their own parameter indexes", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({ name: "list_recent", arguments: {} });
 
@@ -328,8 +328,8 @@ describe("list_recent scopes both its data and its count query", () => {
     // rows produces a has_more that lies.
     expect(dataQuery.sql).toContain("t.namespace = ANY($4::text[])");
     expect(countQuery.sql).toContain("t.namespace = ANY($2::text[])");
-    expect(dataQuery.values[3]).toEqual(["rico", "shared-kb"]);
-    expect(countQuery.values[1]).toEqual(["rico", "shared-kb"]);
+    expect(dataQuery.values[3]).toEqual(["dana", "shared-kb"]);
+    expect(countQuery.values[1]).toEqual(["dana", "shared-kb"]);
   });
 
   test("a global role emits no predicate in either query", async () => {
@@ -359,7 +359,7 @@ describe("adjacent_context binds the namespace it was authorized for", () => {
   const nodeId = "11111111-2222-4333-8444-555555555555";
 
   test("the traversal is constrained to the caller's own namespace by default", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "adjacent_context",
@@ -368,11 +368,11 @@ describe("adjacent_context binds the namespace it was authorized for", () => {
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("l.namespace = $3");
-    expect(query.values).toEqual(["thought", nodeId, "rico", 50]);
+    expect(query.values).toEqual(["thought", nodeId, "dana", 50]);
   });
 
   test("an optional relation filter does not shift the limit onto its index", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "adjacent_context",
@@ -382,11 +382,11 @@ describe("adjacent_context binds the namespace it was authorized for", () => {
     const query = onlyQuery(queries);
     expect(query.sql).toContain("l.relation = $4");
     expect(query.sql).toContain("LIMIT $5");
-    expect(query.values).toEqual(["thought", nodeId, "rico", "depends_on", 50]);
+    expect(query.values).toEqual(["thought", nodeId, "dana", "depends_on", 50]);
   });
 
   test("an unreadable namespace is refused before any query runs", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "adjacent_context",

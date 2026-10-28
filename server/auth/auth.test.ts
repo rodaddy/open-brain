@@ -68,8 +68,8 @@ describe("namespace isolation policy", () => {
     const admin = {
       ...AGENT,
       role: "admin" as const,
-      clientId: "rico",
-      tokenClientId: "rico",
+      clientId: "dana",
+      tokenClientId: "dana",
     };
     expect(canTargetNamespace(promoter, "write", "shared-kb")).toBe(true);
     expect(canTargetNamespace(promoter, "read", "all")).toBe(false);
@@ -83,8 +83,8 @@ describe("namespace isolation policy", () => {
     const admin = {
       ...AGENT,
       role: "admin" as const,
-      clientId: "rico",
-      tokenClientId: "rico",
+      clientId: "dana",
+      tokenClientId: "dana",
     };
     expect(delegateNamespace(admin, "attacker")?.clientId).toBe("attacker");
     expect(delegateNamespace(admin, "all")).toBeUndefined();

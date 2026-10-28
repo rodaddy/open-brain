@@ -127,7 +127,7 @@ fi
 # already carries OPENBRAIN_TOKEN / OPENBRAIN_BASE_URL wins over the shared env
 # file, so a Buzz-launched agent session (per-agent env_vars in
 # managed-agents.json) hydrates and captures under ITS OWN namespace instead of
-# rico's. Captured BEFORE sourcing, because sourcing overwrites; sessions with
+# dana's. Captured BEFORE sourcing, because sourcing overwrites; sessions with
 # no override see exactly the old behavior.
 PARENT_OPENBRAIN_TOKEN="${OPENBRAIN_TOKEN:-}"
 PARENT_OPENBRAIN_BASE_URL="${OPENBRAIN_BASE_URL:-}"

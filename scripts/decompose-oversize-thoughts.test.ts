@@ -38,7 +38,7 @@ describe("decompose-oversize-thoughts", () => {
       tags: ["planning"],
       source: "planning-skippy-agentspace",
       created_by: "skippy",
-      namespace: "rico",
+      namespace: "dana",
       tier: "warm",
       created_at: "2026-03-17T00:00:00Z",
       archived_at: null,

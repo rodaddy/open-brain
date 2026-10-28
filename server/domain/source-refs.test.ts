@@ -52,7 +52,7 @@ function acceptsPrivilegeMetadata(): void {
     matter_id: "lit-1",
     tenant_id: "tenant-a",
     access_group: "trial-team",
-    role_policy: "attorney-only",
+    role_policy: "finance-only",
     ethical_wall: true,
     legal_hold: true,
     page: 3,

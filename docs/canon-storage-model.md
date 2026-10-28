@@ -2,7 +2,7 @@
 
 **Status: reference, describing RUNNING behavior verified 2026-08-03 against
 the dogfood service.** Written because answering "how is Skippy's canon
-separated from Rico's" took three code reads; it should take one `aqmd`.
+separated from Dana's" took three code reads; it should take one `aqmd`.
 
 ## Canon is an event-sourced ledger, not a table of rules
 
@@ -27,14 +27,14 @@ keeps the history.
 Events hang on lanes, and **`ob_session_lanes.namespace` is the isolation
 boundary**. The pack read joins event → lane and binds
 `WHERE l.namespace = $1` with the **auth-resolved** namespace
-(`context-pack-guidance.ts:162-181`). Rico's canon is the fold of lifecycle
-events on `rico` lanes; Skippy's is the fold on `skippy` lanes. Same tables,
+(`context-pack-guidance.ts:162-181`). Dana's canon is the fold of lifecycle
+events on `dana` lanes; Skippy's is the fold on `skippy` lanes. Same tables,
 one column apart.
 
 Namespace comes from the consumer token: `AUTH_TOKEN_USER_<NAME>` →
 clientId `<name>` (`server/config.ts:200-207`, value format `role:token`).
 Proven live 2026-08-03: the same SessionStart probe under two tokens returned
-`namespace=rico` (10 profile / 22 process rules) and `namespace=skippy`
+`namespace=dana` (10 profile / 22 process rules) and `namespace=skippy`
 (0 / 0 — his ledger was empty).
 
 **Canon guidance reads consult ONLY the token's own namespace.** There is no

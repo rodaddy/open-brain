@@ -251,7 +251,7 @@ production — a standing operator decision, not an oversight.
 | variable | default | read at |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `src/logger.ts:12` |
-| `LOG_FILE` | unset (stdout only) | `src/logger.ts:176` |
+| `LOG_FILE` | required by the server (`server/config.ts` rejects startup without it) | `src/logger.ts:176` |
 | `LOG_MAX_BYTES` | `1_000_000` | `src/logger.ts:184` |
 | `LOG_MAX_FILES` | `3` | `src/logger.ts:185` |
 | `HOSTNAME` / `HOST` | unset | `src/logger.ts:116`, first non-empty wins |
@@ -259,7 +259,7 @@ production — a standing operator decision, not an oversight.
 `src/operator-doctor.ts:363,410` warns when `LOG_MAX_BYTES` or `LOG_MAX_FILES`
 is set without `LOG_FILE` — rotation settings with nothing to rotate.
 
-**None of these are in `.env.example`.** Add them.
+`LOG_FILE` is in `.env.example`; the others are not.
 
 ---
 

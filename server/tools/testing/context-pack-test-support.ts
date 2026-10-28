@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 /** One recalled brain row, shaped as the search engine emits it. */
-export function searchRow(id: string, preview: string, namespace = "rico") {
+export function searchRow(id: string, preview: string, namespace = "dana") {
   return {
     source_type: "thought",
     id,

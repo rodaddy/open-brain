@@ -63,7 +63,7 @@ const TYPES = ["decision", "correction", "fact", "preference"] as const;
 function candidates(): RouteCandidate[] {
   return CONTENTS.map((content, index) => ({
     id: `cand-${String(index).padStart(2, "0")}`,
-    namespace: "rico",
+    namespace: "dana",
     candidateType: TYPES[index % 4] as RouteCandidate["candidateType"],
     content,
     operatorText: index % 2 === 0 ? content : null,

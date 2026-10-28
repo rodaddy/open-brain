@@ -244,7 +244,7 @@ def test_top_level_namespace_is_rejected_by_where_it_belongs() -> None:
             "config": _CONFIG,
             "operation": "recall",
             "query": "client install proof",
-            "namespace": "rico",
+            "namespace": "dana",
             "scope": _FULL_SCOPE,
         },
         transport=LaneAwareTransport(),
@@ -281,7 +281,7 @@ def test_ingest_keeps_its_own_top_level_namespace() -> None:
         {
             "config": _CONFIG,
             "operation": "ingest",
-            "namespace": "rico",
+            "namespace": "dana",
             "turns": [],
             "scope": _FULL_SCOPE,
         },

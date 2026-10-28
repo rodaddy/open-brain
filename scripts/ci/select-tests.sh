@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pick which tests a CI run needs (Rico ask 2026-10-06: a simple change must
+# Pick which tests a CI run needs (Dana ask 2026-10-06: a simple change must
 # not run the whole suite).
 #
 # Usage: scripts/ci/select-tests.sh <event_name> <base_sha> [<head_sha>]

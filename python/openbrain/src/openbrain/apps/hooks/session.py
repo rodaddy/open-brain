@@ -1168,7 +1168,7 @@ async def run_session_start(
         request no sections (an explicit empty override, nothing to inject).
 
     Canon is the ALWAYS-KNOWN layer and NOTHING episodic: the default
-    ``settings.sections`` is exactly ``profile_guidance`` (who Rico is, the User
+    ``settings.sections`` is exactly ``profile_guidance`` (who Dana is, the User
     layer), ``process_guidance`` (the rules, LAWs, coding/git standards, persona
     -- the Soul layer), and ``repo_facts`` (this repo's truths, scope-bound). No
     lane events, working set, durable recall, recovery, or pointers are requested

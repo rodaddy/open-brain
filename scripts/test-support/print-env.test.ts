@@ -4,7 +4,7 @@
  * `scripts/local-clone.test.ts` and `scripts/retire-collab-migration.test.ts`
  * gate themselves on two variables the isolated runner did not used to set, so
  * both skipped every local run -- the false green #878 is about. This file is
- * the tripwire for the SUPPLY side: it fails when `bun run test:isolated` stops
+ * the tripwire for the SUPPLY side: it fails when `npm run test:isolated` stops
  * exporting them, or exports a clone URL those suites would reject.
  *
  * It deliberately asserts the same three properties `local-clone.test.ts`
@@ -18,7 +18,7 @@
  *
  * A missing variable throws the same named error shape
  * `scripts/test-support/require-test-database.ts` uses --
- * `test_database_required: <VAR> is unset; run bun run test:isolated` -- rather
+ * `test_database_required: <VAR> is unset; run npm run test:isolated` -- rather
  * than failing a bare `expect`. The distinction matters to whoever reads the
  * failure: a bare assertion reads as "this test is wrong", while the named
  * error names the actual cause, that the SUPPLIER did not export what the
@@ -40,7 +40,7 @@ function requireSuppliedUrl(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(
-      `test_database_required: ${name} is unset; run bun run test:isolated`,
+      `test_database_required: ${name} is unset; run npm run test:isolated`,
     );
   }
   return value;

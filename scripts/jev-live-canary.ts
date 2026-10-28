@@ -24,7 +24,7 @@ const execFileAsync = promisify(execFile);
 const INPUT_USD_PER_MILLION_TOKENS = 0.042;
 const MAX_PROVIDER_CALLS = 4;
 const MAX_ESTIMATED_INPUT_USD = 0.05;
-const NAMESPACE = "rico";
+const NAMESPACE = "dana";
 const SEARCH_QUERY =
   "What rules govern Open Brain dream stage promotion and operator approval?";
 
@@ -75,7 +75,7 @@ async function getTypeSafeKey(): Promise<string> {
   if (direct) return direct;
   const command = process.env.TYPESAFE_KEY_COMMAND;
   if (!command) throw new Error("set TYPESAFE_API_KEY or TYPESAFE_KEY_COMMAND");
-  const [file, ...args] = command.split(" ");
+  const [file = command, ...args] = command.split(" ");
   const { stdout } = await execFileAsync(file, args);
   return secretFromCredentialPayload(stdout);
 }

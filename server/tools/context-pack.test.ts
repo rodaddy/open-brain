@@ -31,7 +31,7 @@ import {
 
 describe("namespace isolation is enforced before any query runs", () => {
   test("an unauthorized explicit namespace is denied, not silently emptied", async () => {
-    const { client, queries } = await harness("agent", "rico");
+    const { client, queries } = await harness("agent", "dana");
 
     const { payload, isError } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -50,7 +50,7 @@ describe("namespace isolation is enforced before any query runs", () => {
   });
 
   test("the recall binds the caller's own namespaces, never a global read", async () => {
-    const { client, queries } = await harness("agent", "rico");
+    const { client, queries } = await harness("agent", "dana");
 
     await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -60,14 +60,14 @@ describe("namespace isolation is enforced before any query runs", () => {
 
     const recall = queries.find((query) => isRecallSql(query.sql));
     expect(recall).toBeDefined();
-    expect(recall?.values).toContainEqual(["rico", "shared-kb"]);
+    expect(recall?.values).toContainEqual(["dana", "shared-kb"]);
   });
 
   test("the default pack recalls a namespace-scoped session event", async () => {
     const event = {
       source_type: "session_event",
       id: "event-from-python-capture",
-      namespace: "rico",
+      namespace: "dana",
       content_preview: "python capture survives into the next session",
       tags: null,
       created_by: "python-runtime",
@@ -77,7 +77,7 @@ describe("namespace isolation is enforced before any query runs", () => {
       tier: "warm",
     };
     let capturedQueries: CapturedQuery[] = [];
-    const setup = await harness("agent", "rico", {
+    const setup = await harness("agent", "dana", {
       // A generic fake row would let an ALL_TABLES-only query pass. Return the
       // marker only when the SQL actually selects the session-event corpus.
       get rows() {
@@ -98,14 +98,14 @@ describe("namespace isolation is enforced before any query runs", () => {
       expect.objectContaining({
         id: event.id,
         source_type: "session_event",
-        namespace: "rico",
+        namespace: "dana",
         content: event.content_preview,
         citation_id: `brain_record:session_event:${event.id}`,
         source_ref: expect.objectContaining({
           source: "brain",
           type: "session_event",
           id: event.id,
-          namespace: "rico",
+          namespace: "dana",
         }),
       }),
     );
@@ -116,7 +116,7 @@ describe("namespace isolation is enforced before any query runs", () => {
           source: "brain",
           type: "session_event",
           id: event.id,
-          namespace: "rico",
+          namespace: "dana",
         }),
       }),
     );
@@ -126,14 +126,14 @@ describe("namespace isolation is enforced before any query runs", () => {
     for (const arm of recallArms) {
       expect(arm.sql).toContain("JOIN ob_session_lanes sl ON sl.id = se.lane_id");
       expect(arm.sql).toContain("sl.namespace");
-      expect(arm.values).toContainEqual(["rico", "shared-kb"]);
+      expect(arm.values).toContainEqual(["dana", "shared-kb"]);
     }
   });
 });
 
 describe("one retrieval stack feeds durable_memory, pointers, and candidates", () => {
   test("requesting durable_memory AND pointers together runs exactly one recall", async () => {
-    const { client, queries } = await harness("agent", "rico", {
+    const { client, queries } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 
@@ -150,7 +150,7 @@ describe("one retrieval stack feeds durable_memory, pointers, and candidates", (
   });
 
   test("candidate_memory alone runs no recall at all", async () => {
-    const { client, queries } = await harness("agent", "rico", {
+    const { client, queries } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha")],
     });
 
@@ -175,7 +175,7 @@ describe("one retrieval stack feeds durable_memory, pointers, and candidates", (
 
 describe("pointers carry references, never bodies", () => {
   test("a pointer emits identity and structural source_ref with no content field", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "a memory body that must not be copied")],
     });
 
@@ -195,7 +195,7 @@ describe("pointers carry references, never bodies", () => {
       source: "brain",
       type: "thought",
       id: "a",
-      namespace: "rico",
+      namespace: "dana",
     });
     // The whole value of a pointer is that it is cheap and body-free. Any of
     // these fields appearing is body leakage.
@@ -209,7 +209,7 @@ describe("pointers carry references, never bodies", () => {
   });
 
   test("a pointer is dropped when durable_memory already emitted that record", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 
@@ -233,7 +233,7 @@ describe("pointers carry references, never bodies", () => {
   });
 
   test("a record suppressed from durable output stays pointer-eligible", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha")],
     });
 
@@ -252,7 +252,7 @@ describe("pointers carry references, never bodies", () => {
 
 describe("prior-context suppression removes only what the caller already has", () => {
   test("a record referenced by citation_id is dropped and counted", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 
@@ -277,7 +277,7 @@ describe("prior-context suppression removes only what the caller already has", (
   });
 
   test("a structural source_ref suppresses the same record as its citation_id", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha")],
     });
 
@@ -294,7 +294,7 @@ describe("prior-context suppression removes only what the caller already has", (
             source: "brain",
             type: "thought",
             id: "a",
-            namespace: "rico",
+            namespace: "dana",
           },
         },
       ],
@@ -308,7 +308,7 @@ describe("prior-context suppression removes only what the caller already has", (
 
 describe("citations stay a bijection with emitted items", () => {
   test("every citation maps to an emitted item and every item to a citation", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 
@@ -326,7 +326,7 @@ describe("citations stay a bijection with emitted items", () => {
     const rows = Array.from({ length: 12 }, (_, index) =>
       searchRow(`row-${index}`, "x".repeat(400)),
     );
-    const { client } = await harness("agent", "rico", { rows });
+    const { client } = await harness("agent", "dana", { rows });
 
     const { payload } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -358,7 +358,7 @@ describe("the whole-pack budget is a hard bound", () => {
     const rows = Array.from({ length: 20 }, (_, index) =>
       searchRow(`row-${index}`, "y".repeat(500)),
     );
-    const { client } = await harness("agent", "rico", { rows });
+    const { client } = await harness("agent", "dana", { rows });
 
     const { payload } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -384,7 +384,7 @@ describe("the whole-pack budget is a hard bound", () => {
   });
 
   test("the declared limit never falls below the irreducible empty object", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "z".repeat(5000))],
     });
 
@@ -408,7 +408,7 @@ describe("the whole-pack budget is a hard bound", () => {
   });
 
   test("a section starved out entirely still records a starved marker", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "z".repeat(5000))],
     });
 
@@ -439,10 +439,10 @@ describe("working_set reads exact scope only", () => {
   test("items appear for the exact scope and never for a near-miss scope", async () => {
     const store = new WorkingSetStore();
     store.append(
-      { namespace: "rico", ...SCOPE, thread_id: null },
+      { namespace: "dana", ...SCOPE, thread_id: null },
       { kind: "current_intent", content: "the active intent" },
     );
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       workingSetStore: store,
     });
 
@@ -477,7 +477,7 @@ describe("working_set reads exact scope only", () => {
 
 describe("a failed recall degrades content-free instead of erroring", () => {
   test("durable_memory reports recall_failed and leaks no error detail", async () => {
-    const { client } = await harness("agent", "rico", { failRecall: true });
+    const { client } = await harness("agent", "dana", { failRecall: true });
 
     const { payload, isError } = await callJson(client, "agent_context_pack", {
       ...SCOPE,

@@ -1833,7 +1833,7 @@ def _write_injection(pack: object, out: io.StringIO) -> None:
 #: test can assert it survived verbatim.
 _FIXTURE_PACK = {
     "schema": "openbrain.agent_context_pack.v1",
-    "scope": {"namespace": "rico", "agent": "claude"},
+    "scope": {"namespace": "dana", "agent": "claude"},
     "sections": {
         "profile_guidance": {
             "label": "profile_guidance",
@@ -1841,7 +1841,7 @@ _FIXTURE_PACK = {
             "items": [
                 {
                     "scope_key": "profile.who",
-                    "guidance": "Rico is the operator; PROFILE-RULE-ONE in full.",
+                    "guidance": "Dana is the operator; PROFILE-RULE-ONE in full.",
                     "candidate_type": "profile_fact",
                 },
                 {
@@ -1879,7 +1879,7 @@ _FIXTURE_PACK = {
 
 _DURABLE_CONTENT_PACK = {
     "schema": "openbrain.agent_context_pack.v1",
-    "scope": {"namespace": "rico", "agent": "claude"},
+    "scope": {"namespace": "dana", "agent": "claude"},
     "sections": {
         "profile_guidance": {
             "items": [{"guidance": "PROFILE-GUIDANCE-CONTROL"}],
@@ -1892,7 +1892,7 @@ _DURABLE_CONTENT_PACK = {
                 {
                     "id": "durable-1",
                     "source_type": "memory",
-                    "namespace": "rico",
+                    "namespace": "dana",
                     "content": "DURABLE-STORED-CONTENT",
                     "citation_id": "brain_record:durable-1",
                     "source_ref": {"table": "memory", "id": "durable-1"},
@@ -1928,7 +1928,7 @@ class TestSessionStartRendersCanonAsPlainText:
         header = rendered.splitlines()[0]
         # The header names the schema, namespace, and per-section counts.
         assert "openbrain.agent_context_pack.v1" in header
-        assert "namespace=rico" in header
+        assert "namespace=dana" in header
         assert "profile_guidance=2" in header
         assert "process_guidance=1" in header
         assert "repo_facts=1" in header

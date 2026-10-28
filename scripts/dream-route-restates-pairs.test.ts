@@ -22,13 +22,13 @@ function row(input: {
   return {
     ordinal: 0,
     candidateId: input.id,
-    namespace: "rico",
+    namespace: "dana",
     contentHash: "f".repeat(64),
     source: input.neighbourOf === null ? "draw" : "neighbour",
     neighbourOf: input.neighbourOf,
     snapshot: {
       id: input.id,
-      namespace: "rico",
+      namespace: "dana",
       candidate_type: "fact",
       content: input.content,
       content_hash: "f".repeat(64),

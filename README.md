@@ -120,6 +120,18 @@ creates one, migrates it, runs everything and drops it.
 The repo is MIT licensed: use it, change it and ship it, keeping the
 copyright notice.
 
+## How it was built
+
+Open Brain went from a one-day v1 (2026-03-13) to 668 commits over seven
+months, built by AI coding agents under one operator's direction. Each phase
+was planned, built test-first and checked by an agent review swarm; later
+work ran as numbered lanes whose acceptance claims are scripts that must
+pass. Notable turns: an isolated-database test run became the default after
+shared-database runs gave different failure counts on unchanged code, and a
+batch of merges was reverted when one rested on an untested claim. The full
+account, with dates, design decisions and what did not work, is in
+[docs/BUILD-STORY.md](docs/BUILD-STORY.md).
+
 ## Project status
 
 Active, single-operator deployment.

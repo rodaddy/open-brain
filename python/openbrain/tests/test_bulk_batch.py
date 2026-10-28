@@ -42,7 +42,7 @@ class RecordingLane:
             "ingested": len(turns),
             "duplicates": 0,
             "filtered": 0,
-            "namespace": "rico",
+            "namespace": "dana",
         }
 
 
@@ -77,7 +77,7 @@ def test_recursive_scan_includes_parent_and_subagent_files(
     assert result == 0
     assert [turn["turn_uuid"] for turn in lane.turns] == ["parent", "child"]
     staging = tmp_path / f"projects{DEFAULT_STAGING_NAME}"
-    assert StagingStore(staging).bound_namespace() == "rico"
+    assert StagingStore(staging).bound_namespace() == "dana"
     assert (
         "discovered=2 parsed=2 eligible=2 undated=0 delivered=2 deduped=0 filtered=0 failures=0"
         in capsys.readouterr().out
@@ -262,10 +262,10 @@ def test_same_uuid_with_different_content_is_not_treated_as_replay(
 
 def test_staging_refuses_a_different_delivery_target(tmp_path: Path) -> None:
     store = StagingStore(tmp_path / "target.sqlite")
-    store.bind_target("https://first.example/v1", "rico")
+    store.bind_target("https://first.example/v1", "dana")
 
     with pytest.raises(StagingTargetMismatchError):
-        store.bind_target("https://second.example/v1", "rico")
+        store.bind_target("https://second.example/v1", "dana")
 
 
 @pytest.mark.parametrize(
@@ -273,8 +273,8 @@ def test_staging_refuses_a_different_delivery_target(tmp_path: Path) -> None:
     [
         ({"ingested": 1, "duplicates": 0, "filtered": 0}, 0, 1),
         ({"ingested": 1, "duplicates": 0, "filtered": 0, "namespace": "other"}, 0, 1),
-        ({"ingested": 0, "duplicates": 0, "filtered": 0, "namespace": "rico"}, 0, 1),
-        ({"ingested": 0, "duplicates": 0, "filtered": 1, "namespace": "rico"}, 1, 0),
+        ({"ingested": 0, "duplicates": 0, "filtered": 0, "namespace": "dana"}, 0, 1),
+        ({"ingested": 0, "duplicates": 0, "filtered": 1, "namespace": "dana"}, 1, 0),
     ],
 )
 def test_invalid_or_non_durable_server_receipt_is_not_marked_sent(
@@ -286,7 +286,7 @@ def test_invalid_or_non_durable_server_receipt_is_not_marked_sent(
     store = StagingStore(tmp_path / "receipt.sqlite")
     store.stage([RawTurn(turn_uuid="receipt", content="eligible")])
 
-    result = ingest(store, ReceiptLane(receipt), expected_namespace="rico")
+    result = ingest(store, ReceiptLane(receipt), expected_namespace="dana")
 
     assert result.sent == 0
     assert result.duplicates == 0
@@ -302,10 +302,10 @@ def test_server_duplicate_is_accounted_and_marked_complete(tmp_path: Path) -> No
         "ingested": 0,
         "duplicates": 1,
         "filtered": 0,
-        "namespace": "rico",
+        "namespace": "dana",
     }
 
-    result = ingest(store, ReceiptLane(receipt), expected_namespace="rico")
+    result = ingest(store, ReceiptLane(receipt), expected_namespace="dana")
 
     assert result.sent == 0
     assert result.duplicates == 1
@@ -320,10 +320,10 @@ def test_negative_server_counts_are_refused(tmp_path: Path) -> None:
         "ingested": -1,
         "duplicates": 2,
         "filtered": 0,
-        "namespace": "rico",
+        "namespace": "dana",
     }
 
-    result = ingest(store, ReceiptLane(receipt), expected_namespace="rico")
+    result = ingest(store, ReceiptLane(receipt), expected_namespace="dana")
 
     assert result.sent == 0
     assert result.duplicates == 0

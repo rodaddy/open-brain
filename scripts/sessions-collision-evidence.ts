@@ -6,7 +6,7 @@
  * The repair writes a row's FRESH content_hash; when another row in the same
  * namespace already stores that hash, `idx_sessions_content_hash`
  * (content_hash, namespace) rejects it with 23505 and issue 1462 skips the row.
- * The repair log does not name the row holding the hash. Rico must rule
+ * The repair log does not name the row holding the hash. Dana must rule
  * between archiving the duplicates and rehashing; this script produces the
  * evidence for that ruling.
  *

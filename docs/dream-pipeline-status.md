@@ -264,8 +264,8 @@ Output:
   Open Brain -- candidate grading
   ------------------------------------------------------------
   URL          http://127.0.0.1:3417/
-  namespace    rico
-  graded_by    rico
+  namespace    dana
+  graded_by    dana
   ungraded     1104 of 1104
   keys         1 pass · 2 fail · 3 inconclusive · 4 duplicate · u undo
   ------------------------------------------------------------
@@ -275,8 +275,8 @@ Options:
 
 ```bash
 bun run grade --port 3418            # if 3417 is taken (it says so and exits 1)
-bun run grade --namespace rico       # default; never inferred from the database
-bun run grade --graded-by rico       # lands in candidate_memory.graded_by
+bun run grade --namespace dana       # default; never inferred from the database
+bun run grade --graded-by dana       # lands in candidate_memory.graded_by
 ```
 
 The listener is loopback-only and not configurable

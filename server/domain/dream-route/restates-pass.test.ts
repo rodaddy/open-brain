@@ -36,7 +36,7 @@ const CONFIG: JevConfig = {
 
 const candidate = (id: string, content: string): RouteCandidate => ({
   id,
-  namespace: "rico",
+  namespace: "dana",
   candidateType: "fact",
   content,
   operatorText: null,
@@ -48,13 +48,13 @@ function row(candidateId: string, neighbourOf: string | null): FrozenRow {
   return {
     ordinal: 0,
     candidateId,
-    namespace: "rico",
+    namespace: "dana",
     contentHash: "f".repeat(64),
     source: neighbourOf === null ? "draw" : "neighbour",
     neighbourOf,
     snapshot: {
       id: candidateId,
-      namespace: "rico",
+      namespace: "dana",
       candidate_type: "rule",
       content: "c",
       content_hash: "f".repeat(64),

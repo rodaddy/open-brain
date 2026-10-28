@@ -194,9 +194,9 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
         usefulness_score, access_count, promoted_from, extracted_metadata,
         embedding_model)
      VALUES
-       ('mirrored one', 'rico', 'h-mirror-1', 'collab', '2026-01-01T00:00:00Z',
+       ('mirrored one', 'dana', 'h-mirror-1', 'collab', '2026-01-01T00:00:00Z',
         'warm', NULL, 0, NULL, NULL, NULL),
-       ('mirrored two', 'rico', 'h-mirror-2', 'collab', '2026-01-02T00:00:00Z',
+       ('mirrored two', 'dana', 'h-mirror-2', 'collab', '2026-01-02T00:00:00Z',
         'warm', NULL, 0, NULL, NULL, NULL),
        ('unmirrored a', 'codex', 'h-uniq-a', 'collab', '2026-02-01T00:00:00Z',
         'hot', 0.9, 7, '{"table":"thoughts","id":"src-1"}'::jsonb,
@@ -205,21 +205,21 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
         'warm', NULL, 0, NULL, NULL, NULL),
        ('unmirrored c', 'discord', 'h-uniq-c', 'collab', '2026-02-03T00:00:00Z',
         'cold', NULL, 0, NULL, NULL, NULL),
-       ('no hash live', 'rico', NULL, 'collab', '2026-02-04T00:00:00Z',
+       ('no hash live', 'dana', NULL, 'collab', '2026-02-04T00:00:00Z',
         'warm', NULL, 0, NULL, NULL, NULL)`,
   );
   await pool.query(
     `INSERT INTO thoughts (content, created_by, content_hash, namespace, archived_at)
      VALUES
-       ('mirrored one', 'rico', 'h-mirror-1', 'shared-kb', NULL),
-       ('mirrored two', 'rico', 'h-mirror-2', 'shared-kb', NULL),
-       ('archived mirror only', 'rico', 'h-uniq-b', 'shared-kb', NOW())`,
+       ('mirrored one', 'dana', 'h-mirror-1', 'shared-kb', NULL),
+       ('mirrored two', 'dana', 'h-mirror-2', 'shared-kb', NULL),
+       ('archived mirror only', 'dana', 'h-uniq-b', 'shared-kb', NOW())`,
   );
 
   // decisions: one live un-mirrored collab row -> audit out-of-scope.
   await pool.query(
     `INSERT INTO decisions (title, rationale, created_by, content_hash, namespace)
-     VALUES ('legacy decision', 'because', 'rico', 'h-dec-1', 'collab')`,
+     VALUES ('legacy decision', 'because', 'dana', 'h-dec-1', 'collab')`,
   );
 
   // entities: re-taggable repo_fact, name-conflict repo_fact, canonical_id
@@ -227,21 +227,21 @@ async function seedFixtures(pool: InstanceType<typeof Pool>): Promise<void> {
   await pool.query(
     `INSERT INTO ob_entities (entity_type, name, canonical_id, namespace, created_by)
      VALUES
-       ('repo_fact', 'acme-core:unique', 'rf:acme-core:unique', 'collab', 'rico'),
-       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe', 'collab', 'rico'),
-       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe-shared', 'shared-kb', 'rico'),
-       ('repo_fact', 'acme-core:canon-collab-name', 'rf:acme-core:canon', 'collab', 'rico'),
-       ('repo_fact', 'acme-core:canon-shared-name', 'rf:acme-core:canon', 'shared-kb', 'rico'),
-       ('project', 'legacy-project-node', NULL, 'collab', 'rico')`,
+       ('repo_fact', 'acme-core:unique', 'rf:acme-core:unique', 'collab', 'dana'),
+       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe', 'collab', 'dana'),
+       ('repo_fact', 'acme-core:dupe', 'rf:acme-core:dupe-shared', 'shared-kb', 'dana'),
+       ('repo_fact', 'acme-core:canon-collab-name', 'rf:acme-core:canon', 'collab', 'dana'),
+       ('repo_fact', 'acme-core:canon-shared-name', 'rf:acme-core:canon', 'shared-kb', 'dana'),
+       ('project', 'legacy-project-node', NULL, 'collab', 'dana')`,
   );
 
   // lanes: 1 active + 1 wrapped to archive, 1 already archived (skip).
   await pool.query(
     `INSERT INTO ob_session_lanes (session_key, namespace, status, created_by, ended_at)
      VALUES
-       ('lane-a', 'collab', 'active', 'rico', NULL),
-       ('lane-b', 'collab', 'wrapped', 'rico', NULL),
-       ('lane-old', 'collab', 'archived', 'rico', NOW())`,
+       ('lane-a', 'collab', 'active', 'dana', NULL),
+       ('lane-b', 'collab', 'wrapped', 'dana', NULL),
+       ('lane-old', 'collab', 'archived', 'dana', NOW())`,
   );
 }
 

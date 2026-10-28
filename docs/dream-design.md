@@ -50,7 +50,7 @@ aged out.
 |---|---|---|---|
 | Maintenance runner is off (`OPEN_BRAIN_MAINTENANCE_ENABLED=0` local, unset on the retired host) | `maintenanceQueueEnabled()` is **opt-out** (`src/maintenance-bootstrap.ts:173-180`: `return raw !== "0" && raw !== "false"`). The var is **absent from `.env`**, so the runner is **ENABLED** | not re-measured (code claim, not a count) | ❌ **STALE — inverted** (as of 2026-07-27) |
 | "0.66% capture" proof case | Capture is **live**: `ob_raw_turns` 3,303 rows, `ob_session_events` 9,462 rows | `ob_raw_turns` 328,017 rows, `ob_session_events` 16,238 rows | ❌ **STALE — obsolete** |
-| Dream Cycle is missing "a scheduler" | **Three scheduling primitives already exist**: leased `setInterval` in `src/maintenance-queue.ts:668-676`, the session sweeper in `src/transport.ts:99-113`, and launchd `com.rico.open-brain` | not re-measured (code claim, not a count) | ⚠️ **PARTLY STALE** (as of 2026-07-27) — what is missing is a *dream* scheduler, not scheduling capability. Reuse one of the three |
+| Dream Cycle is missing "a scheduler" | **Three scheduling primitives already exist**: leased `setInterval` in `src/maintenance-queue.ts:668-676`, the session sweeper in `src/transport.ts:99-113`, and launchd `com.example.open-brain` | not re-measured (code claim, not a count) | ⚠️ **PARTLY STALE** (as of 2026-07-27) — what is missing is a *dream* scheduler, not scheduling capability. Reuse one of the three |
 | `graduateLaneEvent` has no caller | It has a caller at **`scripts/tier-lane-durable.ts:352`** (plus the internal call at `src/tiering.ts:362`) | not re-measured (code claim, not a count) | ⚠️ **PARTLY STALE** (as of 2026-07-27) — no *automatic* caller; a script caller exists |
 | `discarded_entries` — 0 rows, no writer | Still 0 rows, still no writer | 4 rows; the writer was not re-checked | ❌ **STALE** — rows exist, so something has written |
 | `graduateLaneEvent` has never written a row | Still true — `thoughts WHERE promoted_from ? 'graduated_at'` is 0 | 1 row by the same query | ❌ **STALE** — one graduated row exists |
@@ -143,7 +143,7 @@ The epic uses **confidence bands**. The April 2026 SOP used **reversibility**.
 Recorded in #389's comment (2026-07-27) so the epic carries the axis it would
 otherwise lose. Verbatim from the April SOP:
 
-> (1) Always present proposed changes to Rico before executing deletions.
+> (1) Always present proposed changes to Dana before executing deletions.
 > (2) Cold demotions can proceed without approval.
 > (3) Hot promotions for SOPs and active refs are autonomous.
 
@@ -230,7 +230,7 @@ Scaling limit, verbatim:
 
 > **On the scaling limit:** if ingest volume ever gets high enough that tagging in
 > the write path is a real cost, that is a hardware conversation, not a design
-> one. Rico framing — reaching that point means the retired host has been replaced by
+> one. Dana framing — reaching that point means the retired host has been replaced by
 > something much larger. Do not pre-optimize light into a queue for a load that
 > does not exist.
 
@@ -351,7 +351,7 @@ count on `ob_raw_turns`, not a counter light maintains.
 
 > A box serving Open Brain is never at zero. "No requests at all" never happens
 > and is a useless gate. A steady trickle of small writes is a sleeping box —
-> Rico framing: 50 bpm, working so little it could be asleep.
+> Dana framing: 50 bpm, working so little it could be asleep.
 
 ### The idle signal
 
@@ -425,7 +425,7 @@ floor. Real values come from #397.
 > Tier movement is currently one-way. Cold is a grave.
 >
 > Everything in the lifecycle is about things fading; nothing brings them back.
-> Rico case: returning to a project untouched for 3 months. With the lifecycle
+> Dana case: returning to a project untouched for 3 months. With the lifecycle
 > running, that project decisions would be in Open Brain, correct and complete —
 > and would stay cold while he re-derives decisions already made.
 
@@ -497,8 +497,8 @@ Re-warming judgments use `occurred_at`, **never** `created_at`. See
 *DREAM-4: compare what is happening against what was decided.*
 
 > ⚠️ **Superseded in mechanism, not in intent.** `code-brain-design.md` §5 records
-> a Rico correction: *"The first draft of drift detection (#393) was a REM-time
-> semantic comparison needing a model. Rico's version needs **no model at all** —
+> a Dana correction: *"The first draft of drift detection (#393) was a REM-time
+> semantic comparison needing a model. Dana's version needs **no model at all** —
 > two counters and a date — and catches drift earlier."* Build the counter
 > version. #393's problem statement below is still the reason the job exists.
 
@@ -523,7 +523,7 @@ Re-warming judgments use `occurred_at`, **never** `created_at`. See
 > **Do that 200 times and you get 200 clean summaries describing a curve nobody
 > sees.**
 >
-> Rico framing: session start and wrap are the start and stop of a 100m dash when
+> Dana framing: session start and wrap are the start and stop of a 100m dash when
 > the thing being run is a marathon.
 
 ### The missing layer
@@ -684,7 +684,7 @@ Consistent with `code-brain-design.md` §R2: *"Reinforcement bumps `last_seen_at
 > `DEFAULT_DUP_THRESHOLD = 0.08` (cosine **distance**, i.e. 0.92 similarity) was
 > tuned for lane-event-to-durable comparison.
 >
-> Rico standing rule from LiteLLM semantic caching: **0.91 similarity**. Same
+> Dana standing rule from LiteLLM semantic caching: **0.91 similarity**. Same
 > question in a different domain — "is this close enough to treat as the same
 > thing" — and two independent arrivals at 0.91/0.92 is good evidence for the
 > neighbourhood.
@@ -758,7 +758,7 @@ CREATE INDEX idx_candidate_unreviewed
 > - **#396** "accumulated support" stops being vague and becomes countable: how
 >   many reinforcement rows, spanning what period, from how many distinct
 >   sessions.
-> - **Receipts on recall** (a standing Rico want, borrowed from gbrain): weight
+> - **Receipts on recall** (a standing Dana want, borrowed from gbrain): weight
 >   0.7 becomes "0.3 baseline, reinforced three times across sessions on Jun 12,
 >   Jul 3, Jul 19" instead of an unexplained number.
 > - **Reversibility.** If the threshold proves too loose and distinct facts were
@@ -829,9 +829,9 @@ Nightly.
 | 0.2 – 0.5 | **nightly human-in-the-loop ranking page** |
 | < 0.2 | drop |
 
-> Only the uncertain band costs Rico attention. Everything else is automatic.
+> Only the uncertain band costs Dana attention. Everything else is automatic.
 >
-> Rico ranking picks become **reference data** — the feedback loop that tunes the
+> Dana ranking picks become **reference data** — the feedback loop that tunes the
 > threshold. This is the eval Open Brain has never had: nothing currently measures
 > whether a promotion decision improved recall.
 
@@ -847,7 +847,7 @@ not across tiers.
 
 | Mode | Rule | Risk |
 |---|---|---|
-| A — review page | commit >0.5, review 0.2-0.5 | Rico is the bottleneck |
+| A — review page | commit >0.5, review 0.2-0.5 | Dana is the bottleneck |
 | B — permissive | commit >0.2, drop below | weak items enter the corpus |
 
 > B is defensible because **stored is not the same as ranked**: a 0.3-weight
@@ -875,7 +875,7 @@ That hole is **open**. Do not invent a rule for it during implementation; see
 
 > The metric to watch is not REM cost but **how many items land on the nightly
 > page**. Roughly: 20 is reviewable, 200 gets skipped. REM over-prescription
-> (#391) is what fills it, and Rico rankings are what eventually tune it down.
+> (#391) is what fills it, and Dana rankings are what eventually tune it down.
 
 ## Borrowed from gbrain (#394, verbatim)
 
@@ -952,7 +952,7 @@ path) is in `decisions/cognitive-tiering-dream-cycle.md`.
 
 ### 2. A new bad thought is not better than an old correct one
 
-> Rico rule. Newest usually wins in live work, but a considered decision from
+> Dana rule. Newest usually wins in live work, but a considered decision from
 > three months ago can outrank a hasty one from yesterday.
 
 ## Resolution: accumulated support, not timestamp
@@ -966,7 +966,7 @@ path) is in `decisions/cognitive-tiering-dream-cycle.md`.
 | survived prior contradictions | already tested | supersession history |
 | acted on / referenced | it worked | access count |
 | `occurred_at` span | said over months vs. once | raw turns |
-| source tier | Rico words vs. agent inference | provenance |
+| source tier | Dana words vs. agent inference | provenance |
 
 > A new claim with none of these is **one utterance**. It should not beat a
 > position reinforced twenty times over three months.
@@ -990,7 +990,7 @@ regardless of how the other five signals score.
 
 ## Default to not-superseding
 
-> Rico framing: the past often has reasoning nobody wrote down — the "ask an old
+> Dana framing: the past often has reasoning nobody wrote down — the "ask an old
 > man or lady why it was done that way" case, except the agent cannot ask. The
 > tacit judgment behind a claim is not in the record.
 >
@@ -1011,7 +1011,7 @@ regardless of how the other five signals score.
 > The **signals** above are design and are settled. The **weights** are a fitting
 > problem, not a design problem: any numbers chosen now would be invented.
 >
-> They get fitted against Rico rankings from the #394 review page. Sequence:
+> They get fitted against Dana rankings from the #394 review page. Sequence:
 > build with signals and guardrails → collect ~50 ranked contradictions → fit
 > weights to reproduce those judgments.
 
@@ -1064,7 +1064,7 @@ live schema before writing, not against either document.
 
 ## Trigger
 
-Weekly. Rico framing: the *"once a week ballpin hammer to the head"* session.
+Weekly. Dana framing: the *"once a week ballpin hammer to the head"* session.
 
 ## Scope
 
@@ -1274,7 +1274,7 @@ Related: #388, #397.
 Also reusable, per the 2026-07-27 audit: **three scheduling primitives already
 exist** — the leased `setInterval` at `src/maintenance-queue.ts:668-676`, the
 session sweeper at `src/transport.ts:99-113`, and launchd
-`com.rico.open-brain`. The dream scheduler should be built on one of these, not
+`com.example.open-brain`. The dream scheduler should be built on one of these, not
 as a fourth.
 
 ## Scope: trip → release → notify
@@ -1309,7 +1309,7 @@ as a fourth.
 
 > The genuinely new piece. Requirements:
 >
-> - Reaches Rico out of band — not a log line nobody reads.
+> - Reaches Dana out of band — not a log line nobody reads.
 > - **Content-free.** Stage name, condition, counts, timestamps. No memory
 >   content, no prompts, no secrets. Same posture as `mcp_tool_audit_log`.
 > - **Deduplicated.** One notification per trip, not one per occurrence.
@@ -1419,7 +1419,7 @@ rather than closing the question silently.
 |---|---|---|
 | 1 | **How does a genuine one-off get promoted?** Corroboration cannot promote a decision made once and never restated, and *"some of the most important entries are exactly that. A companion rule is needed and is not yet designed."* | #394 |
 | 2 | **What does "related" mean for entries not tagged to the project?** Candidates: embedding similarity, and `ob_entities` (23 rows, barely used). The valuable case is the decision never tagged to that project that still matters. | #392 |
-| 3 | **What are the supersession weights?** *"The signals above are design and are settled. The weights are a fitting problem, not a design problem: any numbers chosen now would be invented."* Fit against ~50 Rico-ranked contradictions from the #394 page. | #396 |
+| 3 | **What are the supersession weights?** *"The signals above are design and are settled. The weights are a fitting problem, not a design problem: any numbers chosen now would be invented."* Fit against ~50 Dana-ranked contradictions from the #394 page. | #396 |
 | 4 | **A/B outcome: is the review page ceremony?** Mode A (commit >0.5, review 0.2–0.5) vs Mode B (commit >0.2, drop below). Unresolved until recall is compared. | #394 |
 | 5 | **Model residency:** resident (~2 GB held) vs load-on-demand (~1.8 s/run). Reasoning favours on-demand; evidence does not exist. | #397 |
 | 6 | **Which notification transport?** `discord-courier` is the obvious candidate; *"the transport choice is deliberately left open here."* | #399 |
@@ -1437,7 +1437,7 @@ rather than closing the question silently.
 From `code-brain-design.md`, verbatim:
 
 > Issues #386–#399 were written by **one agent in one session** — the same shape
-> as the drift being diagnosed. Every substantive correction came from Rico:
+> as the drift being diagnosed. Every substantive correction came from Dana:
 
 | Agent had it wrong | Corrected to |
 |---|---|

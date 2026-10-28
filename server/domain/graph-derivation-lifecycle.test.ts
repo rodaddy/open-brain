@@ -31,7 +31,7 @@ async function derivesAnchorEntitiesAndEdgesOnFirstRun() {
   expect(receipt.links_new).toBe(3);
   // content-free: no topic/person/anchor text in the receipt.
   expect(JSON.stringify(receipt)).not.toContain("Migrations");
-  expect(JSON.stringify(receipt)).not.toContain("Rico");
+  expect(JSON.stringify(receipt)).not.toContain("Dana");
   expect(JSON.stringify(receipt)).not.toContain("release plan");
 }
 
@@ -87,7 +87,7 @@ async function newMetadataTermAddsANodeAndReportsPreviousHash() {
     baseInput({
       metadata: {
         topics: ["Migrations", "pgvector", "halfvec"],
-        people: ["Rico"],
+        people: ["Dana"],
       },
     }),
   );
@@ -106,7 +106,7 @@ async function caseInsensitiveIdentityCollapsesToOneNode() {
     asRepository(g),
     auth,
     baseInput({
-      metadata: { topics: [], people: ["Rico", "rico", " RICO "] },
+      metadata: { topics: [], people: ["Dana", "dana", " DANA "] },
     }),
   );
   // anchor + 1 person node.
@@ -132,7 +132,7 @@ describe("deriveGraphFromMetadata", () => {
     newMetadataTermAddsANodeAndReportsPreviousHash,
   );
   it(
-    "case-insensitive identity: 'Rico' and 'rico' collapse to one node",
+    "case-insensitive identity: 'Dana' and 'dana' collapse to one node",
     caseInsensitiveIdentityCollapsesToOneNode,
   );
 });

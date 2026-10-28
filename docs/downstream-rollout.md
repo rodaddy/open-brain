@@ -31,10 +31,10 @@ If none of those apply, say so explicitly in the PR and release notes.
 
 2. **Open Brain hosted verification**
    - Merge alone does not deploy. The live Open Brain is the Mini's launchd
-     service `com.rico.open-brain-local-clone`.
+     service `com.example.open-brain-local-clone`.
      Deploy a committed `dogfood-v*` tag
      from the repo checkout with
-     `OPENBRAIN_NATS_WORKER_LABEL=com.rico.open-brain-local-nats-worker OPENBRAIN_SERVICE_LABEL=com.rico.open-brain-local-clone scripts/local-clone-deploy.sh <tag>`
+     `OPENBRAIN_NATS_WORKER_LABEL=com.example.open-brain-local-nats-worker OPENBRAIN_SERVICE_LABEL=com.example.open-brain-local-clone scripts/local-clone-deploy.sh <tag>`
      (`docs/local-clone-dogfood.md`, "Installed release"). The script has no
      origin gate (its header, lines 10-14): it deploys any committed ref,
      merged or not. Before deploying, confirm the tag is on main with
@@ -164,7 +164,7 @@ required memory mode, incompatible or unreachable contracts must fail closed.
 ## qmd-Derived Repo Facts
 
 qmd runs on the Mini (`10.0.1.20`), the same host as the live Open Brain
-service `com.rico.open-brain-local-clone`, and acts as the repo-knowledge
+service `com.example.open-brain-local-clone`, and acts as the repo-knowledge
 compiler. Open Brain is the shared runtime distribution layer for agents that
 cannot run qmd.
 Required repo knowledge is promoted into Open Brain with `upsert_repo_fact` and

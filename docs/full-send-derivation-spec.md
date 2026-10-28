@@ -161,7 +161,7 @@ Payload (bounded, validated, terminal on malformed — matching the
 
 ```jsonc
 {
-  "namespace": "rico",
+  "namespace": "dana",
   "lane_id": "<uuid>",
   "turn_ids": ["<uuid>", "..."],   // bounded batch
   "batch_hash": "<hash of turn_ids + content hashes>"

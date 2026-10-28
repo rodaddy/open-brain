@@ -126,7 +126,7 @@ before raising it.
 ### Deploy And qmd Runtime
 
 The one live Open Brain is the Mini's launchd service
-`com.rico.open-brain-local-clone`, deployed from a clean `main` at a release tag
+`com.example.open-brain-local-clone`, deployed from a clean `main` at a release tag
 with `scripts/local-clone-deploy.sh`. The procedure and the installed release are
 in [`docs/local-clone-dogfood.md`](local-clone-dogfood.md) ("Installed release")
 and [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md). Deploys
@@ -141,7 +141,7 @@ qmd models, Postgres data, or required production `node_modules` under the
 source checkout.
 
 NATS transport rollout is separate from the HTTP deploy. The local NATS
-request/reply worker label is `com.rico.open-brain-local-nats-worker`; install
+request/reply worker label is `com.example.open-brain-local-nats-worker`; install
 or check it with `scripts/install-nats-worker-launchagent.sh --local` (`--check` for
 the liveness assertion).
 
@@ -315,7 +315,7 @@ Tests live alongside source files and cover auth, embedding, search, migrations,
 ## Identity and Shared Knowledge Boundary
 
 Open Brain treats `shared-kb` as the canonical shared knowledge namespace, not
-as a caller identity. Person identities such as `rico` and `alex`, agent lane
+as a caller identity. Person identities such as `dana` and `alex`, agent lane
 identities such as `bilby` and `skippy`, and promoter service identities such as
 `openbrain-promoter` is the bearer-token identity.
 

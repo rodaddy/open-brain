@@ -39,7 +39,7 @@
 #   OPENBRAIN_CLONE_ENV_FILE    env file to migrate against (default <root>/local-clone.env)
 #   OPENBRAIN_SERVICE_LABEL     launchd label to restart, if any
 #   OPENBRAIN_NATS_WORKER_LABEL NATS worker launchd label to kickstart, if any
-#                               (e.g. com.rico.open-brain-local-nats-worker).
+#                               (e.g. com.example.open-brain-local-nats-worker).
 #                               Unset = no worker installed; nothing happens.
 set -euo pipefail
 

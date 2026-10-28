@@ -27,7 +27,7 @@ async function compactProjectionRetainsComparableFields(): Promise<void> {
     {
       row_id: "row-a",
       source_type: "session_event",
-      namespace: "rico",
+      namespace: "dana",
       similarity: 0.91,
       bm25_score: 0.4,
       usefulness: 0.7,
@@ -59,7 +59,7 @@ async function compactProjectionRetainsComparableFields(): Promise<void> {
         {
           row_id: "row-a",
           source_type: "session_event",
-          namespace: "rico",
+          namespace: "dana",
           similarity: 0.91,
           bm25_score: 0.4,
           usefulness: 0.7,
@@ -83,7 +83,7 @@ async function oversizedProjectionMarksIncomplete(): Promise<void> {
   const rows = Array.from({ length: 5_000 }, (_, index) => ({
     row_id: `row-${String(index).padStart(5, "0")}-${"x".repeat(32)}`,
     source_type: "thought",
-    namespace: "rico",
+    namespace: "dana",
     similarity: 0.9,
     usefulness: 0.5,
     content_preview: "content that must be omitted ".repeat(20),

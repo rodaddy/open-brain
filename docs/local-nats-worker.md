@@ -8,9 +8,9 @@ proven live on 2026-08-04.
 
 | Component | Launchd label | Notes |
 | --- | --- | --- |
-| Local HTTP clone | `com.rico.open-brain-local-clone` | Pre-existing; stays `OPENBRAIN_TRANSPORT` empty (HTTP mode). |
-| NATS broker | `com.rico.open-brain-nats` | `nats-server` on **127.0.0.1:4222**, monitor 127.0.0.1:8222. |
-| NATS worker | `com.rico.open-brain-local-nats-worker` | Bridge for `dev.ob.memory.context_pack`, own health on 3110. |
+| Local HTTP clone | `com.example.open-brain-local-clone` | Pre-existing; stays `OPENBRAIN_TRANSPORT` empty (HTTP mode). |
+| NATS broker | `com.example.open-brain-nats` | `nats-server` on **127.0.0.1:4222**, monitor 127.0.0.1:8222. |
+| NATS worker | `com.example.open-brain-local-nats-worker` | Bridge for `dev.ob.memory.context_pack`, own health on 3110. |
 
 These are **user LaunchAgents** (`~/Library/LaunchAgents`, `launchctl bootstrap
 gui/$(id -u) ...`), not system LaunchDaemons, matching the existing local clone
@@ -41,8 +41,8 @@ Never the other way round.
 ## Files
 
 - broker config: `/opt/homebrew/etc/nats-server.conf`
-- broker plist: `~/Library/LaunchAgents/com.rico.open-brain-nats.plist`
-- worker plist: `~/Library/LaunchAgents/com.rico.open-brain-local-nats-worker.plist`
+- broker plist: `~/Library/LaunchAgents/com.example.open-brain-nats.plist`
+- worker plist: `~/Library/LaunchAgents/com.example.open-brain-local-nats-worker.plist`
 - worker env: `/srv/open-brain-local/local-clone.env.nats-worker` (mode 0600)
 - logs: `~/Library/Logs/open-brain-local/nats-worker.{out,err}.log`
 
@@ -63,7 +63,7 @@ dedicated-worker boundary cannot be disabled by editing the env file.
 ## Install or reinstall
 
 The worker plist and its wrapper are rendered from
-`docs/deploy/com.rico.open-brain-local-nats-worker.plist.template` and
+`docs/deploy/com.example.open-brain-local-nats-worker.plist.template` and
 `docs/deploy/open-brain-local-nats-worker.sh.template` by
 `scripts/install-nats-worker-launchagent.sh` (issue 735). Preview first, then
 install, then assert liveness. A dry run refuses to start unless
@@ -90,8 +90,8 @@ execute from, so the worker must be restarted or it keeps running the previous
 revision. Set the label so the deploy kickstarts it:
 
 ```zsh
-OPENBRAIN_NATS_WORKER_LABEL=com.rico.open-brain-local-nats-worker \
-OPENBRAIN_SERVICE_LABEL=com.rico.open-brain-local-clone \
+OPENBRAIN_NATS_WORKER_LABEL=com.example.open-brain-local-nats-worker \
+OPENBRAIN_SERVICE_LABEL=com.example.open-brain-local-clone \
   scripts/local-clone-deploy.sh
 ```
 
@@ -227,7 +227,7 @@ launchctl list | rg 'open-brain'
 curl -fsS http://127.0.0.1:3110/health
 curl -fsS 'http://127.0.0.1:8222/connz?subs=1'
 curl -fsS http://127.0.0.1:3100/health    # must stay healthy across a worker restart
-launchctl kickstart -k "gui/$(id -u)/com.rico.open-brain-local-nats-worker"
+launchctl kickstart -k "gui/$(id -u)/com.example.open-brain-local-nats-worker"
 ```
 
 ## Rollback
@@ -235,7 +235,7 @@ launchctl kickstart -k "gui/$(id -u)/com.rico.open-brain-local-nats-worker"
 Rolling back the NATS worker must not roll back PostgreSQL or the HTTP clone.
 
 ```zsh
-launchctl bootout "gui/$(id -u)/com.rico.open-brain-local-nats-worker"
+launchctl bootout "gui/$(id -u)/com.example.open-brain-local-nats-worker"
 curl -fsS http://127.0.0.1:3100/health
 ```
 
@@ -246,7 +246,7 @@ decision says only minimized metadata exists and the state can be removed.
 
 A live request/reply on `dev.ob.memory.context_pack` returns `status: ok` in
 ~1.2s for `repo_facts` / `working_set` / `pointers`. Before #563, asking for
-`durable_memory` in the `rico` namespace built a **58.5 MB** reply (the
+`durable_memory` in the `dana` namespace built a **58.5 MB** reply (the
 `durable_memory` section alone was 39.9 MB), which exceeds the broker's 8 MB
 `max_payload`, so the client rejected the publish.
 

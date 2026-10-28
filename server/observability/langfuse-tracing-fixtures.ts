@@ -60,8 +60,8 @@ export const ENABLED_CONFIG: McpTracingConfig = {
 export const AUTH = {
   authInfo: {
     role: "admin" as const,
-    clientId: "rico",
-    tokenClientId: "rico",
+    clientId: "dana",
+    tokenClientId: "dana",
     agentId: "worker-530",
     namespaceSource: "header" as const,
   },
@@ -176,7 +176,7 @@ export function searchRow(id: string, content = `content ${id}`): FixtureSearchR
   return {
     source_type: "thought",
     id,
-    namespace: "rico",
+    namespace: "dana",
     content_preview: content,
     tags: [],
     created_at: "2026-01-01T00:00:00.000Z",

@@ -62,7 +62,7 @@ __all__ = [
 #: a real project rather than falling silent outside its lane.
 #:
 #: Read from the production constant rather than repeated as a literal: on a
-#: machine without Rico's volume, `conftest.py` provisions a stand-in root and
+#: machine without Dana's volume, `conftest.py` provisions a stand-in root and
 #: points the override at it, and a second hardcoded copy here would send the
 #: gate a cwd outside the root it actually resolved against.
 DEVELOPMENT_CWD = str(development_root())

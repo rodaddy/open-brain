@@ -16,7 +16,7 @@ import {
 
 describe("agent_reflex_pointers projects the pack without a second stack", () => {
   test("the reflex runs exactly one recall and returns body-free pointers", async () => {
-    const { client, queries } = await harness("agent", "rico", {
+    const { client, queries } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 
@@ -43,7 +43,7 @@ describe("agent_reflex_pointers projects the pack without a second stack", () =>
   });
 
   test("the reflex emits no non-pointer section even when the pack could", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha")],
     });
 
@@ -59,7 +59,7 @@ describe("agent_reflex_pointers projects the pack without a second stack", () =>
   });
 
   test("an auth denial passes through unchanged rather than inventing a message", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     const { payload, isError } = await callJson(client, "agent_reflex_pointers", {
       ...SCOPE,
@@ -74,7 +74,7 @@ describe("agent_reflex_pointers projects the pack without a second stack", () =>
   });
 
   test("prior-context suppression applies before any pointer is emitted", async () => {
-    const { client } = await harness("agent", "rico", {
+    const { client } = await harness("agent", "dana", {
       rows: [searchRow("a", "alpha"), searchRow("b", "bravo")],
     });
 

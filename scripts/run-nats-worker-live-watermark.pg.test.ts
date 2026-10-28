@@ -205,7 +205,7 @@ async function startDefaultWorker(): Promise<{
       error: () => undefined,
     } as never,
     buildTokens: () =>
-      new Map([["secret-token", { role: "admin", clientId: "rico" }]]) as never,
+      new Map([["secret-token", { role: "admin", clientId: "dana" }]]) as never,
     // The real pool, behind a shim whose ONLY difference is that `end()` is a
     // no-op. `startNatsWorkerProcess.shutdown()` legitimately closes the pool
     // it was handed (`closePool`, scripts/run-nats-worker.ts), and this suite

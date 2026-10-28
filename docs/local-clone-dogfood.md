@@ -8,7 +8,7 @@ backup.
 
 The clone binds to loopback by default. `OPEN_BRAIN_BIND_HOST=0.0.0.0` is the
 one allowed non-loopback value: the LAN opt-in
-(`server/config/local-clone-mode.ts:111-120`, Rico, 2026-07-31). The Mini's
+(`server/config/local-clone-mode.ts:111-120`, Dana, 2026-07-31). The Mini's
 dogfood service runs with it so other devices can reach this brain; do not
 reset it to loopback. Every other clone-mode guard (database, embeddings) stays
 loopback-locked. See
@@ -26,8 +26,8 @@ old clone. Never restore over or refresh the running clone in place.
 - Deploy a release with:
 
   ```zsh
-  OPENBRAIN_NATS_WORKER_LABEL=com.rico.open-brain-local-nats-worker \
-    OPENBRAIN_SERVICE_LABEL=com.rico.open-brain-local-clone \
+  OPENBRAIN_NATS_WORKER_LABEL=com.example.open-brain-local-nats-worker \
+    OPENBRAIN_SERVICE_LABEL=com.example.open-brain-local-clone \
     scripts/local-clone-deploy.sh <tag>
   ```
 
@@ -160,7 +160,7 @@ requires at least:
 OPENBRAIN_LOCAL_CLONE=1
 OPENBRAIN_LOCAL_CLONE_ROOT=<absolute-clone-root>
 OPEN_BRAIN_BIND_HOST=127.0.0.1
-# LAN opt-in: 0.0.0.0 is the only non-loopback value clone mode accepts. The Mini's running service uses it on purpose (Rico, 2026-07-31); do not reset it to loopback.
+# LAN opt-in: 0.0.0.0 is the only non-loopback value clone mode accepts. The Mini's running service uses it on purpose (Dana, 2026-07-31); do not reset it to loopback.
 PORT=<unused-loopback-port>
 
 DB_HOST=127.0.0.1
@@ -375,7 +375,7 @@ Server side, on the Mini: set `OPEN_BRAIN_BIND_HOST=0.0.0.0` in
 `local-clone.env`, then restart the service:
 
 ```zsh
-launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-local-clone
+launchctl kickstart -k gui/$(id -u)/com.example.open-brain-local-clone
 ```
 
 Check it: `lsof -nP -iTCP:<port> -sTCP:LISTEN` shows `*:<port>`, and from the

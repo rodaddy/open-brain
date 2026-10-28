@@ -117,7 +117,7 @@ def normalise(text: str, scratch: Path) -> str:
     replaced = _UUID.sub("<UUID>", replaced)
     replaced = replaced.replace(str(scratch), "<SCRATCH>")
     replaced = _SCRATCH_PATH.sub("<SCRATCH>", replaced)
-    # The recordings were made on Rico's Mac, where the Development root is
+    # The recordings were made on Dana's Mac, where the Development root is
     # `/srv/dev`. On a machine without that volume the
     # suite runs against a provisioned stand-in root, so the root is environment
     # exactly like a scratch path is -- NOT behaviour. Both spellings collapse to

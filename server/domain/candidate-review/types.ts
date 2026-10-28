@@ -338,7 +338,7 @@ const MACHINE_IDENTITY_MARKERS = [
  * than the names do.
  *
  * Kept narrow on purpose, because the design rejects locking out a human
- * (:200-207): a bare human handle ("rico", "rico-m4", "jane.doe") matches none
+ * (:200-207): a bare human handle ("dana", "dana-m4", "jane.doe") matches none
  * of these. What they match is a version-suffixed identifier -- the shape human
  * handles do not have and model identifiers almost always do.
  */

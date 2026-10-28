@@ -609,7 +609,7 @@ class ObservationSettings(_Base):
 class CanonSettings(_Base):
     """Where the ``SessionStart`` hook reads canon from, and the scope it reads under.
 
-    Canon is the always-known layer -- who Rico is, the rules, this repo's facts
+    Canon is the always-known layer -- who Dana is, the rules, this repo's facts
     -- that the ``SessionStart`` hook injects at the top of every session. It is
     the DEFAULT of ``agent_context_pack``: exactly the three structured-guidance
     sections (``profile_guidance``, ``process_guidance``, ``repo_facts``) and

@@ -16,7 +16,7 @@ const issue = {
   author: { login: "rodaddy" },
   labels: [],
   milestone: null,
-  body: `The ${HOST}-deploy-local script ran on ${IP}:3100 (${HOST[0].toUpperCase()}${HOST.slice(1)}).`,
+  body: `The ${HOST}-deploy-local script ran on ${IP}:3100 (${HOST.charAt(0).toUpperCase()}${HOST.slice(1)}).`,
   comments: [
     {
       author: { login: "rodaddy" },

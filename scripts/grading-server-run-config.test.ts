@@ -18,12 +18,12 @@ function parse(args: string[], env: NodeJS.ProcessEnv = {}) {
 
 describe("parseGradingServerRunConfig", () => {
   it("preserves normal-mode defaults", () => {
-    expect(parse([])).toEqual({ namespace: "rico", gradedBy: "rico", port: 3417 });
+    expect(parse([])).toEqual({ namespace: "dana", gradedBy: "dana", port: 3417 });
   });
 
   it("requires an explicit namespace before frozen startup", () => {
     expect(() =>
-      parse(["--frozen-schema", "dream_run_001", "--graded-by", "human-rico"], {
+      parse(["--frozen-schema", "dream_run_001", "--graded-by", "human-dana"], {
         OB_GRADING_NAMESPACE: "environment-is-not-explicit",
       }),
     ).toThrow(/--namespace is required with --frozen-schema/);
@@ -31,14 +31,14 @@ describe("parseGradingServerRunConfig", () => {
 
   it("requires and trusts a human grader before frozen startup", () => {
     expect(() =>
-      parse(["--frozen-schema", "dream_run_001", "--namespace", "rico"]),
+      parse(["--frozen-schema", "dream_run_001", "--namespace", "dana"]),
     ).toThrow(/--graded-by or GRADED_BY is required/);
     expect(() =>
       parse([
         "--frozen-schema",
         "dream_run_001",
         "--namespace",
-        "rico",
+        "dana",
         "--graded-by",
         "gpt-6",
       ]),
@@ -46,7 +46,7 @@ describe("parseGradingServerRunConfig", () => {
   });
 
   it("rejects a missing or malformed frozen schema value", () => {
-    expect(() => parse(["--frozen-schema", "--namespace", "rico"])).toThrow(
+    expect(() => parse(["--frozen-schema", "--namespace", "dana"])).toThrow(
       /--frozen-schema requires a value/,
     );
     expect(() =>
@@ -54,21 +54,21 @@ describe("parseGradingServerRunConfig", () => {
         "--frozen-schema",
         "public",
         "--namespace",
-        "rico",
+        "dana",
         "--graded-by",
-        "human-rico",
+        "human-dana",
       ]),
     ).toThrow(/dream run schema/);
   });
 
   it("returns the frozen callback inputs with an env-supplied trusted grader", () => {
     expect(
-      parse(["--frozen-schema", "dream_run_042", "--namespace", "rico"], {
-        GRADED_BY: "human-rico",
+      parse(["--frozen-schema", "dream_run_042", "--namespace", "dana"], {
+        GRADED_BY: "human-dana",
       }),
     ).toEqual({
-      namespace: "rico",
-      gradedBy: "human-rico",
+      namespace: "dana",
+      gradedBy: "human-dana",
       port: 3417,
       frozenSchema: "dream_run_042",
     });

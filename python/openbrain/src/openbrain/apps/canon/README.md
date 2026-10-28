@@ -51,7 +51,7 @@ Pattern/Convention:
 
     DRY RUN IS THE DEFAULT. Canon is an AUTHORITY model, not a decay model
     (`docs/code-brain-design.md`: canon > decided > observed), and #444 -- what
-    canon actually contains -- is an open HITL grilling ticket that says "Rico
+    canon actually contains -- is an open HITL grilling ticket that says "Dana
     decides; do not answer this one alone". A tool that promoted rules on sight
     would be answering it. `--apply` is the operator saying the file is the
     decision.

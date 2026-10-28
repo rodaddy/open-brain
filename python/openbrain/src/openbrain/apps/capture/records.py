@@ -60,7 +60,7 @@ Both Sides (#447):
     The TypeScript adapter this package replaced honoured that
     (``scripts/backfill-transcripts.ts:125``); the port carried the operator half
     across and left the assistant half behind. Measured on the dogfood database,
-    ``ob_raw_turns`` in namespace ``rico``:
+    ``ob_raw_turns`` in namespace ``dana``:
 
     ==========  =========  ====  =====  ===================================
     Day         assistant  tool  user   Path

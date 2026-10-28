@@ -76,7 +76,7 @@ def live_pack(**sections: list[dict[str, str]]) -> dict[str, object]:
     """A decoded `agent_context_pack` payload carrying the given sections."""
     return {
         "schema": "openbrain.agent_context_pack.v1",
-        "scope": {"namespace": "rico"},
+        "scope": {"namespace": "dana"},
         "sections": {name: {"items": items} for name, items in sections.items()},
     }
 

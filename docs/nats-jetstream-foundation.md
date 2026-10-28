@@ -42,10 +42,10 @@ Planned host:
 the retired host, co-located with hosted Open Brain.
 
 Planned service:
-`com.rico.open-brain-nats` launchd service for the broker.
+`com.example.open-brain-nats` launchd service for the broker.
 
 Dedicated Open Brain worker service:
-`com.rico.open-brain-local-nats-worker`, installed by
+`com.example.open-brain-local-nats-worker`, installed by
 `scripts/install-nats-worker-launchagent.sh`. This worker is separate from the HTTP
 launchd service and subscribes to NATS request/reply subjects without making
 HTTP `/health` depend on broker or subscription health.
@@ -324,9 +324,9 @@ Local-only validation for #223:
 - docs make deployment to the retired host optional/deferred;
 - Python tests prove package contract pins match the server contract version.
 
-Release validation, deferred until Rico approves deploy:
+Release validation, deferred until Dana approves deploy:
 
-- install or update `com.rico.open-brain-nats-worker` only after the runtime
+- install or update `com.example.open-brain-nats-worker` only after the runtime
   entrypoint exists and the worker tests pass;
 - prove HTTP `/health` remains healthy while the NATS worker is started,
   stopped, and restarted;
@@ -342,8 +342,8 @@ Before NATS becomes the default path, rollback is to keep or restore
 the service and needs rollback:
 
 1. Set Open Brain clients back to HTTP and confirm `/mcp` reads/writes.
-2. Stop or unload `com.rico.open-brain-nats-worker`.
-3. Stop or unload `com.rico.open-brain-nats` if the broker itself is unsafe.
+2. Stop or unload `com.example.open-brain-nats-worker`.
+3. Stop or unload `com.example.open-brain-nats` if the broker itself is unsafe.
 4. Preserve the JetStream store for inspection unless an explicit cleanup
    decision says it contains only minimized metadata and can be deleted.
 5. Remove or rotate NATS credentials through the approved secret store.

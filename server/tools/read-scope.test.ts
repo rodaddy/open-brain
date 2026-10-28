@@ -70,13 +70,13 @@ async function clientCapturingQueries(
 
 describe("session_load scopes reads from the auth-derived predicate", () => {
   test("a namespaced role reads its own namespace and shared-kb", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({ name: "session_load", arguments: {} });
 
     const query = onlyQuery(queries);
     expect(query.sql).toContain("namespace = ANY($1::text[])");
-    expect(query.values).toEqual([["rico", "shared-kb"]]);
+    expect(query.values).toEqual([["dana", "shared-kb"]]);
   });
 
   test("a global role reads every namespace with no predicate at all", async () => {
@@ -90,7 +90,7 @@ describe("session_load scopes reads from the auth-derived predicate", () => {
   });
 
   test("the project filter and the namespace predicate get distinct placeholders", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "session_load",
@@ -100,7 +100,7 @@ describe("session_load scopes reads from the auth-derived predicate", () => {
     const query = onlyQuery(queries);
     expect(query.sql).toContain("project = $1");
     expect(query.sql).toContain("namespace = ANY($2::text[])");
-    expect(query.values).toEqual(["open-brain", ["rico", "shared-kb"]]);
+    expect(query.values).toEqual(["open-brain", ["dana", "shared-kb"]]);
   });
 
   test("a role without session read permission never reaches the pool", async () => {

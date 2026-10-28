@@ -32,8 +32,8 @@ const injected: SharedNamespaceConfig = {
 
 const identity: AuthIdentity = {
   role: "agent",
-  clientId: "rico",
-  tokenClientId: "rico",
+  clientId: "dana",
+  tokenClientId: "dana",
   namespaceSource: "token",
 };
 
@@ -41,7 +41,7 @@ describe("read-scope helpers honour injected shared-namespace names", () => {
   test("readableNamespaces returns the injected physical shared namespace", () => {
     expect(() => readableNamespaces(identity)).toThrow(/sharedNamespaceNames/);
     expect(readableNamespaces(identity, {}, injected)).toEqual([
-      "rico",
+      "dana",
       "lane3-physical-kb",
     ]);
   });
@@ -62,7 +62,7 @@ describe("read-scope helpers honour injected shared-namespace names", () => {
       "lane3-physical-kb",
     );
     expect(namespaceFilterFor(identity, undefined, {}, injected)).toEqual([
-      "rico",
+      "dana",
       "lane3-physical-kb",
     ]);
   });
@@ -74,6 +74,6 @@ describe("read-scope helpers honour injected shared-namespace names", () => {
     });
 
     expect(sql).toBe(" AND t.namespace = ANY($1::text[])");
-    expect(params).toEqual([["rico", "lane3-physical-kb"]]);
+    expect(params).toEqual([["dana", "lane3-physical-kb"]]);
   });
 });

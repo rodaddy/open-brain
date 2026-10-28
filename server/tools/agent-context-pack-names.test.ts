@@ -29,8 +29,8 @@ const injected: SharedNamespaceConfig = {
 
 const identity: AuthIdentity = {
   role: "agent",
-  clientId: "rico",
-  tokenClientId: "rico",
+  clientId: "dana",
+  tokenClientId: "dana",
   namespaceSource: "token",
 };
 

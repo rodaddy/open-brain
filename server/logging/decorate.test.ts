@@ -143,12 +143,12 @@ describe("withLogging", () => {
   it("merges caller-supplied fields into the entry line", () => {
     const capture = captureLogger();
     const noop = withLogging(
-      { logger: capture.logger, name: "noop", fields: { tenant: "rico" } },
+      { logger: capture.logger, name: "noop", fields: { tenant: "dana" } },
       () => undefined,
     );
 
     noop();
-    expect(capture.entries()[0]?.tenant).toBe("rico");
+    expect(capture.entries()[0]?.tenant).toBe("dana");
   });
 });
 

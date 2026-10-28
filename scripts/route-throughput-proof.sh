@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/bash
 # Standing check (issue 1525): the scheduled dream.route, running as the real
 # server on a disposable clone of the dogfood database, routes at least 2x
-# Rico's measured real peak, and the thoughts it writes are embedded.
+# Dana's measured real peak, and the thoughts it writes are embedded.
 # Usage: scripts/route-throughput-proof.sh [--measure-only]
 set -euo pipefail
 
@@ -12,17 +12,17 @@ export PATH="$NODE_BIN:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DB="${ROUTE_PROOF_SOURCE_DB:-open_brain_local_20260724}"
 WINDOW_MIN="${ROUTE_PROOF_WINDOW_MIN:-6}"
-PGCONN=(-h 127.0.0.1 -p 5432 -U rico)
+PGCONN=(-h 127.0.0.1 -p 5432 -U dana)
 MEASURE_ONLY=0
 [[ "${1:-}" == "--measure-only" ]] && MEASURE_ONLY=1
 
 q() { psql "${PGCONN[@]}" -d "$1" -XAtq -v ON_ERROR_STOP=1 -c "$2"; }
 
 # --- a. Target (read-only on the source) ---
-LIVE="namespace = 'rico' AND created_at > now() - interval '60 days' AND occurred_at IS NOT NULL AND occurred_at > created_at - interval '1 hour'"
+LIVE="namespace = 'dana' AND created_at > now() - interval '60 days' AND occurred_at IS NOT NULL AND occurred_at > created_at - interval '1 hour'"
 peak_hour=$(q "$SRC_DB" "SELECT coalesce(max(c),0) FROM (SELECT count(*) c FROM ob_raw_turns WHERE $LIVE GROUP BY date_trunc('hour', created_at)) s")
-cands=$(q "$SRC_DB" "SELECT count(*) FROM candidate_memory WHERE namespace = 'rico' AND parent_id IS NULL AND embedding IS NOT NULL")
-turns=$(q "$SRC_DB" "SELECT count(*) FROM ob_raw_turns WHERE namespace = 'rico'")
+cands=$(q "$SRC_DB" "SELECT count(*) FROM candidate_memory WHERE namespace = 'dana' AND parent_id IS NULL AND embedding IS NOT NULL")
+turns=$(q "$SRC_DB" "SELECT count(*) FROM ob_raw_turns WHERE namespace = 'dana'")
 if (( turns > 0 )); then
   ratio=$(q "$SRC_DB" "SELECT round($cands::numeric / $turns, 4)")
   target_per_hour=$(q "$SRC_DB" "SELECT ceil(2 * $peak_hour * $cands::numeric / $turns)::bigint")
@@ -44,7 +44,7 @@ SERVER_PID=""
 CLONE_CREATED=0
 teardown() {
   if [[ -n "$SERVER_PID" ]]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
-  if (( CLONE_CREATED )); then dropdb "${PGCONN[@]}" --if-exists "$CLONE" || echo "WARN: dropdb failed: dropdb -h 127.0.0.1 -p 5432 -U rico $CLONE" >&2; fi
+  if (( CLONE_CREATED )); then dropdb "${PGCONN[@]}" --if-exists "$CLONE" || echo "WARN: dropdb failed: dropdb -h 127.0.0.1 -p 5432 -U dana $CLONE" >&2; fi
   # The delete gate refuses rm on a $VAR path; hand the literal line to the operator.
   echo "operator cleanup: rm -r $WORKDIR"
 }

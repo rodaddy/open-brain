@@ -120,12 +120,12 @@ async function anchorContentHashNeverLeaksSourceTextIntoTheReceipt() {
     auth,
     baseInput({
       anchorContentHash: "d".repeat(64),
-      metadata: { topics: ["Migrations"], people: ["Rico"] },
+      metadata: { topics: ["Migrations"], people: ["Dana"] },
     }),
   );
   const serialized = JSON.stringify(receipt);
   expect(serialized).not.toContain("Migrations");
-  expect(serialized).not.toContain("Rico");
+  expect(serialized).not.toContain("Dana");
   expect(serialized).not.toContain("release plan");
 }
 
@@ -149,7 +149,7 @@ async function aNewDerivationNeverLogsNamespaceHashIdOrTerms() {
   expect(serialized).not.toContain("11111111-1111-4111-8111-111111111111");
   expect(serialized).not.toContain("Migrations");
   expect(serialized).not.toContain("pgvector");
-  expect(serialized).not.toContain("Rico");
+  expect(serialized).not.toContain("Dana");
   expect(serialized).not.toContain("release plan");
   expectNoHashValueInFields(fields);
 }

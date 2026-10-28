@@ -33,7 +33,7 @@ describe("assertPurgeableNamespace", () => {
   });
 
   test.each([
-    ["an operator namespace", "rico"],
+    ["an operator namespace", "dana"],
     ["the shared knowledge base", "shared-kb"],
     ["a bare empty string", ""],
     ["one character off the prefix", "eval-live-recal-abc123"],
@@ -57,14 +57,14 @@ describe("assertPurgeableNamespace", () => {
       assertPurgeableNamespace(`not-${EVAL_NAMESPACE_PREFIX}abc123`),
     ).toThrow(NamespacePurgeRefused);
     expect(() =>
-      assertPurgeableNamespace(`rico-${EVAL_NAMESPACE_PREFIX}abc123`),
+      assertPurgeableNamespace(`dana-${EVAL_NAMESPACE_PREFIX}abc123`),
     ).toThrow(NamespacePurgeRefused);
   });
 
   test("the refusal message carries no namespace content", () => {
     // A refusal can be pointed at an operator's real namespace, so the message
     // must not echo it into a log or a receipt.
-    const secret = "rico-private-namespace";
+    const secret = "dana-private-namespace";
     let message = "";
     try {
       assertPurgeableNamespace(secret);
@@ -87,7 +87,7 @@ describe("purgeNamespace", () => {
       },
     } as never;
 
-    await expect(purgeNamespace(exploding, "rico")).rejects.toThrow(
+    await expect(purgeNamespace(exploding, "dana")).rejects.toThrow(
       NamespacePurgeRefused,
     );
   });

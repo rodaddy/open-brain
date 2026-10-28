@@ -4,7 +4,7 @@
     {
       "id": "workflow-evaluator-no-imports",
       "query": "can a Claudex mixed-model workflow script use import statements",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "thoughts",
@@ -17,7 +17,7 @@
     {
       "id": "claude-hook-payload-case",
       "query": "what casing do Claude hook payload fields use, tool_name or toolName",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "thoughts",
@@ -35,7 +35,7 @@
     {
       "id": "cliproxyapi-credential-cooldown",
       "query": "why does a single upstream 5xx take a CLIProxyAPI account offline for minutes",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "thoughts",
@@ -48,7 +48,7 @@
     {
       "id": "keybase-volume-unmounted",
       "query": "Keybase broke after a macOS update and the Keybase volume is missing",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "thoughts",
@@ -66,7 +66,7 @@
     {
       "id": "runner-hub-github-auth",
       "query": "should self-hosted runners authenticate with per-repo PATs or a broad token",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "decisions",
@@ -84,7 +84,7 @@
     {
       "id": "mcp2cli-hosted-by-default",
       "query": "when should an mcp2cli service run locally instead of hosted",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "decisions",
@@ -97,7 +97,7 @@
     {
       "id": "workflow-first-inline-runner",
       "query": "what are the exceptions to routing Claudex work through a Workflow",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "decisions",
@@ -221,7 +221,7 @@
           "label": 2
         }
       ],
-      "note": "States Bilby should use the built-in Python module/API path, not mcp2cli, unless Rico explicitly says otherwise."
+      "note": "States Bilby should use the built-in Python module/API path, not mcp2cli, unless Dana explicitly says otherwise."
     },
     {
       "id": "durable-corrections-into-open-brain",
@@ -239,12 +239,12 @@
           "label": 1
         }
       ],
-      "note": "The label-2 row states Rico expects durable operator corrections and preferences saved into Open Brain memory. The label-1 row is the adjacent OB-first preference: relevant, not the answer."
+      "note": "The label-2 row states Dana expects durable operator corrections and preferences saved into Open Brain memory. The label-1 row is the adjacent OB-first preference: relevant, not the answer."
     },
     {
       "id": "handover-git-guard-literal-path",
       "query": "why does the git guard reject a commit that passes the repo path in a variable",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "ob_session_events",
@@ -257,7 +257,7 @@
     {
       "id": "dirty-paths-are-owned",
       "query": "can a session leave a dirty file alone because it belongs to another session",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "ob_session_events",
@@ -270,7 +270,7 @@
     {
       "id": "wave-sizing-for-head-sessions",
       "query": "how many concurrent worker lanes should a head session dispatch at once",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "ob_session_events",
@@ -283,7 +283,7 @@
     {
       "id": "tax-obligation-is-a-json-row",
       "query": "how is a new dated tax obligation added to the calendar",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "ob_session_events",
@@ -301,7 +301,7 @@
     {
       "id": "codex-checkpoint-blocked-on-main",
       "query": "a memories checkout is sitting on protected main and cannot be committed",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "sessions",
@@ -314,7 +314,7 @@
     {
       "id": "zip-as-ownership-artifact",
       "query": "what was chosen as the universal fallback and ownership artifact format",
-      "namespace": "rico",
+      "namespace": "dana",
       "expected": [
         {
           "source_type": "sessions",
@@ -336,7 +336,7 @@
       "note": "Negative isolation case. This is deliberately the same question as `openbrain-access-python-module`, whose answer lives in the `bilby` namespace. Scoped to `skippy`, that row must never be returned: a leak here is a namespace-predicate bug in the retrieval stack, not a ranking miss."
     },
     {
-      "id": "isolation-bilby-query-cannot-reach-rico",
+      "id": "isolation-bilby-query-cannot-reach-dana",
       "query": "does the Claudex Workflow evaluator support import statements",
       "namespace": "bilby",
       "isolation": true,
@@ -345,7 +345,7 @@
         { "source_type": "thoughts", "id": "a4c5c025-c0e1-45a0-b398-63f79376e610" },
         { "source_type": "decisions", "id": "21331f8d-642d-424f-8097-916a3554066a" }
       ],
-      "note": "Second negative isolation case, crossing a different pair of namespaces and two tables. Both forbidden rows live in `rico` and answer the query well; scoped to `bilby` neither may appear."
+      "note": "Second negative isolation case, crossing a different pair of namespaces and two tables. Both forbidden rows live in `dana` and answer the query well; scoped to `bilby` neither may appear."
     },
     {
       "id": "isolation-shared-kb-query-cannot-reach-skippy",

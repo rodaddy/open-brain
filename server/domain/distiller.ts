@@ -323,7 +323,7 @@ interface Classified {
 
 /**
  * Operator speech. The operator is the authority in this corpus, so their turns
- * default to `decision` rather than `fact`: a directive from Rico is a decision
+ * default to `decision` rather than `fact`: a directive from Dana is a decision
  * even when phrased as an observation, and 033_candidate_memory.sql:20-27 makes
  * clear the type is a claim about KIND, not about authority.
  */

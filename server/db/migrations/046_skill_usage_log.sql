@@ -7,7 +7,7 @@
 -- ranking, and no lifecycle state, because a column shaped like a judgement is
 -- an invitation to write one, and the issue body forbids that in terms: the
 -- telemetry "must never categorize, recommend, rotate, shelve, or retire
--- anything." Rico reads the counts and decides.
+-- anything." Dana reads the counts and decides.
 --
 -- WHY A NEW TABLE INSTEAD OF entry_access_log.
 --

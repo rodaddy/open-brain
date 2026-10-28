@@ -50,7 +50,7 @@ function pairRow(over: Record<string, unknown> = {}) {
   return {
     dup_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     survivor_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-    namespace: "rico",
+    namespace: "dana",
     dup_content_hash: "hash-dup",
     dup_occurred_at: new Date("2026-07-28T10:00:00Z"),
     dup_source_turn_ids: ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"],
@@ -311,12 +311,12 @@ describe("runCandidateDedupe — bounds, locking, and reporting", () => {
 
   it("scopes to a namespace when asked", async () => {
     const { pool, seen } = mergePool([]);
-    await runCandidateDedupe({ pool, logger: silentLogger, namespace: "rico" });
+    await runCandidateDedupe({ pool, logger: silentLogger, namespace: "dana" });
     const pairing = expectDefined(
       seen.find((s) => s.text.includes("WITH RECURSIVE scoped")),
       "pairing",
     );
-    expect(pairing.values[0]).toBe("rico");
+    expect(pairing.values[0]).toBe("dana");
   });
 
   it("rolls back and rethrows on a failed write", async () => {

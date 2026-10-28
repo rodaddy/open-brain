@@ -307,12 +307,12 @@ describe("teardownRecords failure labels (#671)", () => {
   it("never lets an arbitrary error's MESSAGE into the label — class name only", async () => {
     // A receipt gets pasted into issues and PRs, and an arbitrary Error.message
     // can carry row content, a namespace value, or a token fragment.
-    const secret = "namespace=rico row=super-secret-content";
+    const secret = "namespace=dana row=super-secret-content";
     const tally = await teardownRecords(["x"], async () => {
       throw new Error(secret);
     });
     expect(tally.failure_labels).toEqual(["Error"]);
-    expect(tally.failure_labels.join(" ")).not.toContain("rico");
+    expect(tally.failure_labels.join(" ")).not.toContain("dana");
     expect(tally.failure_labels.join(" ")).not.toContain("super-secret-content");
   });
 

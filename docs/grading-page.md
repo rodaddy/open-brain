@@ -16,8 +16,8 @@ It prints the URL and the size of the queue, then serves on
 | Flag | Env | Default | What it does |
 |---|---|---|---|
 | `--port` | `GRADING_PORT` | `3417` | Listen port. |
-| `--namespace` | `OB_GRADING_NAMESPACE` | `rico` | Which namespace's candidates to grade. Every read and write is scoped to it. |
-| `--graded-by` | `GRADED_BY` | `rico` | Who is grading. Written to `candidate_memory.graded_by`. |
+| `--namespace` | `OB_GRADING_NAMESPACE` | `dana` | Which namespace's candidates to grade. Every read and write is scoped to it. |
+| `--graded-by` | `GRADED_BY` | `dana` | Who is grading. Written to `candidate_memory.graded_by`. |
 
 The host is **not** configurable: the server binds `127.0.0.1` only, and that
 loopback boundary is what stands in for a token (see the header of

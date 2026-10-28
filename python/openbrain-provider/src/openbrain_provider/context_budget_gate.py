@@ -126,7 +126,7 @@ _DEFAULT_COMPACT_PCT: Final[int] = 92
 _NAG_FRACTION_OF_COMPACT: Final[float] = 0.88
 _ADVISORY_FRACTION_OF_COMPACT: Final[float] = 0.96
 
-#: Rico's 2026-08-19 single-sprint rule: compact once, then hand off after
+#: Dana's 2026-08-19 single-sprint rule: compact once, then hand off after
 #: roughly 200k more tokens. This is intentionally separate from the first-sprint
 #: advisory, whose live profile override is currently higher.
 _DEFAULT_HANDOFF_TOKENS: Final[int] = 200_000
