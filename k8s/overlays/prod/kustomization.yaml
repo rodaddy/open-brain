@@ -1,0 +1,77 @@
+# Open Brain — PROD overlay (issue 762).
+#
+# STATUS: WRITTEN. This overlay renders, and it deliberately renders ZERO pods.
+#
+# This is the overlay Argo would sync. Everything here is the stable slot: the
+# production namespace and the production image tag.
+#
+# THE DEPLOY IS THE `newTag` LINE. Changing it and merging to the GitOps repo
+# is how a version ships; `kubectl set image` is reverted by Argo selfHeal
+# within seconds.
+#
+# WHAT IS NOT HERE, deliberately: no Secret manifests, no Namespace (the Argo
+# Application creates it with CreateNamespace=true), no Argo Application (that
+# lives in apps/ in the k3s-deploy repo), no CNPG Cluster. An Argo-managed
+# Secret is a secret in git.
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: open-brain
+
+resources:
+  - ../../base
+
+# ---------------------------------------------------------------------------
+# THE IMAGE TAG — the one line that is the release.
+#
+# PINNED and EXACT: never `:latest`, never a branch name, never a moving major.
+# The tag must already exist in the registry before this merges, because Argo
+# deploys whatever lands on main and a Deployment pointing at an unbuilt image
+# is an ImagePullBackOff that selfHeal retries forever. Build first (Kaniko Job
+# in the cluster), verify the tag through the registry API, then merge.
+#
+# v0.9.0 matches package.json. NOTHING HAS BEEN BUILT AT THIS TAG YET — this
+# lane wrote manifests and did not build an image. That is safe only because
+# replicas is 0 below.
+# ---------------------------------------------------------------------------
+images:
+  - name: registry.example.internal/you/open-brain
+    newTag: v0.9.0
+
+# ---------------------------------------------------------------------------
+# REPLICAS 0 ON BOTH DEPLOYMENTS.
+#
+# Issue 762's manifests lane creates NO pod. Zero replicas is what makes that
+# true in the artifact rather than in a promise, and it is also what makes the
+# secretKeyRef blocks in the base safe: a secretKeyRef to a key that does not
+# yet exist pins a pod in CreateContainerConfigError forever, and there is no
+# pod to pin.
+#
+# Turning this app on is a separate, deliberate change: confirm the image tag
+# is built and present in the registry, confirm `open-brain-secrets` carries
+# every key the base names, confirm `open-brain-regcred` exists in this
+# namespace, then raise these numbers.
+#
+# Each patch targets a Deployment BY NAME. A patch whose target matches nothing
+# renders clean and green — `kustomize build` exits 0 and kubeconform reports
+# every resource valid — while changing nothing at all. That is why
+# scripts/done-means/762-k3s-manifests.sh asserts on the RENDERED output and
+# not on this file or on an exit code.
+# ---------------------------------------------------------------------------
+patches:
+  - target:
+      kind: Deployment
+      name: open-brain
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+
+  - target:
+      kind: Deployment
+      name: open-brain-nats-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0

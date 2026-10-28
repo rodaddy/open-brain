@@ -1,0 +1,176 @@
+{
+  "id": "server-source-mutation",
+  "description": "Freeze update_source and remove_source against a captured registry id: revisions advance, a stale revision is refused, self-approval is refused, removal is idempotent, and an unknown id is not_found.",
+  "capability": "source-mutation",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-source-mutation",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "register_source",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/parity-mutation.git",
+        "title": "Parity Mutation Repo"
+      },
+      "capture": {
+        "source_id": "source.id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "source": {
+            "id": "<uuid>",
+            "source_kind": "git",
+            "external_id": "https://example.invalid/parity-mutation.git",
+            "title": "Parity Mutation Repo",
+            "approval_state": "pending",
+            "lifecycle_state": "active",
+            "namespace": "{{namespace}}",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "tool": "update_source",
+      "arguments": {
+        "id": "{{source_id}}",
+        "expected_revision": 1,
+        "title": "Parity Mutation Repo Renamed"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "source": {
+            "id": "{{source_id}}",
+            "title": "Parity Mutation Repo Renamed",
+            "namespace": "{{namespace}}",
+            "approval_state": "pending",
+            "lifecycle_state": "active",
+            "revision": 2
+          }
+        }
+      }
+    },
+    {
+      "tool": "update_source",
+      "arguments": {
+        "id": "{{source_id}}",
+        "expected_revision": 1,
+        "title": "Stale Revision Attempt"
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "ok": false,
+          "code": "stale_revision",
+          "error": "source was modified concurrently; re-read and retry"
+        }
+      }
+    },
+    {
+      "tool": "update_source",
+      "arguments": {
+        "id": "{{source_id}}",
+        "expected_revision": 2,
+        "approval_state": "approved"
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "ok": false,
+          "code": "approval_denied",
+          "error": "approval requires an authorized admin/ob-admin token identity"
+        }
+      }
+    },
+    {
+      "tool": "update_source",
+      "arguments": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "expected_revision": 1,
+        "title": "Unknown Source"
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "ok": false,
+          "code": "not_found",
+          "error": "source not found"
+        }
+      }
+    },
+    {
+      "tool": "remove_source",
+      "arguments": {
+        "id": "{{source_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "id": "{{source_id}}"
+        }
+      }
+    },
+    {
+      "tool": "remove_source",
+      "arguments": {
+        "id": "{{source_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "id": "{{source_id}}"
+        }
+      }
+    },
+    {
+      "tool": "list_sources",
+      "arguments": {
+        "source_kind": "git"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "count": 1,
+          "sources": [
+            {
+              "id": "{{source_id}}",
+              "external_id": "https://example.invalid/parity-mutation.git",
+              "title": "Parity Mutation Repo Renamed",
+              "approval_state": "pending",
+              "lifecycle_state": "retired",
+              "namespace": "{{namespace}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tool": "remove_source",
+      "arguments": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "ok": false,
+          "code": "not_found",
+          "error": "source not found"
+        }
+      }
+    }
+  ]
+}

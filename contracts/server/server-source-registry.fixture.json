@@ -1,0 +1,121 @@
+{
+  "id": "server-source-registry",
+  "description": "Freeze the source registry lifecycle: register starts pending, pending is not ingestion-eligible, and remove retires.",
+  "capability": "source-registry",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-source-registry",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "register_source",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/parity-repo.git",
+        "title": "Parity Repo"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "source": {
+            "source_kind": "git",
+            "external_id": "https://example.invalid/parity-repo.git",
+            "title": "Parity Repo",
+            "approval_state": "pending",
+            "lifecycle_state": "active",
+            "namespace": "{{namespace}}",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "tool": "register_source",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/parity-repo.git",
+        "title": "Parity Repo"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "source": {
+            "approval_state": "pending",
+            "revision": 1
+          }
+        }
+      }
+    },
+    {
+      "tool": "source_ingestion_eligibility",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/parity-repo.git"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "eligible": false,
+          "code": "approval_denied"
+        }
+      }
+    },
+    {
+      "tool": "list_sources",
+      "arguments": {
+        "source_kind": "git"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "count": 1,
+          "sources": [
+            {
+              "external_id": "https://example.invalid/parity-repo.git",
+              "approval_state": "pending",
+              "namespace": "{{namespace}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tool": "source_ingestion_eligibility",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/never-registered.git"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "eligible": false,
+          "code": "not_found"
+        }
+      }
+    },
+    {
+      "tool": "source_ingestion_eligibility",
+      "arguments": {
+        "source_kind": "git",
+        "external_id": "https://example.invalid/parity-repo.git"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": true,
+          "eligible": false
+        }
+      }
+    }
+  ]
+}

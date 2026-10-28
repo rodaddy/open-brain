@@ -1,0 +1,38 @@
+{
+  "id": "server-brain-answer-empty",
+  "description": "Freeze the cited-answer no-evidence response in an empty isolated namespace.",
+  "capability": "brain-answer",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-answer",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "brain_answer",
+      "arguments": {
+        "query": "What evidence exists?",
+        "search_mode": "keyword"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "query": "What evidence exists?",
+          "answer": null,
+          "evidence_count": 0,
+          "citations": [],
+          "known_gaps": [
+            "No readable Open Brain evidence was found for: What evidence exists?"
+          ],
+          "uncertainty": [
+            "No readable evidence was available to cite."
+          ]
+        }
+      }
+    }
+  ]
+}

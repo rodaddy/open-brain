@@ -1,0 +1,93 @@
+{
+  "capture": {
+    "config": {
+      "base_url": "https://brain.example",
+      "namespace": "bilby",
+      "token": "fixture-token"
+    },
+    "content": "Distilled compatibility event.",
+    "distilled": true,
+    "event_type": "fact",
+    "operation": "capture",
+    "scope": {
+      "agent": "bilby",
+      "channel_id": "channel",
+      "platform": "discord",
+      "server_id": "guild",
+      "session_key": "compat/session"
+    }
+  },
+  "checkpoint": {
+    "config": {
+      "base_url": "https://brain.example",
+      "namespace": "bilby",
+      "token": "fixture-token"
+    },
+    "distilled": true,
+    "key_decisions": [
+      "Keep the console boundary tolerant."
+    ],
+    "next_steps": [
+      "Validate N-1 compatibility."
+    ],
+    "operation": "checkpoint",
+    "receipt_refs": [
+      "receipt-1"
+    ],
+    "scope": {
+      "agent": "bilby",
+      "channel_id": "channel",
+      "platform": "discord",
+      "server_id": "guild",
+      "session_key": "compat/session"
+    },
+    "summary": "Distilled compatibility checkpoint."
+  },
+  "recall": {
+    "config": {
+      "base_url": "https://brain.example",
+      "namespace": "bilby",
+      "token": "fixture-token"
+    },
+    "max_latency_ms": 250,
+    "max_tokens": 400,
+    "operation": "recall",
+    "query": "Compatibility recall query.",
+    "requested_sections": [
+      "working_set"
+    ],
+    "scope": {
+      "agent": "bilby",
+      "channel_id": "channel",
+      "platform": "discord",
+      "server_id": "guild",
+      "session_key": "compat/session"
+    }
+  },
+  "wrap": {
+    "config": {
+      "base_url": "https://brain.example",
+      "namespace": "bilby",
+      "token": "fixture-token"
+    },
+    "distilled": true,
+    "key_decisions": [
+      "Keep the console boundary tolerant."
+    ],
+    "next_steps": [
+      "Roll out the compatible package."
+    ],
+    "operation": "wrap",
+    "receipt_refs": [
+      "receipt-2"
+    ],
+    "scope": {
+      "agent": "bilby",
+      "channel_id": "channel",
+      "platform": "discord",
+      "server_id": "guild",
+      "session_key": "compat/session"
+    },
+    "summary": "Distilled compatibility wrap."
+  }
+}

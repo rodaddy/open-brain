@@ -1,0 +1,24 @@
+{
+  "id": "server-operator-diagnostics",
+  "description": "Freeze the operator_doctor privilege boundary: an agent identity is refused with a role-named denial, because doctor output describes the deployment rather than any namespace's memory.",
+  "capability": "operator-diagnostics",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-operator-diagnostics",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "operator_doctor",
+      "arguments": {},
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: admin or ob-admin role required"
+      }
+    }
+  ]
+}

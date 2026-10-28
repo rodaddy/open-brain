@@ -1,0 +1,393 @@
+import type { Express, RequestHandler } from "express";
+import type { Logger } from "pino";
+import { natsHealthFromConfig, type ServerConfig } from "../config.ts";
+import type { Database } from "../db/pool.ts";
+import type { ServerModuleBoundary } from "../module.ts";
+import type { BackgroundRuntime } from "../domain/background-runtime.ts";
+import {
+  createMaintenanceRuntime,
+  type MaintenanceRuntime,
+} from "../maintenance/index.ts";
+import {
+  readCaptureLiveness,
+  type CaptureObservation,
+} from "../capture/liveness-observer.ts";
+import type { MaintenanceJobHandler } from "../maintenance/maintenance-queue-runner.ts";
+import {
+  createSingleWorkerTransportApp,
+  createSessionTransportHandlers,
+  type McpServerFactory,
+  type SessionTransportFactory,
+  type SessionTransportHandlers,
+  type TransportNatsHealth,
+} from "../transport/index.ts";
+import { createRemSignalSource } from "../maintenance/rem-signal-source.ts";
+
+export const APPLICATION_BOUNDARY: ServerModuleBoundary = {
+  name: "application",
+  owns: ["composition", "startup ordering", "shutdown ordering"],
+  excludes: ["HTTP routing", "SQL", "authorization policy", "tool behavior"],
+};
+
+export interface ShadowApplicationInput {
+  readonly config: ServerConfig;
+  readonly logger: Logger;
+  readonly database: Database;
+  readonly authenticate: RequestHandler;
+  readonly parseRequestBody: RequestHandler;
+  readonly serverFactory: McpServerFactory;
+  readonly transportFactory?: SessionTransportFactory;
+  readonly fetch?: typeof fetch;
+  readonly natsHealth?: () => TransportNatsHealth;
+  /**
+   * Long-running work this application must shut down, in order, on close.
+   *
+   * The maintenance queue runner is the one that matters today. It is passed as
+   * a PORT rather than constructed here for a specific reason: `stop()` on a
+   * claim-then-dispatch runner is not a cancel, it is a DRAIN. It must await
+   * the in-flight claim so rows that claim already leased land in the tracked
+   * set before the drain waits on it — otherwise those rows sit `running` with
+   * a live lease and no handler, stuck until the lease expires
+   * (`docs/sme/domain-backend.md`, PR #350 / issue #343). That behavior belongs
+   * to the runner and is already implemented there; the application's job is
+   * only to CALL it, and to call it before the database goes away.
+   */
+  readonly backgroundRuntimes?: readonly BackgroundRuntime[];
+  /**
+   * Job kinds this process can dispatch. Supplying it composes the maintenance
+   * queue runner from `config.maintenance` and appends it to the shutdown order.
+   *
+   * This is what turned the `backgroundRuntimes` port from a declared shape into
+   * a wired one: before it, the port's only suppliers were test fakes, so the
+   * ordered shutdown above was proven against runtimes that had no leases to
+   * drain. Composing here rather than making every caller assemble a queue keeps
+   * "maintenance is running" and "maintenance is in the shutdown order" the same
+   * decision — they cannot disagree, which is the failure the drain exists to
+   * prevent.
+   *
+   * Omitted means this process dispatches nothing, which is correct for a test
+   * composition and for any worker deliberately not running maintenance. It is
+   * NOT the same as `config.maintenance.enabled: false`, which is an operator
+   * opting a process out; both end with no runtime in the shutdown order.
+   */
+  readonly maintenanceHandlers?: ReadonlyMap<string, MaintenanceJobHandler>;
+  /**
+   * Start maintenance polling immediately (default true). `false` composes the
+   * runner and its shutdown wiring without a timer, for tests that drive ticks
+   * deterministically.
+   */
+  readonly maintenanceAutoStart?: boolean;
+  /**
+   * Middleware mounted ahead of every route, and extra routers mounted after
+   * `/health`. Passed straight through to the transport app builder, which owns
+   * the ordering rule; see `server/transport/http-app.ts`.
+   *
+   * They are optional because the shadow compositions that predate the real
+   * entrypoint compose no REST surface at all, and a test that only needs
+   * `/health` and `/mcp` should not have to supply an empty CORS handler to get
+   * one.
+   */
+  readonly beforeRoutes?: readonly RequestHandler[];
+  readonly routers?: ReadonlyArray<{
+    readonly path: string;
+    readonly handler: RequestHandler;
+  }>;
+  /**
+   * This process's view of the raw-capture lane (#652).
+   *
+   * Supplying it composes the capture block into `/health`; omitting it
+   * publishes no block and cannot degrade the status. That asymmetry is the
+   * whole contract: a deployment that legitimately runs no capture lane — an
+   * opted-out worker, a process no hook reports to — must not report itself
+   * broken for a job it was never given. Absent means "not my job"; `stale`
+   * means "my job and I am not doing it" (`docs/lane-contract.md` Tightenings
+   * rounds 8 and 13).
+   *
+   * It is a PORT rather than a construction here for the same reason the
+   * background runtimes are: the observer owns a query cadence and a timer, and
+   * the composition's job is to place its reading, not to decide how often the
+   * database is asked. `server/capture/liveness-observer.ts` builds one.
+   *
+   * Returning `undefined` from the observer is the ordinary not-yet-observed
+   * case — a fresh process, a quiet window — and is treated exactly as absence.
+   */
+  readonly captureObserver?: () => CaptureObservation | undefined;
+}
+
+/**
+ * `BackgroundRuntime` moved down to the domain tier so the maintenance tier can
+ * implement it without importing upward (issue 1210). Re-exported here because
+ * application-tier consumers — `./nats.ts` among them — take it from this
+ * module, and the move must not break the tier it left.
+ */
+export type { BackgroundRuntime } from "../domain/background-runtime.ts";
+
+export interface ShadowApplication {
+  readonly app: Express;
+  readonly sessions: SessionTransportHandlers;
+  /**
+   * Everything this application will stop on close, in the order it will stop
+   * it. Exposed so a caller (and a test) can see the composed shutdown order
+   * rather than infer it — a runtime that is running but absent from this list
+   * is the abandoned-lease bug, and it should be observable, not silent.
+   */
+  readonly backgroundRuntimes: readonly BackgroundRuntime[];
+  close(): Promise<void>;
+}
+
+/**
+ * Compose the session transport handlers.
+ *
+ * `transportFactory` stays conditionally spread rather than defaulted: the
+ * transport builder owns its own default, and passing an explicit `undefined`
+ * is not the same call.
+ */
+function composeSessions(
+  input: ShadowApplicationInput,
+  transportLogger: Logger,
+): SessionTransportHandlers {
+  return createSessionTransportHandlers({
+    config: input.config.transport,
+    logger: transportLogger,
+    serverFactory: input.serverFactory,
+    ...(input.transportFactory ? { transportFactory: input.transportFactory } : {}),
+  });
+}
+
+/**
+ * The optional fields of the `/health` block, kept as conditional spreads.
+ *
+ * Each one is present-or-absent rather than present-and-undefined, because the
+ * health builder distinguishes the two: an absent `revision` publishes no
+ * revision, an explicit `undefined` is a different call. Split out only so the
+ * composition root stays under the branch count; every read is the same read
+ * from the same place, in the same order.
+ */
+function composeHealthOverrides(input: ShadowApplicationInput) {
+  return {
+    ...(input.config.transport.deployedRevision
+      ? { revision: input.config.transport.deployedRevision }
+      : {}),
+    ...(input.config.transport.embeddingBaseUrl
+      ? { embeddingBaseUrl: input.config.transport.embeddingBaseUrl }
+      : {}),
+    ...(input.config.transport.embeddingApiKey
+      ? { embeddingApiKey: input.config.transport.embeddingApiKey }
+      : {}),
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+  };
+}
+
+/**
+ * Compose the `/health` inputs.
+ *
+ * `readProducerHealth` is passed in rather than read from a captured value for
+ * the LATE-BINDING reason spelled out at its call site: the maintenance runtime
+ * is composed after this object, and the reading must be taken per request.
+ */
+function composeHealth(
+  input: ShadowApplicationInput,
+  transportLogger: Logger,
+  readProducerHealth: () => MaintenanceProducerHealth | undefined,
+) {
+  return {
+    // Called through `input.database` rather than passed as a bare reference:
+    // `Database.health` is an interface method, so detaching it would drop the
+    // receiver for any implementation that needs `this`.
+    databaseHealth: () => input.database.health(),
+    hostname: input.config.transport.hostname,
+    serverIp: input.config.transport.serverIp,
+    serverIps: input.config.transport.serverIps,
+    probeTimeoutMs: input.config.transport.healthProbeTimeoutMs,
+    logger: transportLogger,
+    ...composeHealthOverrides(input),
+    // Config is the DEFAULT source of the `nats` health block, not an optional
+    // extra. `server/transport/health.ts` falls back to a hardcoded
+    // http/available literal when nothing supplies one, which is correct only
+    // for a worker that genuinely runs HTTP -- so a worker configured with
+    // `OPENBRAIN_TRANSPORT=nats` and a broken bridge would report itself
+    // `healthy` on the strength of a constant. Deriving it from the parsed
+    // config makes the degraded case reachable; an explicit `natsHealth` still
+    // wins, because a LIVE bridge knows its own failure counters and config
+    // cannot.
+    natsHealth: input.natsHealth ?? (() => natsHealthFromConfig(input.config.nats)),
+    producerHealth: readProducerHealth,
+    // #652. The reading #648 built and nothing composed. Same LATE-BINDING as
+    // `producerHealth` above and for the same reason: the closure is invoked
+    // per request, so `/health` publishes what the capture lane looks like NOW
+    // rather than what it looked like at boot — which is precisely the
+    // stale-but-confident answer this feature exists to replace.
+    //
+    // No observer composes no block: `readCaptureLiveness(undefined)` returns
+    // `undefined`, `getSingleWorkerHealth` omits the field, and the status is
+    // untouched. Absence is not staleness, and it is the ordinary case for
+    // most workers rather than an edge (a deployment can run several).
+    captureHealth: () => readCaptureLiveness(input.captureObserver?.()),
+  };
+}
+
+/** The `producer` block of `/health`, as the transport layer publishes it. */
+interface MaintenanceProducerHealth {
+  readonly quiet_ms: number;
+  readonly stale: boolean;
+  readonly quiet_threshold_ms: number;
+  readonly overlapped_ticks: number;
+  readonly completed_ticks: number;
+}
+
+/** Snake-case the runner's producer liveness for `/health`. */
+function readMaintenanceProducerHealth(
+  maintenance: MaintenanceRuntime | undefined,
+): MaintenanceProducerHealth | undefined {
+  const liveness = maintenance?.producerLiveness();
+  if (!liveness) return undefined;
+  return {
+    quiet_ms: liveness.quietMs,
+    stale: liveness.stale,
+    quiet_threshold_ms: liveness.quietThresholdMs,
+    overlapped_ticks: liveness.overlappedTicks,
+    completed_ticks: liveness.completedTicks,
+  };
+}
+
+/**
+ * Compose the maintenance runner, or nothing.
+ *
+ * `createMaintenanceRuntime` returns undefined when the operator disabled
+ * maintenance for this process, and a process that dispatches no job kinds
+ * composes none at all. `autoStart` stays conditionally spread so the runtime's
+ * own default applies when the caller expressed no preference.
+ */
+function composeMaintenance(
+  input: ShadowApplicationInput,
+  readRemSignals?: () => Promise<
+    import("../maintenance/maintenance-sweep.ts").RemEligibilitySignals
+  >,
+): MaintenanceRuntime | undefined {
+  if (!input.maintenanceHandlers) return undefined;
+  return createMaintenanceRuntime({
+    config: input.config.maintenance,
+    logger: input.logger.child({ component: "maintenance" }),
+    pool: input.database.pool,
+    handlers: input.maintenanceHandlers,
+    ...(readRemSignals ? { readRemSignals } : {}),
+    ...(input.maintenanceAutoStart !== undefined
+      ? { autoStart: input.maintenanceAutoStart }
+      : {}),
+  });
+}
+
+/** Compose the transport app from the session handlers and health inputs. */
+function composeTransportApp(
+  input: ShadowApplicationInput,
+  transportLogger: Logger,
+  sessions: SessionTransportHandlers,
+  rem: {
+    health: ReturnType<typeof composeHealth>;
+    observeMcpRequest?: () => void;
+  },
+): Express {
+  return createSingleWorkerTransportApp({
+    authenticate: input.authenticate,
+    parseRequestBody: input.parseRequestBody,
+    sessions,
+    health: rem.health,
+    logger: transportLogger,
+    ...(rem.observeMcpRequest ? { observeMcpRequest: rem.observeMcpRequest } : {}),
+    ...(input.beforeRoutes ? { beforeRoutes: input.beforeRoutes } : {}),
+    ...(input.routers ? { routers: input.routers } : {}),
+  });
+}
+
+/** Compose the phase-4 shadow implementation without binding a network socket. */
+export function createShadowApplication(
+  input: ShadowApplicationInput,
+): ShadowApplication {
+  const transportLogger = input.logger.child({ component: "transport" });
+  const remSignals = input.config.maintenance.rem?.enabled
+    ? createRemSignalSource(input.database.pool)
+    : undefined;
+  const sessions = composeSessions(input, transportLogger);
+  // #625. The producer reading is deliberately LATE-BOUND: `maintenance` is
+  // composed below this object, because the health block is an input to the
+  // transport app and the runner is a shutdown-order concern. Reading
+  // `maintenance` through a closure invoked per request — rather than
+  // reordering the composition — keeps that ordering intact and, more
+  // importantly, keeps the reading LIVE. A value captured here would be the
+  // producer's liveness at boot, which is exactly the stale-but-confident
+  // answer the issue is about.
+  const health = composeHealth(input, transportLogger, () =>
+    readMaintenanceProducerHealth(maintenance),
+  );
+  const app = composeTransportApp(input, transportLogger, sessions, {
+    health,
+    ...(remSignals ? { observeMcpRequest: () => remSignals.observeMcpRequest() } : {}),
+  });
+  // Compose maintenance BEFORE returning, so the runner and its place in the
+  // shutdown order are created together.
+  //
+  // Caller-supplied runtimes stop first, then maintenance. The queue runner is
+  // the drain that needs the database longest -- it must finish jobs it has
+  // already leased -- so it sits closest to the database in the ordering.
+  const maintenance = composeMaintenance(
+    input,
+    remSignals ? () => remSignals.read() : undefined,
+  );
+  const backgroundRuntimes: readonly BackgroundRuntime[] = [
+    ...(input.backgroundRuntimes ?? []),
+    ...(maintenance ? [maintenance] : []),
+  ];
+
+  return {
+    app,
+    sessions,
+    backgroundRuntimes,
+    close: () => closeInOrder(input.logger, sessions, backgroundRuntimes),
+  };
+}
+
+/**
+ * Shut down in dependency order: stop accepting work, then drain, then release.
+ *
+ * SESSIONS FIRST. While a session is live an MCP handler can still enqueue
+ * maintenance work, so draining the runner before closing sessions would let a
+ * late request refill the queue after the drain had already passed it.
+ *
+ * BACKGROUND RUNTIMES SECOND, and they are drained BEFORE the caller closes the
+ * database, because a claim-then-dispatch runner needs its pool to finish the
+ * jobs it has already leased. Killing the pool first turns an orderly drain
+ * into the exact abandoned-lease failure the drain exists to prevent. The
+ * composed maintenance runner is last in this list for that reason: it is the
+ * runtime that needs the database for the longest.
+ *
+ * EVERY runtime is stopped even if an earlier one throws. A shutdown path that
+ * abandons the remaining runtimes on the first failure leaks precisely when
+ * something is already going wrong, which is the worst moment to also lose the
+ * drain. Failures are logged with an error CATEGORY, never the error object,
+ * and the first one is rethrown so a caller cannot read a partial shutdown as a
+ * clean one.
+ */
+async function closeInOrder(
+  logger: Logger,
+  sessions: SessionTransportHandlers,
+  backgroundRuntimes: readonly BackgroundRuntime[],
+): Promise<void> {
+  await sessions.close();
+  let firstFailure: unknown;
+  for (const runtime of backgroundRuntimes) {
+    try {
+      await runtime.stop();
+      logger.info({ runtime: runtime.name }, "background_runtime_stopped");
+    } catch (error: unknown) {
+      firstFailure ??= error;
+      logger.error(
+        {
+          runtime: runtime.name,
+          error_category: error instanceof Error ? error.name : typeof error,
+        },
+        "background_runtime_stop_failed",
+      );
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
+}

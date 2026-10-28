@@ -1,0 +1,393 @@
+# Open Brain
+
+A semantic knowledge base and memory system built as an [MCP](https://modelcontextprotocol.io/) server. Store thoughts, decisions, contacts, sessions, and projects in PostgreSQL with pgvector — then search across all of them with hybrid vector + keyword retrieval.
+
+Built for AI agents that need persistent, searchable memory across conversations.
+
+## Features
+
+- **Contract-first MCP tools** for reading, writing, and managing knowledge
+- **Hybrid search** — reciprocal rank fusion (RRF) over HNSW vector similarity + PostgreSQL full-text search
+- **Cognitive tiering** — hot/warm/cold memory lifecycle with usage-based scoring
+- **Per-consumer auth** — role-based access control with scoped tokens (admin, agent, readonly, etc.)
+- **Auto-embedding** — content is embedded on write via `EMBEDDING_BASE_URL`
+- **Session management** — stateful MCP sessions with upsert, deduplication, and TTL expiry
+- **Curation pipeline** — automated duplicate detection, staleness decay, and LLM-as-judge quality scoring
+
+## Tools and Contract
+
+`get_contract` is the source of truth for the Open Brain tool surface and input
+contract. Downstream clients should not hard-code the tool list from this
+README; they should fetch the live contract and, when they need model tool
+schemas, convert it through the `openbrain-memory` Python package.
+
+Major tool groups include search and synthesis (`search_brain`, `search_all`,
+`brain_answer`), memory writes (`log_thought`, `log_decision`,
+`append_session_event`, `session_wrap`), session lifecycle (`session_start`,
+`session_context`, `session_load`, `session_save`), repo facts
+(`upsert_repo_fact`, `list_repo_facts`), lane state (`lane_upsert`,
+`lane_load`), contacts, entries, tiers, and curation.
+
+## Prerequisites
+
+- Node.js 24 (native TypeScript type stripping) and npm
+- PostgreSQL 13+ with [pgvector](https://github.com/pgvector/pgvector) extension
+- An OpenAI-compatible embedding endpoint
+
+## Setup
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/rodaddy/open-brain.git
+cd open-brain
+npm ci
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your values:
+
+```env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=open_brain
+DB_USER=postgres
+DB_PASSWORD=your-password
+
+# Embedding service (any OpenAI-compatible /v1/embeddings endpoint)
+EMBEDDING_BASE_URL=http://localhost:8791/v1
+EMBEDDING_API_KEY=your-key
+EMBEDDING_MODEL=embeddinggemma-300m-8bit
+EMBEDDING_DIMENSIONS=768
+
+# Optional operator opt-in for the public search_brain default
+# Non-English keyword/hybrid FTS is recomputed on the fly and is not index-backed
+# (admin/ob-admin only; ordinary roles degrade to english -- see docs/fts-operations.md)
+# OPENBRAIN_FTS_CONFIG=german
+# Statement timeout for the permitted non-default (unindexed) FTS path, ms
+# OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS=5000
+
+# Server
+PORT=3100
+
+# Auth tokens (generate with: openssl rand -hex 32)
+AUTH_TOKEN_ADMIN=
+AUTH_TOKEN_AGENT=
+AUTH_TOKEN_DISCORD=
+AUTH_TOKEN_OB_ADMIN=
+AUTH_TOKEN_PROMOTER=
+AUTH_TOKEN_READONLY=
+```
+
+Generate each token with `openssl rand -hex 32`.
+
+### 3. Set up the database
+
+Enable pgvector and run migrations:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+```bash
+npm run migrate
+```
+
+### 4. Start the server
+
+```bash
+npm run start
+```
+
+The MCP server listens on `http://localhost:3100` with Streamable HTTP transport.
+
+### MCP Session Limits
+
+Open Brain keeps stateful Streamable HTTP sessions in memory and expires idle
+sessions after 30 minutes. Initialize requests over the active-session cap return
+HTTP 429 with `Retry-After` and a machine-readable
+`session_cap_exceeded` response.
+
+Defaults:
+
+- `OPEN_BRAIN_MAX_SESSIONS=100`
+- `OPEN_BRAIN_SESSION_RETRY_AFTER_SECONDS=2`
+
+`OPEN_BRAIN_MAX_SESSIONS` is a safety cap, not the primary fleet-throttling
+mechanism. Prefer client retry/backoff behavior and explicit session cleanup
+before raising it.
+
+### Deploy And qmd Runtime
+
+The one live Open Brain is the Mini's launchd service
+`com.rico.open-brain-local-clone`, deployed from a clean `main` at a release tag
+with `scripts/local-clone-deploy.sh`. The procedure and the installed release are
+in [`docs/local-clone-dogfood.md`](local-clone-dogfood.md) ("Installed release")
+and [`docs/local-release-deploy-sop.md`](local-release-deploy-sop.md). Deploys
+are owned by this repository, not by hand-copying files; merging to `main`
+validates the repo, and the deploy is a separate release gate.
+
+macOS shell rule: never call `/bin/bash` or rely on the old Apple bash. Use the
+Homebrew bash path explicitly in automation.
+
+The Open Brain runtime reads qmd through `QMD_PATH`. Do not put qmd indexes,
+qmd models, Postgres data, or required production `node_modules` under the
+source checkout.
+
+NATS transport rollout is separate from the HTTP deploy. The local NATS
+request/reply worker label is `com.rico.open-brain-local-nats-worker`; install
+or check it with `scripts/install-nats-worker-launchagent.sh --local` (`--check` for
+the liveness assertion).
+
+qmd is a repo-knowledge compiler and optional deep lookup source. It is not a
+required distributed memory layer for agents. Required qmd-
+derived facts must be promoted into Open Brain; remote qmd access remains a
+future best-effort escape hatch unless a separate approved wrapper ships.
+See [`docs/roadmap/optional-qmd-deep-lookup.md`](roadmap/optional-qmd-deep-lookup.md).
+
+Smoke after startup:
+
+```bash
+curl -fsS http://127.0.0.1:3100/health
+mcp2cli cache warm open-brain
+mcp2cli cache diff open-brain
+OPEN_BRAIN_CODEX_SMOKE_WRITE=1 npm run codex-memory-smoke
+```
+
+## Python Client Package
+
+The reusable Python package lives in `python/openbrain-memory/`. Install it on
+agent hosts, automation hosts, or any Python runtime that talks to Open Brain.
+Installing the package does not run the Open Brain service locally; the service
+remains remote.
+
+Preferred install sources:
+
+```bash
+# Published/internal package, once available
+uv pip install --python /path/to/venv/bin/python openbrain-memory==<version>
+
+# Reviewed wheel artifact
+uv pip install --python /path/to/venv/bin/python /path/to/openbrain_memory-<version>-py3-none-any.whl
+
+# Transitional git-subdirectory install, pinned to a reviewed commit
+uv pip install --python /path/to/venv/bin/python \
+  "git+https://github.com/rodaddy/open-brain.git@<40-char-commit>#subdirectory=python/openbrain-memory"
+```
+
+Do not use a moving branch or unpinned package for host installs. Use a
+reviewed wheel, exact package version, or a full 40-character commit pin.
+
+Runtime configuration for package consumers:
+
+```bash
+export OPENBRAIN_BASE_URL="https://open-brain.example.com"
+export OPENBRAIN_TOKEN="..."              # bearer token; never commit this
+export OPENBRAIN_NAMESPACE="nagatha"      # normal agent token namespace
+export OPENBRAIN_AGENT_ID="nagatha"
+```
+
+For normal agent-role tokens, namespace authority is enforced by the server from
+the bearer token. `OPENBRAIN_NAMESPACE` must match the token-bound identity;
+cross-namespace access requires an explicit delegated privileged role/path.
+
+Trusted lab-only direct HTTP to the active Mac Mini endpoint requires an
+explicit opt-in because bearer tokens travel over the request:
+
+```bash
+export OPENBRAIN_BASE_URL="http://192.0.2.21:3100"
+export OPENBRAIN_ALLOW_INSECURE_HTTP=1
+```
+
+Use `https://open-brain.example.com` or direct `192.0.2.21:3100` for current
+host canaries. Only two hosts belong to this project: this machine while
+developing, and production-host when the dev work is done. A retired host may still
+answer and still hold old Open Brain data — a successful connection is not
+evidence it is in scope.
+
+For full package usage, schema helper, and live canary
+guidance, see [`python/openbrain-memory/README.md`](../python/openbrain-memory/README.md).
+
+## Auth & Permissions
+
+Each consumer gets a scoped Bearer token. Roles control which tables are readable/writable:
+
+| Role | Read | Write | Delete |
+|------|------|-------|--------|
+| `admin` | All tables | All tables | All tables |
+| `agent` | All tables | thoughts, decisions, relationships, sessions | — |
+| `discord` | — | thoughts | — |
+| `ob-admin` | All tables | All tables | All tables |
+| `promoter` | Shared promotion scope | Curated shared-kb promotions | — |
+| `readonly` | All tables | — | — |
+
+Set tokens via `AUTH_TOKEN_ADMIN`, `AUTH_TOKEN_AGENT`, `AUTH_TOKEN_DISCORD`,
+`AUTH_TOKEN_OB_ADMIN`, `AUTH_TOKEN_PROMOTER`, and `AUTH_TOKEN_READONLY` in your
+`.env`. You can also add custom per-user tokens with the `AUTH_TOKEN_USER_*`
+pattern. `promoter` is for controlled shared-kb promotion flows, not normal
+agent identity. `ob-admin` is a break-glass, full-RWD server-side admin identity
+for human operators (manual promotions, deletions) -- it is not for n8n.io
+automations (it was renamed from the misnamed, unused `n8n` role in #168).
+
+## Database Schema
+
+Five core tables, all with 768-dimensional halfvec embeddings and HNSW indexes:
+
+- **thoughts** — ideas, observations, notes
+- **decisions** — titled decisions with rationale and alternatives
+- **relationships** — contacts with warmth scoring and structured fields
+- **projects** — named projects with status and metadata
+- **sessions** — session summaries with blockers, next steps, and key decisions
+
+Supporting tables: `entry_access_log` (usage tracking), `discarded_entries` (archive staging), `mcp_tool_audit_log` (privacy-safe MCP tool audit — see [docs/operator-audit-log.md](operator-audit-log.md)), `_migrations`.
+
+## Search
+
+`search_brain` fuses results from two retrieval paths:
+
+1. **Vector search** — HNSW nearest-neighbor over halfvec(768) embeddings (cosine distance)
+2. **Full-text search** — PostgreSQL `tsvector`; English uses the stored GIN-indexed `search_vector`
+
+English is the shared default and preserves existing search behavior. Supported non-English configurations recompute the same source text with PostgreSQL `to_tsvector` on the fly for keyword and hybrid searches, so those scans are not index-backed. `OPENBRAIN_FTS_CONFIG` is an operator opt-in that changes the public `search_brain` deployment default; it does not implicitly change sibling `executeSearch` consumers.
+
+The non-English path is a privilege boundary on the **effective** configuration for keyword/hybrid searches, regardless of whether it came from the request or the env default:
+
+- A caller may always explicitly select English.
+- An explicitly requested effective non-English `fts_config` requires the `admin` or `ob-admin` role (content-free denial otherwise).
+- When a non-English config comes only from the `OPENBRAIN_FTS_CONFIG` env default, ordinary roles (`agent`, `readonly`, `discord`, `promoter`) silently degrade to the GIN-indexed English default instead of being denied -- availability and the pre-language-aware cost profile are preserved. Admin roles get the configured language.
+- `search_mode: "vector"` performs no FTS, so `fts_config` is ignored there and never denies a request.
+
+Permitted non-default searches are cost-bounded with a transaction-scoped statement timeout (`OPENBRAIN_FTS_STATEMENT_TIMEOUT_MS`, default 5000 ms). Operator enable/monitor/rollback procedures live in [docs/fts-operations.md](fts-operations.md).
+
+Results are merged via Reciprocal Rank Fusion (RRF) with adjustments for:
+- **Cognitive tier** — hot entries boosted (+0.3), cold entries penalized (−0.2)
+- **Recency** — newer entries score slightly higher
+- **Table weights** — configurable per-table importance
+
+Search modes: `hybrid` (default), `vector`, `keyword`.
+
+## Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run start` | Start the MCP server |
+| `npm run migrate` | Run pending database migrations |
+| `npm run test` | Run test suite |
+| `npm run typecheck` | Type-check without emit |
+| `npm run backfill` | Backfill NULL embeddings across all tables (`-- --all` re-embeds every row for model migrations) |
+| `npm run curate` | Automated curation: dedup, staleness, quality scoring (`--dry-run` supported) |
+
+Additional utility scripts in `scripts/`:
+
+| Script | Description |
+|--------|-------------|
+| `bulk-import.ts` | Batch import entries from JSON/CSV with deduplication |
+| `obsidian-sync.ts` | Sync entries with an Obsidian vault |
+| `ob-backfill.ts` | Extract and backfill session data from Claude Code transcripts |
+
+## Cognitive Tiering
+
+Entries move between three tiers based on access patterns:
+
+| Tier | Meaning | Search Impact |
+|------|---------|---------------|
+| **hot** | Recently created or frequently accessed | Boosted (+0.3) |
+| **warm** | Default tier for all new entries | Neutral |
+| **cold** | Stale, low-access, or decay candidates | Penalized (−0.2) |
+
+Tier transitions can be manual (`set_tier` tool) or automated via the curation script, which uses access frequency, age, and LLM-as-judge quality scoring to archive or downgrade entries.
+
+## Testing
+
+```bash
+npm run test        # run test suite
+npm run typecheck   # type-check without emit
+```
+
+Tests live alongside source files and cover auth, embedding, search, migrations, and tool behavior. Coverage threshold: 80% for lines, functions, and statements (configured in `bunfig.toml`).
+
+## Identity and Shared Knowledge Boundary
+
+Open Brain treats `shared-kb` as the canonical shared knowledge namespace, not
+as a caller identity. Person identities such as `rico` and `alex`, agent lane
+identities such as `bilby` and `skippy`, and promoter service identities such as
+`openbrain-promoter` is the bearer-token identity.
+
+Normal agents write their own lane and read their lane plus shared knowledge
+through server read policy. Direct `shared-kb` writes require an explicit
+promoter service identity and provenance; `X-Namespace` alone is not shared
+truth authority. See [docs/identity-boundary.md](identity-boundary.md).
+
+## CI/CD
+
+Pull requests trigger automated checks via GitHub Actions:
+- **CI** — tests, type-checking, linting
+- **Claude Code Review** — AI-powered code review focused on bugs, security, performance, and embedding quality
+
+## Project Structure
+
+```
+src/
+├── index.ts              # Express server bootstrap
+├── server.ts             # MCP server factory
+├── transport.ts          # Streamable HTTP transport & session management
+├── auth.ts               # Token parsing & role resolution
+├── permissions.ts        # RBAC matrix
+├── embedding.ts          # Embedding pipeline
+├── extraction.ts         # LLM metadata extraction
+├── tools/                # MCP tool implementations (14 tools)
+│   ├── search-brain.ts   # Hybrid search engine
+│   ├── log-thought.ts
+│   ├── log-decision.ts
+│   ├── find-person.ts
+│   ├── session-save.ts
+│   └── ...
+├── db/
+│   ├── pool.ts           # Connection pool
+│   ├── migrate.ts        # Migration runner
+│   └── migrations/       # SQL migrations (001–008)
+└── middleware/
+    └── request-logger.ts
+```
+
+## MCP Client Configuration
+
+To connect from an MCP client (e.g., Claude Desktop, Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "open-brain": {
+      "url": "http://localhost:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Python package consumers normally use direct HTTP through
+`openbrain-memory`, not a local mcp2cli daemon. Configure them with
+`OPENBRAIN_BASE_URL`, `OPENBRAIN_TOKEN`, `OPENBRAIN_NAMESPACE`, and
+`OPENBRAIN_AGENT_ID`; use `OPENBRAIN_ALLOW_INSECURE_HTTP=1` only for trusted
+lab HTTP endpoints such as `http://192.0.2.21:3100`.
+
+## Documentation
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — coding standards, development workflow, and infrastructure rules
+- [GLOSSARY.md](GLOSSARY.md) — domain terminology (tiers, warmth, dream cycles, etc.)
+- [docs/operator-audit-log.md](operator-audit-log.md) — MCP tool audit log schema, env controls, privacy guarantees, fail-open behavior
+- [docs/compatibility-matrix.md](compatibility-matrix.md) — supported client versions and Python/TS capability parity, rendered from the machine-enforced contract data
+- [docs/memory-limits.md](memory-limits.md) — enforced capacity/backpressure/degradation limits and their at-limit behavior
+- [docs/backup-restore.md](backup-restore.md) — backup/restore substrate: RPO/RTO/retention requirements, content-free manifests, verify-before-restore, upgrade matrix, CI drill
+
+## License
+
+MIT

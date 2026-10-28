@@ -1,0 +1,357 @@
+import { describe, expect, test, vi } from "vitest";
+import { buildTokenMap, verifyToken, authMiddleware } from "./auth.ts";
+import type { AuthInfo } from "../types.ts";
+
+// Helper: create mock Express req/res/next
+function mockReq(headers: Record<string, string> = {}) {
+  return {
+    headers,
+    auth: undefined as AuthInfo | undefined,
+  } as unknown as { headers: Record<string, string>; auth?: AuthInfo };
+}
+
+function mockRes() {
+  let statusCode = 200;
+  let body: unknown = undefined;
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return res;
+    },
+    json(data: unknown) {
+      body = data;
+      return res;
+    },
+    get statusCode() {
+      return statusCode;
+    },
+    get body() {
+      return body;
+    },
+  };
+  return res;
+}
+
+/**
+ * Call the middleware with the mock req/res. The mocks carry only the fields the
+ * middleware reads, so the widening to the Express types happens once, here.
+ */
+function invokeMiddleware(
+  middleware: ReturnType<typeof authMiddleware>,
+  req: ReturnType<typeof mockReq>,
+  res: ReturnType<typeof mockRes>,
+  next: () => void,
+): void {
+  (middleware as unknown as (r: unknown, s: unknown, n: () => void) => void)(
+    req,
+    res,
+    next,
+  );
+}
+
+describe("buildTokenMap", () => {
+  test("builds map from env vars with correct roles", () => {
+    const env: Record<string, string | undefined> = {
+      AUTH_TOKEN_ADMIN: "admin-token-123",
+      AUTH_TOKEN_AGENT: "agent-token-456",
+      AUTH_TOKEN_DISCORD: "discord-token-789",
+      AUTH_TOKEN_OB_ADMIN: "ob-admin-token-abc",
+      AUTH_TOKEN_PROMOTER: "promoter-token-ghi",
+      AUTH_TOKEN_READONLY: "readonly-token-def",
+    };
+    const map = buildTokenMap(env);
+    expect(map.size).toBe(6);
+    expect(map.get("promoter-token-ghi")).toEqual({
+      role: "promoter",
+      clientId: "promoter",
+    });
+    expect(map.get("admin-token-123")).toEqual({
+      role: "admin",
+      clientId: "admin",
+    });
+    expect(map.get("agent-token-456")).toEqual({
+      role: "agent",
+      clientId: "agent",
+    });
+    expect(map.get("discord-token-789")).toEqual({
+      role: "discord",
+      clientId: "discord",
+    });
+    expect(map.get("ob-admin-token-abc")).toEqual({
+      role: "ob-admin",
+      clientId: "ob-admin",
+    });
+    expect(map.get("readonly-token-def")).toEqual({
+      role: "readonly",
+      clientId: "readonly",
+    });
+  });
+
+  test("skips undefined env vars", () => {
+    const env: Record<string, string | undefined> = {
+      AUTH_TOKEN_ADMIN: "admin-token",
+      AUTH_TOKEN_AGENT: undefined,
+    };
+    const map = buildTokenMap(env);
+    expect(map.size).toBe(1);
+    expect(map.has("admin-token")).toBe(true);
+  });
+
+  test("skips empty string env vars", () => {
+    const env: Record<string, string | undefined> = {
+      AUTH_TOKEN_ADMIN: "",
+      AUTH_TOKEN_READONLY: "readonly-token",
+    };
+    const map = buildTokenMap(env);
+    expect(map.size).toBe(1);
+    expect(map.has("readonly-token")).toBe(true);
+  });
+
+  test("maps named person, agent, and promoter identities from per-user tokens", () => {
+    const env: Record<string, string | undefined> = {
+      AUTH_TOKEN_USER_RICO: "admin:rico-token",
+      AUTH_TOKEN_USER_ALEX: "readonly:alex-token",
+      AUTH_TOKEN_USER_BILBY: "agent:bilby-token",
+      AUTH_TOKEN_USER_SKIPPY: "agent:skippy-token",
+      AUTH_TOKEN_USER_OPENBRAIN_PROMOTER: "ob-admin:promoter-token",
+    };
+
+    const map = buildTokenMap(env);
+
+    expect(map.get("rico-token")).toEqual({ role: "admin", clientId: "rico" });
+    expect(map.get("alex-token")).toEqual({
+      role: "readonly",
+      clientId: "alex",
+    });
+    expect(map.get("bilby-token")).toEqual({
+      role: "agent",
+      clientId: "bilby",
+    });
+    expect(map.get("skippy-token")).toEqual({
+      role: "agent",
+      clientId: "skippy",
+    });
+    expect(map.get("promoter-token")).toEqual({
+      role: "ob-admin",
+      clientId: "openbrain-promoter",
+    });
+  });
+});
+
+describe("verifyToken", () => {
+  test("returns true for matching tokens", () => {
+    expect(verifyToken("my-secret-token", "my-secret-token")).toBe(true);
+  });
+
+  test("returns false for non-matching tokens of same length", () => {
+    expect(verifyToken("aaaa-bbbb-cccc", "xxxx-yyyy-zzzz")).toBe(false);
+  });
+
+  test("returns false for tokens of different lengths", () => {
+    expect(verifyToken("short", "much-longer-token")).toBe(false);
+  });
+
+  test("returns false for empty provided token", () => {
+    expect(verifyToken("", "expected-token")).toBe(false);
+  });
+});
+
+describe("authMiddleware", () => {
+  const tokenMap = new Map<string, AuthInfo>([
+    ["valid-admin-token", { role: "admin", clientId: "admin" }],
+    ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
+  ]);
+
+  const middleware = authMiddleware(tokenMap);
+
+  test("returns 401 when no Authorization header", () => {
+    const req = mockReq({});
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "Missing Bearer token" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("returns 401 when Authorization is not Bearer scheme", () => {
+    const req = mockReq({ authorization: "Basic dXNlcjpwYXNz" });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "Missing Bearer token" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("returns 401 when token is invalid", () => {
+    const req = mockReq({ authorization: "Bearer wrong-token" });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "Invalid token" });
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe("authMiddleware identity and namespace delegation", () => {
+  const tokenMap = new Map<string, AuthInfo>([
+    ["valid-admin-token", { role: "admin", clientId: "admin" }],
+    ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
+  ]);
+
+  const middleware = authMiddleware(tokenMap);
+
+  test("sets req.auth and calls next for valid admin token", () => {
+    const req = mockReq({ authorization: "Bearer valid-admin-token" });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(req.auth).toEqual({
+      role: "admin",
+      clientId: "admin",
+      tokenClientId: "admin",
+      agentId: undefined,
+      namespaceSource: "token",
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("sets req.auth and calls next for valid agent token", () => {
+    const req = mockReq({ authorization: "Bearer valid-agent-token" });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(req.auth).toEqual({
+      role: "agent",
+      clientId: "agent",
+      tokenClientId: "agent",
+      agentId: undefined,
+      namespaceSource: "token",
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses X-Namespace as effective clientId and keeps token identity", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-admin-token",
+      "x-namespace": "bilby",
+      "x-agent-id": "bilby",
+      "x-role": "agent",
+    });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(req.auth).toEqual({
+      role: "admin",
+      clientId: "bilby",
+      tokenClientId: "admin",
+      agentId: "bilby",
+      namespaceSource: "header",
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("authMiddleware refuses namespace delegation by role", () => {
+  const tokenMap = new Map<string, AuthInfo>([
+    ["valid-admin-token", { role: "admin", clientId: "admin" }],
+    ["valid-agent-token", { role: "agent", clientId: "agent" }],
+    ["valid-promoter-token", { role: "promoter", clientId: "promoter" }],
+    ["valid-readonly-token", { role: "readonly", clientId: "readonly" }],
+  ]);
+
+  const middleware = authMiddleware(tokenMap);
+
+  test("returns 403 when agent token sends X-Namespace", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-agent-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("returns 403 when promoter token sends X-Namespace (service identity, no delegation)", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-promoter-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      error: "Role not permitted to delegate namespace",
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("returns 403 when readonly token sends X-Namespace", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-readonly-token",
+      "x-namespace": "bilby",
+    });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: "Role not permitted to delegate namespace" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("rejects invalid delegated namespace header", () => {
+    const req = mockReq({
+      authorization: "Bearer valid-admin-token",
+      "x-namespace": "../bilby",
+    });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(middleware, req, res, next);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid X-Namespace header" });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test("handles empty token map gracefully", () => {
+    const emptyMiddleware = authMiddleware(new Map());
+    const req = mockReq({ authorization: "Bearer any-token" });
+    const res = mockRes();
+    const next = vi.fn(() => {});
+
+    invokeMiddleware(emptyMiddleware, req, res, next);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "Invalid token" });
+    expect(next).not.toHaveBeenCalled();
+  });
+});

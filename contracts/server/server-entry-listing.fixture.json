@@ -1,0 +1,42 @@
+{
+  "id": "server-entry-listing",
+  "description": "Freeze list_stale's envelope-by-default contract and its array back-compat mode on an empty namespace.",
+  "capability": "entry-listing",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-entry-listing",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "list_stale",
+      "arguments": {
+        "table": "thoughts",
+        "days": 30
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entries": [],
+          "total_count": 0,
+          "offset": 0,
+          "limit": 50,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "tool": "list_stale",
+      "arguments": {
+        "table": "thoughts",
+        "days": 30,
+        "response_format": "array"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": []
+      }
+    }
+  ]
+}

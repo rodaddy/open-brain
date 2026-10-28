@@ -1,0 +1,59 @@
+{
+  "id": "server-access-reporting",
+  "description": "Freeze access_report's not-readable shape and get_stats' aggregate envelope keys.",
+  "capability": "access-reporting",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-access-reporting",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "access_report",
+      "arguments": {
+        "entry_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entry not found or not readable"
+      }
+    },
+    {
+      "tool": "get_stats",
+      "arguments": {},
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entry_counts": {
+            "thoughts": { "active": 0, "archived": 0 },
+            "decisions": { "active": 0, "archived": 0 },
+            "relationships": { "active": 0, "archived": 0 },
+            "projects": { "active": 0, "archived": 0 },
+            "sessions": { "active": 0, "archived": 0 }
+          },
+          "tier_distribution": {},
+          "namespaces": [],
+          "access_stats": {
+            "total_log_entries": 0,
+            "unique_entries_accessed": 0,
+            "avg_access_count": 0
+          },
+          "graph_counts": {
+            "entities": 0,
+            "links": 0,
+            "entity_types": []
+          },
+          "zero_access_entries": {
+            "thoughts": 0,
+            "decisions": 0,
+            "relationships": 0,
+            "projects": 0,
+            "sessions": 0
+          },
+          "top_accessed": []
+        }
+      }
+    }
+  ]
+}

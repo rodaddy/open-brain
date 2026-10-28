@@ -1,0 +1,54 @@
+[project]
+name = "openbrain-memory"
+version = "0.9.0"
+license = { text = "MIT" }
+description = "Python client for remote Open Brain memory service"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+openbrain-memory = "openbrain_memory.__main__:main"
+
+[project.optional-dependencies]
+# Realtime NATS transport (fleet-bus). nats-py is the wire client. The fleet
+# Envelope/subjects contract comes from `fleet-nats`, which is NOT published on
+# PyPI (it lives in the private monorepo git@github.com:rodaddy/fleet-bus.git
+# under packages/fleet-nats). The transport optional-imports fleet-nats and
+# mirrors its Envelope/subjects shape locally when it is absent, so this extra
+# stays pip-installable without a private git dependency. Add fleet-nats here
+# once it is published or vendored, e.g.:
+#   fleet-nats @ git+ssh://git@github.com/rodaddy/fleet-bus.git#subdirectory=packages/fleet-nats
+nats = [
+    "nats-py>=2.15",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E741"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

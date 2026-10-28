@@ -1,0 +1,28 @@
+{
+  "id": "trace-timeline-degenerate",
+  "name": "search_brain",
+  "observations": [
+    {
+      "id": "z-last-tie",
+      "name": "tied-later-end",
+      "startTime": "2026-08-06T12:00:00.020Z",
+      "endTime": "2026-08-06T12:00:00.070Z"
+    },
+    {
+      "id": "unknown-start",
+      "name": "missing-start"
+    },
+    {
+      "id": "b-second-id",
+      "name": "tied-same-end-b",
+      "startTime": "2026-08-06T12:00:00.020Z",
+      "endTime": "2026-08-06T12:00:00.060Z"
+    },
+    {
+      "id": "a-first-id",
+      "name": "tied-same-end-a",
+      "startTime": "2026-08-06T12:00:00.020Z",
+      "endTime": "2026-08-06T12:00:00.060Z"
+    }
+  ]
+}

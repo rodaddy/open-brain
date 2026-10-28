@@ -1,0 +1,641 @@
+#!/usr/bin/env node
+/**
+ * Fail-closed launcher for an explicitly configured local Open Brain clone.
+ *
+ * This launcher never discovers configuration or mutates PostgreSQL. It first
+ * proves the configured database and embedding provider through read-only
+ * probes, then either prints one content-free verification receipt or replaces
+ * that verification step with a tightly scoped src/index.ts child process.
+ */
+import { spawn, type ChildProcess } from "node:child_process";
+import pg from "pg";
+import { validateLocalCloneMode } from "../server/config/local-clone-mode.ts";
+import {
+  LOCAL_CLONE_LOG_DIR_KEY,
+  pipeChildOutputToRotatingLogs,
+} from "./local-clone-log-rotation.ts";
+
+export const LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA =
+  "openbrain.local_clone_verify_receipt.v1";
+
+/**
+ * The file this launcher actually starts -- the local dogfood serving target.
+ *
+ * This is the charter's Phase 6 cutover in one line
+ * (`_plans/463-server-rewrite-charter.md` §4): it was `src/index.ts`, and the
+ * rewrite under `server/` became the default only when this constant changed.
+ * It is named and exported rather than inlined in the default `child.spawn`
+ * below so the flip has ONE owning site that a test can assert against, instead
+ * of a string literal reachable only by starting a real process.
+ *
+ * ROLLBACK: set this back to `src/index.ts` and redeploy. `src/` is untouched
+ * by the cutover and still starts, per the charter's strangler rule that an old
+ * module is retired only after the candidate is proven RUNNING.
+ */
+export const SERVING_ENTRYPOINT = "server/main.ts";
+
+export function servingProcessSpec(): { executable: string; arguments: string[] } {
+  return { executable: process.execPath, arguments: [SERVING_ENTRYPOINT] };
+}
+
+const CHILD_ENV_KEYS = [
+  "ALLOWED_ORIGINS",
+  "AUTH_TOKEN_ADMIN",
+  "AUTH_TOKEN_AGENT",
+  "AUTH_TOKEN_DISCORD",
+  "AUTH_TOKEN_OB_ADMIN",
+  "AUTH_TOKEN_PROMOTER",
+  "AUTH_TOKEN_READONLY",
+  "DB_HOST",
+  "DB_NAME",
+  "DB_PASSWORD",
+  "DB_POOL_MAX",
+  "DB_PORT",
+  "DB_USER",
+  "EMBEDDING_API_KEY",
+  "EMBEDDING_BASE_URL",
+  "EMBEDDING_DIMENSIONS",
+  "EMBEDDING_MODEL",
+  "EMBEDDING_TIMEOUT_MS",
+  "LOG_FILE",
+  // #661 operator ruling 29.2a: these five were configured with real values in
+  // the operator-owned env file and dropped in silence for their whole life --
+  // surfaced the moment #659's announce-on-drop made the drops visible. Fourth
+  // instance of the deploy-coupling class documented at the #530 comment below.
+  //
+  // The sixth key that boot line named, EMBEDDING_WATCHDOG_RESTART_SCRIPT, is
+  // deliberately NOT here: `src/local-clone-mode.ts` prohibits it in clone mode
+  // and the launcher throws on any non-empty value. It is set EMPTY in the env
+  // file, which is the documented suppression form -- see the empty-value rule
+  // in `describeDroppedChildEnvironment` below.
+  "LOG_LEVEL",
+  "LOG_MAX_BYTES",
+  "LOG_MAX_FILES",
+  "NODE_ENV",
+  "OPENBRAIN_MCP_AUDIT_ENABLED",
+  "OPENBRAIN_LOCAL_CLONE",
+  "OPENBRAIN_LOCAL_CLONE_ROOT",
+  // #659 capture-health observer (PR #656, ledger item 28): these three must
+  // reach the server child or `createCaptureHealthRuntime` builds no observer
+  // and /health publishes no capture block -- the same deploy coupling the
+  // #530 tracing comment below documents, third instance. Listed by NAME
+  // rather than by an `OPENBRAIN_CAPTURE_HEALTH_` prefix sweep so that adding
+  // a fourth key stays a deliberate act with a reviewer attached.
+  "OPENBRAIN_CAPTURE_HEALTH_NAMESPACE",
+  "OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS",
+  "OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES",
+  "OPENBRAIN_RECOVERY_WAL_PATH",
+  "OPEN_BRAIN_BIND_HOST",
+  // #757: the fleet-embedding opt-in read by `validateLocalCloneMode`; without
+  // it here the key is dropped before the child sees it (the #755 trap).
+  "OPEN_BRAIN_EMBEDDING_HOST_ALLOW",
+  // Issue 1488, fifth instance of the deploy-coupling class: only ENABLED was
+  // listed, so the REM producer and runner tuning keys never reached the
+  // server. scripts/local-clone.maintenance-env.test.ts now fails the suite
+  // when server/config/maintenance.ts reads a key this list does not carry.
+  "OPEN_BRAIN_MAINTENANCE_CONCURRENCY",
+  "OPEN_BRAIN_MAINTENANCE_DISTILL_BATCH_SIZE",
+  "OPEN_BRAIN_MAINTENANCE_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_GRAPH_LIMIT",
+  "OPEN_BRAIN_MAINTENANCE_LEASE_MS",
+  "OPEN_BRAIN_MAINTENANCE_MAX_DISTILL_BATCHES",
+  "OPEN_BRAIN_MAINTENANCE_POLL_MS",
+  "OPEN_BRAIN_MAINTENANCE_REM_BACKLOG_HIGH_WATER",
+  "OPEN_BRAIN_MAINTENANCE_REM_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_REM_FORCED_SLICE_SIZE",
+  "OPEN_BRAIN_MAINTENANCE_REM_MAX_REQUESTS_PER_MINUTE",
+  "OPEN_BRAIN_MAINTENANCE_REM_MIN_GAP_MS",
+  "OPEN_BRAIN_MAINTENANCE_REM_MIN_HEADROOM_BYTES",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_BACKEND",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_ENABLED",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_MAX_USD_PER_RUN",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_MIN_GAP_MS",
+  "OPEN_BRAIN_MAINTENANCE_ROUTE_SLICE_SIZE",
+  "OPEN_BRAIN_RUN_MIGRATIONS",
+  "OPENBRAIN_TRANSPORT",
+  "PORT",
+  "QMD_PATH",
+  "SERVICE_NAME",
+  "TZ",
+] as const;
+
+type LauncherMode = "verify" | "start";
+
+export interface DatabaseProof {
+  database: string;
+  user: string;
+  serverAddress: string;
+  serverPort: number;
+  postgresMajor: number;
+  transactionReadOnly: boolean;
+  pgvectorAvailable: boolean;
+  pgvectorInstalled: boolean;
+}
+
+export interface EmbeddingProof {
+  model: string;
+  dimensions: number;
+}
+
+export interface DatabaseBoundary {
+  prove(env: Record<string, string | undefined>): Promise<DatabaseProof>;
+}
+
+export interface EmbeddingBoundary {
+  prove(env: Record<string, string | undefined>): Promise<EmbeddingProof>;
+}
+
+export interface ChildBoundary {
+  spawn(env: Record<string, string>): ChildProcess;
+}
+
+export interface LocalCloneLauncherDependencies {
+  database: DatabaseBoundary;
+  embedding: EmbeddingBoundary;
+  child: ChildBoundary;
+  writeReceipt(receipt: unknown): void;
+  onSignal(signal: NodeJS.Signals, handler: () => void): () => void;
+  /**
+   * The launcher's normal operational output -- diagnostics an operator reads,
+   * kept separate from `writeReceipt` because the verify receipt is a
+   * content-free machine-parsed JSON document and must stay one line.
+   */
+  announce(line: string): void;
+}
+
+interface DatabaseProbeRow {
+  database: string;
+  user_name: string;
+  server_address: string | null;
+  server_port: number | string | null;
+  server_version: string;
+  transaction_read_only: string;
+  pgvector_available: boolean;
+  pgvector_installed: boolean;
+}
+
+function required(env: Record<string, string | undefined>, key: string): string {
+  const configured = env[key]?.trim();
+  if (!configured) throw new Error(`Local clone launcher requires ${key}`);
+  return configured;
+}
+
+function configuredPort(
+  env: Record<string, string | undefined>,
+  key: string,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(env[key] ?? String(fallback), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    throw new Error(`Local clone launcher requires a valid ${key}`);
+  }
+  return parsed;
+}
+
+export function parseLocalCloneArgs(argv: string[]): LauncherMode {
+  if (argv.length === 1 && argv[0] === "--verify") return "verify";
+  if (argv.length === 1 && argv[0] === "--start") return "start";
+  throw new Error("Usage: bun run scripts/local-clone.ts --verify | --start");
+}
+
+/**
+ * Prefixes that mark a variable as OPEN BRAIN SERVER CONFIGURATION.
+ *
+ * The launcher's environment is the clone env file UNIONED with launchd's
+ * ambient environment (`scripts/local-clone-autostart.sh:56-59` does
+ * `set -a; source local-clone.env`), so "everything not allowlisted" includes
+ * `PATH`, `HOME`, `SSH_AUTH_SOCK` and dozens more. Announcing all of them on
+ * every boot is noise that teaches an operator to skip the line -- silence with
+ * extra steps. Announcing none of them is #659. So the drop report is scoped to
+ * the namespaces this project actually configures itself with.
+ */
+const SERVER_CONFIG_PREFIXES = [
+  "ALLOWED_",
+  "AUTH_TOKEN_",
+  "DB_",
+  "EMBEDDING_",
+  "LOG_",
+  "OPENBRAIN_",
+  "OPEN_BRAIN_",
+  "SERVICE_",
+] as const;
+
+/**
+ * Keys that configure the LAUNCHER process itself, not the server child. They
+ * are consumed before the child exists (OPENBRAIN_LOCAL_CLONE_LOG_DIR selects
+ * the launcher's own rotating log sink, exported by
+ * scripts/local-clone-autostart.sh), so the drop report skips them (issue 755).
+ */
+export const LAUNCHER_OWN_ENV_KEYS = ["OPENBRAIN_LOCAL_CLONE_LOG_DIR"] as const;
+
+/** One configured key the child environment does not carry. */
+export interface DroppedChildEnvEntry {
+  readonly key: string;
+}
+
+/**
+ * The keys that LOOK like Open Brain server configuration and are nevertheless
+ * dropped from the child environment.
+ *
+ * This exists because an allowlist that discards a configured key without
+ * saying so is accept-and-ignore, not tolerance -- the class already recorded
+ * in `docs/sme/gotcha-agent.md` from #464, whose first review question is
+ * "does the drop path name what it dropped?". #659 is that question answered
+ * the wrong way for a third time: `OPENBRAIN_CAPTURE_HEALTH_NAMESPACE` was set
+ * in the deployed env file, the redeploy's revision proof PASSED, and live
+ * /health still published no capture block, because the launcher dropped the
+ * key in silence.
+ *
+ * Returned as NAMES ONLY, never values. The dropped set can contain secrets in
+ * the general case -- an unlisted `AUTH_TOKEN_*` spelling lands here -- and
+ * this report is written to a log file the deploy runbook tells an operator to
+ * read.
+ *
+ * Reporting is not honoring: the allowlist stays an allowlist. A key named here
+ * is one a human must either add to `CHILD_ENV_KEYS` or delete from the env
+ * file.
+ *
+ * A CONFIGURED value has three states here, not two (#661, operator ruling
+ * 29.2a). Reading only `undefined` as "not configured" made this function
+ * report deliberate SUPPRESSIONS as mistakes:
+ *
+ *   unset        -- absent from the env file. Not configured, not reported.
+ *   set-empty    -- `KEY=` in the env file. A deliberate OFF SWITCH, not a
+ *                   dropped configuration, so it is not reported either.
+ *   set-valued   -- `KEY=something`. Configured; reported if the child will not
+ *                   receive it.
+ *
+ * Clone mode already reads an explicit empty this way: `QMD_PATH` MUST be empty
+ * to suppress the production `/opt/qmd` default
+ * (`src/local-clone-mode.ts`), and `EMBEDDING_WATCHDOG_RESTART_SCRIPT=` is the
+ * documented way to disable the embedding watchdog in a clone
+ * (`docs/local-clone-dogfood.md`) -- a key clone mode PROHIBITS from carrying a
+ * value at all. Announcing those as dropped configuration is the mirror of the
+ * #659 defect: a false positive that teaches an operator the boot line is
+ * noise, which costs exactly what silence costs. It also has a live receipt --
+ * the first boot after #659 named the empty watchdog key, and #661 was filed
+ * asking that a prohibited key be honored.
+ */
+export function describeDroppedChildEnvironment(
+  env: Record<string, string | undefined>,
+): readonly DroppedChildEnvEntry[] {
+  const delivered = buildChildEnvironment(env);
+  const dropped: DroppedChildEnvEntry[] = [];
+  for (const [key, configured] of Object.entries(env)) {
+    if (configured === undefined) continue;
+    // An explicitly-empty value is a suppression, not a dropped setting. Note
+    // this tests the RAW value for `""` rather than falsiness: a key whose
+    // configured value is the string "0" or "false" IS configured, and dropping
+    // it silently is the bug this whole function exists to prevent.
+    if (configured === "") continue;
+    if (delivered[key] !== undefined) continue;
+    if ((LAUNCHER_OWN_ENV_KEYS as readonly string[]).includes(key)) continue;
+    if (!SERVER_CONFIG_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      continue;
+    }
+    dropped.push({ key });
+  }
+  return dropped.sort((left, right) => left.key.localeCompare(right.key));
+}
+
+export function buildChildEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const childEnv: Record<string, string> = {};
+  for (const key of CHILD_ENV_KEYS) {
+    const configured = env[key];
+    if (configured !== undefined) childEnv[key] = configured;
+  }
+  for (const [key, configured] of Object.entries(env)) {
+    if (key.startsWith("AUTH_TOKEN_USER_") && configured !== undefined) {
+      childEnv[key] = configured;
+    }
+    // #530 server-side tracing: the four OPENBRAIN_TRACING_* variables must
+    // reach the server child or createTracingRuntime silently stays off — the
+    // same deploy coupling the hook wrapper documents for OPENBRAIN_OBSERVATION_*.
+    if (key.startsWith("OPENBRAIN_TRACING_") && configured !== undefined) {
+      childEnv[key] = configured;
+    }
+  }
+  return childEnv;
+}
+
+function assertDatabaseProof(
+  proof: DatabaseProof,
+  env: Record<string, string | undefined>,
+): void {
+  if (!proof.transactionReadOnly) {
+    throw new Error("Local clone database probe was not read-only");
+  }
+  if (proof.database !== required(env, "DB_NAME")) {
+    throw new Error("Local clone database identity does not match DB_NAME");
+  }
+  if (proof.user !== required(env, "DB_USER")) {
+    throw new Error("Local clone database identity does not match DB_USER");
+  }
+  if (proof.serverAddress !== required(env, "DB_HOST")) {
+    throw new Error("Local clone database address does not match DB_HOST");
+  }
+  if (proof.serverPort !== configuredPort(env, "DB_PORT", 5432)) {
+    throw new Error("Local clone database port does not match DB_PORT");
+  }
+  if (proof.postgresMajor !== 18) {
+    throw new Error("Local clone launcher requires PostgreSQL major 18");
+  }
+  if (!proof.pgvectorAvailable || !proof.pgvectorInstalled) {
+    throw new Error(
+      "Local clone launcher requires pgvector to be available and installed",
+    );
+  }
+}
+
+function expectedEmbedding(env: Record<string, string | undefined>): EmbeddingProof {
+  const dimensions = Number.parseInt(env.EMBEDDING_DIMENSIONS ?? "768", 10);
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    throw new Error("Local clone launcher requires a valid EMBEDDING_DIMENSIONS");
+  }
+  return {
+    model: env.EMBEDDING_MODEL?.trim() || "gemini-embedding-001",
+    dimensions,
+  };
+}
+
+function assertEmbeddingProof(
+  proof: EmbeddingProof,
+  env: Record<string, string | undefined>,
+): void {
+  const expected = expectedEmbedding(env);
+  if (proof.model !== expected.model) {
+    throw new Error("Local clone embedding provider does not expose EMBEDDING_MODEL");
+  }
+  if (proof.dimensions !== expected.dimensions) {
+    throw new Error(
+      "Local clone embedding provider returned an incompatible dimension",
+    );
+  }
+}
+
+function waitForChild(child: ChildProcess): Promise<number> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) {
+        resolve(128 + (signal === "SIGINT" ? 2 : 15));
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  });
+}
+
+export async function runLocalCloneLauncher(
+  mode: LauncherMode,
+  env: Record<string, string | undefined>,
+  deps: LocalCloneLauncherDependencies,
+): Promise<number> {
+  const clone = validateLocalCloneMode(env);
+  if (!clone.enabled) {
+    throw new Error("Local clone launcher requires OPENBRAIN_LOCAL_CLONE=1");
+  }
+
+  let database: DatabaseProof;
+  try {
+    database = await deps.database.prove(env);
+  } catch {
+    throw new Error("Local clone database preflight failed");
+  }
+  assertDatabaseProof(database, env);
+  let embedding: EmbeddingProof;
+  try {
+    embedding = await deps.embedding.prove(env);
+  } catch {
+    throw new Error("Local clone embedding preflight failed");
+  }
+  assertEmbeddingProof(embedding, env);
+
+  if (mode === "verify") {
+    deps.writeReceipt({
+      schema: LOCAL_CLONE_VERIFY_RECEIPT_SCHEMA,
+      operation: "local_clone_verify",
+      status: "verified",
+      database: {
+        identity_verified: true,
+        read_only: true,
+        postgres_major: 18,
+        pgvector_available: true,
+        pgvector_installed: true,
+      },
+      embedding: {
+        model_verified: true,
+        dimensions: embedding.dimensions,
+        healthy: true,
+      },
+    });
+    return 0;
+  }
+
+  // Announce BEFORE spawning. A server that starts without the config key it
+  // was given is the #659 failure, and the operator's chance to notice is the
+  // boot log -- which is only useful if the line precedes the child's own
+  // output rather than being buried under it.
+  const dropped = describeDroppedChildEnvironment(env);
+  if (dropped.length > 0) {
+    deps.announce(
+      `local-clone launcher ADJUSTED the server child's environment: ` +
+        `${dropped.length} configured key(s) are NOT in the child allowlist and ` +
+        `were dropped -- ${dropped.map((entry) => entry.key).join(", ")}. ` +
+        `The server child will not see them. Add each to CHILD_ENV_KEYS in ` +
+        `scripts/local-clone.ts if it is meant to reach the server, or remove ` +
+        `it from the clone env file if it is not.`,
+    );
+  }
+
+  let child: ChildProcess;
+  try {
+    child = deps.child.spawn(buildChildEnvironment(env));
+  } catch {
+    throw new Error("Local clone runtime failed to start");
+  }
+  const removeSignalHandlers = (["SIGINT", "SIGTERM"] as const).map((signal) =>
+    deps.onSignal(signal, () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+      }
+    }),
+  );
+  try {
+    try {
+      return await waitForChild(child);
+    } catch {
+      throw new Error("Local clone runtime child failed");
+    }
+  } finally {
+    for (const remove of removeSignalHandlers) remove();
+  }
+}
+
+export const productionDependencies: LocalCloneLauncherDependencies = {
+  database: {
+    async prove(env): Promise<DatabaseProof> {
+      const client = new pg.Client({
+        host: required(env, "DB_HOST"),
+        port: configuredPort(env, "DB_PORT", 5432),
+        database: required(env, "DB_NAME"),
+        user: required(env, "DB_USER"),
+        password: async () => env.DB_PASSWORD ?? "",
+        ssl: false,
+        options: "-c default_transaction_read_only=on",
+        connectionTimeoutMillis: 5_000,
+        statement_timeout: 5_000,
+        application_name: "open-brain-local-clone-preflight",
+      });
+      await client.connect();
+      try {
+        await client.query("BEGIN READ ONLY");
+        const result = await client.query<DatabaseProbeRow>(`
+          SELECT
+            current_database() AS database,
+            current_user AS user_name,
+            host(inet_server_addr()) AS server_address,
+            inet_server_port() AS server_port,
+            current_setting('server_version') AS server_version,
+            current_setting('transaction_read_only') AS transaction_read_only,
+            EXISTS (
+              SELECT 1 FROM pg_available_extensions WHERE name = 'vector'
+            ) AS pgvector_available,
+            EXISTS (
+              SELECT 1 FROM pg_extension WHERE extname = 'vector'
+            ) AS pgvector_installed
+        `);
+        const row = result.rows[0];
+        if (!row || row.server_address === null || row.server_port === null) {
+          throw new Error("Local clone database did not return TCP identity");
+        }
+        return {
+          database: row.database,
+          user: row.user_name,
+          serverAddress: row.server_address,
+          serverPort: Number(row.server_port),
+          postgresMajor: Number.parseInt(row.server_version, 10),
+          transactionReadOnly: row.transaction_read_only === "on",
+          pgvectorAvailable: row.pgvector_available,
+          pgvectorInstalled: row.pgvector_installed,
+        };
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+        await client.end();
+      }
+    },
+  },
+  embedding: {
+    async prove(env): Promise<EmbeddingProof> {
+      const baseUrl = required(env, "EMBEDDING_BASE_URL").replace(/\/+$/, "");
+      const expected = expectedEmbedding(env);
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      const apiKey = env.EMBEDDING_API_KEY?.trim();
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+      const modelsResponse = await fetch(`${baseUrl}/models`, {
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!modelsResponse.ok) {
+        throw new Error("Local clone embedding provider health check failed");
+      }
+      const models = (await modelsResponse.json()) as {
+        data?: Array<{ id?: unknown }>;
+      };
+      if (
+        !models.data?.some(
+          (model) => typeof model.id === "string" && model.id === expected.model,
+        )
+      ) {
+        throw new Error(
+          "Local clone embedding provider does not expose EMBEDDING_MODEL",
+        );
+      }
+
+      const embeddingResponse = await fetch(`${baseUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: expected.model,
+          input: "local clone compatibility probe",
+        }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!embeddingResponse.ok) {
+        throw new Error("Local clone embedding provider probe failed");
+      }
+      const payload = (await embeddingResponse.json()) as {
+        data?: Array<{ embedding?: unknown }>;
+      };
+      const vector = payload.data?.[0]?.embedding;
+      if (!Array.isArray(vector)) {
+        throw new Error("Local clone embedding provider returned no vector");
+      }
+      return { model: expected.model, dimensions: vector.length };
+    },
+  },
+  child: {
+    spawn(env): ChildProcess {
+      const command = servingProcessSpec();
+      const logDir = process.env[LOCAL_CLONE_LOG_DIR_KEY]?.trim();
+      if (!logDir) {
+        return spawn(command.executable, command.arguments, {
+          cwd: process.cwd(),
+          env,
+          stdio: "inherit",
+        });
+      }
+      // Announced, not silent: the child's output leaves this process's
+      // stdio for the rotating files (issue 1526).
+      process.stderr.write(
+        `local-clone launcher: server child output -> ${logDir}/autostart.{out,err}.log ` +
+          `(rotating, 1 MB per file, 3 rolled files)\n`,
+      );
+      const child = spawn(command.executable, command.arguments, {
+        cwd: process.cwd(),
+        env,
+        stdio: ["inherit", "pipe", "pipe"],
+      });
+      void pipeChildOutputToRotatingLogs(child, logDir);
+      return child;
+    },
+  },
+  writeReceipt(receipt): void {
+    process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  },
+  onSignal(signal, handler): () => void {
+    process.on(signal, handler);
+    return () => process.off(signal, handler);
+  },
+  announce(line): void {
+    // stderr, not stdout: `writeReceipt` puts a machine-parsed JSON document on
+    // stdout, and an operator diagnostic sharing that stream would corrupt it.
+    // The autostart wrapper captures both into the same log file, so the
+    // operator still reads this line where they look for boot problems.
+    process.stderr.write(`${line}\n`);
+  },
+};
+
+if (import.meta.main) {
+  try {
+    const mode = parseLocalCloneArgs(process.argv.slice(2));
+    process.exitCode = await runLocalCloneLauncher(
+      mode,
+      process.env,
+      productionDependencies,
+    );
+  } catch (error) {
+    console.error(
+      error instanceof Error ? error.message : "Local clone launcher failed",
+    );
+    process.exitCode = 1;
+  }
+}

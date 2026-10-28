@@ -1,0 +1,146 @@
+[
+  {
+    "id": "tp-askuserquestion-cap-menu",
+    "why": "The 2026-07-30 original. The agent opened a ticket and offered three ceiling sizes for canon; 'no cap' was not among them. The gate fired, the agent ran two lookups, and re-fired the same question.",
+    "tool": "AskUserQuestion",
+    "input": {
+      "questions": [
+        {
+          "question": "How big should the canon pack be allowed to get before we start dropping rows?",
+          "header": "canon size",
+          "options": [
+            {
+              "label": "Per-lane cap",
+              "description": "Cap each lane at 40 events so the pack stays small."
+            },
+            {
+              "label": "Global ceiling",
+              "description": "A single global ceiling of 200 events across all lanes."
+            },
+            {
+              "label": "Reserved floor",
+              "description": "Reserve 20 slots for canon and truncate everything past that."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "tp-resume-slice-200",
+    "why": "resume.py [:200] reintroduced. A cut in a READER became a false claim about the DATABASE.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "_ob/skills/brain/scripts/resume.py",
+      "old_string": "body = \" \".join((event.get(\"content\") or \"\").split())",
+      "new_string": "body = \" \".join((event.get(\"content\") or \"\").split())[:200]"
+    }
+  },
+  {
+    "id": "tp-bounded-context-line",
+    "why": "boundedContextLine cutting every line to 500 across seven read paths, canon included.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "_ob/scripts/ob-memory-provider.ts",
+      "old_string": "return value.trim();",
+      "new_string": "return value.trim().slice(0, 500);"
+    }
+  },
+  {
+    "id": "tp-zod-ceiling-on-turn-content",
+    "why": "ingest_raw_turn REJECTED turns over 200k, losing 100% instead of the overflow, and failing the whole 100-turn batch with it.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "src/tools/ingest-raw-turn.ts",
+      "old_string": "content: z.string(),",
+      "new_string": "content: z.string().max(200000),"
+    }
+  },
+  {
+    "id": "tp-naming-a-max-chars-constant",
+    "why": "Naming a ceiling into existence in a capture path.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "src/tools/turn-capture.ts",
+      "old_string": "export function captureTurn(input: TurnInput) {",
+      "new_string": "const MAX_CONTENT_CHARS = 200_000;\n\nexport function captureTurn(input: TurnInput) {"
+    }
+  },
+  {
+    "id": "tp-prose-proposal-in-a-design-doc",
+    "why": "Agent-authored prose proposing a new ceiling in its own voice. No code, no command; the reflex shows up in a plan just as readily.",
+    "tool": "Write",
+    "input": {
+      "file_path": "docs/recall-budget-proposal.md",
+      "content": "# Recall budget\n\nWe should cap the recall payload at 8,000 characters per lane. I propose we truncate the oldest events first and keep the pack tight so the context stays manageable.\n"
+    }
+  },
+  {
+    "id": "tp-commit-message-adding-a-cap",
+    "why": "Agent-authored commit message announcing a NEW ceiling it just added. Same reflex, different surface.",
+    "tool": "Bash",
+    "input": {
+      "command": "git commit -m 'perf(recall): cap the context pack at 500 events to keep the payload smaller'"
+    }
+  },
+  {
+    "id": "tp-askuserquestion-how-many-rows",
+    "why": "The interrogative form: asking the operator to pick a size he never asked to bound.",
+    "tool": "AskUserQuestion",
+    "input": {
+      "questions": [
+        {
+          "question": "How many events should the lane loader return at most?",
+          "header": "lane rows",
+          "options": [
+            {
+              "label": "Top 50",
+              "description": "Return only the 50 most recent events and drop the rest."
+            },
+            {
+              "label": "Top 200",
+              "description": "Return the first 200 rows; truncate anything beyond."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "tp-truncate-call-in-capture",
+    "why": "A truncate() call added to a capture surface.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "src/capture.ts",
+      "old_string": "const stored = payload.content;",
+      "new_string": "const stored = truncateContent(payload.content, 4000);"
+    }
+  },
+  {
+    "id": "tp-issue-body-proposing-shrinkage",
+    "why": "An agent-authored issue proposing to slim the stored corpus. Filed in its own voice, arguing for the reduction.",
+    "tool": "Bash",
+    "input": {
+      "command": "gh issue create --title 'Shrink the stored turn corpus' --body 'The table is getting large. I suggest we trim old raw turns and add a retention ceiling so the database stays leaner.'"
+    }
+  },
+  {
+    "id": "tp-python-client-slice-on-recall",
+    "why": "The same reflex in the Python client's recall path.",
+    "tool": "Edit",
+    "input": {
+      "file_path": "python/openbrain-memory/src/openbrain_memory/recall.py",
+      "old_string": "return record[\"content\"]",
+      "new_string": "return record[\"content\"][:1000]"
+    }
+  },
+  {
+    "id": "tp-write-new-guidance-doc-with-ceiling",
+    "why": "A brand-new file whose prior weight is zero, proposing a token budget for guidance.",
+    "tool": "Write",
+    "input": {
+      "file_path": "src/guidance-budget.ts",
+      "content": "// Keep the guidance payload small so prompts stay short.\nexport const MAX_GUIDANCE_LENGTH = 1200;\n\nexport function boundGuidance(text: string): string {\n  return text.slice(0, MAX_GUIDANCE_LENGTH);\n}\n"
+    }
+  }
+]

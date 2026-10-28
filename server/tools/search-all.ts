@@ -1,0 +1,604 @@
+/**
+ * `search_all` — federated search across Open Brain records and the qmd file index.
+ *
+ * Design authority: `docs/qmd-ob-layered-recall.md` (the peer-federation model
+ * and its fail-open rule), #327 (one shared retrieval stack on the brain side),
+ * and `docs/decisions/privilege-isolation-closed-brain.md` (namespace isolation
+ * is server-side).
+ *
+ * WHAT THIS IS, per that design: PEER federation. Both sources are searched
+ * independently and their results are rank-merged. It is explicitly NOT the
+ * layered recall the same document specifies for scope-derived repo questions —
+ * that entry point resolves a repo first and then reaches one `.qmd`, and it is
+ * a separate surface. Peer federation keeps its place for genuinely cross-repo
+ * questions; the caller names the collection here rather than having one derived.
+ *
+ * QMD FEDERATION FAILS OPEN, THE BRAIN SIDE DOES NOT. If qmd is missing, slow,
+ * or returns malformed JSON, its results are dropped and the brain results are
+ * still returned. That asymmetry is the design's stated choice: qmd indexes
+ * files that can be re-indexed at any time, so degrading to brain-only loses
+ * less than failing the call, while the brain is the authoritative memory.
+ *
+ * Fusion is by RANK, never by raw score: qmd's similarity numbers and the
+ * brain's RRF values are incomparable scales, and blending them directly would
+ * let whichever source emits larger numbers win regardless of relevance.
+ */
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canRead } from "../auth/permissions.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
+import {
+  canReadNamespace,
+  type NamespaceFilter,
+  namespaceFilterFor,
+} from "../domain/read-scope.ts";
+import { isSharedNamespace } from "./shared-namespace.ts";
+import { ALL_TABLES, RRF_K, TIER_BOOST, type Tier } from "./search-constants.ts";
+import {
+  setActiveMcpTraceMetadata,
+  traceRetrievalSpan,
+  traceRetrievalSpanSync,
+} from "../observability/langfuse-tracing.ts";
+import {
+  executeSearchWithSharedFallback,
+  type SearchMode,
+  type SearchRow,
+  type SourceRef,
+} from "./search-engine.ts";
+import { normalizeSearchArgs } from "./search-request.ts";
+import {
+  raceWithTimeout,
+  spawnQmd,
+  type QmdChild,
+  type QmdSpawn,
+} from "./qmd-spawn.ts";
+
+/**
+ * How the qmd child is created, as a mutable module binding.
+ *
+ * A binding rather than a threaded dependency because the qmd arm is reached
+ * through the registered MCP tool, several call frames below any caller that
+ * could pass one in. `setQmdSpawn` is the seam the tracing fixtures assign a
+ * double over; production never calls it.
+ */
+let qmdSpawn: QmdSpawn = spawnQmd;
+
+/**
+ * Replace the qmd spawn used by `search_all`, returning the previous one.
+ *
+ * Test-support only. Callers restore the returned value in a `finally`, the
+ * same shape the previous `Bun.spawn` monkeypatch used.
+ */
+export function setQmdSpawn(next: QmdSpawn): QmdSpawn {
+  const previous = qmdSpawn;
+  qmdSpawn = next;
+  return previous;
+}
+
+export type { QmdChild, QmdSpawn };
+
+const NOT_AUTHENTICATED = "Permission denied: not authenticated";
+const NAMESPACE_DENIED = "Permission denied: namespace read access denied";
+
+/** Longest a qmd subprocess may run before its results are abandoned. */
+const QMD_TIMEOUT_MS = 10_000;
+/** Longest content excerpt carried per federated result. */
+const MAX_CONTENT_CHARS = 300;
+
+interface QmdSourceRef {
+  source: "qmd";
+  type: "file";
+  path?: string;
+  collection?: string;
+}
+
+interface UnifiedResult {
+  source: "brain" | "qmd";
+  type: string;
+  content: string;
+  score: number;
+  source_ref: SourceRef | QmdSourceRef;
+  id?: string;
+  path?: string;
+  tags?: string[];
+  collection?: string;
+  tier?: string;
+}
+
+function federatedFilteredBy(
+  chosen: boolean,
+  rankIndex: number,
+  offset: number,
+): "pagination_offset" | "federated_rank_window" | null {
+  if (chosen) return null;
+  if (rankIndex < offset) return "pagination_offset";
+  return "federated_rank_window";
+}
+
+/** One qmd hit; every field is optional because the shape varies by version. */
+interface QmdDocument {
+  path?: string;
+  file?: string;
+  content?: string;
+  text?: string;
+  preview?: string;
+  snippet?: string;
+  score?: number;
+  similarity?: number;
+  collection?: string;
+}
+
+/**
+ * Resolve the qmd entry point, treating a blank value as unconfigured.
+ *
+ * `docs/qmd-ob-layered-recall.md` records the exact defect this avoids: the
+ * dogfood environment sets `QMD_PATH=` (empty, not absent), and a `?? default`
+ * resolution treats empty-string as a configured value, so the caller spawned
+ * `bun "" search …` and the qmd arm silently produced nothing forever. Trimming
+ * to `undefined` means an unusable value disables federation loudly at the call
+ * site instead of failing inside a subprocess that fails open.
+ *
+ * @returns The configured path, or `undefined` when none is usable.
+ */
+export function resolveQmdPath(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const configured = env.QMD_PATH?.trim();
+  return configured ? configured : undefined;
+}
+
+/** One qmd federation request; a named struct so no caller tracks argument order. */
+interface QmdSearchOptions {
+  dependencies: MemoryToolDependencies;
+  /** Resolved qmd entry point; never empty (see resolveQmdPath). */
+  qmdPath: string;
+  query: string;
+  /** How many hits to ask qmd for. */
+  limit: number;
+  collection: string | undefined;
+}
+
+/**
+ * Search the qmd file index, returning `[]` on every failure.
+ *
+ * Fails open by design (see the module header). A timeout, a non-zero exit, or
+ * unparseable output all degrade to no qmd results rather than failing the whole
+ * federated search. Each is logged, so the degradation is visible rather than
+ * merely quiet — the design's R4 objection is to SILENT staleness, not to
+ * degradation itself.
+ */
+async function searchQmdInternal(options: QmdSearchOptions): Promise<UnifiedResult[]> {
+  const { dependencies, qmdPath, query, limit, collection } = options;
+  try {
+    const command = [
+      process.execPath,
+      qmdPath,
+      "search",
+      query,
+      "--json",
+      "-n",
+      String(limit),
+    ];
+    if (collection) command.push("-c", collection);
+
+    // The spawn and the race both live behind `qmd-spawn.ts`, which owns
+    // cancelling BOTH arms: the timer when the child wins, and the child-exit
+    // listeners when the timeout wins. The timer half is the original #608/#632
+    // post-mortem -- "a subprocess that finishes first leaves the timer armed
+    // and it fires later, against an already-settled race, after the test that
+    // started it has ended: `Unhandled error between tests` with `0 fail`, exit
+    // 1". The listener half is the same incident by the route Node's
+    // event-based child exit opens up. That module carries both, so the
+    // property is proven in one place rather than restated here.
+    const proc = qmdSpawn(command);
+    const outcome = await raceWithTimeout(proc, QMD_TIMEOUT_MS);
+
+    if (outcome.timedOut) {
+      dependencies.logger.warn({ timeout_ms: QMD_TIMEOUT_MS }, "qmd_search_timeout");
+      return [];
+    }
+    if (outcome.exitCode !== 0) {
+      dependencies.logger.warn({ exit_code: outcome.exitCode }, "qmd_search_failed");
+      return [];
+    }
+
+    const docs = JSON.parse(outcome.stdout) as QmdDocument[];
+    if (!Array.isArray(docs)) return [];
+
+    return docs.map((doc) => {
+      const path = doc.path ?? doc.file;
+      return {
+        source: "qmd" as const,
+        type: "file",
+        content: (doc.content ?? doc.text ?? doc.preview ?? doc.snippet ?? "").slice(
+          0,
+          MAX_CONTENT_CHARS,
+        ),
+        score: doc.score ?? doc.similarity ?? 0.5,
+        path,
+        collection: doc.collection,
+        source_ref: {
+          source: "qmd" as const,
+          type: "file" as const,
+          path,
+          collection: doc.collection,
+        },
+      };
+    });
+  } catch (error) {
+    dependencies.logger.warn(
+      { error_message: error instanceof Error ? error.message : String(error) },
+      "qmd_search_error",
+    );
+    return [];
+  }
+}
+
+function searchQmd(options: QmdSearchOptions): Promise<UnifiedResult[]> {
+  const { query, limit, collection } = options;
+  return traceRetrievalSpan({
+    name: "retrieval.qmd_query",
+    input: { query, limit, collection },
+    metadata: { stage: "candidate_generation", source: "qmd" },
+    run: () => searchQmdInternal(options),
+    output: (rows) => ({
+      count: rows.length,
+      candidates: rows.map((row) => ({
+        path: row.path ?? null,
+        collection: row.collection ?? null,
+        content: row.content,
+        score: row.score,
+      })),
+    }),
+  });
+}
+
+/** Project a brain search row into the federated result shape. */
+function toUnifiedResult(row: SearchRow): UnifiedResult {
+  const preview = row.content_preview ?? "";
+  return {
+    source: "brain" as const,
+    type: row.source_type,
+    content: preview.slice(0, MAX_CONTENT_CHARS),
+    // Pre-fusion score only. The handler overwrites `score` with the fused rank
+    // value before emitting, so a raw distance or rank never reaches the caller.
+    score: row.distance != null ? 1 - row.distance : (row.fts_rank ?? 0.5),
+    source_ref: row.source_ref ?? {
+      source: "brain" as const,
+      type: row.source_type,
+      id: row.id,
+      label: preview.slice(0, 120),
+      preview: preview.slice(0, MAX_CONTENT_CHARS),
+    },
+    id: row.id,
+    tags: row.tags ?? undefined,
+    tier: row.tier,
+  };
+}
+
+/** Frozen `search_all` argument contract: the names, types, and rule values are the API. */
+const searchAllInputSchema = {
+  query: z.string().min(1).describe("Natural language search query"),
+  namespace: z
+    .string()
+    .optional()
+    .describe(
+      "Optional: filter brain results to a specific namespace (e.g. clientId or 'shared-kb')",
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(250)
+    .optional()
+    .describe("Max results per source (default 10)"),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Number of results to skip for pagination (default 0)"),
+  sources: z
+    .enum(["all", "brain", "qmd"])
+    .optional()
+    .describe("Which sources to search (default: all)"),
+  collection: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional: restrict qmd search to one collection"),
+  search_mode: z
+    .enum(["hybrid", "vector", "keyword"])
+    .optional()
+    .describe(
+      "Brain search mode: hybrid (default) = vector + keyword with RRF, vector = semantic only, keyword = full-text only",
+    ),
+  tier: z
+    .enum(["hot", "warm", "cold"])
+    .optional()
+    .describe("Optional: filter brain results to a specific cognitive tier"),
+};
+
+/** Tool annotations; `search_all` reads and never mutates. */
+const searchAllAnnotations = {
+  title: "Search All",
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+};
+
+/** Which arms of the federation this request will actually run. */
+interface FederationPlan {
+  wantBrain: boolean;
+  wantQmd: boolean;
+  qmdPath: string | undefined;
+}
+
+/**
+ * Decide which sources to search, announcing an unusable qmd configuration.
+ *
+ * @returns The arms to run; `wantQmd` is false when no qmd path is usable.
+ */
+function planFederation(
+  dependencies: MemoryToolDependencies,
+  sources: "all" | "brain" | "qmd",
+): FederationPlan {
+  // The ONE source. There is no fallback read here on purpose: a `?? resolveQmdPath()`
+  // tail would let this handler answer from the ambient environment whenever the
+  // composition root failed to hand the value down, which is the doubled state
+  // rung L2 exists to end (#825).
+  const qmdPath = dependencies.qmdPath;
+  const qmdRequested = sources === "all" || sources === "qmd";
+  if (qmdRequested && qmdPath === undefined) {
+    // Say it once, at the boundary. Without this the qmd arm's absence is
+    // indistinguishable from a search that found no files.
+    dependencies.logger.warn({}, "qmd_search_unconfigured");
+  }
+  return {
+    wantBrain: sources === "all" || sources === "brain",
+    wantQmd: qmdRequested && qmdPath !== undefined,
+    qmdPath,
+  };
+}
+
+/** One brain-arm request against the readable tables for this identity. */
+interface BrainSearchOptions {
+  dependencies: MemoryToolDependencies;
+  role: Parameters<typeof canRead>[0];
+  query: string;
+  /** How many rows to over-fetch so the merged window can be sliced after fusion. */
+  totalNeeded: number;
+  mode: SearchMode;
+  tier: Tier | undefined;
+  namespace: NamespaceFilter | undefined;
+  requestedNamespace: string | undefined;
+}
+
+/**
+ * Search the brain arm, returning `[]` on failure.
+ *
+ * The brain arm degrades to no results here rather than failing the call,
+ * because `search_all` returns whatever federation could reach. The failure is
+ * logged as `search_all_brain_failed` so the degradation stays visible.
+ */
+async function searchBrainArm(options: BrainSearchOptions): Promise<UnifiedResult[]> {
+  const { dependencies, role, query, totalNeeded, mode, tier, namespace } = options;
+  const tables = ALL_TABLES.filter((table) => canRead(role, table));
+  if (tables.length === 0) return [];
+  try {
+    const rows = await executeSearchWithSharedFallback(
+      dependencies,
+      tables,
+      query,
+      totalNeeded,
+      mode,
+      tier,
+      0,
+      namespace,
+      {},
+      options.requestedNamespace !== undefined &&
+        isSharedNamespace(
+          options.requestedNamespace,
+          dependencies.sharedNamespaceNames,
+        ),
+    );
+    return rows.map(toUnifiedResult);
+  } catch (error) {
+    dependencies.logger.warn(
+      {
+        error_message: error instanceof Error ? error.message : String(error),
+      },
+      "search_all_brain_failed",
+    );
+    return [];
+  }
+}
+
+/** A federated candidate carrying its fused rank value. */
+type FusedResult = UnifiedResult & { rrf: number };
+
+/**
+ * Fuse both arms by POSITION, never by raw score.
+ *
+ * qmd's similarity numbers and the brain's RRF values are incomparable scales,
+ * so both sources get fair representation only when position is what counts.
+ * Brain rows additionally carry the cognitive-tier boost, floored at zero so a
+ * cold-tier penalty cannot go negative.
+ */
+function fuseFederatedResults(
+  brainResults: UnifiedResult[],
+  qmdResults: UnifiedResult[],
+): FusedResult[] {
+  const fused: FusedResult[] = [];
+  brainResults.forEach((result, index) => {
+    fused.push({
+      ...result,
+      rrf: Math.max(
+        0,
+        1 / (RRF_K + index + 1) + TIER_BOOST[(result.tier ?? "warm") as Tier],
+      ),
+    });
+  });
+  qmdResults.forEach((result, index) => {
+    fused.push({ ...result, rrf: 1 / (RRF_K + index + 1) });
+  });
+  return fused;
+}
+
+type RankedCandidate = FusedResult & { trace_index: number };
+
+/** The window request applied to the fused candidates after ranking. */
+interface RankWindowOptions {
+  fused: FusedResult[];
+  offset: number;
+  count: number;
+  brainCount: number;
+  qmdCount: number;
+}
+
+/**
+ * Sort the fused candidates and take the caller's window, under one trace span.
+ *
+ * The span records EVERY candidate with why it was or was not returned, so a
+ * missing result can be told apart from a result that never existed.
+ */
+function selectRankedWindow(options: RankWindowOptions): RankedCandidate[] {
+  const { fused, offset, count, brainCount, qmdCount } = options;
+  let rankedCandidates: RankedCandidate[] = [];
+  return traceRetrievalSpanSync({
+    name: "retrieval.federated_rank",
+    input: {
+      brain_count: brainCount,
+      qmd_count: qmdCount,
+    },
+    metadata: {
+      stage: "scoring_ranking",
+      filter_names: ["pagination_offset", "federated_rank_window"],
+    },
+    run: () => {
+      rankedCandidates = fused
+        .map((row, trace_index) => ({ ...row, trace_index }))
+        .sort((a, b) => b.rrf - a.rrf);
+      return rankedCandidates.slice(offset, offset + count);
+    },
+    output: (selected) => {
+      const selectedIndexes = new Set(selected.map((row) => row.trace_index));
+      return {
+        candidate_count: rankedCandidates.length,
+        selected_count: selected.length,
+        returned_row_ids: selected
+          .filter((row) => row.source === "brain")
+          .map((row) => row.id),
+        candidates: rankedCandidates.map((row, rankIndex) => {
+          const chosen = selectedIndexes.has(row.trace_index);
+          return {
+            source: row.source,
+            row_id: row.id ?? null,
+            path: row.path ?? null,
+            content: row.content,
+            raw_score: row.score,
+            rrf_score: row.rrf,
+            chosen,
+            filtered_by: federatedFilteredBy(chosen, rankIndex, offset),
+          };
+        }),
+      };
+    },
+  });
+}
+
+export function registerSearchAllTool(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  server.registerTool(
+    "search_all",
+    {
+      description:
+        "Federated search across Open Brain knowledge AND qmd file index. Returns merged, ranked results from both sources.",
+      inputSchema: searchAllInputSchema,
+      annotations: searchAllAnnotations,
+    },
+    async (args, extra) => {
+      const identity = authIdentity(extra.authInfo);
+      if (!identity) return errorResult(NOT_AUTHENTICATED);
+
+      const { limit, offset, mode, tier, requestedNamespace } =
+        normalizeSearchArgs(args);
+      const sources = args.sources ?? "all";
+
+      if (
+        requestedNamespace &&
+        !canReadNamespace(
+          identity,
+          requestedNamespace,
+          dependencies.sharedNamespaceNames,
+        )
+      ) {
+        return errorResult(NAMESPACE_DENIED);
+      }
+
+      const namespace = namespaceFilterFor(
+        identity,
+        requestedNamespace,
+        {},
+        dependencies.sharedNamespaceNames,
+      );
+      setActiveMcpTraceMetadata({ resolved_namespace: namespace ?? null });
+
+      const plan = planFederation(dependencies, sources);
+      // Over-fetch to cover the requested window, then slice after the merge.
+      const totalNeeded = offset + limit;
+
+      const [brainResults, qmdResults] = await Promise.all([
+        plan.wantBrain
+          ? searchBrainArm({
+              dependencies,
+              role: identity.role,
+              query: args.query,
+              totalNeeded,
+              mode,
+              tier,
+              namespace,
+              requestedNamespace,
+            })
+          : Promise.resolve<UnifiedResult[]>([]),
+        plan.wantQmd && plan.qmdPath
+          ? searchQmd({
+              dependencies,
+              qmdPath: plan.qmdPath,
+              query: args.query,
+              limit: totalNeeded,
+              collection: args.collection,
+            })
+          : Promise.resolve<UnifiedResult[]>([]),
+      ]);
+
+      const selectedCandidates = selectRankedWindow({
+        fused: fuseFederatedResults(brainResults, qmdResults),
+        offset,
+        count: limit,
+        brainCount: brainResults.length,
+        qmdCount: qmdResults.length,
+      });
+      const tracedMerged = selectedCandidates.map(
+        ({ rrf, trace_index: _traceIndex, ...rest }) => ({
+          ...rest,
+          score: rrf,
+        }),
+      );
+
+      return textResult({
+        total: tracedMerged.length,
+        brain_hits: brainResults.length,
+        qmd_hits: qmdResults.length,
+        results: tracedMerged,
+      });
+    },
+  );
+}

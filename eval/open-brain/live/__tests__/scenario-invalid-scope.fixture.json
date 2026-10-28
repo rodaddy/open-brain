@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "fixture_id": "invalid-scenario-scope-key",
+  "description": "Fixture proving non-contract scope keys fail during load.",
+  "scenarios": [
+    {
+      "id": "invalid-scope-key",
+      "kind": "capture_round_trip",
+      "request": {
+        "operation": "capture",
+        "distilled": true,
+        "content": "Invalid fixture scope marker.",
+        "event_type": "decision",
+        "scope": {
+          "agent": "scenario-eval",
+          "platform": "eval",
+          "server_id": "open-brain-scenarios",
+          "channel_id": "invalid-scope",
+          "session_key": "eval:scenario:invalid-scope",
+          "bogus": "not-a-scope-key"
+        }
+      }
+    }
+  ]
+}

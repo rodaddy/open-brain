@@ -1,0 +1,363 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "workflow-evaluator-no-imports",
+      "query": "can a Claudex mixed-model workflow script use import statements",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "a4c5c025-c0e1-45a0-b398-63f79376e610",
+          "label": 2
+        }
+      ],
+      "note": "This thought states outright that the Claudex Workflow evaluator supports neither static nor dynamic imports and that meta must be the script's first statement. It is the only row that answers the import question directly."
+    },
+    {
+      "id": "claude-hook-payload-case",
+      "query": "what casing do Claude hook payload fields use, tool_name or toolName",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "b7f4c528-f72a-4b85-a07e-2041ce99b8d6",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "39f60f73-4150-49b1-b56e-a3f2456a0523",
+          "label": 1
+        }
+      ],
+      "note": "The label-2 row is the routing gotcha naming snake_case tool_name/tool_input explicitly. The label-1 row is the adjacent agent-routing-verification note: same subject area, does not answer the casing question."
+    },
+    {
+      "id": "cliproxyapi-credential-cooldown",
+      "query": "why does a single upstream 5xx take a CLIProxyAPI account offline for minutes",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "34472e4c-e719-4453-a4f1-f01a1cb58843",
+          "label": 2
+        }
+      ],
+      "note": "Records the v7.2.80 single-account gotcha: a transient 408/5xx marks the credential unavailable for a default cooldown. Nothing else in the corpus covers this failure mode."
+    },
+    {
+      "id": "keybase-volume-unmounted",
+      "query": "Keybase broke after a macOS update and the Keybase volume is missing",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "8c15ec6d-b682-4998-92f5-559a0c59f550",
+          "label": 2
+        },
+        {
+          "source_type": "decisions",
+          "id": "3f9e62c5-b1e9-49d5-accb-b439d7a1dfc6",
+          "label": 1
+        }
+      ],
+      "note": "The thought names the two independent breakage layers including the unmounted volume. The decision (keybase-fix stays a manual one-shot script, no launchd watchdog) is relevant policy on the same subject but does not diagnose the breakage."
+    },
+    {
+      "id": "runner-hub-github-auth",
+      "query": "should self-hosted runners authenticate with per-repo PATs or a broad token",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "722c7d11-25d5-46f7-bbee-2df4d47c9f08",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "d6d13494-8f2c-4579-a64e-2b895b917058",
+          "label": 1
+        }
+      ],
+      "note": "The decision is the ruling itself: The thought is the verification receipt for the easy-path token retrieval on the same subject, supporting rather than answering."
+    },
+    {
+      "id": "mcp2cli-hosted-by-default",
+      "query": "when should an mcp2cli service run locally instead of hosted",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "cbf8285d-d433-4ebe-acb4-f44ad703405e",
+          "label": 2
+        }
+      ],
+      "note": "The standard itself: mcp2cli service routing is hosted-by-default, local ONLY for Mac-hardware-bound MCPs."
+    },
+    {
+      "id": "workflow-first-inline-runner",
+      "query": "what are the exceptions to routing Claudex work through a Workflow",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "21331f8d-642d-424f-8097-916a3554066a",
+          "label": 2
+        },
+        {
+          "source_type": "decisions",
+          "id": "a74f42fd-51cf-4ced-92d7-665391aba0eb",
+          "label": 1
+        }
+      ],
+      "note": "The label-2 decision makes Claudex Workflow-first with explicit inline and runner exceptions. The label-1 decision (provider companions stay beneath Workflow ownership) is the same policy area but answers ownership, not the exceptions."
+    },
+    {
+      "id": "dolibarr-not-twenty",
+      "query": "which system is the rTech Consulting back office built on",
+      "namespace": "shared-kb",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "914860e9-de1e-4b42-99d7-d3120dccd550",
+          "label": 2
+        }
+      ],
+      "note": "States the back-office base is Dolibarr, separate from Twenty CRM. The distractor risk here is the CRM mention inside the same row."
+    },
+    {
+      "id": "promotion-covers-codex-and-user",
+      "query": "does Open Brain promotion apply only to Hermes agent work",
+      "namespace": "shared-kb",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "440b05dc-4dc1-4071-806a-af4eaf85b7ee",
+          "label": 2
+        }
+      ],
+      "note": "The decision says promotion must cover Codex and user work, not only Hermes agents -- a direct no to the question."
+    },
+    {
+      "id": "goal-run-closeout-clean-wip",
+      "query": "what branch state must a goal run leave behind when it closes out",
+      "namespace": "shared-kb",
+      "expected": [
+        {
+          "source_type": "decisions",
+          "id": "a9834ad2-bc8a-4faf-9015-27339e72574e",
+          "label": 2
+        }
+      ],
+      "note": "Goal-run closeout must reconcile branches and leave a clean WIP. Directly answers the end-state question."
+    },
+    {
+      "id": "embedding-watchdog-host",
+      "query": "where is the Open Brain embedding watchdog deployed",
+      "namespace": "shared-kb",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "32c44822-b0b7-441c-9841-90b9111eb526",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "18c7369c-5dc8-4327-a649-69d41e4dc0dd",
+          "label": 1
+        },
+        {
+          "source_type": "thoughts",
+          "id": "cefbd7bf-eda6-4979-8867-eeb5ba2fd21b",
+          "label": 0
+        }
+      ],
+      "note": "The label-2 process note states the watchdog is deployed on the retired host's address. The label-1 row is the post-bounce canary on the same host. The label-0 row is a diagnostic write probe that literally says 'safe to ignore' -- it shares vocabulary with the query and must not outrank the process note."
+    },
+    {
+      "id": "dap-raw-ids-only",
+      "query": "how should an agent format a Discord ping in the DAP protocol",
+      "namespace": "skippy",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "1e069878-8ae9-4f00-8560-74b203669548",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "78b1a98e-6242-4707-a5e6-b7917108f457",
+          "label": 1
+        }
+      ],
+      "note": "Both memory rows state raw IDs only plus verify-receipt; the label-2 row is the fuller one. Kept as a near-duplicate pair on purpose: recall must surface at least one, and near-duplicates are a real property of this corpus."
+    },
+    {
+      "id": "sam-fail-closed",
+      "query": "what happens when a price is zero or blank under the Sam rule",
+      "namespace": "skippy",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "fa13473c-f481-429f-bcad-7bb05a2068f7",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "45e11a52-8347-443e-9d31-564c9cdddd24",
+          "label": 1
+        }
+      ],
+      "note": "The label-2 row names it 'Sam Law' and states 0/blank HALT and missing=NULL. The label-1 row is the shorter variant of the same rule."
+    },
+    {
+      "id": "openbrain-access-python-module",
+      "query": "should Bilby reach Open Brain through mcp2cli or the Python module",
+      "namespace": "bilby",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "edb0630e-c3a5-4ffd-9159-7ef0c1e83de7",
+          "label": 2
+        }
+      ],
+      "note": "States Bilby should use the built-in Python module/API path, not mcp2cli, unless Rico explicitly says otherwise."
+    },
+    {
+      "id": "durable-corrections-into-open-brain",
+      "query": "where do operator corrections and working-context preferences get stored",
+      "namespace": "bilby",
+      "expected": [
+        {
+          "source_type": "thoughts",
+          "id": "ba598a83-51be-4069-a49f-be145aec5fe8",
+          "label": 2
+        },
+        {
+          "source_type": "thoughts",
+          "id": "9163f677-27ea-4082-8dab-83b38d5bddf1",
+          "label": 1
+        }
+      ],
+      "note": "The label-2 row states Rico expects durable operator corrections and preferences saved into Open Brain memory. The label-1 row is the adjacent OB-first preference: relevant, not the answer."
+    },
+    {
+      "id": "handover-git-guard-literal-path",
+      "query": "why does the git guard reject a commit that passes the repo path in a variable",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "ob_session_events",
+          "id": "99370b47-3d3f-4f29-8ce9-f5b81dd315a1",
+          "label": 2
+        }
+      ],
+      "note": "The handover-authoring correction states clause (1) verbatim: the git guard rejects `git -C $VAR commit`; always pass a literal absolute path. The event's effective namespace is inherited from its session lane."
+    },
+    {
+      "id": "dirty-paths-are-owned",
+      "query": "can a session leave a dirty file alone because it belongs to another session",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "ob_session_events",
+          "id": "75d29b27-2a3c-400e-b6a2-7c3c218e4681",
+          "label": 2
+        }
+      ],
+      "note": "The 2026-09-04 ruling: everything under Development is the agent's own to reconcile, and 'not mine, reported' is a failure. A direct no."
+    },
+    {
+      "id": "wave-sizing-for-head-sessions",
+      "query": "how many concurrent worker lanes should a head session dispatch at once",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "ob_session_events",
+          "id": "71da1b6f-d213-4514-960a-825ee44e37fb",
+          "label": 2
+        }
+      ],
+      "note": "Names waves of 5-10 concurrent single-agent Opus 5 low dispatches and calls two lanes undersized. The only row that gives a number."
+    },
+    {
+      "id": "tax-obligation-is-a-json-row",
+      "query": "how is a new dated tax obligation added to the calendar",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "ob_session_events",
+          "id": "471c2c16-5489-4c1b-8ccc-fdadbd65fd81",
+          "label": 2
+        },
+        {
+          "source_type": "ob_session_events",
+          "id": "333bb556-233f-4832-bffc-8b2e3132a297",
+          "label": 1
+        }
+      ],
+      "note": "The label-2 decision states adding an obligation = add a json row to planning/tax-calendar.json, never a script edit. The label-1 correction is the drift post-mortem that motivated it."
+    },
+    {
+      "id": "codex-checkpoint-blocked-on-main",
+      "query": "a memories checkout is sitting on protected main and cannot be committed",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "sessions",
+          "id": "0baa9761-4a4b-4d7e-8cf1-5ff58882bcfa",
+          "label": 2
+        }
+      ],
+      "note": "The session summary records exactly this blocker for the `memories` project. Chosen from sessions to give the fixture set a fourth source_type."
+    },
+    {
+      "id": "zip-as-ownership-artifact",
+      "query": "what was chosen as the universal fallback and ownership artifact format",
+      "namespace": "rico",
+      "expected": [
+        {
+          "source_type": "sessions",
+          "id": "983dfe21-6f55-4318-8049-51e68f5c5c44",
+          "label": 2
+        }
+      ],
+      "note": "The Development session checkpoint names ZIP as the better universal fallback and ownership artifact."
+    },
+    {
+      "id": "isolation-skippy-query-cannot-reach-bilby",
+      "query": "how should an agent reach Open Brain, through mcp2cli or the Python module",
+      "namespace": "skippy",
+      "isolation": true,
+      "expected": [],
+      "forbidden": [
+        { "source_type": "thoughts", "id": "edb0630e-c3a5-4ffd-9159-7ef0c1e83de7" }
+      ],
+      "note": "Negative isolation case. This is deliberately the same question as `openbrain-access-python-module`, whose answer lives in the `bilby` namespace. Scoped to `skippy`, that row must never be returned: a leak here is a namespace-predicate bug in the retrieval stack, not a ranking miss."
+    },
+    {
+      "id": "isolation-bilby-query-cannot-reach-rico",
+      "query": "does the Claudex Workflow evaluator support import statements",
+      "namespace": "bilby",
+      "isolation": true,
+      "expected": [],
+      "forbidden": [
+        { "source_type": "thoughts", "id": "a4c5c025-c0e1-45a0-b398-63f79376e610" },
+        { "source_type": "decisions", "id": "21331f8d-642d-424f-8097-916a3554066a" }
+      ],
+      "note": "Second negative isolation case, crossing a different pair of namespaces and two tables. Both forbidden rows live in `rico` and answer the query well; scoped to `bilby` neither may appear."
+    },
+    {
+      "id": "isolation-shared-kb-query-cannot-reach-skippy",
+      "query": "what is the Sam rule about zero or blank prices",
+      "namespace": "shared-kb",
+      "isolation": true,
+      "expected": [],
+      "forbidden": [
+        { "source_type": "thoughts", "id": "fa13473c-f481-429f-bcad-7bb05a2068f7" },
+        { "source_type": "thoughts", "id": "45e11a52-8347-443e-9d31-564c9cdddd24" }
+      ],
+      "note": "Third negative case. shared-kb is the largest namespace and the one a leak is most likely to hide in, so the strongest lexical match for this query must still be excluded when the scope is shared-kb."
+    }
+  ]
+}

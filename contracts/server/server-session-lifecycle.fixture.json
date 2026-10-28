@@ -1,0 +1,155 @@
+{
+  "id": "server-session-lifecycle",
+  "description": "Create a lane, append a checkpoint event, read context, and checkpoint the lane through current-src.",
+  "capability": "session-lifecycle-server",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-session",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "session_start",
+      "arguments": {
+        "session_key": "parity/lifecycle",
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "lane": {
+            "id": "<uuid>",
+            "session_key": "parity/lifecycle",
+            "namespace": "{{namespace}}",
+            "status": "active",
+            "agent": "fixture-agent",
+            "source": "test",
+            "channel_id": "channel-1",
+            "thread_id": null,
+            "project": null,
+            "topic": null,
+            "current_context_md": null,
+            "metadata": {
+              "server_id": "server-1"
+            },
+            "created_at": "<iso-date>",
+            "updated_at": "<iso-date>",
+            "ended_at": null
+          },
+          "events": [],
+          "events_returned": 0,
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "append_session_event",
+      "arguments": {
+        "session_key": "parity/lifecycle",
+        "event_type": "fact",
+        "content": "Observed parity event",
+        "source": "fixture-agent"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "event_id": "<uuid>",
+          "lane_id": "<uuid>",
+          "lane_created": false,
+          "event_type": "fact",
+          "importance": "warm",
+          "created_at": "<iso-date>",
+          "transcript_ref": null,
+          "writer_identity": "{{namespace}}",
+          "token_identity": "{{namespace}}",
+          "delegated_agent_id": null,
+          "namespace_source": "token"
+        }
+      }
+    },
+    {
+      "tool": "session_context",
+      "arguments": {
+        "session_key": "parity/lifecycle"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "lane": {
+            "id": "<uuid>",
+            "session_key": "parity/lifecycle",
+            "namespace": "{{namespace}}",
+            "status": "active",
+            "agent": "fixture-agent",
+            "project": null,
+            "topic": null,
+            "current_context_md": null,
+            "metadata": {
+              "server_id": "server-1"
+            },
+            "created_at": "<iso-date>",
+            "updated_at": "<iso-date>"
+          },
+          "events": [
+            {
+              "id": "<uuid>",
+              "event_type": "fact",
+              "content": "Observed parity event",
+              "source": "fixture-agent",
+              "artifact_path": null,
+              "transcript_ref": null,
+              "transcript": null,
+              "occurred_at": null,
+              "importance": "warm",
+              "metadata": {
+                "_openbrain": {
+                  "writer": {
+                    "agent_id": null,
+                    "client_id": "{{namespace}}",
+                    "token_client_id": "{{namespace}}",
+                    "namespace_source": "token"
+                  }
+                }
+              },
+              "created_at": "<iso-date>",
+              "created_by": "{{namespace}}"
+            }
+          ],
+          "event_count": 1
+        }
+      }
+    },
+    {
+      "tool": "session_wrap",
+      "arguments": {
+        "session_key": "parity/lifecycle",
+        "summary": "Observed parity checkpoint",
+        "key_decisions": [
+          "Keep current-src behavior"
+        ],
+        "next_steps": [
+          "Implement scaffold parity"
+        ]
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "session_id": "<uuid>",
+          "lane_id": "<uuid>",
+          "lane_status": "active",
+          "event_count": 1,
+          "created_at": "<iso-date>",
+          "source_refs": [],
+          "context_updated": true
+        }
+      }
+    }
+  ]
+}

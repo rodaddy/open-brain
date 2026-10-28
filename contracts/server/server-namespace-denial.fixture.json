@@ -1,0 +1,49 @@
+{
+  "id": "server-namespace-denial",
+  "description": "Freeze auth-derived namespace denial shapes for write and read surfaces.",
+  "capability": "namespace-denial",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-namespace",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "session_start",
+      "arguments": {
+        "session_key": "parity/denied",
+        "namespace": "{{other_namespace}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: agent role cannot write to namespace '{{namespace}}-other'"
+      }
+    },
+    {
+      "tool": "search_brain",
+      "arguments": {
+        "query": "denied",
+        "namespace": "{{other_namespace}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: namespace read access denied"
+      }
+    },
+    {
+      "tool": "session_context",
+      "arguments": {
+        "session_key": "parity/denied",
+        "namespace": "{{other_namespace}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: cannot read namespace '{{namespace}}-other'"
+      }
+    }
+  ]
+}

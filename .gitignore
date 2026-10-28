@@ -1,0 +1,120 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+.omc/
+
+# Private development artifacts (contain infrastructure-specific details)
+.planning/
+.reports/
+reports/
+.env.dev
+
+# .claude/ -- ignored by CONTENTS, not as a directory.
+#
+# `.claude/` on its own excludes the directory, and git then never descends into
+# it, so a later `!.claude/hooks/` re-include is silently ignored. Excluding
+# `.claude/*` instead leaves the directory walkable and makes the exceptions
+# below actually take effect. Verified with `git check-ignore -v`.
+.claude/*
+
+# EXCEPT the design-lookup gate. An untracked gate protects only the machine it
+# was written on: a runner box, a Codex worker, a fresh clone, or a worktree
+# gets no enforcement at all -- which is exactly where an unresearched edit is
+# most expensive and least visible. The gate and the settings that wire it up
+# are repo policy, not machine config, so they ship with the repo.
+# settings.local.json stays ignored: permissions and paths ARE machine-local.
+!.claude/hooks/
+!.claude/settings.json
+
+# AND the repo-local agent definitions, for the same reason. `pr-scribe` exists
+# so a lane composes a PR body that passes scripts/validate-pr-body.ts on the
+# first try; an untracked copy helps only the machine that wrote it, while every
+# worktree and worker -- where the body is actually written -- gets nothing.
+# scripts/done-means/pr-template-passes-validator.sh asserts the file exists, so
+# leaving it ignored would pass locally and fail on a fresh clone.
+!.claude/agents/
+
+# Session report buffers are local-only, never committed (public repo)
+_reports/
+
+
+# qmd: the index is ONE STORE, the Development catalogue
+# (/srv/dev/.qmd/index.yml, operator ruling 2026-08-28);
+# a repo-local .qmd/ re-scopes aqmd to an empty config and is never tracked.
+.qmd/
+
+# Capture watermark store: the Python capture hooks default their SQLite
+# read-offset store to PACKAGE_ROOT/data/capture-watermarks.sqlite
+# (openbrain.config CaptureSettings.watermark_path), so running a hook from the
+# source tree creates this dir. It is per-machine runtime state, rebuildable by
+# re-reading transcripts, and never belongs in git.
+python/openbrain/data/
+
+# Secrets and file-based config layers: ALLOWLIST, never a blocklist.
+#
+# The structure is tracked, the values are not. A blocklist of known-bad names
+# (`*.secret.json`, `credentials.json`) only ever catches the spellings someone
+# thought of; the first file named something new lands in git. Ignoring the
+# whole directory and re-admitting named exceptions inverts that: a new file is
+# ignored by default and has to be deliberately allowed.
+#
+# The committed *.example.json files carry the full key structure with
+# placeholder values, so a fresh clone shows exactly what is required without a
+# real value ever entering git.
+#
+# An ignored file is still a file on disk. Check what is already sitting in
+# secrets/ before assuming this has covered you.
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+!secrets/*.example
+!secrets/*.example.json
+
+# Deploy stamp written into a DEPLOYED tree by scripts/local-clone-deploy.sh
+# and read back by `/health` as `revision`. It describes one deployment, not
+# the source, so it must never be committed — a checked-in stamp would make
+# every tree claim to be whichever one happened to be deployed when it landed.
+.deployed-revision
+
+# Test scratch fixtures (src/operator-doctor.test.ts qmd index fixture). The
+# repo temp-workspace rule bans /tmp and $TMPDIR, so fixtures land in-repo and
+# must never be committed; afterEach removes them, a crashed run does not.
+_scratch/
+
+# Added by ggshield
+.cache_ggshield

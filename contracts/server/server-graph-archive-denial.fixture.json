@@ -1,0 +1,62 @@
+{
+  "id": "server-graph-archive-denial",
+  "description": "Freeze the archive_entity permission boundary: the agent role may create an entity but may not archive it, because agent holds read/write and not delete on the sessions resource that gates the graph.",
+  "capability": "graph-archive",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-graph-archive-denial",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "upsert_entity",
+      "arguments": {
+        "entity_type": "host",
+        "name": "parity-archive-denied",
+        "canonical_id": "host:parity-archive-denied"
+      },
+      "capture": {
+        "entity_id": "id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "entity_type": "host",
+          "name": "parity-archive-denied",
+          "namespace": "{{namespace}}",
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "archive_entity",
+      "arguments": {
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: cannot archive entities"
+      }
+    },
+    {
+      "tool": "get_entity",
+      "arguments": {
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "{{entity_id}}",
+          "entity_type": "host",
+          "name": "parity-archive-denied",
+          "namespace": "{{namespace}}"
+        }
+      }
+    }
+  ]
+}

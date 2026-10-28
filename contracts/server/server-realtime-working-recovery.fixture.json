@@ -1,0 +1,128 @@
+{
+  "id": "server-realtime-working-recovery",
+  "description": "Append RAM working context and quarantined recovery state, then mark the missing recovery record shape.",
+  "capability": "realtime-working-recovery",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-realtime",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "working_set_append",
+      "arguments": {
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1",
+        "session_key": "parity/realtime",
+        "kind": "current_intent",
+        "content": "Preserve observed behavior"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "accepted": true,
+          "reason": null,
+          "item": {
+            "id": "ws-1",
+            "kind": "current_intent",
+            "label": "working_context",
+            "content": "Preserve observed behavior",
+            "confidence": null,
+            "stale_at": null,
+            "trace_id": null,
+            "source_ref": null,
+            "durable_ref": null,
+            "metadata": {},
+            "created_at": "<iso-date>",
+            "expires_at": "<iso-date>"
+          },
+          "counters": {
+            "dropped": 0,
+            "expired": 0,
+            "trimmed": 0
+          },
+          "not_durable_memory": true
+        }
+      }
+    },
+    {
+      "tool": "recovery_wal_append",
+      "arguments": {
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1",
+        "session_key": "parity/realtime",
+        "content": "Unreviewed recovery note"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "accepted": true,
+          "reason": null,
+          "item": {
+            "id": "rw-1",
+            "label": "quarantined_recovery",
+            "status": "active",
+            "content": "Unreviewed recovery note",
+            "trace_id": null,
+            "source_ref": null,
+            "metadata": {},
+            "created_at": "<iso-date>",
+            "updated_at": "<iso-date>",
+            "expires_at": "<iso-date>",
+            "reviewed_at": null,
+            "last_action": null
+          },
+          "counters": {
+            "dropped": 0,
+            "expired": 0,
+            "trimmed": 0,
+            "marked": 0,
+            "purged": 0
+          },
+          "not_durable_memory": true,
+          "not_searchable_recall": true,
+          "unreviewed_quarantine": true
+        }
+      }
+    },
+    {
+      "tool": "recovery_wal_mark",
+      "arguments": {
+        "agent": "fixture-agent",
+        "platform": "test",
+        "server_id": "server-1",
+        "channel_id": "channel-1",
+        "session_key": "parity/realtime",
+        "id": "missing-record",
+        "action": "review",
+        "status": "reviewed"
+      },
+      "expectation": {
+        "is_error": true,
+        "json": {
+          "accepted": false,
+          "reason": "not_found",
+          "item": null,
+          "purged": false,
+          "counters": {
+            "dropped": 0,
+            "expired": 0,
+            "trimmed": 0,
+            "marked": 0,
+            "purged": 0
+          },
+          "not_durable_memory": true,
+          "not_searchable_recall": true
+        }
+      }
+    }
+  ]
+}

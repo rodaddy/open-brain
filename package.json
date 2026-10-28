@@ -1,0 +1,71 @@
+{
+  "name": "open-brain",
+  "version": "0.9.0",
+  "license": "MIT",
+  "module": "server/main.ts",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/main.ts",
+    "migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "db": "node --env-file=.env scripts/db.ts",
+    "sync-issues": "node --env-file-if-exists=.env scripts/sync-issues.ts",
+    "test": "node node_modules/vitest/vitest.mjs run",
+    "test:isolated": "node scripts/test-isolated.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --config .oxlintrc.json --type-aware --deny-warnings .",
+    "lint:fix": "oxlint --config .oxlintrc.json --type-aware --fix .",
+    "backfill": "node --env-file-if-exists=.env scripts/backfill.ts",
+    "codex-memory-smoke": "node --env-file-if-exists=.env scripts/codex-memory-smoke.ts",
+    "eval:memory": "node --env-file-if-exists=.env scripts/eval-open-brain-memory.ts",
+    "eval:live": "node --env-file-if-exists=.env scripts/eval-open-brain-live.ts",
+    "eval:scenarios": "node --env-file-if-exists=.env scripts/eval-open-brain-scenarios.ts",
+    "eval:reflex-ab": "node --env-file-if-exists=.env eval/open-brain/live/reflex-ab-cli.ts",
+    "import-kb": "node --env-file-if-exists=.env scripts/import-legacy-kb.ts",
+    "promote:legacy-shared": "node --env-file-if-exists=.env scripts/promote-legacy-shared.ts",
+    "promote:qmd-facts": "node --env-file-if-exists=.env scripts/promote-qmd-repo-facts.ts",
+    "curate": "node --env-file-if-exists=.env scripts/curate.ts",
+    "distill": "node --env-file-if-exists=.env scripts/distill-run.ts",
+    "dream:cycle": "node --env-file-if-exists=.env scripts/dream-cycle.ts",
+    "dream:light": "node --env-file-if-exists=.env scripts/dream-light-run.ts",
+    "dream:rem": "node --env-file-if-exists=.env scripts/dream-rem-run.ts",
+    "dream:deep": "node --env-file-if-exists=.env scripts/dream-deep-run.ts",
+    "grade": "node --env-file-if-exists=.env scripts/grading-server-run.ts",
+    "sample:grade": "node --env-file=.env scripts/grading-sample.ts"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-decorators": "8.0.2",
+    "@rolldown/plugin-babel": "0.2.3",
+    "@types/node": "^24.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.18.0",
+    "oxlint": "^1.76.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "prettier": "^3.6.2",
+    "vitest": "5.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@langfuse/core": "^4.6.1",
+    "@langfuse/otel": "^4.6.1",
+    "@langfuse/tracing": "^4.6.1",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.10.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "nats": "^2.29.3",
+    "pg": "^8.20.0",
+    "pgvector": "^0.2.1",
+    "pino": "^10.3.1",
+    "pino-roll": "^4.0.0",
+    "zod": "^4.3.6"
+  }
+}

@@ -1,0 +1,461 @@
+import type { LiveEvalConfig } from "./config.ts";
+import { buildGateReceipt, collectGateFailures } from "./gate-phases.ts";
+import { buildScorecard } from "./metrics.ts";
+import {
+  LiveTransportError,
+  type OpenBrainLiveClient,
+  type SearchHit,
+} from "./transport.ts";
+import type {
+  LiveCorpusEntry,
+  LiveFixture,
+  LiveGateReceipt,
+  LiveScorecard,
+  LiveThresholds,
+  NegativeControlProof,
+  SeededRecord,
+} from "./types.ts";
+
+// Live recall gate orchestrator.
+//
+// One run: seed a unique throwaway namespace (and a sibling negative namespace)
+// with the sealed synthetic fixture, run each recall probe under the primary
+// namespace, score deterministic ranking metrics, apply versioned thresholds,
+// and ALWAYS tear down exactly the records this run created -- even when a
+// probe or a threshold check fails partway through.
+//
+// Teardown is mutation-safe: it archives only server ids that this run created,
+// each under its own table, through the namespace-scoped archive_entry tool. It
+// never issues a bulk or query-shaped delete, so it cannot touch a record it
+// did not create.
+
+export interface GateClients {
+  /** Reads/writes/archives the primary throwaway namespace. */
+  primary: OpenBrainLiveClient;
+  /**
+   * Seeds/reads/archives the negative sibling namespace. This is a MANDATORY
+   * real negative control: it is bound to a distinct X-Namespace (optionally a
+   * distinct token too), so the primary caller must not be able to read what it
+   * writes. It is never optional -- the gate cannot prove isolation without it.
+   */
+  negative: OpenBrainLiveClient;
+}
+
+export interface RunGateOptions {
+  fixture: LiveFixture;
+  thresholds: LiveThresholds;
+  config: LiveEvalConfig;
+  clients: GateClients;
+  commit: string;
+  generatedAt: string;
+}
+
+export interface GateOutcome {
+  scorecard: LiveScorecard;
+  receipt: LiveGateReceipt;
+  /**
+   * Composite verdict. True only when scorecard thresholds are met AND the
+   * negative-control isolation proof ran and denied AND teardown stranded no
+   * seeded record. Never true on a metrics-only pass.
+   */
+  passed: boolean;
+}
+
+export interface TeardownTally {
+  attempted: number;
+  archived: number;
+  already_absent: number;
+  failed: number;
+  /**
+   * One content-free label per cleanup failure, in failure order (issue #671).
+   *
+   * Before this existed, `teardownRecords` caught the cleanup error into a bare
+   * `catch {}` and only the integer `failed` survived. When the third
+   * credentialed #653 verify hit `failed=2`, the label of the throw was
+   * unrecoverable from the receipt, the log, or anywhere else -- the
+   * dead-end-error class (docs/lane-contract.md Tightenings rounds 15/19)
+   * inside our own eval tooling. The catch STAYS, because a teardown that
+   * aborts on the first bad record strands every later one; what changes is
+   * that the error stops being discarded.
+   *
+   * Content-free by construction: `labelTeardownError` emits a
+   * `LiveTransportError`'s already-redacted `label`, or otherwise the error's
+   * CLASS NAME only -- never `error.message` from an arbitrary throw, which can
+   * echo row content or a namespace value into a receipt.
+   */
+  failure_labels: string[];
+}
+
+/**
+ * Residue -- the DB-queryable truth about what a teardown actually left behind.
+ *
+ * This exists because the tally cannot answer the question the tally was being
+ * asked (issue #671). A tally counts CALLS: `failed` means "a cleanup call
+ * threw", which is not the same claim as "rows remain". The third credentialed
+ * #653 verify reported `attempted=6 archived=4 already_absent=0 failed=2` on a
+ * database that a 12-table residue query proved was clean -- two archive calls
+ * threw, the composed purge then removed everything, and nothing corrected the
+ * count. The gate exited 1 on a clean database.
+ *
+ * Round 16's Tightening says "a teardown that reports success is not evidence
+ * of removal"; this is its mirror -- a teardown that reports FAILURE is not
+ * evidence of residue. So the verdict channel now reads rows, and the tally is
+ * demoted to diagnostics.
+ *
+ * `checked: false` means no residue observation was possible (no database
+ * handle). That is NOT a pass: a verdict may not be derived from an
+ * unperformed check, so callers treat unchecked as unproven and say so.
+ */
+export interface TeardownResidue {
+  /** Whether a residue observation actually ran. False is unproven, not clean. */
+  checked: boolean;
+  /** Total rows still carrying this run's namespace, across every table checked. */
+  rows: number;
+  /** Per-table counts, only for tables that had any rows left. */
+  by_table: Record<string, number>;
+  /** Content-free reason the observation could not run, when `checked` is false. */
+  unchecked_reason?: string;
+}
+
+/**
+ * Reduce an arbitrary thrown value to a content-free label safe for a receipt.
+ *
+ * A `LiveTransportError` already carries a redacted label by contract, so that
+ * label passes through -- it is the one that names WHICH tool call failed and
+ * why, which is the whole point of capturing it. Anything else contributes its
+ * constructor name only: an arbitrary `Error.message` may contain row content,
+ * a namespace, or a token fragment, and a receipt is an artifact that gets
+ * pasted into issues and PRs.
+ */
+export function labelTeardownError(error: unknown): string {
+  if (error instanceof LiveTransportError) return error.label;
+  if (error instanceof Error) return `${error.constructor.name}`;
+  return "unknown";
+}
+
+/**
+ * Shared EVAL-3 teardown accounting. Callers provide the exact records this run
+ * created and one record-specific cleanup operation; every record is attempted,
+ * individual failures never prevent later cleanup, and the receipt carries
+ * counts plus one content-free label per failure (#671).
+ */
+export async function teardownRecords<T>(
+  records: readonly T[],
+  cleanup: (record: T) => Promise<"archived" | "already_absent">,
+): Promise<TeardownTally> {
+  const tally: TeardownTally = {
+    attempted: 0,
+    archived: 0,
+    already_absent: 0,
+    failed: 0,
+    failure_labels: [],
+  };
+  for (const record of records) {
+    tally.attempted += 1;
+    try {
+      const outcome = await cleanup(record);
+      if (outcome === "archived") tally.archived += 1;
+      else tally.already_absent += 1;
+    } catch (error: unknown) {
+      // The catch is deliberate and stays: one bad record must not strand the
+      // rest. What #671 changes is that the error is no longer DISCARDED.
+      tally.failed += 1;
+      tally.failure_labels.push(labelTeardownError(error));
+    }
+  }
+  return tally;
+}
+
+/**
+ * Seed one entry with the owning client for its namespace role and record the
+ * resulting server id for scoring + teardown. Both the primary and negative
+ * clients always exist (the negative control is mandatory), so seeding never
+ * silently skips a corpus entry.
+ */
+async function seedEntry(
+  entry: LiveCorpusEntry,
+  config: LiveEvalConfig,
+  clients: GateClients,
+): Promise<SeededRecord> {
+  const isNegative = entry.namespace_role === "negative";
+  const client = isNegative ? clients.negative : clients.primary;
+  const namespace = isNegative ? config.negativeNamespace : config.primaryNamespace;
+
+  const result = await client.logMemory({
+    table: entry.table,
+    content: entry.content,
+    tags: entry.tags,
+    namespace,
+  });
+  return {
+    fixture_id: entry.id,
+    table: entry.table,
+    server_id: result.id,
+    namespace,
+    namespace_role: entry.namespace_role,
+  };
+}
+
+/**
+ * Archive every seeded record through its owning client, tolerating individual
+ * failures so one bad archive never strands the rest. Negative-namespace records
+ * are archived with the negative client (the only token that owns them).
+ */
+async function teardown(
+  seeded: SeededRecord[],
+  clients: GateClients,
+): Promise<TeardownTally> {
+  return teardownRecords(seeded, async (record) => {
+    const client =
+      record.namespace_role === "negative" ? clients.negative : clients.primary;
+    return client.archive({ table: record.table, id: record.server_id });
+  });
+}
+
+/**
+ * Preserve the content-free teardown failed COUNT when a deferred seed/query
+ * error is rethrown after teardown. When nothing was stranded (failed === 0),
+ * the original error passes through unchanged. When records were stranded, a new
+ * LiveTransportError carries the original (already-redacted) label with a
+ * `;teardown-failed=<n>` suffix -- only the integer count, never a record id,
+ * body, or raw error string -- and preserves the original `denied` flag. A
+ * non-LiveTransportError is left untouched so we never widen an unknown error's
+ * content-free guarantees.
+ */
+export function withTeardownFailedCount(
+  error: unknown,
+  teardownFailed: number,
+): unknown {
+  if (teardownFailed <= 0) return error;
+  if (error instanceof LiveTransportError) {
+    return new LiveTransportError(
+      `${error.label};teardown-failed=${teardownFailed}`,
+      error.denied,
+    );
+  }
+  return error;
+}
+
+/**
+ * Build the fixture-local retrieved-id list for one probe from live search hits.
+ *
+ * EVERY hit is validated before it is mapped: a hit is trustworthy only when it
+ * carries the EXACT primary namespace this run bound AND an id this run created
+ * (present in serverIdToFixtureId, which holds every seeded server id -- primary
+ * and negative). A hit that fails either check is NOT silently discarded:
+ * dropping an unmapped or foreign hit would compress the ranks, hide a real
+ * leak (leaving namespace_leaks=0), and let the run still reach PASS. Instead we
+ * fail the run closed, content-free -- naming only the failure class, never a
+ * hit id, namespace value, or body:
+ *
+ *  - a hit with no namespace, or a namespace that is not EXACTLY the primary
+ *    namespace, means the server returned a row from outside our bound
+ *    namespace (`:foreign-namespace`).
+ *  - a hit whose id this run did not create is an unknown row that our seed map
+ *    cannot account for (`:unknown-hit`).
+ *
+ * A KNOWN negative-role id that surfaces under the primary namespace is NOT a
+ * validation failure here: it maps to its fixture id and flows to the scorer,
+ * which counts it as a namespace leak (that is how in-namespace leakage is
+ * scored). Only genuinely unaccountable hits fail the run. Rank order is
+ * preserved for the survivors (which, on a clean run, is all of them).
+ */
+function toFixtureRetrieval(
+  hits: SearchHit[],
+  serverIdToFixtureId: Map<string, string>,
+  primaryNamespace: string,
+): string[] {
+  const out: string[] = [];
+  for (const hit of hits) {
+    if (hit.namespace !== primaryNamespace) {
+      // Missing or different namespace: a row from outside our bound namespace.
+      throw new LiveTransportError("search_brain:foreign-namespace", false);
+    }
+    const fixtureId = serverIdToFixtureId.get(hit.id);
+    if (!fixtureId) {
+      // A same-namespace id this run never created: unaccountable, fail closed.
+      throw new LiveTransportError("search_brain:unknown-hit", false);
+    }
+    out.push(fixtureId);
+  }
+  return out;
+}
+
+/**
+ * Explicit negative-control proof. The PRIMARY caller attempts to read the
+ * NEGATIVE namespace (which the negative control seeded) and the server must
+ * DENY that read. An empty-but-successful read is NOT proof of denial -- the
+ * namespace being empty for the primary caller looks identical to a working
+ * isolation boundary, so we require an actual permission denial.
+ *
+ * The probe queries are the forbidden-bearing probe queries from the fixture,
+ * chosen because they are the ones most likely to surface the negative records
+ * if isolation were broken. Runs after seeding (records exist) and before
+ * teardown. Content-free: only booleans and counts, never hit bodies.
+ */
+async function probeNegativeControl(
+  fixture: LiveFixture,
+  config: LiveEvalConfig,
+  clients: GateClients,
+  topK: number,
+): Promise<NegativeControlProof> {
+  const proof: NegativeControlProof = {
+    ran: true,
+    denied: false,
+    observed_hit_count: 0,
+    cross_token: config.negativeTokenIsDistinct,
+  };
+
+  // Prefer probes that declare a forbidden (negative) id; fall back to all
+  // probes so the proof always exercises at least one read.
+  const withForbidden = fixture.probes.filter((p) => p.forbidden_ids.length > 0);
+  const probes = withForbidden.length > 0 ? withForbidden : fixture.probes;
+
+  let anyDenied = false;
+  let anyAllowed = false;
+  let totalHits = 0;
+  for (const probe of probes) {
+    let result;
+    try {
+      result = await clients.primary.attemptRead({
+        query: probe.query,
+        namespace: config.negativeNamespace,
+        limit: topK,
+        searchMode: config.searchMode,
+      });
+    } catch (error) {
+      // A non-denial transport error means we could not establish the proof.
+      const label =
+        error instanceof LiveTransportError ? error.label : "attempt-read-error";
+      proof.denied = false;
+      proof.failure = `negative-control read failed: ${label}`;
+      return proof;
+    }
+    if (result.denied) {
+      anyDenied = true;
+    } else {
+      anyAllowed = true;
+      totalHits += result.hitCount;
+    }
+  }
+
+  proof.observed_hit_count = totalHits;
+  // Isolation is proven ONLY when every read was denied and none was allowed.
+  proof.denied = anyDenied && !anyAllowed;
+  if (!proof.denied) {
+    proof.failure = anyAllowed
+      ? "primary caller was permitted to read the negative namespace"
+      : "no negative-namespace read was denied";
+  }
+  return proof;
+}
+
+/**
+ * Run the full gate. Seeding and querying failures are caught so teardown still
+ * runs; the thrown error (if any) is re-raised only AFTER teardown completes.
+ * PASS requires all three: scorecard thresholds met, the negative-control proof
+ * denied, and teardown left nothing behind.
+ */
+export async function runLiveGate(opts: RunGateOptions): Promise<GateOutcome> {
+  const { fixture, thresholds, config, clients, commit, generatedAt } = opts;
+
+  if (thresholds.applies_to_fixture_id !== fixture.fixture_id) {
+    throw new Error(
+      `thresholds ${thresholds.thresholds_id} apply to fixture ${thresholds.applies_to_fixture_id}, not ${fixture.fixture_id}`,
+    );
+  }
+
+  const seeded: SeededRecord[] = [];
+  const serverIdToFixtureId = new Map<string, string>();
+  let deferredError: unknown = null;
+  let retrievedByProbe: Record<string, string[]> = {};
+  // Default proof: did-not-run. Only replaced by a real probe result when
+  // seeding + querying complete without a deferred error.
+  let negativeControl: NegativeControlProof = {
+    ran: false,
+    denied: false,
+    observed_hit_count: 0,
+    cross_token: config.negativeTokenIsDistinct,
+    failure: "negative-control proof did not run",
+  };
+
+  try {
+    // --- Seed (both namespaces; negative control is mandatory) ---
+    for (const entry of fixture.corpus) {
+      const record = await seedEntry(entry, config, clients);
+      seeded.push(record);
+      serverIdToFixtureId.set(record.server_id, record.fixture_id);
+    }
+
+    // --- Query + collect fixture-local retrievals per probe ---
+    const collected: Record<string, string[]> = {};
+    for (const probe of fixture.probes) {
+      const hits = await clients.primary.search({
+        query: probe.query,
+        namespace: config.primaryNamespace,
+        limit: thresholds.top_k,
+        searchMode: config.searchMode,
+      });
+      collected[probe.id] = toFixtureRetrieval(
+        hits,
+        serverIdToFixtureId,
+        config.primaryNamespace,
+      );
+    }
+    retrievedByProbe = collected;
+
+    // --- Explicit negative-control isolation proof (before teardown) ---
+    negativeControl = await probeNegativeControl(
+      fixture,
+      config,
+      clients,
+      thresholds.top_k,
+    );
+  } catch (error) {
+    // Defer: teardown must still run before we surface the failure.
+    deferredError = error;
+  }
+
+  // --- Teardown (always, even after a partial failure) ---
+  const teardownTally = await teardown(seeded, clients);
+
+  if (deferredError) {
+    // Re-raise the original (already content-free) seed/query error, but preserve
+    // the teardown failed COUNT so a partial-failure run that also stranded
+    // records does not silently lose that signal. Only the integer count is
+    // attached -- never a record id, body, or raw error string.
+    throw withTeardownFailedCount(deferredError, teardownTally.failed);
+  }
+
+  // --- Score + threshold ---
+  const scorecard = buildScorecard(fixture, thresholds, retrievedByProbe);
+
+  // Composite gate verdict. A metrics-only pass is never enough: the isolation
+  // proof must have denied, and teardown must have stranded nothing. The
+  // failure list and the receipt are assembled in ./gate-phases.ts (issue 752);
+  // both are pure over the facts this run already established.
+  const teardownClean = teardownTally.failed === 0;
+  const gateFailures = collectGateFailures({
+    scorecard,
+    negativeControl,
+    teardownTally,
+  });
+  const passed =
+    scorecard.passed && negativeControl.ran && negativeControl.denied && teardownClean;
+
+  const receipt = buildGateReceipt({
+    scorecard,
+    thresholds,
+    config,
+    fixtureId: fixture.fixture_id,
+    commit,
+    generatedAt,
+    seeded,
+    negativeControl,
+    teardownTally,
+    gateFailures,
+    passed,
+  });
+
+  return { scorecard, receipt, passed };
+}

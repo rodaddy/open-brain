@@ -1,0 +1,100 @@
+{
+  "id": "server-graph-entities",
+  "description": "Freeze the not-found shape for knowledge graph entity reads.",
+  "capability": "graph-entities",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-graph-entities",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "get_entity",
+      "arguments": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entity not found"
+      }
+    },
+    {
+      "tool": "upsert_entity",
+      "arguments": {
+        "entity_type": "host",
+        "name": "parity-entity-one",
+        "canonical_id": "host:parity-one"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entity_type": "host",
+          "name": "parity-entity-one",
+          "namespace": "{{namespace}}",
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "upsert_entity",
+      "arguments": {
+        "entity_type": "host",
+        "name": "PARITY-ENTITY-ONE",
+        "metadata": { "role": "second" }
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entity_type": "host",
+          "namespace": "{{namespace}}",
+          "is_new": false
+        }
+      }
+    },
+    {
+      "tool": "list_entities",
+      "arguments": {
+        "entity_type": "host",
+        "name": "parity-entity"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": [
+          {
+            "entity_type": "host",
+            "name": "parity-entity-one",
+            "canonical_id": "host:parity-one",
+            "namespace": "{{namespace}}",
+            "metadata": { "role": "second" }
+          }
+        ]
+      }
+    },
+    {
+      "tool": "list_entities",
+      "arguments": {
+        "namespace": "{{other_namespace}}"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: namespace read access denied"
+      }
+    },
+    {
+      "tool": "hydrate_entities",
+      "arguments": {
+        "entity_type": "host",
+        "only_missing_embedding": false
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "matched": 1,
+          "hydrated": 1,
+          "failed": []
+        }
+      }
+    }
+  ]
+}

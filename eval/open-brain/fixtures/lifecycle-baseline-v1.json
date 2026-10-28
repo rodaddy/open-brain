@@ -1,0 +1,13 @@
+{
+  "schema": "openbrain.lifecycle_baseline.fixture.v1",
+  "primary_namespace": "lifecycle-primary",
+  "negative_namespace": "lifecycle-negative",
+  "query": "cobalt-orchid",
+  "durable_text": "The cobalt-orchid lifecycle baseline remains stable through DREAM Light maintenance.",
+  "negative_text": "The cobalt-orchid negative namespace control must remain isolated.",
+  "raw_turn_text": "The cobalt-orchid lifecycle baseline remains stable through DREAM Light maintenance.",
+  "noise_text": "<local-command-stdout>cobalt-orchid ignored harness noise</local-command-stdout>",
+  "sessions": ["lifecycle-session-alpha", "lifecycle-session-beta"],
+  "occurred_at": ["2026-09-05T12:00:00.000Z", "2026-09-05T12:01:00.000Z"],
+  "turn_uuids": ["lifecycle-turn-alpha", "lifecycle-turn-beta", "lifecycle-turn-noise"]
+}

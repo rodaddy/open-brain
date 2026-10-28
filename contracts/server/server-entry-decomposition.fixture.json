@@ -1,0 +1,49 @@
+{
+  "id": "server-entry-decomposition",
+  "description": "Freeze decompose_entry's dry-run-first contract: the apply-mode refusal, the overlap validation, and the not-found shape.",
+  "capability": "entry-decomposition",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-entry-decomposition",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "decompose_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "dry_run": false
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "dry_run=false requires apply_mode=write_replacements"
+      }
+    },
+    {
+      "tool": "decompose_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "max_chunk_chars": 600,
+        "overlap_chars": 600
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "overlap_chars must be less than max_chunk_chars"
+      }
+    },
+    {
+      "tool": "decompose_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Entry not found or archived"
+      }
+    }
+  ]
+}

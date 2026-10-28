@@ -1,0 +1,28 @@
+{
+  "schema": "openbrain.dream.light.producer.v1",
+  "namespaces": ["dream-light-1425-a", "dream-light-1425-b"],
+  "content": "The release must prove an attributable Light producer before it claims completion.",
+  "backlog": [
+    {
+      "namespace": "dream-light-1425-a",
+      "count": 500,
+      "session_ref": "dream-light-session-a",
+      "turn_uuid": "dream-light-turn-a",
+      "occurred_at": "2026-09-12T22:00:00.000Z"
+    },
+    {
+      "namespace": "dream-light-1425-b",
+      "count": 1,
+      "session_ref": "dream-light-session-b",
+      "turn_uuid": "dream-light-turn-b",
+      "occurred_at": "2026-09-12T23:00:00.000Z"
+    }
+  ],
+  "candidate_type": "decision",
+  "candidate_model": "dream-light-fixture-producer-v1",
+  "expected_light_job": "dream.light",
+  "expected_light_idempotency_key": "dream.light",
+  "expected_light_payload": {},
+  "expected_rem_job": "dream.rem",
+  "expected_job_version": 1
+}

@@ -1,0 +1,81 @@
+{
+  "id": "server-entry-revision",
+  "description": "Freeze not-found and no-field shapes for entry revision and UUID resolution.",
+  "capability": "entry-revision",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-entry-revision",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "update_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "99999999-9999-4999-8999-999999999999",
+        "content": "parity probe content"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Not found"
+      }
+    },
+    {
+      "tool": "update_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "99999999-9999-4999-8999-999999999999",
+        "summary": "field that does not belong to thoughts"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "No valid fields to update for table thoughts"
+      }
+    },
+    {
+      "tool": "rate_entry",
+      "arguments": {
+        "table": "thoughts",
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "score": 0.5
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Cannot rate archived entry"
+      }
+    },
+    {
+      "tool": "resolve_entry",
+      "arguments": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "resolved": false,
+          "status": "not_found_or_unreadable",
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "source_type": null,
+          "table": null,
+          "namespace": null,
+          "fetch_path": null,
+          "checked_sources": [
+            "thought",
+            "decision",
+            "relationship",
+            "project",
+            "session"
+          ],
+          "checked_tables": [
+            "thoughts",
+            "decisions",
+            "relationships",
+            "projects",
+            "sessions"
+          ]
+        }
+      }
+    }
+  ]
+}

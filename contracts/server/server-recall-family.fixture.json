@@ -1,0 +1,159 @@
+{
+  "id": "server-recall-family",
+  "description": "Freeze the recall family against seeded data: list_recent returns the paging envelope with and without a table filter, adjacent_context returns the defined empty-neighbourhood shape for both a real isolated node and an unknown id, and search_all reports its brain/qmd federation split.",
+  "capability": "recall-family",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-recall-family",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "log_thought",
+      "arguments": {
+        "content": "parity recall probe thought",
+        "tags": ["parity"]
+      },
+      "capture": {
+        "thought_id": "id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "namespace": "{{namespace}}"
+        }
+      }
+    },
+    {
+      "tool": "list_recent",
+      "arguments": {
+        "table": "thoughts",
+        "days": 7
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entries": [
+            {
+              "source_type": "thought",
+              "id": "{{thought_id}}",
+              "content_preview": "parity recall probe thought",
+              "tags": ["parity"],
+              "tier": "warm",
+              "created_at": "<iso-date>"
+            }
+          ],
+          "total_count": 1,
+          "offset": 0,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "tool": "list_recent",
+      "arguments": {
+        "days": 7
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "entries": [
+            {
+              "source_type": "thought",
+              "id": "{{thought_id}}",
+              "content_preview": "parity recall probe thought",
+              "tier": "warm"
+            }
+          ],
+          "total_count": 1,
+          "offset": 0,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "tool": "upsert_entity",
+      "arguments": {
+        "entity_type": "host",
+        "name": "parity-adjacent-source"
+      },
+      "capture": {
+        "entity_id": "id"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "id": "<uuid>",
+          "entity_type": "host",
+          "name": "parity-adjacent-source",
+          "namespace": "{{namespace}}",
+          "is_new": true
+        }
+      }
+    },
+    {
+      "tool": "adjacent_context",
+      "arguments": {
+        "type": "entity",
+        "id": "{{entity_id}}"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "links": [],
+          "count": 0
+        }
+      }
+    },
+    {
+      "tool": "adjacent_context",
+      "arguments": {
+        "type": "entity",
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "links": [],
+          "count": 0
+        }
+      }
+    },
+    {
+      "tool": "search_all",
+      "arguments": {
+        "query": "parity recall probe"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "total": 1,
+          "brain_hits": 1,
+          "qmd_hits": 0,
+          "results": [
+            {
+              "source": "brain",
+              "type": "thought",
+              "content": "parity recall probe thought",
+              "id": "{{thought_id}}",
+              "tags": ["parity"],
+              "tier": "warm",
+              "source_ref": {
+                "source": "brain",
+                "type": "thought",
+                "id": "{{thought_id}}",
+                "namespace": "{{namespace}}",
+                "created_by": "{{namespace}}"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

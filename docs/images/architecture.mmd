@@ -1,0 +1,28 @@
+flowchart TB
+  subgraph Clients
+    CC["Claude Code / Codex hooks<br/>python/openbrain"]
+    PV["python/openbrain-provider<br/>session start · capture · reflex"]
+    TS["clients/ts"]
+  end
+  CC --> PY["python/openbrain-memory<br/>AgentMemory client + CLI"]
+  PV --> PY
+  PY -->|"HTTP, bearer token"| HTTP
+  TS -->|"MCP, X-OB-Contract header"| HTTP
+  subgraph Server["server/ (Node 24, TypeScript)"]
+    HTTP["transport<br/>Streamable HTTP MCP · REST · optional NATS"] --> AUTH["auth<br/>tokens → roles → namespaces"]
+    AUTH --> CON["contracts<br/>get_contract · schema hash"]
+    AUTH --> TOOLS["tools<br/>capture · ingest-raw-turn · session-events<br/>search-brain · agent-context-pack"]
+    TOOLS --> SE["search-engine<br/>vector + full-text → RRF fusion"]
+    TOOLS --> EMB["embedding<br/>OpenAI-compatible /v1/embeddings"]
+  end
+  SE --> PG[("PostgreSQL + pgvector")]
+  TOOLS --> PG
+  subgraph Maint["server/maintenance"]
+    DI["distill<br/>raw turns → candidates"]
+    DREAM["DREAM stages<br/>dream-light · dream-rem (grading) · dream-deep"]
+  end
+  PG -->|"raw turns, session events"| DI
+  DI -->|candidate_memory| PG
+  PG <--> DREAM
+  PG -->|candidate queue| GP["grading page<br/>scripts/grading-server-run.ts"]
+  GP -->|"pass → promoted memory"| PG

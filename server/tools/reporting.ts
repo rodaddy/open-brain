@@ -1,0 +1,571 @@
+/**
+ * Read-only access and statistics reporting.
+ *
+ * Design authority: `docs/decisions/cognitive-tiering-dream-cycle.md` for the
+ * `entry_access_log`-as-a-log model.
+ *
+ * BOTH TOOLS HERE ARE READ-ONLY. They aggregate; they never write a tier, a
+ * counter, or an archive.
+ *
+ * `entry_access_log` is read as a LOG, not a counter: totals, distinct queries,
+ * distinct agents, and the trend all come from counting timestamped rows. NO
+ * INDEX is added on that table -- `008_index_cleanup.sql` removed the unused
+ * ones, and adding one with no reading consumer would repeat that.
+ *
+ * The access log carries no namespace of its own, so every read of it is scoped
+ * by joining back to the owning row and applying the auth-derived predicate
+ * THERE. Reading the log directly by `entry_id` would leak another namespace's
+ * access pattern to any caller who could guess an id.
+ */
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { canRead } from "../auth/permissions.ts";
+import { namespacePredicate } from "../auth/namespace-policy.ts";
+import type { AuthIdentity, ResourceTable } from "../auth/types.ts";
+import { canonicalNamespace } from "./shared-namespace.ts";
+import type { SharedNamespaceConfig } from "./shared-namespace.ts";
+import {
+  authIdentity,
+  errorResult,
+  textResult,
+  type MemoryToolDependencies,
+} from "./types.ts";
+import {
+  ALL_TABLES,
+  CONTENT_PREVIEW,
+  PREVIEW_WIDTH,
+  qualifyNamespacePredicate,
+} from "./curation-helpers.ts";
+import { createEntityReportRepository } from "../db/entity-report-repository.ts";
+
+/** Query alias per table, matching observed current-src SQL. */
+const TABLE_ALIAS: Readonly<Record<ResourceTable, string>> = {
+  thoughts: "t",
+  decisions: "d",
+  relationships: "r",
+  projects: "p",
+  sessions: "s",
+};
+
+/** Observed current-src maxima on the reported breakdowns. */
+const TOP_NAMESPACES = 10;
+const TOP_ACCESSED = 10;
+const TOP_ENTITY_TYPES = 25;
+
+/** Trend bands from observed current-src: +/-20% around the prior window. */
+const RISING_RATIO = 1.2;
+const DECLINING_RATIO = 0.8;
+
+/** Map-key separator, chosen so no namespace value can contain it. */
+const NAMESPACE_KEY_SEPARATOR = "\u0000";
+
+/** Look-back window applied when the caller names none. */
+const DEFAULT_PERIOD_DAYS = 30;
+
+/** Minimal shape of the handler `extra` argument these tools read. */
+interface HandlerExtra {
+  authInfo?: Parameters<typeof authIdentity>[0];
+}
+
+const accessReportInputSchema = {
+  entry_id: z.string().uuid().describe("UUID of the entry to report on"),
+  days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe("Number of days to look back (default 30)"),
+};
+
+const getStatsInputSchema = {
+  raw: z
+    .boolean()
+    .optional()
+    .describe("Return physical namespace names instead of canonical public names"),
+};
+
+export function registerReportingTools(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  registerAccessReport(server, dependencies);
+  registerGetStats(server, dependencies);
+}
+
+function registerAccessReport(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  server.registerTool(
+    "access_report",
+    {
+      description:
+        "Returns a detailed access report for a specific entry: total accesses, unique queries, unique agents, access trend, and recency.",
+      inputSchema: accessReportInputSchema,
+      annotations: {
+        title: "Access Report",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => handleAccessReport(dependencies, args, extra),
+  );
+}
+
+function registerGetStats(
+  server: McpServer,
+  dependencies: MemoryToolDependencies,
+): void {
+  server.registerTool(
+    "get_stats",
+    {
+      description:
+        "Returns aggregate statistics about the Open Brain knowledge base: entry counts, tier distribution, namespace breakdown, and access analytics.",
+      inputSchema: getStatsInputSchema,
+      annotations: {
+        title: "Get Stats",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async (args, extra) => handleGetStats(dependencies, args, extra),
+  );
+}
+
+/** A resolved read scope, or the error result that replaces it. */
+type ReadScope =
+  | { identity: AuthIdentity; tables: readonly ResourceTable[] }
+  | { error: ReturnType<typeof errorResult> };
+
+/**
+ * @returns The identity and its readable tables, or an error result when the
+ *   caller is unauthenticated or may read nothing.
+ */
+function resolveReadScope(identity: AuthIdentity | undefined): ReadScope {
+  if (!identity) {
+    return { error: errorResult("Permission denied: not authenticated") };
+  }
+  const tables = ALL_TABLES.filter((table) => canRead(identity.role, table));
+  if (tables.length === 0) {
+    return { error: errorResult("Permission denied: no readable tables") };
+  }
+  return { identity, tables };
+}
+
+/** Raw one-row access aggregate, before it becomes the reported payload. */
+interface AccessAggregate {
+  total: number;
+  uniqueQueries: number;
+  uniqueAgents: number;
+  recent7d: number;
+  previous7d: number;
+  lastAccessed: unknown;
+}
+
+/**
+ * One pass over the log instead of five sequential round trips: the windows are
+ * FILTER clauses over the same scan, which is what the separate current-src
+ * queries add up to.
+ */
+async function accessAggregate(
+  dependencies: MemoryToolDependencies,
+  entryId: string,
+  sourceTable: ResourceTable,
+  days: number,
+): Promise<AccessAggregate> {
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.accessAggregate({ entryId, sourceTable, days });
+
+  const row = rows[0] ?? {};
+  return {
+    total: Number(row.total ?? 0),
+    uniqueQueries: Number(row.unique_queries ?? 0),
+    uniqueAgents: Number(row.unique_agents ?? 0),
+    recent7d: Number(row.recent_7d ?? 0),
+    previous7d: Number(row.previous_7d ?? 0),
+    lastAccessed: row.last_accessed ?? null,
+  };
+}
+
+/** @returns The `access_report` payload, or an error result. */
+async function handleAccessReport(
+  dependencies: MemoryToolDependencies,
+  args: { entry_id: string; days?: number },
+  extra: HandlerExtra,
+) {
+  const scope = resolveReadScope(authIdentity(extra.authInfo));
+  if ("error" in scope) return scope.error;
+
+  // Which table owns this id is resolved through the namespace predicate,
+  // so an entry the caller cannot read is indistinguishable from a miss.
+  const sourceTable = await findReadableEntryTable(
+    dependencies,
+    scope.identity,
+    scope.tables,
+    args.entry_id,
+  );
+  if (!sourceTable) return errorResult("Entry not found or not readable");
+
+  const days = args.days ?? DEFAULT_PERIOD_DAYS;
+  const aggregate = await accessAggregate(
+    dependencies,
+    args.entry_id,
+    sourceTable,
+    days,
+  );
+
+  dependencies.logger.info(
+    { tool: "access_report", entryId: args.entry_id },
+    "tool_result",
+  );
+  return textResult({
+    entry_id: args.entry_id,
+    source_table: sourceTable,
+    period_days: days,
+    total_accesses: aggregate.total,
+    unique_queries: aggregate.uniqueQueries,
+    unique_agents: aggregate.uniqueAgents,
+    trend: accessTrend(aggregate.recent7d, aggregate.previous7d),
+    trend_detail: {
+      recent_7d: aggregate.recent7d,
+      previous_7d: aggregate.previous7d,
+    },
+    last_accessed: aggregate.lastAccessed,
+    days_since_last_access: daysSince(aggregate.lastAccessed),
+  });
+}
+
+/** One namespace breakdown row, before and after canonical folding. */
+interface NamespaceRow {
+  table: string;
+  namespace: string;
+  count: number;
+}
+
+/** The per-table aggregates, folded into the reported `get_stats` shapes. */
+interface FoldedTableStats {
+  entryCounts: Record<string, { active: number; archived: number }>;
+  tierDistribution: Record<string, Record<string, number>>;
+  zeroAccess: Record<string, number>;
+  namespaceRows: NamespaceRow[];
+  avgTotal: number;
+}
+
+/** @returns The per-table stats folded into their reported shapes. */
+function foldTableStats(
+  perTable: readonly TableStats[],
+  raw: boolean | undefined,
+  names: SharedNamespaceConfig | undefined,
+): FoldedTableStats {
+  const folded: FoldedTableStats = {
+    entryCounts: {},
+    tierDistribution: {},
+    zeroAccess: {},
+    namespaceRows: [],
+    avgTotal: 0,
+  };
+  for (const stats of perTable) {
+    folded.entryCounts[stats.table] = {
+      active: stats.active,
+      archived: stats.archived,
+    };
+    // Observed current-src omits a table with no rows entirely rather than
+    // mapping it to an empty object, because it builds this from the
+    // GROUP BY result rows. A table key with `{}` would be a new shape.
+    if (Object.keys(stats.tiers).length > 0) {
+      folded.tierDistribution[stats.table] = stats.tiers;
+    }
+    folded.zeroAccess[stats.table] = stats.zeroAccess;
+    folded.avgTotal += stats.avgAccess;
+    for (const entry of stats.namespaces) {
+      folded.namespaceRows.push({
+        table: stats.table,
+        // Legacy `collab` is folded into the canonical shared name unless
+        // the caller explicitly asked for physical names.
+        namespace: raw ? entry.namespace : canonicalNamespace(entry.namespace, names),
+        count: entry.count,
+      });
+    }
+  }
+  return folded;
+}
+
+/**
+ * @returns The highest-count namespaces.
+ *
+ * Folding can collide two physical names onto one canonical name, so this sums
+ * before ranking rather than ranking the pre-fold rows.
+ */
+function rankNamespaces(namespaceRows: readonly NamespaceRow[]): NamespaceRow[] {
+  const merged = new Map<string, NamespaceRow>();
+  for (const entry of namespaceRows) {
+    const key = `${entry.table}${NAMESPACE_KEY_SEPARATOR}${entry.namespace}`;
+    const existing = merged.get(key);
+    if (existing) existing.count += entry.count;
+    else merged.set(key, { ...entry });
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, TOP_NAMESPACES);
+}
+
+/** @returns The `get_stats` payload, or an error result. */
+async function handleGetStats(
+  dependencies: MemoryToolDependencies,
+  args: { raw?: boolean },
+  extra: HandlerExtra,
+) {
+  const scope = resolveReadScope(authIdentity(extra.authInfo));
+  if ("error" in scope) return scope.error;
+  const { identity, tables: accessible } = scope;
+
+  const perTable = await Promise.all(
+    accessible.map((table) => tableStats(dependencies, identity, table)),
+  );
+  const [accessStats, graph, topAccessed] = await Promise.all([
+    accessLogStats(dependencies, identity, accessible),
+    graphCounts(dependencies, identity),
+    topAccessedEntries(dependencies, identity, accessible),
+  ]);
+
+  const { sharedNamespaceNames } = dependencies;
+  const folded = foldTableStats(perTable, args.raw, sharedNamespaceNames);
+  const namespaces = rankNamespaces(folded.namespaceRows);
+
+  dependencies.logger.info(
+    { tool: "get_stats", tables: accessible.length },
+    "tool_result",
+  );
+  return textResult({
+    entry_counts: folded.entryCounts,
+    tier_distribution: folded.tierDistribution,
+    namespaces,
+    access_stats: {
+      total_log_entries: accessStats.totalLogEntries,
+      unique_entries_accessed: accessStats.uniqueEntriesAccessed,
+      avg_access_count:
+        perTable.length > 0
+          ? Math.round((folded.avgTotal / perTable.length) * 100) / 100
+          : 0,
+    },
+    graph_counts: graph,
+    zero_access_entries: folded.zeroAccess,
+    top_accessed: topAccessed,
+  });
+}
+
+/** @returns The first readable table holding this id, or `undefined`. */
+async function findReadableEntryTable(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  accessible: readonly ResourceTable[],
+  entryId: string,
+): Promise<ResourceTable | undefined> {
+  const repository = createEntityReportRepository(dependencies.pool);
+  for (const table of accessible) {
+    const predicate = namespacePredicate(identity, "read", 2);
+    const rows = await repository.findEntryInTable({
+      table,
+      predicateClause: predicate.clause,
+      parameters: [entryId, ...predicate.values],
+    });
+    if (rows.length > 0) return table;
+  }
+  return undefined;
+}
+
+interface TableStats {
+  table: ResourceTable;
+  active: number;
+  archived: number;
+  tiers: Record<string, number>;
+  zeroAccess: number;
+  avgAccess: number;
+  namespaces: Array<{ namespace: string; count: number }>;
+}
+
+/**
+ * Per-table aggregates.
+ *
+ * The scalar aggregates all scan the same rows under the same predicate, so
+ * they collapse into a single row rather than the four separate round trips
+ * current-src issues. The tier and namespace breakdowns each need their own
+ * GROUP BY and stay separate -- folding them into the scalar query would need
+ * a padded UNION whose column types must be asserted by hand, which is a
+ * silent-wrong-answer risk that is not worth one saved round trip.
+ */
+async function tableStats(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  table: ResourceTable,
+): Promise<TableStats> {
+  const predicate = namespacePredicate(identity, "read", 1);
+  const scoped = predicate.clause
+    ? ` WHERE ${predicate.clause.slice(" AND ".length)}`
+    : "";
+  const activeScoped = ` WHERE archived_at IS NULL${predicate.clause}`;
+
+  const repository = createEntityReportRepository(dependencies.pool);
+  const [totals, tierRows, namespaces] = await Promise.all([
+    repository.tableTotals({ table, scoped, parameters: [...predicate.values] }),
+    repository.tableTierCounts({
+      table,
+      activeScoped,
+      parameters: [...predicate.values],
+    }),
+    repository.tableNamespaceCounts({
+      table,
+      activeScoped,
+      parameters: [...predicate.values],
+      topNamespaces: TOP_NAMESPACES,
+    }),
+  ]);
+
+  const row = totals[0] ?? {};
+  const tiers: Record<string, number> = {};
+  for (const tierRow of tierRows) {
+    tiers[String(tierRow.tier)] = Number(tierRow.count);
+  }
+  return {
+    table,
+    active: Number(row.active ?? 0),
+    archived: Number(row.archived ?? 0),
+    tiers,
+    zeroAccess: Number(row.zero_access ?? 0),
+    avgAccess: Number(row.avg_access ?? 0),
+    namespaces: namespaces.map((entry) => ({
+      namespace: String(entry.namespace),
+      count: Number(entry.count),
+    })),
+  };
+}
+
+/**
+ * Access-log totals, scoped by joining back to the owning row.
+ *
+ * The log has no namespace column of its own, so the predicate is applied to
+ * the source table inside an EXISTS -- reading the log unscoped would report
+ * another namespace's activity.
+ */
+async function accessLogStats(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  accessible: readonly ResourceTable[],
+): Promise<{ totalLogEntries: number; uniqueEntriesAccessed: number }> {
+  const values: unknown[] = [];
+  const clauses = accessible.map((table) => {
+    const predicate = namespacePredicate(identity, "read", values.length + 1);
+    values.push(...predicate.values);
+    const scoped = qualifyNamespacePredicate(
+      predicate,
+      "source.namespace",
+      values.length,
+    );
+    return `EXISTS (
+      SELECT 1 FROM ${table} source
+       WHERE source.id = eal.entry_id
+         AND eal.source_table = '${table}'${scoped}
+    )`;
+  });
+  const where = clauses.length > 0 ? ` WHERE ${clauses.join(" OR ")}` : "";
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.accessLogTotals({ where, parameters: values });
+  return {
+    totalLogEntries: Number(rows[0]?.total_log_entries ?? 0),
+    uniqueEntriesAccessed: Number(rows[0]?.unique_entries_accessed ?? 0),
+  };
+}
+
+/** Knowledge-graph counts, which live in `ob_entities`/`ob_links`. */
+async function graphCounts(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+): Promise<{
+  entities: number;
+  links: number;
+  entity_types: Array<{ entity_type: string; count: number }>;
+}> {
+  const predicate = namespacePredicate(identity, "read", 1);
+  const where = predicate.clause
+    ? ` WHERE ${predicate.clause.slice(" AND ".length)}`
+    : "";
+  const repository = createEntityReportRepository(dependencies.pool);
+  const [entities, links, types] = await Promise.all([
+    repository.entityCount({ where, parameters: [...predicate.values] }),
+    repository.linkCount({ where, parameters: [...predicate.values] }),
+    repository.entityTypeCounts({
+      where,
+      parameters: [...predicate.values],
+      topEntityTypes: TOP_ENTITY_TYPES,
+    }),
+  ]);
+  return {
+    entities: Number(entities[0]?.total ?? 0),
+    links: Number(links[0]?.total ?? 0),
+    entity_types: types.map((row) => ({
+      entity_type: String(row.entity_type),
+      count: Number(row.count),
+    })),
+  };
+}
+
+/** Busiest entries across every readable table, by stored access counter. */
+async function topAccessedEntries(
+  dependencies: MemoryToolDependencies,
+  identity: AuthIdentity,
+  accessible: readonly ResourceTable[],
+): Promise<
+  Array<{
+    id: string;
+    table: string;
+    content_preview: string;
+    access_count: number;
+  }>
+> {
+  const values: unknown[] = [];
+  const arms = accessible.map((table) => {
+    const alias = TABLE_ALIAS[table];
+    const predicate = namespacePredicate(identity, "read", values.length + 1);
+    values.push(...predicate.values);
+    const scoped = qualifyNamespacePredicate(
+      predicate,
+      `${alias}.namespace`,
+      values.length,
+    );
+    return `SELECT ${alias}.id, '${table}' AS table_name,
+                   ${CONTENT_PREVIEW[table]} AS content_preview,
+                   COALESCE(${alias}.access_count, 0) AS access_count
+              FROM ${table} ${alias}
+             WHERE ${alias}.archived_at IS NULL${scoped}`;
+  });
+  const repository = createEntityReportRepository(dependencies.pool);
+  const rows = await repository.topAccessedEntries({
+    arms: arms.join(" UNION ALL "),
+    parameters: values,
+    previewWidth: PREVIEW_WIDTH,
+    topAccessed: TOP_ACCESSED,
+  });
+  return rows.map((row) => ({
+    id: String(row.id),
+    table: String(row.table_name),
+    content_preview: row.content_preview as string,
+    access_count: Number(row.access_count),
+  }));
+}
+
+/** @returns `rising`, `declining`, or `stable` per the observed bands. */
+function accessTrend(recent: number, previous: number): string {
+  if (recent > previous * RISING_RATIO) return "rising";
+  if (recent < previous * DECLINING_RATIO) return "declining";
+  return "stable";
+}
+
+/** @returns Whole days since the timestamp, or `null` when never accessed. */
+function daysSince(value: unknown): number | null {
+  if (!value) return null;
+  const when = new Date(value as string).getTime();
+  return Math.floor((Date.now() - when) / (1000 * 60 * 60 * 24));
+}

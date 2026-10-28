@@ -1,0 +1,80 @@
+{
+  "id": "server-people",
+  "description": "Freeze find_person's not-found text in both search modes.",
+  "capability": "people",
+  "providers": ["current-src", "server-rewrite-scaffold"],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-people",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "upsert_person",
+      "arguments": {
+        "name": "Parity Person",
+        "context": "created by the people parity fixture",
+        "warmth": 3
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "person_name": "Parity Person",
+          "namespace": "{{namespace}}",
+          "action": "created",
+          "embedded": true
+        }
+      }
+    },
+    {
+      "tool": "upsert_person",
+      "arguments": {
+        "name": "Parity Person",
+        "notes": "second call updates in place"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "person_name": "Parity Person",
+          "action": "updated"
+        }
+      }
+    },
+    {
+      "tool": "find_person",
+      "arguments": { "query": "Parity Person" },
+      "expectation": {
+        "is_error": false,
+        "json": [
+          {
+            "person_name": "Parity Person",
+            "context": "created by the people parity fixture",
+            "notes": "second call updates in place",
+            "warmth": 3
+          }
+        ]
+      }
+    },
+    {
+      "tool": "find_person",
+      "arguments": { "query": "nobody-by-this-name" },
+      "expectation": {
+        "is_error": false,
+        "text": "No people found matching: nobody-by-this-name"
+      }
+    },
+    {
+      "tool": "find_person",
+      "arguments": { "query": "nobody-by-this-name", "mode": "semantic" },
+      "expectation": {
+        "is_error": false,
+        "json": [
+          {
+            "person_name": "Parity Person",
+            "distance": 0
+          }
+        ]
+      }
+    }
+  ]
+}

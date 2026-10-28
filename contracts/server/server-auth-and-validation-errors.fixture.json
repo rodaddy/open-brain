@@ -1,0 +1,38 @@
+{
+  "id": "server-auth-and-validation-errors",
+  "description": "Freeze permission and structured input-validation error envelopes.",
+  "capability": "auth-error-shapes",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "discord",
+    "client_id": "parity-auth",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "search_brain",
+      "arguments": {
+        "query": "not readable"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Permission denied: no readable tables"
+      }
+    },
+    {
+      "tool": "append_session_event",
+      "arguments": {
+        "session_key": "parity/auth",
+        "event_type": "invalid-event-type",
+        "content": "invalid"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "MCP error -32602: Input validation error: {\"error\":\"input_validation_failed\",\"tool\":\"append_session_event\",\"fields\":[{\"field\":\"event_type\",\"code\":\"invalid_value\",\"message\":\"Invalid option: expected one of \\\"fact\\\"|\\\"decision\\\"|\\\"blocker\\\"|\\\"action\\\"|\\\"artifact\\\"|\\\"receipt\\\"|\\\"question\\\"|\\\"correction\\\"|\\\"handoff\\\"\",\"constraint\":\"must be one of fact, decision, blocker, action, artifact, receipt, question, correction, handoff\",\"options\":[\"fact\",\"decision\",\"blocker\",\"action\",\"artifact\",\"receipt\",\"question\",\"correction\",\"handoff\"]}]}"
+      }
+    }
+  ]
+}

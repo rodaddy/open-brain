@@ -1,0 +1,6 @@
+# name	line	commits
+rule	a standing rule about how work is done	true
+decision	a choice the operator made or approved	true
+fact	a lasting fact about a system or a person	true
+correction	the operator correcting the record	true
+steering	a go-ahead or a passing fragment	false

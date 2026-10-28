@@ -1,0 +1,30 @@
+{
+  "id": "server-drop-folder",
+  "description": "Freeze collect_drop_folder's registry gate: an external_id with no registered source is refused as not_found with ok:false rather than raising, so an unregistered folder is never collected from disk.",
+  "capability": "drop-folder-collection",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-drop-folder",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "collect_drop_folder",
+      "arguments": {
+        "external_id": "parity-drop-folder-never-registered"
+      },
+      "expectation": {
+        "is_error": false,
+        "json": {
+          "ok": false,
+          "eligible": false,
+          "code": "not_found"
+        }
+      }
+    }
+  ]
+}

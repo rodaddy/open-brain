@@ -1,0 +1,26 @@
+{
+  "id": "server-citation-recall-not-found",
+  "description": "Freeze the readable-but-missing citation response.",
+  "capability": "citation-recall",
+  "providers": [
+    "current-src",
+    "server-rewrite-scaffold"
+  ],
+  "auth": {
+    "role": "agent",
+    "client_id": "parity-citation",
+    "namespace_source": "token"
+  },
+  "steps": [
+    {
+      "tool": "citation_recall",
+      "arguments": {
+        "event_id": "55555555-5555-4555-8555-555555555555"
+      },
+      "expectation": {
+        "is_error": true,
+        "text": "Citation event not found"
+      }
+    }
+  ]
+}
