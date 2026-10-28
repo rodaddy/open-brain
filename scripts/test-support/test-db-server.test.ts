@@ -19,7 +19,7 @@ const remoteVars = {
 const dogfoodFile = {
   DB_HOST: "127.0.0.1",
   DB_PORT: "5432",
-  DB_USER: "rico",
+  DB_USER: "dana",
   DB_PASSWORD: "local-secret",
 };
 
@@ -35,7 +35,7 @@ const expectedRemote = {
 describe("resolveTestDbServer", () => {
   test("set in the process environment: the four variables win over DB_*", () => {
     const resolved = resolveTestDbServer(
-      { ...remoteVars, DB_HOST: "127.0.0.1", DB_USER: "rico" },
+      { ...remoteVars, DB_HOST: "127.0.0.1", DB_USER: "dana" },
       dogfoodFile,
     );
     expect(resolved).toEqual(expectedRemote);
@@ -114,7 +114,7 @@ describe("resolveTestDbServer", () => {
 
   test("host set without a user is refused rather than borrowing DB_USER", () => {
     expect(() =>
-      resolveTestDbServer({ OPENBRAIN_TEST_DB_HOST: "127.0.0.1" }, { DB_USER: "rico" }),
+      resolveTestDbServer({ OPENBRAIN_TEST_DB_HOST: "127.0.0.1" }, { DB_USER: "dana" }),
     ).toThrow(/OPENBRAIN_TEST_DB_USER/);
   });
 
@@ -140,7 +140,7 @@ describe("resolveLaneDbConnection (lane-bootstrap --fresh-db)", () => {
     expect(conn).toEqual({
       host: "127.0.0.1",
       port: "5432",
-      user: "rico",
+      user: "dana",
       password: "local-secret",
     });
     expect(notices).toEqual([]);

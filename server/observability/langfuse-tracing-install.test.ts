@@ -65,12 +65,12 @@ async function recordsOneCompleteTracePerCall(): Promise<void> {
   expect(body.input).toBe(args);
   expect(body.output).toBe(result);
   expect(body.sessionId).toBe("sess-530");
-  expect(body.userId).toBe("rico");
+  expect(body.userId).toBe("dana");
   expect(body.tags).toEqual(["open-brain-server", "mcp-tool"]);
   expect(body.metadata).toMatchObject({
     caller_role: "admin",
-    caller_client_id: "rico",
-    caller_token_client_id: "rico",
+    caller_client_id: "dana",
+    caller_token_client_id: "dana",
     caller_agent_id: "worker-530",
     namespace_source: "header",
     status: "success",
@@ -92,10 +92,10 @@ async function emitsMaskedRetrievalChildSpans(): Promise<void> {
     "search_brain",
     { inputSchema: {} } as never,
     (async () => {
-      setActiveMcpTraceMetadata({ resolved_namespace: "rico" });
+      setActiveMcpTraceMetadata({ resolved_namespace: "dana" });
       const candidates = await traceRetrievalSpan({
         name: "retrieval.vector_query",
-        input: { namespace: "rico" },
+        input: { namespace: "dana" },
         run: async () => [
           {
             row_id: "row-569",
@@ -129,7 +129,7 @@ async function emitsMaskedRetrievalChildSpans(): Promise<void> {
 
   const body = onlyBody(sink.bodies);
   const spans = onlySpans(sink.bodies);
-  expect(body.metadata.resolved_namespace).toBe("rico");
+  expect(body.metadata.resolved_namespace).toBe("dana");
   expect(spans.map((span) => span.name)).toEqual([
     "retrieval.vector_query",
     "retrieval.rank_rrf",
@@ -173,7 +173,7 @@ async function handlerMetadataCannotForgeIdentity(): Promise<void> {
   );
   expect(onlyBody(sink.bodies).metadata).toMatchObject({
     caller_role: "admin",
-    caller_client_id: "rico",
+    caller_client_id: "dana",
     status: "exception",
   });
 }

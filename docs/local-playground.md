@@ -12,7 +12,7 @@ Two Open Brain services on this machine, fully isolated:
 | env | `open-brain-local/local-clone.env` | `open-brain-local/play.env` |
 | WAL | `state/recovery.wal` | `state/recovery-play.wal` |
 | log | `log/open-brain.log` | `log/open-brain-play.log` |
-| launchd | `com.rico.open-brain-local-clone` | started by hand |
+| launchd | `com.example.open-brain-local-clone` | started by hand |
 | purpose | Claude's real memory | break it freely |
 
 **Both now run from `open-brain-local`, from committed revisions.** The dev
@@ -49,7 +49,7 @@ runtime contains **no `.git`** — it cannot drift, only be redeployed.
 # --- the REAL service ---------------------------------------------
 scripts/local-clone-deploy.sh                # deploy HEAD to app/
 scripts/local-clone-deploy.sh <ref>          # deploy any commit
-launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-local-clone
+launchctl kickstart -k gui/$(id -u)/com.example.open-brain-local-clone
 scripts/local-clone-deploy.sh --rollback     # restore .previous
 
 # --- the PLAYGROUND ------------------------------------------------
@@ -148,7 +148,7 @@ flag stays `0`.
 `pg_dump`/`pg_restore` run **without** `--no-owner`/`--no-acl`.
 
 Measured 2026-07-30: live carries **mixed ownership** — 23 `public` tables owned
-by `open_brain_local_clone`, 10 by `rico`. Restoring with `--no-owner` flattened
+by `open_brain_local_clone`, 10 by `dana`. Restoring with `--no-owner` flattened
 all 33 to the invoking user, and migrations then failed with `permission denied
 for table _migrations`.
 
@@ -206,7 +206,7 @@ Runtime repoint (2026-07-31):
 - Maintenance queue restarted with all five handlers
   (`embedding.repair, graph.derive, memory.distill, dream.light, dream.rem`)
 - Runtime carries **no `.git`**, so it cannot be edited into drift
-- Plist backed up to `_backups/com.rico.open-brain-local-clone.plist.bak-20260731`
+- Plist backed up to `_backups/com.example.open-brain-local-clone.plist.bak-20260731`
 
 ---
 

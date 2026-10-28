@@ -224,7 +224,7 @@ export interface DerivedEntity {
  * Normalize one extracted term to a stable identity. Deterministic: trims,
  * collapses internal whitespace, lowercases the canonical id. The display name
  * preserves the first-seen casing; identity dedup is case-insensitive so
- * "Rico" and "rico" collapse to one node.
+ * "Dana" and "dana" collapse to one node.
  */
 function normalizeTerm(entityType: string, raw: string): DerivedEntity | null {
   const name = raw.trim().replace(/\s+/g, " ");

@@ -48,9 +48,9 @@
  * value and the reason.
  *
  * Usage:
- *   bun run scripts/repair-embeddings.ts --namespace rico
+ *   bun run scripts/repair-embeddings.ts --namespace dana
  *   bun run scripts/repair-embeddings.ts --global --dry-run
- *   bun run scripts/repair-embeddings.ts --namespace rico --table ob_session_lanes
+ *   bun run scripts/repair-embeddings.ts --namespace dana --table ob_session_lanes
  *
  * Exit codes: 0 = ran to completion with no permanent failures;
  *             1 = a fatal error, or permanent per-row failures were recorded.

@@ -8,7 +8,7 @@ write.
 
 | Identity | Kind | Expected role | Purpose |
 | --- | --- | --- | --- |
-| `rico` | person | `admin` | Rico as a human operator across Codex, Claude, and local hosts. |
+| `dana` | person | `admin` | Dana as a human operator across Codex, Claude, and local hosts. |
 | `alex` | person | `readonly` or scoped user role | Alex as a human collaborator, not an agent lane. |
 | `openbrain-promoter` | service | `promoter` (or legacy `admin`/`ob-admin` clientId path) | Approved Open Brain promotion service for shared truth writes. |
 

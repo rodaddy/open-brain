@@ -122,7 +122,7 @@ fi
 #
 # Ownership and ACLs are PRESERVED, not stripped. Measured 2026-07-30: live
 # carries MIXED ownership -- 23 public tables owned by open_brain_local_clone
-# and 10 by rico. Restoring with --no-owner flattened all 33 to the invoking
+# and 10 by dana. Restoring with --no-owner flattened all 33 to the invoking
 # user, and migrations then failed with "permission denied for table
 # _migrations" because the service connects as the clone role. A playground
 # whose permissions differ from live is not a playground; it fails in ways live
@@ -136,7 +136,7 @@ mkdir -p "$DUMP_DIR"
 DUMP_FILE="${DUMP_DIR}/${TARGET}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 
 # Own the clone with the SAME role that owns the source. Measured 2026-07-30:
-# a database created by `rico` and handed to the clone role's connection failed
+# a database created by `dana` and handed to the clone role's connection failed
 # migrations with "permission denied for schema public". Live's public schema
 # is granted `pg_database_owner=UC`, so schema rights follow database ownership
 # -- matching the owner is the fix, and it needs no explicit GRANT statements

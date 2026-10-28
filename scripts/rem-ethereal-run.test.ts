@@ -44,7 +44,7 @@ vi.mock("../server/config.ts", async (importOriginal) => ({
 
 const candidate: RemCandidate = {
   id: "11111111-1111-4111-8111-111111111111",
-  namespace: "rico",
+  namespace: "dana",
   candidate_type: "decision",
   content: "OPERATOR: keep this",
   content_hash: "hash",

@@ -122,7 +122,7 @@ Gate: `scripts/done-means/512-codex-adapter.sh`.
 
 `response_item/message:user` is contaminated: Codex injects AGENTS.md,
 environment context, and policy text as `user`-role records, so treating it as
-operator speech would attribute injected instructions to Rico. The
+operator speech would attribute injected instructions to Dana. The
 `event_msg/user_message` and `event_msg/task_complete` records carry the clean
 prompt and the final answer, which is why the existing adapter keys on them.
 

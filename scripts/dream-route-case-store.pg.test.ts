@@ -71,7 +71,7 @@ afterAll(async () => {
 
 async function expectRoundTrip(): Promise<void> {
   await expect(
-    save("rico", [
+    save("dana", [
       planted(first, { note: "operator said it plainly" }),
       planted(second, {
         dest: "none",
@@ -93,7 +93,7 @@ async function expectRoundTrip(): Promise<void> {
     restates: false,
     drove_decision: true,
     note: "operator said it plainly",
-    labelled_by: "rico",
+    labelled_by: "dana",
   });
   expect(saved?.labelled_at).toBeInstanceOf(Date);
   expect(await readMatrixCases(pool, schema, "ffffffffffff")).toEqual([]);
@@ -101,7 +101,7 @@ async function expectRoundTrip(): Promise<void> {
 
 async function expectUpdateInPlace(): Promise<void> {
   await expect(
-    save("rico-corrected", [
+    save("dana-corrected", [
       planted(first, {
         dest: "rule",
         yn_rule: true,
@@ -119,17 +119,17 @@ async function expectUpdateInPlace(): Promise<void> {
     yn_rule: true,
     yn_decision: false,
     note: "standing rule, not one decision",
-    labelled_by: "rico-corrected",
+    labelled_by: "dana-corrected",
   });
 }
 
 async function expectUnknownCandidateRefused(): Promise<void> {
   await expect(
-    save("rico", [
+    save("dana", [
       planted(second, { dest: "fact", yn_decision: false, yn_fact: true }),
     ]),
   ).resolves.toEqual({ savedCount: 1 });
-  await expect(save("rico", [planted(randomUUID())])).rejects.toThrow(
+  await expect(save("dana", [planted(randomUUID())])).rejects.toThrow(
     /does not belong to the cohort/i,
   );
 
@@ -139,10 +139,10 @@ async function expectUnknownCandidateRefused(): Promise<void> {
 }
 
 async function expectInconsistentRefused(): Promise<void> {
-  await expect(save("rico", [planted(first, { dest: "fact" })])).rejects.toThrow(
+  await expect(save("dana", [planted(first, { dest: "fact" })])).rejects.toThrow(
     /disagrees/i,
   );
-  await expect(save("rico", [planted(first, { dest: "none" })])).rejects.toThrow(
+  await expect(save("dana", [planted(first, { dest: "none" })])).rejects.toThrow(
     /disagrees/i,
   );
 }
@@ -152,7 +152,7 @@ async function expectInvalidSchemaRefused(): Promise<void> {
     saveMatrixCases(pool, {
       schema: "public; drop table cohort",
       matrixFingerprint: fingerprint,
-      labelledBy: "rico",
+      labelledBy: "dana",
       cases: [planted(first)],
     }),
   ).rejects.toThrow(/invalid dream run schema/i);

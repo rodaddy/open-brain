@@ -116,7 +116,7 @@ async function readWorkerHealth(
   const processRuntime = await startNatsWorkerProcess({
     env,
     log: { info: () => undefined, error: () => undefined },
-    buildTokens: () => new Map([["secret-token", { role: "admin", clientId: "rico" }]]),
+    buildTokens: () => new Map([["secret-token", { role: "admin", clientId: "dana" }]]),
     // `pg.Pool` is far wider than this test exercises; narrowed once, here.
     createDbPool: () =>
       ({ end: async () => undefined }) as unknown as ReturnType<CreateDbPoolFn>,

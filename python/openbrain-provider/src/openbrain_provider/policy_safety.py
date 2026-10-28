@@ -619,12 +619,12 @@ _MAIN_PUSH_APPROVAL_LINE: Final[re.Pattern[str]] = re.compile(
 
 
 def _main_push_approved(cwd: Path) -> bool:
-    """Return whether Rico's timed main-push approval is live for ``cwd``'s repo.
+    """Return whether Dana's timed main-push approval is live for ``cwd``'s repo.
 
     Operator ruling 2026-09-11. The protected-ref refusal says "without explicit
     approval", and this is the approval: `_ob/bin/approve-main-push` writes
     `<gitdir>/guard-main-push-approved` holding one `expires=<unix epoch>`
-    line, and Rico running that command is what makes it explicit. The expiry
+    line, and Dana running that command is what makes it explicit. The expiry
     is what stops it becoming a standing exemption. The TypeScript guard
     (`_ob/scripts/policy-refresh-gate.ts`, readMainPushApproval) honored the
     marker from the day it existed; this guard did not, so on 2026-09-11 an

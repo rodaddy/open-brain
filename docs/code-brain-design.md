@@ -6,7 +6,7 @@ Open Brain is a *memory* system. The thing described here is a **conformance**
 system: it volunteers that work has drifted from stated intent, without being
 asked. Nothing in the market does this (see [Prior art](#prior-art)).
 
-This document records decisions made in one long working session. Rico made
+This document records decisions made in one long working session. Dana made
 every substantive correction; the first draft of most sections was wrong in the
 way noted inline. Read the corrections — they are the load-bearing part.
 
@@ -77,7 +77,7 @@ OB-native kinds:
 | `outcome` | "PR #378 merged, CI green" | short, historically permanent |
 | `pattern` | "agents drift when left autonomous" | long, and dangerous |
 
-`correction` matters most: every real fix in this session was Rico correcting
+`correction` matters most: every real fix in this session was Dana correcting
 the agent. Those are the highest-value rows in the system.
 
 **Why reach:** project rules must not bleed; global rules must.
@@ -139,7 +139,7 @@ Step 6 is the bug. The fix is not better detection — it is **precedence**.
 | Tier | Source | Rule |
 |---|---|---|
 | **canon** | epic / issue / ratified decision doc | overrules |
-| **decided** | an explicit Rico decision | strong |
+| **decided** | an explicit Dana decision | strong |
 | **observed** | what a session did or concluded | weak |
 
 A session finding can never outrank canon, no matter how recent or how
@@ -323,7 +323,7 @@ Two verbs for dream:
 - **bring it to me** — the ambiguous middle, the nightly review page
 
 > **Correction.** The first draft of drift detection (#393) was a REM-time
-> semantic comparison needing a model. Rico's version needs **no model at all** —
+> semantic comparison needing a model. Dana's version needs **no model at all** —
 > two counters and a date — and catches drift earlier.
 
 Sustained observed contradiction of canon is the highest-value alert available:
@@ -349,7 +349,7 @@ Apache-2.0. **All credit given where taken.**
 
 **gbrain salience** is `emotional_weight × 5 + ln(1 + take_count)` — reinforcement
 as a *separate axis*, log-damped so the 50th mention counts less than the 2nd.
-That is exactly the correction Rico made to the naive "+0.2 to confidence"
+That is exactly the correction Dana made to the naive "+0.2 to confidence"
 proposal, already shipped and tested elsewhere.
 
 **cognee is ahead of OB on lifecycle plumbing.** Verified in
@@ -422,7 +422,7 @@ sweep.**
 ## Standing hazard
 
 Issues #386–#399 were written by **one agent in one session** — the same shape
-as the drift being diagnosed. Every substantive correction came from Rico:
+as the drift being diagnosed. Every substantive correction came from Dana:
 
 | Agent had it wrong | Corrected to |
 |---|---|

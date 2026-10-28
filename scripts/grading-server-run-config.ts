@@ -42,8 +42,8 @@ function parsePort(env: NodeJS.ProcessEnv): number {
 
 function normalConfig(env: NodeJS.ProcessEnv, port: number): GradingServerRunConfig {
   return {
-    namespace: arg("--namespace") ?? env.OB_GRADING_NAMESPACE ?? "rico",
-    gradedBy: arg("--graded-by") ?? env.GRADED_BY ?? "rico",
+    namespace: arg("--namespace") ?? env.OB_GRADING_NAMESPACE ?? "dana",
+    gradedBy: arg("--graded-by") ?? env.GRADED_BY ?? "dana",
     port,
   };
 }

@@ -60,14 +60,14 @@ class _RecordingClient:
 
 def test_representative_turn_emits_entities_and_concepts() -> None:
     result = extract_turn_concepts(
-        "Rico asked how the open-brain recall boundary handles the durable memory "
+        "Dana asked how the open-brain recall boundary handles the durable memory "
         "namespace for the agent_memory module."
     )
     # Identifier-shaped tokens (internal separator) land in entities, lowercased.
     assert "open-brain" in result.entities
     assert "agent_memory" in result.entities
     # Ordinary content words -- capitalized or not -- land in concepts, lowercased.
-    assert "rico" in result.concepts
+    assert "dana" in result.concepts
     assert "recall" in result.concepts
     assert "boundary" in result.concepts
     assert "durable" in result.concepts
@@ -194,7 +194,7 @@ def test_casefold_not_lower_folds_expanding_sharp_s() -> None:
     assert _STRASSE_UPPER.casefold() == _STRASSE_SHARP.casefold() == "strasse"
     assert _STRASSE_SHARP.lower() != "strasse"  # lower() would NOT fold ß
 
-    result = extract_turn_concepts(f"Rico noted {_STRASSE_UPPER} and {_STRASSE_SHARP}")
+    result = extract_turn_concepts(f"Dana noted {_STRASSE_UPPER} and {_STRASSE_SHARP}")
     # Exactly one casefolded key, in composed/expanded form -- no ß survives.
     assert result.concepts.count("strasse") == 1
     assert _STRASSE_SHARP not in result.concepts
@@ -208,7 +208,7 @@ def test_derived_query_folds_sharp_s_verbatim_original_key_appended() -> None:
     # "STRASSE"/"straße" -- is appended exactly once. A lower()-based key would
     # dedupe to two keys and could append a bare-ß fragment, breaking both the
     # single-append bound and the "clean normalized key" guarantee.
-    query = f"Rico noted {_STRASSE_UPPER} and {_STRASSE_SHARP} today"
+    query = f"Dana noted {_STRASSE_UPPER} and {_STRASSE_SHARP} today"
     concepts = extract_turn_concepts(query)
     derived = _derive_recall_query(query, concepts)
 
@@ -282,7 +282,7 @@ def test_large_input_is_linear_and_bounded() -> None:
 
 
 def test_telemetry_excludes_raw_text_and_keys() -> None:
-    text = "SecretProject reticulates splines for Rico"
+    text = "SecretProject reticulates splines for Dana"
     result = extract_turn_concepts(text)
     telemetry = result.telemetry()
     serialized = repr(telemetry)
@@ -396,7 +396,7 @@ def test_derived_query_appended_keys_are_bounded() -> None:
 
 
 def test_derived_query_keeps_original_verbatim_and_first() -> None:
-    query = "Explain the API for Rico"
+    query = "Explain the API for Dana"
     concepts = extract_turn_concepts(query)
     derived = _derive_recall_query(query, concepts)
     assert derived == query or derived.startswith(query + " ")
@@ -519,7 +519,7 @@ def test_recall_telemetry_log_is_content_free(
     memory = AgentMemory(client, agent="bilby")
 
     with caplog.at_level(logging.DEBUG, logger="openbrain_memory.agent"):
-        memory.recall("Rico wants OpenBrain to reticulate splines now")
+        memory.recall("Dana wants OpenBrain to reticulate splines now")
 
     turn_records = [
         r for r in caplog.records if r.getMessage() == "turn_concepts_extracted"
@@ -531,7 +531,7 @@ def test_recall_telemetry_log_is_content_free(
     assert getattr(record, "categories", None) == ["entities", "concepts"]
     assert isinstance(getattr(record, "entity_count"), int)
     assert isinstance(getattr(record, "concept_count"), int)
-    for leak in ("reticulate", "splines", "Rico", "OpenBrain"):
+    for leak in ("reticulate", "splines", "Dana", "OpenBrain"):
         assert leak not in record.getMessage()
         for value in vars(record).values():
             assert not (isinstance(value, str) and leak in value)

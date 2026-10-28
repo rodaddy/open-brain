@@ -110,7 +110,7 @@ const MAX_REM_MIN_GAP_MS = 6 * 60 * 60 * 1000;
 // superseding the REM-like 1 h pacing of 2026-09-25 for the route only: 2x the
 // measured real peak needs about 3,810 candidates/hour and a 200-candidate
 // slice per hour cannot carry it. REM's own gap is unchanged. Off by default;
-// enabling it on dogfood needs Rico's go.
+// enabling it on dogfood needs Dana's go.
 const MAX_ROUTE_SLICE_SIZE = 200;
 const DEFAULT_ROUTE_MIN_GAP_MS = 60_000;
 const MAX_ROUTE_MIN_GAP_MS = 86_400_000;

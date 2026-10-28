@@ -145,7 +145,7 @@ function skillUsageReadScope(identity: AuthIdentity, values: unknown[]): string 
  * The entity is seeded on first use rather than requiring a separate seeding
  * pass: telemetry that silently dropped an invocation because nobody had
  * registered the skill yet would under-count exactly the new skills whose
- * adoption Rico most wants to see. `skill.<slug>` matches the scope-key pattern
+ * adoption Dana most wants to see. `skill.<slug>` matches the scope-key pattern
  * canon seeding already uses, and the upsert is the `ob_entities` shape from
  * `repo-facts.ts`.
  */
@@ -248,7 +248,7 @@ async function queryPriorWindow(
 /**
  * Seeded skills with no invocation inside the window. #469 asks for this list
  * explicitly, and it is a LIST of names with zero counts -- naming what went
- * unused is a fact; deciding what to do about it is Rico's.
+ * unused is a fact; deciding what to do about it is Dana's.
  */
 async function queryNeverUsed(
   dependencies: MemoryToolDependencies,

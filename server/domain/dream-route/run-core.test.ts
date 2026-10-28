@@ -38,7 +38,7 @@ const MATRIX: RouteMatrix = {
 function snapshot(over: Partial<CandidateSnapshot> = {}): CandidateSnapshot {
   return {
     id: "cand-1",
-    namespace: "rico",
+    namespace: "dana",
     candidate_type: "decision",
     content: "use Forge, not GitHub",
     content_hash: "f".repeat(64),
@@ -60,7 +60,7 @@ function row(
   return {
     ordinal: 0,
     candidateId,
-    namespace: "rico",
+    namespace: "dana",
     contentHash: "f".repeat(64),
     source: neighbourOf === null ? "draw" : "neighbour",
     neighbourOf,
@@ -87,7 +87,7 @@ describe("candidateOf", () => {
     const candidate = candidateOf(row("cand-1"));
     expect(candidate).toEqual({
       id: "cand-1",
-      namespace: "rico",
+      namespace: "dana",
       candidateType: "decision",
       content: "use Forge, not GitHub",
       operatorText: null,

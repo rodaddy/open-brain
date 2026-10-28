@@ -391,7 +391,7 @@ export async function runRemRewarm(deps: RemDeps): Promise<RemRewarmSummary> {
     );
 
     // Warm the project's cold cluster. NOT namespace-scoped to the turn's
-    // namespace: raw turns all land in `rico` while the durable memory they
+    // namespace: raw turns all land in `dana` while the durable memory they
     // refer to lives in `collab` (measured on the clone -- 1 distinct turn
     // namespace, 10,624 warm collab thoughts). The project tag IS the scope
     // here, which is what #392 asks for ("the unit is the PROJECT").

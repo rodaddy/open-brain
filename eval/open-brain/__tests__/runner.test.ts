@@ -66,7 +66,7 @@ describe("Open Brain memory eval runner: retrieval and namespace guards", () => 
   });
 
   it("fails probes that retrieve declared junk ids", () => {
-    const probe = probeFrom(typedFixture, "identity-rico-rika");
+    const probe = probeFrom(typedFixture, "identity-dana-rika");
     const score = scoreProbe(typedFixture.corpus, { ...probe, top_k: 3 });
     expect(score.passed).toBe(false);
     expect(score.failures).toContain("retrieved declared junk person-rika");

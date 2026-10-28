@@ -14,7 +14,7 @@
 
 export const PHYSICAL_SHARED = "shared-kb";
 export const LEGACY_SHARED = "collab";
-export const PRIVATE_NAMESPACE = "rico-private";
+export const PRIVATE_NAMESPACE = "dana-private";
 
 /** The caller's readable set: their own namespace plus the shared one. */
 export const SCOPE = [PRIVATE_NAMESPACE, PHYSICAL_SHARED];

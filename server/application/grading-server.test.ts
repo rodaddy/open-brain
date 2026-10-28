@@ -4,8 +4,8 @@ import { startGradingServer } from "./grading-server.ts";
 
 const options = () => ({
   pool: { query: vi.fn(() => Promise.reject(new Error("normal route ran"))) },
-  namespace: "rico",
-  gradedBy: "rico",
+  namespace: "dana",
+  gradedBy: "dana",
 });
 
 describe("makeGradingHandler frozen review seam", () => {
@@ -61,8 +61,8 @@ describe("makeGradingHandler frozen review seam", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         status: "ok",
-        namespace: "rico",
-        graded_by: "rico",
+        namespace: "dana",
+        graded_by: "dana",
       });
     } finally {
       await server.stop();

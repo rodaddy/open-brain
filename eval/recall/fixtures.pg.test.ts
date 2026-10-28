@@ -221,7 +221,7 @@ describe("recall fixture ids resolve in the dogfood corpus (live Postgres)", () 
     };
 
     await expect(expectInNamespace(eventRef, "shared-kb")).rejects.toThrow();
-    await expect(expectOutsideNamespace(eventRef, "rico")).rejects.toThrow();
+    await expect(expectOutsideNamespace(eventRef, "dana")).rejects.toThrow();
     await expect(expectInNamespace(directRef, "shared-kb")).rejects.toThrow();
   });
 });

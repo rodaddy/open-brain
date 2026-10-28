@@ -9,7 +9,7 @@ Purpose:
     profile/process guidance first, then repo facts and any remaining sections.
 
     CANON, PLUS THIS REPO'S OWN LANE. The injection is the always-known layer
-    -- who Rico is (``profile_guidance``), the rules/LAWs/standards/persona
+    -- who Dana is (``profile_guidance``), the rules/LAWs/standards/persona
     (``process_guidance``), and this repo's facts (``repo_facts``) -- plus one
     REPO-SCOPED lane resume in emission two (#519): the lane's checkpoint and
     its most recent day's intent events, so a session opens knowing where the

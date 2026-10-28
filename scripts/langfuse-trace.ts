@@ -250,7 +250,7 @@ tool_name, query, count_text = sys.argv[1:]
 client = OpenBrainClient(
     os.environ["OPENBRAIN_BASE_URL"],
     os.environ["OPENBRAIN_TOKEN"],
-    os.environ.get("OPENBRAIN_NAMESPACE", "rico"),
+    os.environ.get("OPENBRAIN_NAMESPACE", "dana"),
     agent_id=os.environ.get("OPENBRAIN_AGENT_ID"),
     role=os.environ.get("OPENBRAIN_ROLE"),
     allow_insecure_http=os.environ.get("OPENBRAIN_ALLOW_INSECURE_HTTP") == "1",

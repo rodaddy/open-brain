@@ -37,7 +37,7 @@ from openbrain_provider.gate_shell import shell_quote
 #: The provider script the gate's `--provider-script-path` default names. Built
 #: from the resolved root for the same reason `gate_harness` builds its cwd that
 #: way -- a hardcoded second copy disagrees with the root the gate resolved
-#: against on any machine that is not Rico's Mac.
+#: against on any machine that is not Dana's Mac.
 #:
 #: `DEVELOPMENT_CWD` is deliberately NOT redefined here: it is imported from
 #: `gate_harness` above, and shadowing it with a literal is what made five of

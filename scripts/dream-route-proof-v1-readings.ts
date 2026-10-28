@@ -10,7 +10,7 @@
 // DB_NAME names any other database. Run it with the DB_* vars pointing at the
 // copy:
 //
-//   DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=rico \
+//   DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=dana \
 //   DB_NAME=open_brain_local_play_route_proof \
 //   /opt/homebrew/opt/node@24/bin/node scripts/dream-route-proof-v1-readings.ts
 //

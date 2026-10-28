@@ -328,11 +328,11 @@ describe("extended env — captureHealth", () => {
 
   it("takes an explicit namespace, window, and refresh", () => {
     const capture = extendedConfig({
-      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "rico",
+      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "dana",
       OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "60",
       OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "5000",
     }).captureHealth;
-    expect(capture.namespace).toBe("rico");
+    expect(capture.namespace).toBe("dana");
     expect(capture.windowMinutes).toBe(60);
     expect(capture.refreshMs).toBe(5_000);
   });

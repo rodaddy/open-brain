@@ -373,7 +373,7 @@ export function baseInput(overrides: Partial<DeriveGraphInput> = {}): DeriveGrap
     anchorId: "11111111-1111-4111-8111-111111111111",
     anchorName: "release plan",
     namespace: "team-kb",
-    metadata: { topics: ["Migrations", "pgvector"], people: ["Rico"] },
+    metadata: { topics: ["Migrations", "pgvector"], people: ["Dana"] },
     ...overrides,
   };
 }

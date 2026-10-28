@@ -58,7 +58,7 @@ Example:
     >>> from openbrain_memory import RuntimeScope
     >>> runtime = FirstClassMemoryRuntime(
     ...     RuntimeConfig.from_sources({}, environ=env),
-    ...     RuntimeScope.from_mapping({"namespace": "rico"}),
+    ...     RuntimeScope.from_mapping({"namespace": "dana"}),
     ... )
     >>> output = runtime.capture_distilled("a decision worth keeping")
     >>> output.receipt.durable

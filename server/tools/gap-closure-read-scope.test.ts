@@ -90,7 +90,7 @@ function queryMatching(
 
 describe("get_entry scopes ID-based reads from the auth-derived predicate", () => {
   test("a namespaced role binds its own namespace and shared-kb on the full render", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "get_entry",
@@ -99,11 +99,11 @@ describe("get_entry scopes ID-based reads from the auth-derived predicate", () =
 
     const query = queryMatching(queries, "FROM thoughts");
     expect(query.sql).toContain("namespace = ANY($2::text[])");
-    expect(query.values).toEqual([ENTRY_ID, ["rico", "shared-kb"]]);
+    expect(query.values).toEqual([ENTRY_ID, ["dana", "shared-kb"]]);
   });
 
   test("the compact render binds the SAME predicate, at its own placeholder", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "get_entry",
@@ -115,7 +115,7 @@ describe("get_entry scopes ID-based reads from the auth-derived predicate", () =
     // both together catches a partial regression, not just a total one.
     const query = queryMatching(queries, "content_preview");
     expect(query.sql).toContain("namespace = ANY($2::text[])");
-    expect(query.values).toEqual([ENTRY_ID, ["rico", "shared-kb"], 500]);
+    expect(query.values).toEqual([ENTRY_ID, ["dana", "shared-kb"], 500]);
   });
 
   test("a global role reads every namespace with no predicate at all", async () => {
@@ -132,7 +132,7 @@ describe("get_entry scopes ID-based reads from the auth-derived predicate", () =
   });
 
   test("the table name reaches SQL only through the enum allowlist", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "get_entry",
@@ -163,7 +163,7 @@ describe("archive_entity applies its predicate to the mutation itself", () => {
   test("a delete-capable namespaced role binds its own namespace on the UPDATE", async () => {
     // `promoter` holds delete on sessions without being a global role, so it is
     // the one identity that proves the clause is emitted rather than skipped.
-    const { client, queries } = await clientCapturingQueries("promoter", "rico");
+    const { client, queries } = await clientCapturingQueries("promoter", "dana");
 
     await client.callTool({ name: "archive_entity", arguments: { id: ENTRY_ID } });
 
@@ -173,7 +173,7 @@ describe("archive_entity applies its predicate to the mutation itself", () => {
   });
 
   test("a role without delete permission never opens a transaction", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "archive_entity",
@@ -208,7 +208,7 @@ describe("archive_entity applies its predicate to the mutation itself", () => {
 
 describe("service-metadata surfaces gate on role alone", () => {
   test("operator_doctor refuses a non-admin identity before any work", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({ name: "operator_doctor", arguments: {} });
 
@@ -220,7 +220,7 @@ describe("service-metadata surfaces gate on role alone", () => {
   });
 
   test("get_contract serves a readable role without touching the database", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({ name: "get_contract", arguments: {} });
 

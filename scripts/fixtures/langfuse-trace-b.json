@@ -4,7 +4,7 @@
   "timestamp": "2026-08-06T12:01:00.000Z",
   "release": "def5678",
   "sessionId": "session-569",
-  "userId": "rico",
+  "userId": "dana",
   "latency": 0.15,
   "observations": [
     {
@@ -36,11 +36,11 @@
       "startTime": "2026-08-06T12:01:00.000Z",
       "endTime": "2026-08-06T12:01:00.150Z",
       "metadata": {
-        "caller_client_id": "rico",
-        "caller_token_client_id": "rico",
+        "caller_client_id": "dana",
+        "caller_token_client_id": "dana",
         "caller_agent_id": "trace-fixture",
         "caller_role": "agent",
-        "resolved_namespace": ["rico"],
+        "resolved_namespace": ["dana"],
         "status": "success",
         "duration_ms": 150
       },

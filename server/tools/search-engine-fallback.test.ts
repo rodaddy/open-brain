@@ -107,7 +107,7 @@ describe("the modern scoped shared fallback", () => {
     expect(
       modern.filter((id) => id.startsWith("1") || id.startsWith("2")),
     ).toHaveLength(2);
-    expect(PRIVATE_NAMESPACE).toBe("rico-private");
+    expect(PRIVATE_NAMESPACE).toBe("dana-private");
   });
 
   test("no top-up when scopedFallbackApplies says no", async () => {

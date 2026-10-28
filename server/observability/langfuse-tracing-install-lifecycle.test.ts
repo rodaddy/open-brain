@@ -116,12 +116,12 @@ async function handlerExceptionPropagatesAndIsTraced(): Promise<void> {
     "get_entity",
     { inputSchema: {} } as never,
     (() => {
-      throw new NamespaceViolationError("entity 7 is not in namespace rico");
+      throw new NamespaceViolationError("entity 7 is not in namespace dana");
     }) as never,
   );
 
   await expect(handlers.get("get_entity")?.({ id: "7" }, AUTH)).rejects.toThrow(
-    "entity 7 is not in namespace rico",
+    "entity 7 is not in namespace dana",
   );
 
   expect(sink.bodies).toHaveLength(1);
@@ -129,7 +129,7 @@ async function handlerExceptionPropagatesAndIsTraced(): Promise<void> {
   expect((body.metadata as { status: string }).status).toBe("exception");
   expect(body.output).toEqual({
     error_class: "NamespaceViolationError",
-    error_message: "entity 7 is not in namespace rico",
+    error_message: "entity 7 is not in namespace dana",
   });
 }
 

@@ -89,8 +89,8 @@ function comparison(equivalent: boolean | null): TraceComparison {
     toolB: "search_brain",
     releaseA: "a",
     releaseB: "b",
-    namespaceA: "rico",
-    namespaceB: "rico",
+    namespaceA: "dana",
+    namespaceB: "dana",
     stages: [],
   };
 }
@@ -153,7 +153,7 @@ describe("Langfuse trace forensics", () => {
     expect(output).toContain("release=abc1234");
     expect(output).toContain("sessionId=session-569");
     expect(output).toContain(
-      "caller=user=rico client=rico token_client=rico agent=trace-fixture role=agent",
+      "caller=user=dana client=dana token_client=dana agent=trace-fixture role=agent",
     );
     expect(output).toContain("status=success");
     expect(vectorIndex).toBeGreaterThan(0);
@@ -185,7 +185,7 @@ describe("Langfuse trace forensics", () => {
     );
     if (root?.metadata) {
       root.metadata.duration_ms = 999;
-      root.metadata.resolved_namespace = ["rico"];
+      root.metadata.resolved_namespace = ["dana"];
     }
     const rank = right.observations?.find(
       (observation) => observation.name === "retrieval.rank_rrf",
@@ -199,7 +199,7 @@ describe("Langfuse trace forensics", () => {
     expect(result.equivalent).toBe(true);
     expect(traceDiffExitCode(result)).toBe(0);
     expect(result.releaseB).toBe("different-release");
-    expect(result.namespaceB).toBe("rico");
+    expect(result.namespaceB).toBe("dana");
     expect(
       result.stages.find((stage) => stage.name === "retrieval.rank_rrf")?.scoreDeltas,
     ).toContain("row-1.rrf_score: 0.03 -> 0.5 delta=0.47");
@@ -218,7 +218,7 @@ describe("Langfuse trace forensics evidence comparison", () => {
     expect(traceDiffExitCode(result)).toBe(1);
     expect(output).toContain("equivalent=false");
     expect(output).toContain("release A=abc1234 B=def5678");
-    expect(output).toContain("namespace A=rico,shared-kb B=rico");
+    expect(output).toContain("namespace A=dana,shared-kb B=dana");
     expect(output).toContain("candidate_row_ids added=row-3 removed=row-2");
     expect(output).toContain("chosen_row_ids added=row-3 removed=row-1");
     expect(output).toContain("row-1: — -> rrf_window");

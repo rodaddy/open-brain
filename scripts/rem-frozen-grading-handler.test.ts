@@ -37,7 +37,7 @@ const options = {
   pool: {} as never,
   schema: "dream_run_001",
   namespace: "frozen-ns",
-  gradedBy: "rico",
+  gradedBy: "dana",
 };
 
 function request(path: string, init: RequestInit = {}): Request {

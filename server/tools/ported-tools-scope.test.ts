@@ -125,7 +125,7 @@ const UUID_B = "22222222-2222-4222-8222-222222222222";
 
 describe("set_tier scopes its write to the caller's own namespace", () => {
   test("a namespaced role writes ONLY its own namespace, never shared-kb", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "set_tier",
@@ -135,17 +135,17 @@ describe("set_tier scopes its write to the caller's own namespace", () => {
     const query = queryContaining(queries, "UPDATE thoughts");
     expect(query.sql).toContain("namespace = ANY($3::text[])");
     // The MUTATION scope is the caller's namespace alone. Deriving this from
-    // the READ policy instead would bind ["rico", "shared-kb"] and let any
+    // the READ policy instead would bind ["dana", "shared-kb"] and let any
     // agent retier shared truth -- this assertion is what fails if the "write"
     // argument is ever changed to "read".
     // The trailing pair is the `tier_moves` history row's own binding (#1469
     // item 5): cause constant, then the source table. Asserting the WHOLE
     // array keeps the namespace binding proven and pins the new tail too.
-    expect(query.values).toEqual(["hot", UUID_A, ["rico"], SET_TIER_CAUSE, "thoughts"]);
+    expect(query.values).toEqual(["hot", UUID_A, ["dana"], SET_TIER_CAUSE, "thoughts"]);
   });
 
   test("a role without write permission never reaches the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("readonly", "rico");
+    const { client, queries } = await clientCapturingQueries("readonly", "dana");
 
     const result = await client.callTool({
       name: "set_tier",
@@ -160,7 +160,7 @@ describe("set_tier scopes its write to the caller's own namespace", () => {
 
 describe("bulk_set_tier and bulk_archive scope every statement", () => {
   test("each bulk update binds the caller's own namespace", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "bulk_set_tier",
@@ -178,14 +178,14 @@ describe("bulk_set_tier and bulk_archive scope every statement", () => {
     expect(thoughts.values).toEqual([
       "cold",
       UUID_A,
-      ["rico"],
+      ["dana"],
       BULK_SET_TIER_CAUSE,
       "thoughts",
     ]);
     expect(decisions.values).toEqual([
       "hot",
       UUID_B,
-      ["rico"],
+      ["dana"],
       BULK_SET_TIER_CAUSE,
       "decisions",
     ]);
@@ -209,7 +209,7 @@ describe("bulk_set_tier and bulk_archive scope every statement", () => {
   });
 
   test("an unauthorized table in the batch stops it before the transaction opens", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "bulk_archive",
@@ -289,7 +289,7 @@ describe("find_duplicates never emits an unscoped self-join (#485)", () => {
   });
 
   test("the statement timeout is armed BEFORE the join, not after", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "find_duplicates",
@@ -310,7 +310,7 @@ describe("find_duplicates never emits an unscoped self-join (#485)", () => {
   });
 
   test("a namespace the caller cannot read is refused before the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "find_duplicates",
@@ -327,7 +327,7 @@ describe("find_duplicates never emits an unscoped self-join (#485)", () => {
 
 describe("citation_recall scopes on the lane's namespace", () => {
   test("the event lookup binds the caller's namespace, not the event id alone", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "citation_recall",
@@ -339,11 +339,11 @@ describe("citation_recall scopes on the lane's namespace", () => {
     // boundary. Matching on `e.id` alone would return whichever lane owns the
     // UUID.
     expect(query.sql).toContain("l.namespace = $1");
-    expect(query.values).toEqual(["rico", UUID_A]);
+    expect(query.values).toEqual(["dana", UUID_A]);
   });
 
   test("a foreign namespace is refused before the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "citation_recall",
@@ -364,20 +364,20 @@ describe("scan_namespace binds the scanned namespace as a parameter", () => {
 
     await client.callTool({
       name: "scan_namespace",
-      arguments: { namespace: "rico", table: "thoughts" },
+      arguments: { namespace: "dana", table: "thoughts" },
     });
 
     const query = queryContaining(queries, "FROM thoughts t");
     expect(query.sql).toContain("t.namespace = $1");
-    expect(query.values[0]).toBe("rico");
+    expect(query.values[0]).toBe("dana");
   });
 
   test("a non-promotion role never reaches the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "scan_namespace",
-      arguments: { namespace: "rico" },
+      arguments: { namespace: "dana" },
     });
 
     expect(result.isError).toBe(true);
@@ -390,14 +390,14 @@ describe("scan_namespace binds the scanned namespace as a parameter", () => {
 
 describe("tier_lane defaults to dry-run and writes nothing", () => {
   test("an unqualified call reports dry_run true and writes no thought", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico", [
+    const { client, queries } = await clientCapturingQueries("agent", "dana", [
       {
         match: "FROM ob_session_events e",
         rows: [
           {
             id: UUID_A,
             lane_id: UUID_B,
-            namespace: "rico",
+            namespace: "dana",
             agent: "claude",
             session_key: "lane-1",
             event_type: "fact",
@@ -425,7 +425,7 @@ describe("tier_lane defaults to dry-run and writes nothing", () => {
   });
 
   test("the lane read binds the caller's own namespace", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     await client.callTool({
       name: "tier_lane",
@@ -434,11 +434,11 @@ describe("tier_lane defaults to dry-run and writes nothing", () => {
 
     const query = queryContaining(queries, "ob_session_lanes");
     expect(query.sql).toContain("l.namespace = $1");
-    expect(query.values).toEqual(["rico", "lane-1", 100]);
+    expect(query.values).toEqual(["dana", "lane-1", 100]);
   });
 
   test("a namespace the caller cannot WRITE is refused before the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "tier_lane",
@@ -492,7 +492,7 @@ describe("promote_entry defaults to dry-run", () => {
   });
 
   test("a non-promotion role never reaches the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "promote_entry",
@@ -533,7 +533,7 @@ describe("ingest_conversation_facts refuses before it writes", () => {
   });
 
   test("a foreign namespace is refused before the pool", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "ingest_conversation_facts",
@@ -551,7 +551,7 @@ describe("ingest_conversation_facts refuses before it writes", () => {
   });
 
   test("a raw transcript body is rejected before any statement runs", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico");
+    const { client, queries } = await clientCapturingQueries("agent", "dana");
 
     const result = await client.callTool({
       name: "ingest_conversation_facts",
@@ -571,7 +571,7 @@ describe("ingest_conversation_facts refuses before it writes", () => {
   });
 
   test("the lane lookup binds all seven scope coordinates", async () => {
-    const { client, queries } = await clientCapturingQueries("agent", "rico", [
+    const { client, queries } = await clientCapturingQueries("agent", "dana", [
       {
         match: "FROM ob_sources",
         rows: [
@@ -581,7 +581,7 @@ describe("ingest_conversation_facts refuses before it writes", () => {
             external_id: "conv-1",
             approval_status: "approved",
             status: "active",
-            namespace: "rico",
+            namespace: "dana",
           },
         ],
       },
@@ -598,7 +598,7 @@ describe("ingest_conversation_facts refuses before it writes", () => {
       // interpolated: it is the isolation boundary for the whole call.
       expect(lane.sql).toContain("namespace = $1");
       expect(lane.sql).toContain("thread_id IS NOT DISTINCT FROM $7::text");
-      expect(lane.values[0]).toBe("rico");
+      expect(lane.values[0]).toBe("dana");
     }
     // Whatever the source registry answered, no durable row may be written when
     // the lane does not resolve.

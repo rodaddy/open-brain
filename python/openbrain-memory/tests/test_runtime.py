@@ -411,7 +411,7 @@ def test_json_capture_forwards_lifecycle_keys_to_event_metadata() -> None:
         request_payload(
             "capture",
             distilled=True,
-            content="Rico prefers the smallest correct change.",
+            content="Dana prefers the smallest correct change.",
             candidate_type="user_preference",
             memory_lifecycle_action="promote",
             candidate_scope={"repo": "rodaddy/open-brain"},
@@ -560,7 +560,7 @@ def test_fresh_checkpoint_and_wrap_are_immediately_recallable() -> None:
         )
 
 
-# RETIRED 2026-08-17 (operator ruling, Rico):
+# RETIRED 2026-08-17 (operator ruling, Dana):
 # test_checkpoint_first_lane_denies_hostile_same_namespace_claim was removed, not lost.
 # With wrap-adopts-lane-scope (#724 item 4), the client provably cannot distinguish
 # the capture hook's lane from another same-namespace session's lane -- the wire

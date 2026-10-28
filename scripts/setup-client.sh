@@ -552,7 +552,7 @@ else
     request body, so without this line every recall fails with a message about
     a request key and says nothing about the env file. Add:
 
-      OPENBRAIN_NAMESPACE=rico"
+      OPENBRAIN_NAMESPACE=dana"
 fi
 
 # The prover is the ONLY end-to-end check that the direct stack works, so it

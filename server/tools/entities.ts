@@ -115,7 +115,7 @@ function registerUpsertEntity(
           .string()
           .max(500)
           .optional()
-          .describe('Optional canonical identifier, e.g. "host:ct235"'),
+          .describe('Optional canonical identifier, e.g. "host:db-01"'),
         metadata: metadataSchema,
       },
       annotations: {

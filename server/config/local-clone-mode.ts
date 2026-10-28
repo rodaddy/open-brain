@@ -110,7 +110,7 @@ function requirePathInsideRoot(path: string, root: string, key: string): void {
 
 function requireBindHost(env: Record<string, string | undefined>): string {
   const bindHost = requireValue(env, "OPEN_BRAIN_BIND_HOST");
-  // LAN dogfood opt-in (Rico, 2026-07-31): the bind host alone may open to all
+  // LAN dogfood opt-in (Dana, 2026-07-31): the bind host alone may open to all
   // interfaces so a second machine can reach this brain; DB, embeddings, and
   // every other clone-mode guard stay loopback-locked.
   if (bindHost !== "0.0.0.0") {
@@ -138,7 +138,7 @@ function embeddingHostOf(baseUrl: string): string {
 
 function requireEmbeddingHost(env: Record<string, string | undefined>): void {
   const embeddingHost = embeddingHostOf(requireValue(env, "EMBEDDING_BASE_URL"));
-  // Fleet embedding opt-in (Rico, 2026-08-25, #757): the embedding provider
+  // Fleet embedding opt-in (Dana, 2026-08-25, #757): the embedding provider
   // moved off this machine to the fleet AI box, so clone mode accepts ONE
   // explicitly named host alongside loopback. Exact string equality only -- no
   // wildcard, no CIDR, no substring, no name resolution -- and every other

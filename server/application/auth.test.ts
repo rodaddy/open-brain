@@ -109,7 +109,7 @@ describe("buildTokenMap", () => {
 
   test("maps named person, agent, and promoter identities from per-user tokens", () => {
     const env: Record<string, string | undefined> = {
-      AUTH_TOKEN_USER_RICO: "admin:rico-token",
+      AUTH_TOKEN_USER_DANA: "admin:dana-token",
       AUTH_TOKEN_USER_ALEX: "readonly:alex-token",
       AUTH_TOKEN_USER_BILBY: "agent:bilby-token",
       AUTH_TOKEN_USER_SKIPPY: "agent:skippy-token",
@@ -118,7 +118,7 @@ describe("buildTokenMap", () => {
 
     const map = buildTokenMap(env);
 
-    expect(map.get("rico-token")).toEqual({ role: "admin", clientId: "rico" });
+    expect(map.get("dana-token")).toEqual({ role: "admin", clientId: "dana" });
     expect(map.get("alex-token")).toEqual({
       role: "readonly",
       clientId: "alex",

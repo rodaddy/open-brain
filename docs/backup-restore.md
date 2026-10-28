@@ -176,7 +176,7 @@ What ships:
 
 | File | Role |
 |---|---|
-| `docs/deploy/com.rico.open-brain-backup.plist.template` | launchd job, 03:00 daily, `LowPriorityIO` |
+| `docs/deploy/com.example.open-brain-backup.plist.template` | launchd job, 03:00 daily, `LowPriorityIO` |
 | `scripts/install-backup-launchagent.sh` | renders + lints + bootstraps it (same staged-write/validation pattern as `install-qmd-sync-launchagent.sh`) |
 | `scripts/backup-scheduled-run.sh` | what launchd runs: dated set, env load, backup, verify, staleness alert |
 | `scripts/deploy-lock.ts` | the deploy-overlap guard shared by backup and deploy |
@@ -187,7 +187,7 @@ What ships:
 cd /srv/open-brain/app
 bash scripts/install-backup-launchagent.sh
 # Prove the wiring immediately — do not wait for 03:00:
-launchctl kickstart -k gui/$(id -u)/com.rico.open-brain-backup
+launchctl kickstart -k gui/$(id -u)/com.example.open-brain-backup
 # Then confirm a set landed and verifies:
 node scripts/backup-verify.ts --dir /srv/open-brain/backups --max-age-hours 26
 ```

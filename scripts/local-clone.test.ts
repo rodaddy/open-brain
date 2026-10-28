@@ -222,7 +222,7 @@ describe("local clone launcher spawn", () => {
       PATH: "/should/not/be/inherited",
       SSH_AUTH_SOCK: "/should/not/be/inherited",
       UNRELATED_HOST: "192.0.2.21",
-      AUTH_TOKEN_USER_LOCAL: "rico:local-user-token",
+      AUTH_TOKEN_USER_LOCAL: "dana:local-user-token",
       OPENBRAIN_TRACING_ENABLED: "1",
       OPENBRAIN_TRACING_ENDPOINT: "http://langfuse.local:3000",
     };
@@ -247,7 +247,7 @@ describe("local clone launcher spawn", () => {
     expect(killed).toEqual(["SIGTERM"]);
     expect(spawnedEnv).toEqual(buildChildEnvironment(env));
     expect(spawnedEnv?.DB_PASSWORD).toBe("local-secret");
-    expect(spawnedEnv?.AUTH_TOKEN_USER_LOCAL).toBe("rico:local-user-token");
+    expect(spawnedEnv?.AUTH_TOKEN_USER_LOCAL).toBe("dana:local-user-token");
     // #530: the tracing coordinates must reach the server child, or
     // createTracingRuntime silently stays off while the env file says on.
     expect(spawnedEnv?.OPENBRAIN_TRACING_ENABLED).toBe("1");
@@ -267,11 +267,11 @@ describe("local clone child environment", () => {
   it("passes the capture-health observer configuration to the server child", () => {
     const child = buildChildEnvironment({
       ...cloneEnv(),
-      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "rico",
+      OPENBRAIN_CAPTURE_HEALTH_NAMESPACE: "dana",
       OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES: "360",
       OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS: "60000",
     });
-    expect(child.OPENBRAIN_CAPTURE_HEALTH_NAMESPACE).toBe("rico");
+    expect(child.OPENBRAIN_CAPTURE_HEALTH_NAMESPACE).toBe("dana");
     expect(child.OPENBRAIN_CAPTURE_HEALTH_WINDOW_MINUTES).toBe("360");
     expect(child.OPENBRAIN_CAPTURE_HEALTH_REFRESH_MS).toBe("60000");
   });

@@ -108,7 +108,7 @@ def test_request_envelope_byte_matches_shared_cross_language_fixture():
 
     # Sanity: the override rides top-level payload.namespace with no
     # namespace_source stamped on the request (canonical wire).
-    assert envelope["payload"]["namespace"] == "rico"
+    assert envelope["payload"]["namespace"] == "dana"
     assert "namespace_source" not in envelope["payload"]
     assert "namespace" not in envelope["payload"]["identity"]
 

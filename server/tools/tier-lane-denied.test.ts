@@ -103,7 +103,7 @@ async function tierLaneClient(
 
 describe("tier_lane denial log", () => {
   test("a refused namespace emits tier_lane_denied with tool, role and namespace", async () => {
-    const { client, warns, statements, close } = await tierLaneClient("agent", "rico");
+    const { client, warns, statements, close } = await tierLaneClient("agent", "dana");
     try {
       const result = await client.callTool({
         name: "tier_lane",
@@ -129,11 +129,11 @@ describe("tier_lane denial log", () => {
   test("the caller's own namespace emits no tier_lane_denied warn", async () => {
     // Without this, a logger that warned on EVERY call would satisfy the test
     // above and the event would still be unpinned.
-    const { client, warns, close } = await tierLaneClient("agent", "rico");
+    const { client, warns, close } = await tierLaneClient("agent", "dana");
     try {
       await client.callTool({
         name: "tier_lane",
-        arguments: { session_key: "lane-6", namespace: "rico" },
+        arguments: { session_key: "lane-6", namespace: "dana" },
       });
 
       expect(warns.filter((warn) => warn.message === "tier_lane_denied")).toEqual([]);

@@ -6,7 +6,7 @@
 specifying. It answers questions our epic leaves open, and its answers are
 mechanisms rather than policies.
 
-Reviewed at Rico's direction ("another dive into the gbrain and other mem
+Reviewed at Dana's direction ("another dive into the gbrain and other mem
 brains/agents... if we use their idea, but the shape is different, it may
 fail"). gbrain was named first and had **never been examined** — 0 references
 in the Open Brain corpus before this review.

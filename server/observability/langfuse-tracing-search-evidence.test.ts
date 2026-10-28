@@ -102,7 +102,7 @@ async function serverSearchTreeEmitsMaskedEvidence(): Promise<void> {
         "keyword",
         undefined,
         0,
-        "rico",
+        "dana",
       );
       return { content: [{ type: "text", text: "ok" }] };
     }) as never,

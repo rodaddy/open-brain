@@ -431,7 +431,7 @@ class RuntimeConfig:
     #
     # Off by default, and that default is not timidity — the server gates the
     # header on ROLE, not on the value: an `agent`-role token presenting
-    # `X-Namespace: rico` is a 403 even though `rico` is already its own
+    # `X-Namespace: dana` is a 403 even though `dana` is already its own
     # namespace (observed live 2026-08-08 against revision 212f916). Sending it
     # unconditionally would therefore 403 every non-admin caller in the fleet,
     # all of whom are correctly served by their token's namespace today.

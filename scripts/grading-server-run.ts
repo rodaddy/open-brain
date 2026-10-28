@@ -8,8 +8,8 @@
  *
  * Usage:
  *   node scripts/grading-server-run.ts
- *   node scripts/grading-server-run.ts --namespace rico --port 3400
- *   GRADED_BY="rico" node scripts/grading-server-run.ts
+ *   node scripts/grading-server-run.ts --namespace dana --port 3400
+ *   GRADED_BY="dana" node scripts/grading-server-run.ts
  *
  * Database credentials come from the environment the same way every other
  * script here reads them (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD). For the

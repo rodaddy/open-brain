@@ -63,21 +63,21 @@
       }
     },
     {
-      "id": "person-rico",
+      "id": "person-dana",
       "namespace": "shared-kb",
       "type": "relationship",
-      "title": "Rico profile",
-      "content": "Rico prefers board-first goal runs, live evidence, and critical review gates before merging production-impacting PRs.",
-      "tags": ["person", "rico", "workflow"],
-      "aliases": ["Rico", "rodaddy"],
+      "title": "Dana profile",
+      "content": "Dana prefers board-first goal runs, live evidence, and critical review gates before merging production-impacting PRs.",
+      "tags": ["person", "dana", "workflow"],
+      "aliases": ["Dana", "rodaddy"],
       "created_at": "2026-06-13T09:00:00.000Z",
       "source_ref": {
         "source": "brain",
         "type": "relationship",
-        "id": "person-rico",
+        "id": "person-dana",
         "namespace": "shared-kb",
-        "label": "Rico profile",
-        "preview": "Rico prefers board-first goal runs and live evidence.",
+        "label": "Dana profile",
+        "preview": "Dana prefers board-first goal runs and live evidence.",
         "created_at": "2026-06-13T09:00:00.000Z"
       }
     },
@@ -86,7 +86,7 @@
       "namespace": "shared-kb",
       "type": "relationship",
       "title": "Rika profile",
-      "content": "Rika is a synthetic designer persona who prefers playful mockups and is unrelated to Rico's infrastructure workflow.",
+      "content": "Rika is a synthetic designer persona who prefers playful mockups and is unrelated to Dana's infrastructure workflow.",
       "tags": ["person", "rika", "synthetic"],
       "aliases": ["Rika"],
       "created_at": "2026-06-13T09:05:00.000Z",
@@ -263,12 +263,12 @@
       "min_precision_at_k": 0.33
     },
     {
-      "id": "identity-rico-rika",
+      "id": "identity-dana-rika",
       "category": "identity",
-      "query": "Rico board first workflow preference",
+      "query": "Dana board first workflow preference",
       "readable_namespaces": ["shared-kb"],
       "top_k": 1,
-      "relevant_ids": ["person-rico"],
+      "relevant_ids": ["person-dana"],
       "junk_ids": ["person-rika"],
       "min_recall_at_k": 1,
       "min_precision_at_k": 0.33

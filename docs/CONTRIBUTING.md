@@ -90,7 +90,7 @@ Critical self-review:
 ```
 
 If the self-review exposes a real issue, fix it before asking for review or
-mark it deferred only with explicit Rico approval. Avoid "all good" receipts;
+mark it deferred only with explicit Dana approval. Avoid "all good" receipts;
 name the risks you checked.
 
 ## Stack

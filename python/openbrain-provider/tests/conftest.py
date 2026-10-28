@@ -29,7 +29,7 @@ def _install_development_root() -> None:
     """Point `OPENBRAIN_DEVELOPMENT_ROOT` at a real directory for this run.
 
     `resolve_development_scope` asks the FILESYSTEM: the root must exist, be a
-    directory, and share a git object store with the cwd under test. On Rico's
+    directory, and share a git object store with the cwd under test. On Dana's
     Mac `/workspace` satisfies that by accident of where
     the work happens, so the suite passed locally and 11 tests failed on the
     Linux CI runner where the path does not exist -- every scope resolved to
@@ -51,7 +51,7 @@ def _install_development_root() -> None:
         return
 
     # Not the temp-workspace rule's business: this is CI's own scratch, chosen
-    # by the runner, and it must not be a path on Rico's machine.
+    # by the runner, and it must not be a path on Dana's machine.
     root = Path(tempfile.mkdtemp(prefix="openbrain-dev-root-")) / "Development"
     root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -68,7 +68,7 @@ def _install_sibling_provider_script(root: Path) -> None:
     """Create the sibling provider script the real Development root carries.
 
     The gate decides whether a recovery command is runnable by ASKING THE
-    FILESYSTEM whether `_ob/scripts/ob-memory-provider.ts` exists. On Rico's Mac
+    FILESYSTEM whether `_ob/scripts/ob-memory-provider.ts` exists. On Dana's Mac
     it does, so the recorded TypeScript parity fixtures were captured with it
     present. A stand-in root that is only an empty git repository answers that
     probe differently, and the gate then appends its "cannot recognise ANY

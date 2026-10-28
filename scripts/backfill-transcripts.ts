@@ -55,7 +55,7 @@ const PROJECTS = `${process.env.HOME}/.claude/projects`;
 // say 9 PM until now". Everything earlier is explicitly out of scope for this
 // run -- it is a different corpus and a different decision.
 const SINCE = new Date("2026-07-25T21:00:00-04:00");
-const NAMESPACE = process.env.OPENBRAIN_NAMESPACE ?? "rico";
+const NAMESPACE = process.env.OPENBRAIN_NAMESPACE ?? "dana";
 const DRY = !process.argv.includes("--write");
 
 type Turn = {

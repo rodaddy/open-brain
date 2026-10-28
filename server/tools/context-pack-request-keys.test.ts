@@ -18,7 +18,7 @@ import {
 /**
  * #535 — a caller mistake must never look like a successful answer.
  *
- * Operator directive (Rico, 2026-08-03): "Should be more than just keep it or
+ * Operator directive (Dana, 2026-08-03): "Should be more than just keep it or
  * drop it. It should be fail loudly and make us think about it."
  *
  * The defect these tests pin: the MCP SDK validates against a plain
@@ -57,7 +57,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
   }
 
   test("agent_context_pack rejects `sections` by name and lists the accepted keys", async () => {
-    const { client, queries } = await harness("agent", "rico");
+    const { client, queries } = await harness("agent", "dana");
 
     // The exact near-miss from #439/#526: correct intent, wrong key.
     const message = await rejectionMessage(client, "agent_context_pack", {
@@ -81,7 +81,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
   });
 
   test("agent_reflex_pointers rejects a pack-only key rather than ignoring it", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     // `requested_sections` is valid on the pack and NOT on the reflex, which is
     // the near-miss this surface actually sees. Ignoring it would silently
@@ -97,7 +97,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
   });
 
   test("an unknown VALUE inside requested_sections names the accepted vocabulary", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     // Singular `repo_fact` — the section name is `repo_facts`. Already enforced
     // by the enum; pinned here so the guarantee cannot regress silently.
@@ -111,7 +111,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
   });
 
   test("the advertised schema declares that unknown keys are refused", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     // `additionalProperties: false` in tools/list is how a caller learns the
     // rule BEFORE breaking it, rather than from a failed call.
@@ -129,7 +129,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
   });
 
   test("a correctly spelled request is unaffected", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     const { payload, isError } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -156,7 +156,7 @@ describe("an unknown request key fails loudly instead of returning a default pac
  */
 describe("the pack names requested vs served sections in its receipt", () => {
   test("a fully served request reports no shortfall", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     const { payload } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -174,7 +174,7 @@ describe("the pack names requested vs served sections in its receipt", () => {
   });
 
   test("the default (no requested_sections) is distinguishable from an explicit request", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     const { payload } = await callJson(client, "agent_context_pack", {
       ...SCOPE,
@@ -195,7 +195,7 @@ describe("the pack names requested vs served sections in its receipt", () => {
   });
 
   test("a requested section that does not arrive is named in the receipt", async () => {
-    const { client } = await harness("agent", "rico");
+    const { client } = await harness("agent", "dana");
 
     // `recovery` is admitted only with the explicit opt-in, so requesting it
     // without `include_unreviewed_recovery` is a request that cannot be served.

@@ -34,7 +34,7 @@ const validRow = {
   content_hash: "hash-1",
   grade: "promoted",
   note: "Exact frozen evidence supports it.",
-  graded_by: "rico",
+  graded_by: "dana",
   graded_at: new Date("2026-09-20T12:00:00.000Z"),
 };
 
@@ -69,7 +69,7 @@ describe("loadFrozenHumanLabels", () => {
           candidate_id: firstId,
           grade: "promoted",
           note: validRow.note,
-          graded_by: "rico",
+          graded_by: "dana",
           graded_at: validRow.graded_at,
         },
       ],

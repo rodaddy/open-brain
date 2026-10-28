@@ -22,7 +22,7 @@ Pattern/Convention:
     DRY RUN IS THE DEFAULT, and that is a design position, not caution. Canon is
     an AUTHORITY model, not a decay model (``docs/code-brain-design.md``: canon >
     decided > observed), and #444 -- deciding what canon contains -- is an open
-    HITL grilling ticket whose own text says "Rico decides; do not answer this
+    HITL grilling ticket whose own text says "Dana decides; do not answer this
     one alone". A tool that promoted rules into the standing set the moment it
     was run would be answering it. So the default run REPORTS, prints the exact
     calls it would make, and changes nothing; ``--apply`` is the operator saying

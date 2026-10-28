@@ -61,7 +61,7 @@ test("rejects missing caller scope and reviewer before database I/O", async () =
     submitFrozenHumanLabels(database, {
       schema: "dream_run_001",
       namespace: "",
-      gradedBy: "rico",
+      gradedBy: "dana",
       expectedSnapshotSha256: "0".repeat(64),
       labels: [label],
     }),
@@ -102,7 +102,7 @@ async function expectSnapshotMismatchLeavesNoTable(candidateId: string): Promise
     submitFrozenHumanLabels(pool, {
       schema: frozenSchema,
       namespace,
-      gradedBy: "rico",
+      gradedBy: "dana",
       expectedSnapshotSha256: "0".repeat(64),
       labels: [{ candidate_id: candidateId, grade: "rejected" }],
     }),
@@ -119,7 +119,7 @@ async function saveInitialLabel(candidateId: string): Promise<void> {
     submitFrozenHumanLabels(pool, {
       schema: frozenSchema,
       namespace,
-      gradedBy: "rico",
+      gradedBy: "dana",
       expectedSnapshotSha256: frozenSnapshotSha256,
       labels: [
         {
@@ -145,7 +145,7 @@ async function expectMidBatchRollback(
     submitFrozenHumanLabels(pool, {
       schema: frozenSchema,
       namespace,
-      gradedBy: "rico-mid-batch",
+      gradedBy: "dana-mid-batch",
       expectedSnapshotSha256: frozenSnapshotSha256,
       labels: [
         { candidate_id: firstCandidateId, grade: "rejected" },
@@ -163,7 +163,7 @@ async function expectMidBatchRollback(
       candidate_id: firstCandidateId,
       grade: "duplicate",
       note: "explicit replacement",
-      graded_by: "rico-corrected",
+      graded_by: "dana-corrected",
     },
   ]);
 }
@@ -176,7 +176,7 @@ async function expectForeignBatchRollback(
     submitFrozenHumanLabels(pool, {
       schema: frozenSchema,
       namespace,
-      gradedBy: "rico",
+      gradedBy: "dana",
       expectedSnapshotSha256: frozenSnapshotSha256,
       labels: [
         { candidate_id: secondCandidateId, grade: "rejected" },
@@ -196,7 +196,7 @@ async function expectForeignBatchRollback(
     {
       grade: "duplicate",
       note: "explicit replacement",
-      graded_by: "rico-corrected",
+      graded_by: "dana-corrected",
     },
   ]);
   const publicRowsAfter = (
@@ -243,7 +243,7 @@ async function expectPersistedLabel(first: {
       content_hash: first.content_hash,
       grade: "promoted",
       note: "explicit correction",
-      graded_by: "rico",
+      graded_by: "dana",
       graded_at: expect.any(Date),
     },
   ]);
@@ -254,7 +254,7 @@ async function correctPersistedLabel(candidateId: string): Promise<void> {
     submitFrozenHumanLabels(pool, {
       schema: frozenSchema,
       namespace,
-      gradedBy: "rico-corrected",
+      gradedBy: "dana-corrected",
       expectedSnapshotSha256: frozenSnapshotSha256,
       labels: [
         {
